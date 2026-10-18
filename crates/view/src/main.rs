@@ -325,6 +325,10 @@ fn setup(
 /// The instance scale `VehBirth` gives drivers (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`).
 const DRIVER_INSTANCE_SCALE: i16 = 0xccc;
 
+/// Racer models face along +X, while a driver's heading (`spawn.rot.y`) points along
+/// +Z: a quarter turn clockwise seen from above (Bevy's +Y is up, so negative).
+const MODEL_FORWARD_YAW: f32 = std::f32::consts::FRAC_PI_2;
+
 /// Puts the model's neutral pose (the middle frame of its first animation,
 /// which is the steering one) at a spawn point.
 fn spawn_racer(
@@ -372,7 +376,8 @@ fn spawn_racer(
     spawn_parts(
         data.parts,
         &base,
-        Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(yaw)),
+        Transform::from_xyz(x, y, z)
+            .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW)),
         commands,
         meshes,
         materials,
