@@ -4,6 +4,7 @@ pub mod disc;
 pub mod dram;
 pub mod lev;
 pub mod level;
+pub mod model;
 pub mod texture;
 pub mod vram;
 pub mod water;

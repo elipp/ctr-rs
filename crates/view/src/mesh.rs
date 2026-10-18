@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use loader::dram::DramFile;
 use loader::lev::{BspKind, Level, SVec3};
+use loader::model::{Frame, ModelHeader};
 use loader::texture::{
     AnimTex, Blend, FaceMode, TextureLayout, face_polygon, face_uv_order, resolve_animation,
     resolve_low_texture, resolve_texture,
@@ -396,6 +397,63 @@ pub fn level_mesh(
     }
 }
 
+/// A textured model in one pose.
+pub struct ModelMesh {
+    pub parts: [MeshPart; PARTS],
+    pub atlas: Atlas,
+}
+
+/// Triangles of `header` in `frame`, with the model's vertex colours and
+/// textures from `vram`. Model units become game units through the header's
+/// scale and the instance's (`inst_scale`, 0x1000 = 1.0), as
+/// `RenderBucket_BuildMatrices` does; the result is in world units.
+///
+/// Corners take the layout's first three UVs in order (`DrawInstPrim_Normal`).
+pub fn model_mesh(header: &ModelHeader, frame: &Frame, vram: &Vram, inst_scale: [i16; 3]) -> ModelMesh {
+    let mut atlas = AtlasBuilder {
+        vram,
+        tiles: vec![vec![255; TILE * TILE * 4]],
+        by_key: HashMap::new(),
+    };
+    let k: [f32; 3] =
+        std::array::from_fn(|a| header.scale[a] as f32 / 4096.0 * inst_scale[a] as f32 / 4096.0 * SCALE);
+
+    let mut parts: [MeshPart; PARTS] = Default::default();
+    for tri in header.triangles(frame) {
+        let texture = tri.texture.checked_sub(1).and_then(|i| header.textures.get(i)).copied();
+        let untextured = [(Part::Opaque, TileKind::Full)];
+        let face_passes = match &texture {
+            Some(t) => passes(t.blend()),
+            None => &untextured,
+        };
+        // Textured primitives get their colour doubled, as for the level.
+        let gain = if texture.is_some() { 2.0 / 255.0 } else { 1.0 / 255.0 };
+        for &(part, kind) in face_passes {
+            let tile = texture.as_ref().map(|t| atlas.tile(t, kind));
+            let out = &mut parts[part as usize];
+            let base = out.positions.len() as u32;
+            for corner in 0..3 {
+                let p = tri.positions[corner];
+                out.positions.push([p[0] as f32 * k[0], p[1] as f32 * k[1], p[2] as f32 * k[2]]);
+                let c = tri.colors[corner];
+                let [r, g, b] = [c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff].map(|c| c as f32 * gain);
+                out.colors.push([r, g, b, 1.0]);
+                out.uvs.push(match (&texture, tile) {
+                    (Some(t), Some(tile)) => atlas.uv(tile, t.uv[corner].0, t.uv[corner].1),
+                    _ => atlas.uv(0, 0, 0),
+                });
+            }
+            out.indices.extend([base, base + 1, base + 2]);
+        }
+    }
+
+    let atlas = atlas.finish();
+    for uv in parts.iter_mut().flat_map(|p| p.uvs.iter_mut()) {
+        *uv = [uv[0] / atlas.width as f32, uv[1] / atlas.height as f32];
+    }
+    ModelMesh { parts, atlas }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +462,49 @@ mod tests {
     use loader::dram::DramFile;
     use loader::level::LevelId;
     use loader::vram::parse_vram_file;
+
+    #[test]
+    fn racer_models_mesh_with_valid_atlas() {
+        use loader::model::Model;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin");
+        let Ok((mut disc, big)) = open_bigfile(&path) else {
+            return;
+        };
+        let mut vram = Vram::default();
+        let shared = big.read(&mut disc, BigIndex::SHARED_MPK_VRM.get()).unwrap();
+        for img in parse_vram_file(&shared).unwrap() {
+            vram.upload(&img).unwrap();
+        }
+        for character in 0..16 {
+            let file = big
+                .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character).get())
+                .unwrap();
+            let model = Model::parse(&DramFile::parse(&file).unwrap()).unwrap();
+            let header = &model.headers[0];
+            let frame = &header.animations[0].frames[10];
+            let m = model_mesh(header, frame, &vram, [0xccc; 3]);
+            let vertices: usize = m.parts.iter().map(|p| p.positions.len()).sum();
+            assert!(vertices >= 3 * header.triangles(frame).len(), "racer {character}");
+            for p in &m.parts {
+                assert_eq!(p.positions.len(), p.uvs.len());
+                assert_eq!(p.positions.len(), p.colors.len());
+                assert!(p.indices.iter().all(|&i| (i as usize) < p.positions.len()));
+                assert!(p.uvs.iter().flatten().all(|c| (0.0..=1.0).contains(c)));
+            }
+            // A kart is a few world units across (the track is hundreds).
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for p in m.parts.iter().flat_map(|p| &p.positions) {
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+            }
+            let size = [0, 1, 2].map(|a| hi[a] - lo[a]);
+            println!("racer {character}: size {size:?}, atlas {}x{}", m.atlas.width, m.atlas.height);
+            assert!(size.iter().all(|&s| (0.3..3.0).contains(&s)), "racer {character}: {size:?}");
+        }
+    }
 
     #[test]
     fn real_tracks_mesh_with_valid_atlas() {

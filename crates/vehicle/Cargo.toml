@@ -1,0 +1,13 @@
+[package]
+name = "vehicle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+coll = { path = "../coll" }
+gte = { path = "../gte" }
+loader = { path = "../loader" }
+math = { path = "../math" }
+
+[dev-dependencies]
+hadris-iso = "2.5.0"

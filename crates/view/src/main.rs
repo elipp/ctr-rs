@@ -1,6 +1,8 @@
 //! Fly-through viewer for a track's geometry (textured).
 //!
-//! `view [LEVEL_ID] [--lo]` — level id as in `loader::level::LevelId` (default 0);
+//! `view [LEVEL_ID] [--lo] [--racer N | --no-racer]` — level id as in
+//! `loader::level::LevelId` (default 0); `--racer N` puts racer model N (0 Crash,
+//! 1 Cortex, ... as `GAME_CHARACTER_IDS`; default 0) at the first starting grid slot;
 //! `--lo` shows the `color_lo` vertex colours; `--show-hidden` keeps the
 //! blocks without textures and the faces painted pure red, which are hidden by default. The disc image is `CTR_BIN`
 //! or `assets/ctr-u.bin`.
@@ -28,6 +30,7 @@ use loader::disc::open_bigfile;
 use loader::dram::DramFile;
 use loader::lev::Level;
 use loader::level::LevelId;
+use loader::model::Model;
 use loader::vram::{Vram, parse_vram_file};
 use mesh::{PARTS, Part};
 use subtract::SubtractMaterial;
@@ -37,9 +40,12 @@ struct Loaded {
     level: Level,
     dram: DramFile,
     vram: Vram,
+    racer: Option<Model>,
 }
 
-fn load_level(id: u32) -> Loaded {
+/// The sprite and texture page file shared by every track (`shared.vrm`):
+/// the racers' textures are in it.
+fn load_level(id: u32, racer: Option<u32>) -> Loaded {
     let path = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -57,7 +63,24 @@ fn load_level(id: u32) -> Loaded {
     for img in parse_vram_file(&read(LevFile::Vram)).expect("parse VRAM file") {
         vram.upload(&img).expect("upload VRAM image");
     }
-    Loaded { level, dram, vram }
+    let shared = big
+        .read(&mut disc, BigIndex::SHARED_MPK_VRM.get())
+        .expect("read shared VRAM file");
+    for img in parse_vram_file(&shared).expect("parse shared VRAM file") {
+        vram.upload(&img).expect("upload shared VRAM image");
+    }
+    let racer = racer.map(|character| {
+        let file = big
+            .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character).get())
+            .expect("read racer model");
+        Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model")
+    });
+    Loaded {
+        level,
+        dram,
+        vram,
+        racer,
+    }
 }
 
 #[derive(Resource)]
@@ -68,6 +91,10 @@ struct Textures {
     dram: DramFile,
     vram: Vram,
 }
+
+/// The racer model shown on the grid.
+#[derive(Resource)]
+struct Racer(Option<Model>);
 
 #[derive(Resource)]
 struct LowColors(bool);
@@ -84,21 +111,37 @@ struct FlyCamera {
 
 fn main() {
     let mut id = 0;
+    let mut racer = Some(0);
     let mut low = false;
     let mut show_hidden = false;
-    for arg in std::env::args().skip(1) {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--lo" => low = true,
             "--show-hidden" => show_hidden = true,
+            "--no-racer" => racer = None,
+            "--racer" => {
+                racer = Some(
+                    args.next()
+                        .and_then(|n| n.parse().ok())
+                        .filter(|&n| n < 16)
+                        .expect("--racer takes a number below 16"),
+                )
+            }
             n => {
                 id = n.parse().unwrap_or_else(|_| {
-                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden], got `{n}`")
+                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden] [--racer N | --no-racer], got `{n}`")
                 })
             }
         }
     }
 
-    let Loaded { level, dram, vram } = load_level(id);
+    let Loaded {
+        level,
+        dram,
+        vram,
+        racer,
+    } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
 
@@ -113,6 +156,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
         .insert_resource(loaded)
         .insert_resource(textures)
+        .insert_resource(Racer(racer))
         .insert_resource(LowColors(low))
         .insert_resource(ShowHidden(show_hidden))
         .add_systems(Startup, setup)
@@ -128,6 +172,7 @@ fn main() {
 fn spawn_parts(
     parts: [mesh::MeshPart; PARTS],
     base: &StandardMaterial,
+    transform: Transform,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -152,7 +197,7 @@ fn spawn_parts(
             alpha_mode,
             ..base.clone()
         };
-        let mut entity = commands.spawn(Mesh3d(handle));
+        let mut entity = commands.spawn((Mesh3d(handle), transform));
         match i {
             i if i == Part::Opaque as usize => {
                 entity.insert(MeshMaterial3d(materials.add(with(AlphaMode::Mask(0.5)))))
@@ -176,6 +221,7 @@ fn setup(
     mut commands: Commands,
     track: Res<Track>,
     textures: Res<Textures>,
+    racer: Res<Racer>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
     show_hidden: Res<ShowHidden>,
@@ -218,6 +264,7 @@ fn setup(
     let handles = spawn_parts(
         data.parts,
         &base,
+        Transform::default(),
         &mut commands,
         &mut meshes,
         &mut materials,
@@ -232,6 +279,7 @@ fn setup(
         handles: spawn_parts(
             data.water,
             &base,
+            Transform::default(),
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -248,6 +296,19 @@ fn setup(
         handles,
     });
 
+    if let Some(model) = &racer.0 {
+        spawn_racer(
+            model,
+            level.driver_spawns[0],
+            &textures.vram,
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+        );
+    }
+
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
     commands.spawn((
@@ -259,6 +320,64 @@ fn setup(
             speed: 10.0,
         },
     ));
+}
+
+/// The instance scale `VehBirth` gives drivers (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`).
+const DRIVER_INSTANCE_SCALE: i16 = 0xccc;
+
+/// Puts the model's neutral pose (the middle frame of its first animation,
+/// which is the steering one) at a spawn point.
+fn spawn_racer(
+    model: &Model,
+    spawn: loader::lev::SpawnPoint,
+    vram: &Vram,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
+) {
+    let header = &model.headers[0];
+    let frame = header
+        .animations
+        .first()
+        .map(|a| &a.frames[a.frames.len() / 2])
+        .or(header.static_frame.as_ref())
+        .expect("racer model has a pose");
+    let data = mesh::model_mesh(header, frame, vram, [DRIVER_INSTANCE_SCALE; 3]);
+
+    let mut atlas = Image::new(
+        Extent3d {
+            width: data.atlas.width as u32,
+            height: data.atlas.height as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data.atlas.rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    atlas.sampler = ImageSampler::nearest();
+    let base = StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(images.add(atlas)),
+        unlit: true,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    };
+
+    let [x, y, z] = mesh::to_world(spawn.pos);
+    let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;
+    spawn_parts(
+        data.parts,
+        &base,
+        Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(yaw)),
+        commands,
+        meshes,
+        materials,
+        subtract_materials,
+    );
 }
 
 /// The game logic and its texture animation run at this rate; rendering may

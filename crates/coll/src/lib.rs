@@ -20,7 +20,7 @@
 //!   `QuadBlockColl` and is only used by those searches;
 //! * `COLL_MOVED_PlayerSearch` and `COLL_MOVED_ScrubImpact` themselves, which
 //!   drive and mutate a `Driver`; only their search setup is here
-//!   ([`Collision::begin_player_search`], [`Collision::sweep_player`]).
+//!   ([`Collision::begin_player_search`], [`Collision::prepare_sweep`]).
 //!
 //! Pointers in the reference scratchpad (quad blocks, level vertices) are
 //! indices into [`Level`] here. `tests/reference.rs` checks this port against
@@ -386,8 +386,8 @@ impl Collision {
 
     /// The setup of `COLL_MOVED_PlayerSearch` before its iterations: hit
     /// radius, the surfaces the player collides with, and an empty scrub list.
-    /// Always high LOD (see the module comment); instance hitboxes are not
-    /// tested, so `TEST_INSTANCES` is left off.
+    /// Always high LOD (see the module comment). `TEST_INSTANCES` is set as in
+    /// the original, but there are no instance hitboxes to test yet.
     pub fn begin_player_search(&mut self) {
         let radius = PLAYER_HIT_RADIUS;
         let sps = &mut self.sps;
@@ -398,18 +398,19 @@ impl Collision {
         q.hit_radius_squared = radius as i32 * radius as i32;
         q.quad_flags_wanted = (quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32;
         q.quad_flags_ignored = 0;
-        q.search_flags = search_flags::HIGH_LOD;
+        q.search_flags = search_flags::TEST_INSTANCES | search_flags::HIGH_LOD;
         sps.num_bsp_hitboxes_hit = 0;
         sps.collision.step_flags = 0;
         self.find_scrub(None, 0);
     }
 
-    /// One iteration of `COLL_MOVED_PlayerSearch`'s sweep from `current` to
-    /// `next` (both in the scratchpad's 1/256 units): resets the per-sweep
-    /// results, sets the swept bounding box and runs [`Collision::search_moved`].
-    /// Returns false, without searching, when the player does not move.
+    /// The start of one iteration of `COLL_MOVED_PlayerSearch`'s sweep from
+    /// `current` to `next` (both in the scratchpad's 1/256 units): resets the
+    /// per-sweep results and sets the swept bounding box. Returns false when
+    /// the player does not move, which ends the search; otherwise
+    /// [`Collision::search_moved`] follows.
     /// `sps.input1.hit_radius` and the search flags are the caller's.
-    pub fn sweep_player(&mut self, level: &Level, current: SVec3, next: SVec3) -> bool {
+    pub fn prepare_sweep(&mut self, current: SVec3, next: SVec3) -> bool {
         let sps = &mut self.sps;
         sps.did_touch_quadblock = 0;
         sps.num_triangles_tested = 0;
@@ -433,8 +434,6 @@ impl Collision {
         (sps.bbox.min.y, sps.bbox.max.y) = axis(current.y, next.y);
         (sps.bbox.min.z, sps.bbox.max.z) = axis(current.z, next.z);
         sps.quad_block_coll.hit_pos = next;
-
-        self.search_moved(level);
         true
     }
 
