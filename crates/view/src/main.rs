@@ -1,21 +1,23 @@
 //! Fly-through viewer for a track's geometry (vertex colours only, no textures yet).
 //!
-//! `view [LEVEL_ID] [--lo] [--screenshot FILE]` — level id as in `loader::level::LevelId` (default 0);
-//! `--lo` shows the `color_lo` vertex colours; `--screenshot` saves the first
-//! frames' view to FILE and exits. The disc image is `CTR_BIN`
+//! `view [LEVEL_ID] [--lo]` — level id as in `loader::level::LevelId` (default 0);
+//! `--lo` shows the `color_lo` vertex colours. The disc image is `CTR_BIN`
 //! or `assets/ctr-u.bin`.
 //!
-//! Controls: hold the right mouse button to look, WASD to move, Q/E down/up,
-//! Shift to go fast, mouse wheel to change the base speed.
+//! A collision probe from the camera is drawn and described on screen; see
+//! `probe.rs` for its keys.
+//!
+//! Controls: hold the right mouse button to look, WASD to move, Space/Shift
+//! up/down, Ctrl to go fast, mouse wheel to change the base speed.
 
 mod mesh;
+mod probe;
 
 use std::path::PathBuf;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
@@ -33,14 +35,10 @@ fn load_level(id: u32) -> Level {
 }
 
 #[derive(Resource)]
-struct Track(Level);
+pub struct Track(pub Level);
 
 #[derive(Resource)]
 struct LowColors(bool);
-
-/// Where to save a screenshot, then quit.
-#[derive(Resource)]
-struct ScreenshotPath(PathBuf);
 
 #[derive(Component)]
 struct FlyCamera {
@@ -52,49 +50,28 @@ struct FlyCamera {
 fn main() {
     let mut id = 0;
     let mut low = false;
-    let mut screenshot = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--lo" => low = true,
-            "--screenshot" => screenshot = Some(PathBuf::from(args.next().expect("--screenshot needs a file"))),
             n => id = n.parse().unwrap_or_else(|_| panic!("usage: view [LEVEL_ID] [--lo], got `{n}`")),
         }
     }
 
-    let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: format!("ctr-rs view: level {id}"),
                 ..default()
             }),
             ..default()
         }))
-    .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
-    .insert_resource(Track(load_level(id)))
-    .insert_resource(LowColors(low))
-    .add_systems(Startup, setup)
-    .add_systems(Update, fly);
-    if let Some(path) = screenshot {
-        app.insert_resource(ScreenshotPath(path)).add_systems(Update, screenshot_and_quit);
-    }
-    app.run();
-}
-
-fn screenshot_and_quit(
-    mut commands: Commands,
-    path: Res<ScreenshotPath>,
-    mut frame: Local<u32>,
-    mut exit: MessageWriter<AppExit>,
-) {
-    *frame += 1;
-    // Give the mesh a few frames to reach the GPU before capturing.
-    if *frame == 30 {
-        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.0.clone()));
-    }
-    if *frame == 90 {
-        exit.write(AppExit::Success);
-    }
+        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
+        .insert_resource(Track(load_level(id)))
+        .insert_resource(LowColors(low))
+        .add_systems(Startup, setup)
+        .add_plugins(probe::ProbePlugin)
+        .add_systems(Update, fly)
+        .run();
 }
 
 fn setup(
@@ -157,8 +134,8 @@ fn fly(
         let axis = |pos: KeyCode, neg: KeyCode| keys.pressed(pos) as i32 as f32 - keys.pressed(neg) as i32 as f32;
         let wish = transform.forward() * axis(KeyCode::KeyW, KeyCode::KeyS)
             + transform.right() * axis(KeyCode::KeyD, KeyCode::KeyA)
-            + Vec3::Y * axis(KeyCode::KeyE, KeyCode::KeyQ);
-        let boost = if keys.pressed(KeyCode::ShiftLeft) { 4.0 } else { 1.0 };
+            + Vec3::Y * axis(KeyCode::Space, KeyCode::ShiftLeft);
+        let boost = if keys.pressed(KeyCode::ControlLeft) { 4.0 } else { 1.0 };
         transform.translation += wish.normalize_or_zero() * cam.speed * boost * time.delta_secs();
     }
 }

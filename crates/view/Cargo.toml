@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 bevy = { version = "0.20.0", features = ["dynamic_linking"] }
+coll = { path = "../coll" }
 loader = { path = "../loader" }
