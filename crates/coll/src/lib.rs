@@ -6,6 +6,10 @@
 //! code with no allocation; all of its working state lives in [`Collision`]
 //! (the reference's scratchpad plus the GTE it uses), which is cheap to clone.
 //!
+//! The `COLL_MOVED_*` family (the player's swept test, [`Collision::search_moved`])
+//! shares the BSP walk, scratchpad and normals; it adds the clip classification
+//! of each hit, the scrub-depth tracking and the step-flag triggers.
+//!
 //! Left out for now:
 //! * the low-LOD triangle path (`COLL_FIXED_QUADBLK_GetNormVecs_LoLOD` and the
 //!   two-triangle test): every racer, bot and camera search sets
@@ -14,7 +18,9 @@
 //!   which need the instance and thread model;
 //! * the `ThBuckColl` view of the scratchpad union, which overlays
 //!   `QuadBlockColl` and is only used by those searches;
-//! * the moved-player searches (`COLL_MOVED_*`).
+//! * `COLL_MOVED_PlayerSearch` and `COLL_MOVED_ScrubImpact` themselves, which
+//!   drive and mutate a `Driver`; only their search setup is here
+//!   ([`Collision::begin_player_search`], [`Collision::sweep_player`]).
 //!
 //! Pointers in the reference scratchpad (quad blocks, level vertices) are
 //! indices into [`Level`] here. `tests/reference.rs` checks this port against
@@ -51,6 +57,41 @@ pub mod normal_axis {
     pub const X: i16 = 2;
     pub const Y: i16 = 3;
 }
+
+/// `CollTriangleClipResult`: which part of the triangle the swept point
+/// was pushed back against.
+pub mod clip {
+    pub const MISS: i32 = -1;
+    pub const V1: i32 = 0;
+    pub const EDGE_V1_V2: i32 = 1;
+    pub const V2: i32 = 2;
+    pub const EDGE_V2_V3: i32 = 3;
+    pub const V3: i32 = 4;
+    pub const EDGE_V1_V3: i32 = 5;
+    pub const FACE: i32 = 6;
+}
+
+/// `CollQuadTriangleId` (high LOD).
+mod triangle_id {
+    pub const HI_0: u8 = 2;
+    pub const HI_1: u8 = 3;
+    pub const HI_2: u8 = 4;
+    pub const HI_3: u8 = 5;
+    pub const HI_4: u8 = 6;
+    pub const HI_5: u8 = 7;
+    pub const HI_6: u8 = 8;
+    pub const HI_7: u8 = 9;
+}
+
+/// `COLL_MOVED_PLAYER_HIT_RADIUS`
+pub const PLAYER_HIT_RADIUS: i16 = 0x19;
+const SCRUB_DEPTH_REPEAT_STEP: i32 = 0x100;
+const SCRUB_DEPTH_REPEAT_LIMIT: i32 = 0x401;
+/// `ScratchpadStructExtended::bspSearchTriangle` has room for one entry per
+/// iteration of the player search.
+const MAX_SCRUB_TRIANGLES: usize = 15;
+/// `DRAW_ORDER_LOW_DOUBLE_SIDED`
+const DRAW_ORDER_LOW_DOUBLE_SIDED: u32 = 0x8000_0000;
 
 /// Indices into `QuadBlock::tri_normal_vec_dividend`.
 mod dividend {
@@ -98,6 +139,16 @@ pub struct SearchResult {
     pub triangle_id: u8,
     /// Index into [`Level::quad_blocks`].
     pub quad: Option<u32>,
+}
+
+/// `BspSearchTriangle`: a triangle the player has already scraped against
+/// during this search, and how hard to ignore it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrubTriangle {
+    /// Index into [`Level::quad_blocks`].
+    pub quad: Option<u32>,
+    pub triangle_id: i32,
+    pub scrub_depth: i32,
 }
 
 /// `CollTriangleBarycentrics`
@@ -168,6 +219,12 @@ pub struct Scratchpad {
     /// Level vertices of the hit triangle.
     pub hit_level_triangle: [Option<u32>; 3],
     pub candidate_delta: SVec3,
+    /// `hitBspSearchTriangle`: indices into `search_vert` of the last triangle
+    /// that got as far as the clip test (moved searches only).
+    pub hit_search_triangle: [Option<u8>; 3],
+    /// `ScratchpadStructExtended::bspSearchTriangle`, first `num_scrub_triangles`.
+    pub scrub_triangles: [ScrubTriangle; MAX_SCRUB_TRIANGLES],
+    pub num_scrub_triangles: i32,
     pub quad_second_tri_index_a: u16,
     pub quad_second_tri_index_b: u16,
     pub search_vert: [SearchVertex; 9],
@@ -179,6 +236,9 @@ pub struct Scratchpad {
 pub struct Collision {
     pub sps: Scratchpad,
     pub gte: Gte,
+    /// `sdata->doorAccessFlags`: door quad blocks whose terrain type matches
+    /// are passable to moved searches.
+    pub door_access_flags: u32,
 }
 
 fn pack(lo: i32, hi: i32) -> u32 {
@@ -187,6 +247,20 @@ fn pack(lo: i32, hi: i32) -> u32 {
 
 fn abs(value: i32) -> i32 {
     if value < 0 { mips::neg_lo(value) } else { value }
+}
+
+/// The two coordinates (x=0, y=1, z=2) a triangle is projected onto, for its
+/// dominant normal axis.
+fn projection_axes(axis: i16) -> (usize, usize) {
+    match axis {
+        normal_axis::Y => (2, 0),
+        normal_axis::Z => (0, 1),
+        _ => (1, 2),
+    }
+}
+
+fn coords(p: SVec3) -> [i32; 3] {
+    [p.x as i32, p.y as i32, p.z as i32]
 }
 
 fn sv(x: i32, y: i32, z: i32) -> SVec3 {
@@ -236,6 +310,9 @@ pub fn triangle_barycentrics(gte: &mut Gte, v1: SVec3, v2: SVec3, point: SVec3) 
 /// `mvmva` with the rotation matrix, V0, no translation.
 const MVMVA_R_V0: u32 = 0x0406012;
 const GPL_SF1: u32 = 0x01a8003e;
+/// `mvmva` with sf=1, the rotation matrix, V0, no translation.
+const RTV0_SF1: u32 = 0x0486012;
+const GPF_SF1: u32 = 0x0198003d;
 const OP_SF0: u32 = 0x0170000c;
 /// `mvmva` with sf=1, the rotation matrix, IR as the vector, no translation.
 const RTIR: u32 = 0x049e012;
@@ -295,11 +372,107 @@ impl Collision {
         (sps.bbox.min.z, sps.bbox.max.z) = axis(top.z, bottom.z);
 
         let bounds = sps.bbox;
-        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf), self);
+        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, false), self);
     }
 
-    /// `COLL_FIXED_BSPLEAF_TestQuadblocks`
-    fn test_leaf_quadblocks(&mut self, level: &Level, leaf: &BspNode) {
+    /// `COLL_SearchBSP_CallbackPARAM` with `COLL_MOVED_BSPLEAF_TestQuadblocks`:
+    /// the player's swept test over `sps.bbox`. The caller sets up the
+    /// scratchpad first (see [`Collision::sweep_player`]); hits are left in
+    /// `sps` (`hit_fraction`, `hit`, `hit_level_triangle`, ...).
+    pub fn search_moved(&mut self, level: &Level) {
+        let bounds = self.sps.bbox;
+        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, true), self);
+    }
+
+    /// The setup of `COLL_MOVED_PlayerSearch` before its iterations: hit
+    /// radius, the surfaces the player collides with, and an empty scrub list.
+    /// Always high LOD (see the module comment); instance hitboxes are not
+    /// tested, so `TEST_INSTANCES` is left off.
+    pub fn begin_player_search(&mut self) {
+        let radius = PLAYER_HIT_RADIUS;
+        let sps = &mut self.sps;
+        sps.input1.hit_radius = radius;
+        sps.input1.hit_radius_squared = radius as i32 * radius as i32;
+        let q = &mut sps.quad_block_coll;
+        q.hit_radius = radius;
+        q.hit_radius_squared = radius as i32 * radius as i32;
+        q.quad_flags_wanted = (quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32;
+        q.quad_flags_ignored = 0;
+        q.search_flags = search_flags::HIGH_LOD;
+        sps.num_bsp_hitboxes_hit = 0;
+        sps.collision.step_flags = 0;
+        self.find_scrub(None, 0);
+    }
+
+    /// One iteration of `COLL_MOVED_PlayerSearch`'s sweep from `current` to
+    /// `next` (both in the scratchpad's 1/256 units): resets the per-sweep
+    /// results, sets the swept bounding box and runs [`Collision::search_moved`].
+    /// Returns false, without searching, when the player does not move.
+    /// `sps.input1.hit_radius` and the search flags are the caller's.
+    pub fn sweep_player(&mut self, level: &Level, current: SVec3, next: SVec3) -> bool {
+        let sps = &mut self.sps;
+        sps.did_touch_quadblock = 0;
+        sps.num_triangles_tested = 0;
+        sps.did_touch_hitbox = 0;
+        sps.reset_only_40 = 0;
+        sps.hit_fraction = FRACTION_ONE;
+        sps.quad_block_coll.pos = current;
+        sps.input1.pos = next;
+        if next == current {
+            return false;
+        }
+
+        let radius = sps.input1.hit_radius as i32;
+        let axis = |current: i16, next: i16| {
+            let (current, next) = (current as i32, next as i32);
+            let min = mips::sub_lo(next, radius).min(mips::sub_lo(current, radius));
+            let max = mips::add_lo(current, radius).max(mips::add_lo(next, radius));
+            (min as i16, max as i16)
+        };
+        (sps.bbox.min.x, sps.bbox.max.x) = axis(current.x, next.x);
+        (sps.bbox.min.y, sps.bbox.max.y) = axis(current.y, next.y);
+        (sps.bbox.min.z, sps.bbox.max.z) = axis(current.z, next.z);
+        sps.quad_block_coll.hit_pos = next;
+
+        self.search_moved(level);
+        true
+    }
+
+    /// `COLL_MOVED_FindScrub`: looks the hit triangle up in the scrub list.
+    /// A repeat hit raises its depth (which `ScrubImpact` subtracts from the
+    /// impact, so repeated scraping softens) and sets `REPEAT_SCRUB`; a new
+    /// one is added at depth 0. `None` clears the list.
+    pub fn find_scrub(&mut self, quad: Option<u32>, triangle_id: i32) {
+        let sps = &mut self.sps;
+        let flags = sps.quad_block_coll.search_flags;
+        let Some(quad) = quad else {
+            sps.quad_block_coll.search_flags = flags & !search_flags::REPEAT_SCRUB;
+            sps.input1.scrub_depth = 0;
+            sps.num_scrub_triangles = 0;
+            return;
+        };
+
+        let count = sps.num_scrub_triangles as usize;
+        for tri in sps.scrub_triangles[..count].iter_mut().rev() {
+            if tri.quad == Some(quad) && tri.triangle_id == triangle_id {
+                if tri.scrub_depth < SCRUB_DEPTH_REPEAT_LIMIT {
+                    tri.scrub_depth = mips::add_lo(tri.scrub_depth, SCRUB_DEPTH_REPEAT_STEP);
+                }
+                sps.quad_block_coll.search_flags = flags | search_flags::REPEAT_SCRUB;
+                sps.input1.scrub_depth = tri.scrub_depth as i16;
+                return;
+            }
+        }
+
+        sps.scrub_triangles[count] = ScrubTriangle { quad: Some(quad), triangle_id, scrub_depth: 0 };
+        sps.quad_block_coll.search_flags = flags & !search_flags::REPEAT_SCRUB;
+        sps.input1.scrub_depth = 0;
+        sps.num_scrub_triangles += 1;
+    }
+
+    /// `COLL_FIXED_BSPLEAF_TestQuadblocks`, or with `moved` its
+    /// `COLL_MOVED_BSPLEAF_TestQuadblocks` twin.
+    fn test_leaf_quadblocks(&mut self, level: &Level, leaf: &BspNode, moved: bool) {
         if leaf.is_water() {
             self.sps.collision.step_flags |= step_flags::FLAG_WATER_BSP;
         }
@@ -314,13 +487,14 @@ impl Collision {
             return;
         }
         for i in quad_blocks.clone() {
-            self.test_quadblock_triangles(level, i as u32);
+            self.test_quadblock_triangles(level, i as u32, moved);
         }
         // Instance hitboxes (`COLL_SEARCH_TEST_INSTANCES`) are not ported yet.
     }
 
-    /// `COLL_FIXED_QUADBLK_TestTriangles` (high LOD only).
-    fn test_quadblock_triangles(&mut self, level: &Level, quad_index: u32) {
+    /// `COLL_FIXED_QUADBLK_TestTriangles` (high LOD only), or with `moved`
+    /// `COLL_MOVED_QUADBLK_TestTriangles`, which also records the triangle id.
+    fn test_quadblock_triangles(&mut self, level: &Level, quad_index: u32, moved: bool) {
         let quad = &level.quad_blocks[quad_index as usize];
         let has_second_triangle = quad.vertex_index[2] != quad.vertex_index[3];
         let flags = self.sps.quad_block_coll.search_flags;
@@ -346,15 +520,26 @@ impl Collision {
             self.quadblock_normals_hi_lod(level, quad);
         }
 
-        self.triangle_test_point(level, 0, 4, 5);
-        self.triangle_test_point(level, 4, 6, 5);
-        self.triangle_test_point(level, 6, 4, 1);
-        self.triangle_test_point(level, 5, 6, 2);
+        let test = |this: &mut Self, id: u8, v1: usize, v2: usize, v3: usize| {
+            if moved {
+                this.sps.candidate.triangle_id = id;
+                this.moved_triangle_test_point(level, v1, v2, v3);
+            } else {
+                this.triangle_test_point(level, v1, v2, v3);
+            }
+        };
+        test(self, triangle_id::HI_0, 0, 4, 5);
+        test(self, triangle_id::HI_1, 4, 6, 5);
+        test(self, triangle_id::HI_2, 6, 4, 1);
+        test(self, triangle_id::HI_3, 5, 6, 2);
+        if moved {
+            self.sps.candidate.triangle_id = triangle_id::HI_4;
+        }
         if has_second_triangle {
-            self.triangle_test_point(level, 8, 6, 7);
-            self.triangle_test_point(level, 7, 3, 8);
-            self.triangle_test_point(level, 1, 7, 6);
-            self.triangle_test_point(level, 2, 6, 8);
+            test(self, triangle_id::HI_4, 8, 6, 7);
+            test(self, triangle_id::HI_5, 7, 3, 8);
+            test(self, triangle_id::HI_6, 1, 7, 6);
+            test(self, triangle_id::HI_7, 2, 6, 8);
         }
     }
 
@@ -512,15 +697,10 @@ impl Collision {
         sps.candidate.hit_pos = sv(hit[0], hit[1], hit[2]);
 
         let (p1, p2, p3) = (sps.search_vert[v1].pos, sps.search_vert[v2].pos, sps.search_vert[v3].pos);
-        let coords = |p: SVec3| [p.x as i32, p.y as i32, p.z as i32];
         let (c1, c2, c3) = (coords(p1), coords(p2), coords(p3));
 
         // Project onto the plane's two least-significant axes: (first, second).
-        let (first, second) = match sps.candidate.normal_axis {
-            normal_axis::Y => (2, 0),
-            normal_axis::Z => (0, 1),
-            _ => (1, 2),
-        };
+        let (first, second) = projection_axes(sps.candidate.normal_axis);
 
         let (mut bary_v1, mut bary_v2) = (v2, v3);
         let origin = c1[first];
@@ -601,6 +781,295 @@ impl Collision {
         sps.quad_block_coll.hit_pos = sps.candidate.hit_pos;
         sps.hit.plane = sps.candidate.plane;
     }
+
+    /// `CollMoved_SelectProjection`: the edge vectors and hit point of the
+    /// clip test, projected onto two axes. Swaps `v2`/`v3` so that `first_a` is
+    /// the longer edge.
+    fn select_projection(&self, v1: usize, v2: &mut usize, v3: &mut usize) -> Projection {
+        let sps = &self.sps;
+        let pos = |i: usize| coords(sps.search_vert[i].pos);
+        let push_out = coords(sps.candidate.push_out);
+        let (first, second) = projection_axes(sps.candidate.normal_axis);
+
+        let origin = pos(v1)[first];
+        let mut first_a = pos(*v2)[first] - origin;
+        let mut first_b = pos(*v3)[first] - origin;
+        let first_hit = push_out[first] - origin;
+        if abs(first_a) < abs(first_b) {
+            std::mem::swap(&mut first_a, &mut first_b);
+            std::mem::swap(v2, v3);
+        }
+
+        let origin = pos(v1)[second];
+        Projection {
+            first_a,
+            first_b,
+            first_hit,
+            second_a: pos(*v2)[second] - origin,
+            second_b: pos(*v3)[second] - origin,
+            second_hit: push_out[second] - origin,
+        }
+    }
+
+    /// `COLL_MOVED_TRIANGL_ReorderNormals`: classifies where the pushed-out
+    /// point lies relative to the triangle ([`clip`]) and sets
+    /// `candidate.hit_pos` to the closest point on it.
+    fn reorder_normals(&mut self, v1: usize, v2: usize, v3: usize) -> i32 {
+        let (mut bary_v2, mut bary_v3) = (v2, v3);
+        let p = self.select_projection(v1, &mut bary_v2, &mut bary_v3);
+
+        let mut bary_a = FRACTION_INVALID;
+        let mut bary_b = FRACTION_INVALID;
+
+        if p.first_a == 0 {
+            if p.first_b == 0 {
+                return clip::MISS;
+            }
+            bary_b = mips::div(mips::sll(p.first_hit, 12), p.first_b);
+            if p.second_a != 0 {
+                bary_a = mips::div(
+                    mips::sub_lo(mips::sll(p.second_hit, 12), mips::mul_lo(bary_b, p.second_b)),
+                    p.second_a,
+                );
+            }
+        } else {
+            let denom = mips::sra(
+                mips::sub_lo(mips::mul_lo(p.second_b, p.first_a), mips::mul_lo(p.first_b, p.second_a)),
+                6,
+            );
+            if denom != 0 {
+                bary_b = mips::div(
+                    mips::sll(
+                        mips::sub_lo(mips::mul_lo(p.second_hit, p.first_a), mips::mul_lo(p.first_hit, p.second_a)),
+                        6,
+                    ),
+                    denom,
+                );
+                bary_a = mips::div(
+                    mips::sub_lo(mips::sll(p.first_hit, 12), mips::mul_lo(bary_b, p.first_b)),
+                    p.first_a,
+                );
+            }
+        }
+
+        if bary_a == FRACTION_INVALID {
+            return clip::MISS;
+        }
+
+        let sps = &mut self.sps;
+        let vertex = |i: usize| sps.search_vert[i].pos;
+        let sum = mips::sub_lo(mips::add_lo(bary_a, bary_b), FRACTION_ONE);
+        let push_out = sps.candidate.push_out;
+
+        if bary_a < 0 {
+            if bary_b < 0 {
+                sps.candidate.hit_pos = vertex(v1);
+                return clip::V1;
+            }
+            if sum >= 0 {
+                sps.candidate.hit_pos = vertex(bary_v3);
+                return clip::V3;
+            }
+            sps.candidate.hit_pos = triangle_barycentrics(&mut self.gte, vertex(v1), vertex(bary_v3), push_out);
+            return clip::EDGE_V1_V3;
+        }
+
+        if bary_b >= 0 {
+            if sum <= 0 {
+                sps.candidate.hit_pos = push_out;
+                return clip::FACE;
+            }
+            sps.candidate.hit_pos = triangle_barycentrics(&mut self.gte, vertex(bary_v2), vertex(bary_v3), push_out);
+            return clip::EDGE_V2_V3;
+        }
+
+        if sum >= 0 {
+            sps.candidate.hit_pos = vertex(bary_v2);
+            return clip::V2;
+        }
+        sps.candidate.hit_pos = triangle_barycentrics(&mut self.gte, vertex(v1), vertex(bary_v2), push_out);
+        clip::EDGE_V1_V2
+    }
+
+    /// `COLL_MOVED_TRIANGL_TestPoint`: sweeps the player's sphere from
+    /// `quad_block_coll.pos` to `input1.pos` against triangle (`v1`, `v2`,
+    /// `v3`), whose plane must already be in `search_vert[v1]`, and keeps the
+    /// hit if it is the earliest so far (`hit_fraction`).
+    pub fn moved_triangle_test_point(&mut self, level: &Level, v1: usize, v2: usize, v3: usize) {
+        let sps = &mut self.sps;
+        let gte = &mut self.gte;
+
+        sps.num_triangles_tested = sps.num_triangles_tested.wrapping_add(1);
+        sps.candidate.normal_axis = sps.search_vert[v1].normal_axis;
+        sps.candidate.plane = sps.search_vert[v1].plane;
+
+        let quad_index = sps.candidate.quad.expect("candidate quad block is set");
+        let quad = &level.quad_blocks[quad_index as usize];
+        let plane = sps.candidate.plane;
+        let normal_zw = pack(plane.normal.z as i32, plane.half_distance as i32) as i32;
+
+        if quad.flags & quad_flags::DOOR != 0 && (quad.terrain_type as i8 as i32 & self.door_access_flags as i32) != 0 {
+            return;
+        }
+
+        let (pos, start) = (sps.input1.pos, sps.quad_block_coll.pos);
+        gte.ctc2(pack(pos.x as i32, pos.y as i32), ctrl::R_MATRIX);
+        gte.ctc2(pack(pos.z as i32, start.x as i32), ctrl::R13R21);
+        gte.ctc2(pack(start.y as i32, start.z as i32), ctrl::R22R23);
+        gte.mtc2(pack(plane.normal.x as i32, plane.normal.y as i32), data::VXY0);
+        gte.mtc2(normal_zw as u32, data::VZ0);
+        gte.cop2(RTV0_SF1);
+
+        let plane_offset = mips::sll(plane.half_distance as i32, 1);
+        let mut plane_near = mips::sub_lo(gte.mfc2(data::MAC1) as i32, plane_offset);
+        let mut plane_far = mips::sub_lo(gte.mfc2(data::MAC2) as i32, plane_offset);
+
+        // A back-facing plane is flipped for triggers and double-sided quads.
+        if plane_far < 0 && (quad.flags & quad_flags::TRIGGER != 0 || quad.draw_order_low & DRAW_ORDER_LOW_DOUBLE_SIDED != 0) {
+            plane_near = mips::neg_lo(plane_near);
+            plane_far = mips::neg_lo(plane_far);
+            let n = &mut sps.candidate.plane.normal;
+            n.x = mips::neg_lo(n.x as i32) as i16;
+            n.y = mips::neg_lo(n.y as i32) as i16;
+            n.z = mips::neg_lo(n.z as i32) as i16;
+            sps.candidate.plane.half_distance = mips::neg_lo(sps.candidate.plane.half_distance as i32) as i16;
+        }
+
+        sps.num_triangles_tested = sps.num_triangles_tested.wrapping_add(1);
+        let radius = sps.input1.hit_radius as i32;
+
+        if mips::sub_lo(plane_near, radius) >= 0 || plane_far < 0 {
+            return;
+        }
+        if quad.flags & quad_flags::TRIGGER == 0 && mips::sub_lo(plane_near, plane_far) > 0 {
+            return;
+        }
+
+        let used_segment_projection;
+        if plane_near >= 0 {
+            gte.mtc2(plane_near as u32, data::IR0);
+            let n = sps.candidate.plane.normal;
+            load_ir(gte, n.x as i32, n.y as i32, n.z as i32);
+            used_segment_projection = false;
+        } else {
+            load_ir(
+                gte,
+                mips::sub_lo(pos.x as i32, start.x as i32),
+                mips::sub_lo(pos.y as i32, start.y as i32),
+                mips::sub_lo(pos.z as i32, start.z as i32),
+            );
+            let fraction = mips::div(mips::sll(mips::neg_lo(plane_near), 12), mips::sub_lo(plane_far, plane_near));
+            gte.mtc2(fraction as u32, data::IR0);
+            used_segment_projection = true;
+        }
+        gte.cop2(GPF_SF1);
+        let hit = [
+            gte.mfc2(data::MAC1) as i32,
+            gte.mfc2(data::MAC2) as i32,
+            gte.mfc2(data::MAC3) as i32,
+        ];
+
+        sps.candidate.push_out = sv(
+            mips::sub_lo(pos.x as i32, hit[0]),
+            mips::sub_lo(pos.y as i32, hit[1]),
+            mips::sub_lo(pos.z as i32, hit[2]),
+        );
+        sps.hit_search_triangle = [Some(v1 as u8), Some(v2 as u8), Some(v3 as u8)];
+
+        let reorder_result = self.reorder_normals(v1, v2, v3);
+        if reorder_result < 0 {
+            return;
+        }
+
+        let sps = &mut self.sps;
+        let gte = &mut self.gte;
+        let (from, hit_pos) = if used_segment_projection { (sps.candidate.push_out, sps.candidate.hit_pos) } else { (pos, sps.candidate.hit_pos) };
+        sps.candidate_delta = sv(
+            mips::sub_lo(from.x as i32, hit_pos.x as i32),
+            mips::sub_lo(from.y as i32, hit_pos.y as i32),
+            mips::sub_lo(from.z as i32, hit_pos.z as i32),
+        );
+
+        let d = sps.candidate_delta;
+        gte.ctc2(pack(d.x as i32, d.y as i32), ctrl::R_MATRIX);
+        gte.ctc2(d.z as i32 as u32, ctrl::R13R21);
+        gte.mtc2(pack(d.x as i32, d.y as i32), data::VXY0);
+        gte.mtc2(d.z as i32 as u32, data::VZ0);
+        gte.cop2(MVMVA_R_V0);
+        let distance_squared = gte.mfc2(data::MAC1) as i32;
+
+        if mips::sub_lo(distance_squared, sps.input1.hit_radius_squared) > 0 {
+            return;
+        }
+
+        if quad.flags & quad_flags::TRIGGER != 0
+            && (plane_near < 0 || (mips::sub_lo(plane_near, radius) | mips::sub_lo(plane_far, radius)) < 0)
+        {
+            sps.collision.step_flags |= quad.terrain_type as u32;
+            return;
+        }
+
+        let mut distance = mips::sub_lo(plane_far, plane_near);
+        if distance != 0 {
+            distance = mips::sub_lo(
+                FRACTION_ONE,
+                mips::div(mips::sll(mips::sub_lo(radius, plane_near), 12), distance),
+            );
+        }
+
+        if mips::sub_lo(distance, sps.hit_fraction) >= 0 {
+            return;
+        }
+
+        if quad.flags & quad_flags::NO_COLLISION_RESPONSE != 0 {
+            if quad.flags & quad_flags::KILL_PLANE != 0 {
+                sps.collision.step_flags |= step_flags::FLAG_KILL_PLANE;
+            }
+            return;
+        }
+
+        sps.hit_fraction = distance;
+        let level_vertex = |i: usize| sps.search_vert[i].level_vertex;
+        sps.hit_level_triangle = [level_vertex(v1), level_vertex(v2), level_vertex(v3)];
+
+        sps.hit.hit_pos = sps.candidate.hit_pos;
+        sps.hit.normal_axis = sps.candidate.normal_axis;
+        sps.hit.plane = sps.candidate.plane;
+        sps.hit.push_out = sps.candidate.push_out;
+        sps.hit.quad = Some(quad_index);
+        sps.hit.triangle_id = sps.candidate.triangle_id;
+        sps.hit.reorder_result = reorder_result as i8;
+
+        if distance <= 0 {
+            sps.quad_block_coll.hit_pos = start;
+        } else {
+            gte.mtc2(distance as u32, data::IR0);
+            load_ir(
+                gte,
+                mips::sub_lo(pos.x as i32, start.x as i32),
+                mips::sub_lo(pos.y as i32, start.y as i32),
+                mips::sub_lo(pos.z as i32, start.z as i32),
+            );
+            gte.cop2(GPF_SF1);
+            sps.quad_block_coll.hit_pos = sv(
+                mips::add_lo(start.x as i32, gte.mfc2(data::MAC1) as i32),
+                mips::add_lo(start.y as i32, gte.mfc2(data::MAC2) as i32),
+                mips::add_lo(start.z as i32, gte.mfc2(data::MAC3) as i32),
+            );
+        }
+
+        sps.did_touch_quadblock = sps.did_touch_quadblock.wrapping_add(1);
+    }
+}
+
+/// `CollTriangleProjection`
+struct Projection {
+    first_a: i32,
+    first_b: i32,
+    first_hit: i32,
+    second_a: i32,
+    second_b: i32,
+    second_hit: i32,
 }
 
 /// `COLL_SearchBSP_CallbackPARAM`: calls `callback` on every BSP leaf whose

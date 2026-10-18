@@ -94,6 +94,7 @@ fn describe_level(level: &Level) -> String {
         for d in q.tri_normal_vec_dividend {
             write!(s, " {d}").unwrap();
         }
+        write!(s, " {}", q.draw_order_low as i32).unwrap();
         s.push('\n');
     }
     writeln!(s, "B {}", level.bsp.len()).unwrap();
@@ -157,6 +158,21 @@ fn dump(c: &Collision) -> String {
         s.collision.tri_normal_vec_dividend, s.collision.tri_normal_vec_bit_shift, s.collision.tri_normal_lod_shift, packed
     )
     .unwrap();
+    o += &vec3(s.candidate.push_out);
+    o += &vec3(s.hit.push_out);
+    o += &vec3(s.candidate_delta);
+    write!(
+        o,
+        " {} {} {} {} {}",
+        s.candidate.triangle_id, s.hit.triangle_id, s.hit.reorder_result, s.hit.normal_axis, s.input1.scrub_depth
+    )
+    .unwrap();
+    let h = s.hit_search_triangle;
+    write!(o, " {} {} {}", index(h[0]), index(h[1]), index(h[2])).unwrap();
+    write!(o, " {} {}", s.quad_block_coll.search_flags, s.num_scrub_triangles).unwrap();
+    for t in &s.scrub_triangles[..s.num_scrub_triangles as usize] {
+        write!(o, " {} {} {}", index(t.quad), t.triangle_id, t.scrub_depth).unwrap();
+    }
     for v in &s.search_vert {
         o += &vec3(v.pos);
         write!(o, " {} {}", v.normal_axis, index(v.level_vertex)).unwrap();
@@ -182,6 +198,19 @@ enum Query {
         v: [SVec3; 3],
     },
     Barycentrics([SVec3; 3]),
+    Moved {
+        flags: u16,
+        wanted: u32,
+        ignored: u32,
+        door_flags: u32,
+        current: SVec3,
+        next: SVec3,
+        radius: i32,
+    },
+    Scrub {
+        quad: Option<u32>,
+        triangle_id: i32,
+    },
 }
 
 impl Query {
@@ -194,6 +223,10 @@ impl Query {
                 format!("G {dividend} {bit_shift} {lod_shift}{}{}{}", vec3(v[0]), vec3(v[1]), vec3(v[2]))
             }
             Query::Barycentrics(v) => format!("Y{}{}{}", vec3(v[0]), vec3(v[1]), vec3(v[2])),
+            Query::Moved { flags, wanted, ignored, door_flags, current, next, radius } => {
+                format!("M {flags} {} {} {}{}{} {radius}", *wanted as i32, *ignored as i32, *door_flags as i32, vec3(*current), vec3(*next))
+            }
+            Query::Scrub { quad, triangle_id } => format!("F {} {triangle_id}", index(*quad)),
         }
     }
 
@@ -212,6 +245,22 @@ impl Query {
                 c.sps.collision.tri_normal_vec_bit_shift = *bit_shift;
                 c.sps.collision.tri_normal_lod_shift = *lod_shift;
                 c.triangle_norm_vec(*dividend, 0, 1, 2);
+                dump(c)
+            }
+            Query::Moved { flags, wanted, ignored, door_flags, current, next, radius } => {
+                let q = &mut c.sps.quad_block_coll;
+                (q.search_flags, q.quad_flags_wanted, q.quad_flags_ignored) = (*flags, *wanted, *ignored);
+                c.door_access_flags = *door_flags;
+                let r = *radius as i16;
+                c.sps.input1.hit_radius = r;
+                c.sps.input1.hit_radius_squared = *radius * *radius;
+                c.sps.quad_block_coll.hit_radius = r;
+                c.sps.quad_block_coll.hit_radius_squared = *radius * *radius;
+                c.sweep_player(level, *current, *next);
+                dump(c)
+            }
+            Query::Scrub { quad, triangle_id } => {
+                c.find_scrub(*quad, *triangle_id);
                 dump(c)
             }
             Query::Barycentrics(v) => {
@@ -260,6 +309,46 @@ fn queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
     out
 }
 
+/// Short sweeps starting inside random quad blocks, interleaved with scrub
+/// list updates for the quads that were hit.
+fn moved_queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
+    let mut out = Vec::new();
+    let wanted = [0x3000, 0x1000, 0x2000, 0xffff, 0x0040, 0x1040];
+    let ignored = [0, 0, 0, 0x0010, 0x8000];
+    for _ in 0..trials {
+        let quad = &level.quad_blocks[rng.below(level.quad_blocks.len() as u64) as usize];
+        let (a, b) = (quad.bbox.min, quad.bbox.max);
+        let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32) as i16;
+        let (x, y, z) = (pick(rng, a.x, b.x), pick(rng, a.y, b.y), pick(rng, a.z, b.z));
+        // Mostly slow movements that end near the surface, some fast ones.
+        let reach = [0x20, 0x60, 0x200][rng.below(3) as usize];
+        let step = |rng: &mut Rng, v: i16| v.wrapping_add(rng.range(-reach, reach) as i16);
+        let mut flags = search_flags::HIGH_LOD;
+        if rng.below(4) == 0 {
+            flags |= search_flags::REUSE_NORMALS;
+        }
+        out.push(Query::Moved {
+            flags,
+            wanted: wanted[rng.below(wanted.len() as u64) as usize],
+            ignored: ignored[rng.below(ignored.len() as u64) as usize],
+            door_flags: [0, 0, 0x7f, 1][rng.below(4) as usize],
+            current: SVec3 { x, y, z },
+            next: SVec3 { x: step(rng, x), y: step(rng, y), z: step(rng, z) },
+            radius: if rng.below(3) == 0 { rng.range(0, 0x100) } else { 0x19 },
+        });
+        if rng.below(3) == 0 {
+            // Few distinct (quad, triangle) pairs, so repeats occur, and a
+            // reset often enough that the list (15 entries) never overflows.
+            let reset = rng.below(10) == 0;
+            out.push(Query::Scrub {
+                quad: if reset { None } else { Some(rng.below(3) as u32) },
+                triangle_id: rng.range(0, 3),
+            });
+        }
+    }
+    out
+}
+
 fn synthetic_queries(rng: &mut Rng, trials: u64) -> Vec<Query> {
     let mut out = Vec::new();
     for _ in 0..trials {
@@ -302,10 +391,15 @@ fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) {
 
     let mut c = Collision::default();
     let (mut failures, mut hits) = (0, 0);
+    // How often each `reorder_result` (-1..=6) was the final hit of a moved query.
+    let mut clips = [0u32; 8];
     for (i, (q, want)) in queries.iter().zip(&reference).enumerate() {
         let got = q.run(&mut c, level);
-        if matches!(q, Query::Search { .. }) && c.sps.did_touch_quadblock > 0 {
+        if matches!(q, Query::Search { .. } | Query::Moved { .. }) && c.sps.did_touch_quadblock > 0 {
             hits += 1;
+        }
+        if matches!(q, Query::Moved { .. }) && c.sps.did_touch_quadblock > 0 {
+            clips[(c.sps.hit.reorder_result + 1) as usize] += 1;
         }
         if &got != want {
             failures += 1;
@@ -314,7 +408,7 @@ fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) {
             }
         }
     }
-    eprintln!("{what}: {} queries, {hits} with a hit", queries.len());
+    eprintln!("{what}: {} queries, {hits} with a hit, moved hits by clip result (-1..6): {clips:?}", queries.len());
     assert_eq!(failures, 0, "{what}: {failures} of {} queries differ from the reference", queries.len());
 }
 
@@ -349,5 +443,6 @@ fn matches_reference_on_tracks() {
         let file = b.big.read(&mut b.disc, idx.get()).unwrap();
         let level = Level::parse(&DramFile::parse(&file).unwrap()).unwrap();
         compare(&format!("level {id}"), &level, &exe, &queries(&level, &mut rng, trials()));
+        compare(&format!("level {id} moved"), &level, &exe, &moved_queries(&level, &mut rng, trials()));
     }
 }
