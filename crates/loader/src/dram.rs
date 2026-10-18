@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io;
 
 /// A subfile loaded with `LT_DRAM`: a 4-byte header giving the offset of a
@@ -23,6 +24,7 @@ pub struct DramFile {
     pub pointer_slots: Vec<u32>,
     /// Whether the file had a pointer map at all.
     pub has_pointer_map: bool,
+    slot_set: HashSet<u32>,
 }
 
 fn invalid(msg: impl Into<String>) -> io::Error {
@@ -44,6 +46,7 @@ impl DramFile {
                 data: payload.to_vec(),
                 pointer_slots: Vec::new(),
                 has_pointer_map: false,
+                slot_set: HashSet::new(),
             });
         }
 
@@ -72,9 +75,15 @@ impl DramFile {
 
         Ok(Self {
             data: payload[..map_offset].to_vec(),
+            slot_set: pointer_slots.iter().copied().collect(),
             pointer_slots,
             has_pointer_map: true,
         })
+    }
+
+    /// Whether the word at payload offset `at` is a pointer (listed in the pointer map).
+    pub fn is_pointer(&self, at: u32) -> bool {
+        self.slot_set.contains(&at)
     }
 
     /// Reads the payload-relative pointer stored at `slot`.

@@ -27,10 +27,10 @@ fn track_textures_decode() {
         for q in &lev.quad_blocks {
             for face in 0..4 {
                 let ctx = |e: &dyn std::fmt::Display| format!("level {id} block {} face {face}: {e}", q.block_id);
-                let Some(g) = resolve_texture(&dram.data, q.texture_mid[face]).unwrap_or_else(|e| panic!("{}", ctx(&e))) else {
+                let Some(g) = resolve_texture(&dram, q.texture_mid[face]).unwrap_or_else(|e| panic!("{}", ctx(&e))) else {
                     continue;
                 };
-                let t = g.near;
+                let t = *g.best();
                 face_polygon(face, FaceMode::of(q, face)).unwrap_or_else(|e| panic!("{}", ctx(&e)));
                 for (u, v) in t.uv {
                     textured += 1;

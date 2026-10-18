@@ -80,7 +80,11 @@ fn toggles(keys: Res<ButtonInput<KeyCode>>, mut probe: ResMut<Probe>) {
 /// World space back to game units, saturating to the `s16` range.
 fn to_game(p: Vec3) -> SVec3 {
     let q = |v: f32| (v / SCALE).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-    SVec3 { x: q(p.x), y: q(p.y), z: q(p.z) }
+    SVec3 {
+        x: q(p.x),
+        y: q(p.y),
+        z: q(p.z),
+    }
 }
 
 fn from_game(p: SVec3) -> Vec3 {
@@ -103,7 +107,11 @@ fn flag_names(flags: u16) -> String {
         (quad_flags::NO_CAMERA_RESPAWN_PROBE, "no-respawn-probe"),
         (quad_flags::SKIP_WATER_LIST, "skip-water"),
     ];
-    let names: Vec<_> = NAMES.iter().filter(|(bit, _)| flags & bit != 0).map(|(_, n)| *n).collect();
+    let names: Vec<_> = NAMES
+        .iter()
+        .filter(|(bit, _)| flags & bit != 0)
+        .map(|(_, n)| *n)
+        .collect();
     names.join(" ")
 }
 
@@ -127,12 +135,16 @@ fn run_probe(
         (0xffff, 0)
     } else {
         // `COLL_FIXED_PlayerSearch_SetupSearch`
-        ((quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32, quad_flags::NO_COLLISION_RESPONSE as u32)
+        (
+            (quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32,
+            quad_flags::NO_COLLISION_RESPONSE as u32,
+        )
     };
 
     let c = &mut probe.collision;
     let q = &mut c.sps.quad_block_coll;
-    (q.search_flags, q.quad_flags_wanted, q.quad_flags_ignored) = (search_flags::HIGH_LOD, wanted, ignored);
+    (q.search_flags, q.quad_flags_wanted, q.quad_flags_ignored) =
+        (search_flags::HIGH_LOD, wanted, ignored);
     // The search runs from its second argument to its first.
     c.search_quadblocks(level, to_game(end), to_game(start), 0);
 
@@ -145,7 +157,11 @@ fn run_probe(
             Direction::Down => "down",
             Direction::Look => "look",
         },
-        if probe.want_all { "anything" } else { "ground | surface" },
+        if probe.want_all {
+            "anything"
+        } else {
+            "ground | surface"
+        },
         sps.num_triangles_tested,
     );
 
@@ -155,13 +171,19 @@ fn run_probe(
         let n = sps.hit.plane.normal;
         let normal = Vec3::new(n.x as f32, n.y as f32, n.z as f32) / 4096.0;
 
-        let corners = sps.hit_level_triangle.map(|v| from_game(level.vertices[v.expect("hit triangle") as usize].pos));
+        let corners = sps
+            .hit_level_triangle
+            .map(|v| from_game(level.vertices[v.expect("hit triangle") as usize].pos));
         gizmos.linestrip(
             [corners[0], corners[1], corners[2], corners[0]].map(|p| p + normal * 0.02),
             Color::srgb(1.0, 0.9, 0.1),
         );
         gizmos.line(hit, hit + normal * 2.0, Color::srgb(0.1, 0.9, 1.0));
-        gizmos.sphere(Isometry3d::from_translation(hit), 0.08, Color::srgb(1.0, 0.1, 0.1));
+        gizmos.sphere(
+            Isometry3d::from_translation(hit),
+            0.08,
+            Color::srgb(1.0, 0.1, 0.1),
+        );
 
         info += &format!(
             "\nhit: quad block {quad_index} (id {}), terrain {}, checkpoint {}\nflags {:#06x}: {}\nbarycentrics {} {}, hit {:?}, normal ({:.3}, {:.3}, {:.3}) x4096",
@@ -181,7 +203,10 @@ fn run_probe(
         info += "\nno hit";
     }
     if sps.collision.step_flags != 0 {
-        info += &format!("\nstep flags {:#x} (trigger payload / water)", sps.collision.step_flags);
+        info += &format!(
+            "\nstep flags {:#x} (trigger payload / water)",
+            sps.collision.step_flags
+        );
     }
     text.0 = info;
 }
