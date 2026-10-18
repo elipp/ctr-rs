@@ -82,3 +82,28 @@ mod tests {
         assert_eq!(buf, [0, 0, 1, 1]);
     }
 }
+
+/// A `.bin` disc image opened for reading `BIGFILE.BIG`.
+pub type Disc = RawSectorReader<std::io::BufReader<std::fs::File>>;
+
+/// Opens the disc image at `path` and parses the header of `BIGFILE.BIG`.
+pub fn open_bigfile(path: &std::path::Path) -> io::Result<(Disc, crate::bigfile::BigFile)> {
+    use hadris_iso::read::IsoImage;
+
+    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+    let open = || RawSectorReader::new(std::io::BufReader::new(std::fs::File::open(path)?));
+
+    let image = IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
+    let start = image
+        .root_dir()
+        .iter(&image)
+        .entries()
+        .filter_map(Result::ok)
+        .find(|e| e.display_name().split(';').next() == Some("BIGFILE.BIG"))
+        .map(|e| e.header().extent.read() as u32)
+        .ok_or_else(|| invalid("BIGFILE.BIG not in the root directory".into()))?;
+
+    let mut disc = open()?;
+    let big = crate::bigfile::BigFile::open(&mut disc, start)?;
+    Ok((disc, big))
+}
