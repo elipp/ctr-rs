@@ -3,14 +3,14 @@
 //!
 //! The C side is built with `gcc -m32` from `reference/ctr-native`; the test
 //! is skipped (with a note) if the reference or a 32-bit gcc is unavailable.
-//! `GTE_ORACLE_TRIALS` overrides the number of trials.
+//! `GTE_REFERENCE_TRIALS` overrides the number of trials.
 
 use std::fmt::Write as _;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use gte::Gte;
+use gte::{Gte, cmd, ctrl};
 
 /// Small deterministic xorshift64* generator, so failures reproduce.
 struct Rng(u64);
@@ -42,16 +42,22 @@ impl Rng {
     }
 }
 
-/// Function codes the reference implements.
-const FUNCTS: [u32; 26] = [
-    0x00, 0x01, 0x06, 0x0c, 0x10, 0x11, 0x12, 0x13, 0x14, 0x16, 0x1b, 0x1c, 0x1e, 0x20, 0x28, 0x29, 0x2a,
-    0x2d, 0x2e, 0x30, 0x3d, 0x3e, 0x3f, 0x02, 0x1f, 0x3c,
-];
+/// Function codes the reference does not implement; both sides must reject them alike.
+const UNIMPLEMENTED: [u32; 3] = [0x02, 0x1f, 0x3c];
+
+fn random_funct(rng: &mut Rng) -> u32 {
+    let implemented = cmd::ALL.len() as u64;
+    match rng.below(implemented + UNIMPLEMENTED.len() as u64) {
+        i if i < implemented => cmd::ALL[i as usize],
+        i => UNIMPLEMENTED[(i - implemented) as usize],
+    }
+}
 
 enum Cmd {
     Mtc2(usize, u32),
     Ctc2(usize, u32),
     Mfc2(usize),
+    Cfc2(usize),
     Cop2(u32),
 }
 
@@ -69,9 +75,13 @@ fn script(trials: u64) -> Vec<Cmd> {
         for _ in 0..nc {
             cmds.push(Cmd::Ctc2(rng.below(32) as usize, rng.value()));
         }
-        let funct = FUNCTS[rng.below(FUNCTS.len() as u64) as usize];
-        let fields = (rng.next() as u32) & 0x1ff_ffc0 & !0x3f;
-        cmds.push(Cmd::Cop2((fields | funct) & 0x1ff_ffff | 0x200_0000));
+        // A command clears FLAG, so its CTC2 behaviour is only visible if read straight back.
+        cmds.push(Cmd::Ctc2(ctrl::FLAG, rng.value()));
+        cmds.push(Cmd::Cfc2(ctrl::FLAG));
+        cmds.push(Cmd::Cfc2(rng.below(32) as usize));
+        let funct = random_funct(&mut rng);
+        let operands = (rng.next() as u32) & cmd::OPERAND_MASK & !cmd::FUNCT_MASK;
+        cmds.push(Cmd::Cop2(operands | funct));
         for _ in 0..3 {
             cmds.push(Cmd::Mfc2(rng.below(32) as usize));
         }
@@ -83,29 +93,27 @@ fn reference_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reference/ctr-native")
 }
 
-fn build_oracle() -> Option<PathBuf> {
+/// Builds the C driver. Returns `None` only when the reference checkout is
+/// absent; if it is there, a failed build is a test failure, not a skip.
+fn build_reference_driver() -> Option<PathBuf> {
     let r = reference_dir();
     if !r.join("platform/native_gte_core.c").exists() {
         eprintln!("skipping: reference/ctr-native not found");
         return None;
     }
-    let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gte_oracle");
+    let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gte_reference");
     let status = Command::new("gcc")
         .args(["-m32", "-O1", "-DCTR_NATIVE", "-I"])
         .arg(r.join("include"))
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/oracle/oracle.c"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"))
         .arg(r.join("platform/native_gte_core.c"))
         .arg(r.join("platform/native_inline_c.c"))
         .arg("-o")
         .arg(&exe)
-        .status();
-    match status {
-        Ok(s) if s.success() => Some(exe),
-        _ => {
-            eprintln!("skipping: could not build the C oracle (needs gcc with -m32)");
-            None
-        }
-    }
+        .status()
+        .expect("failed to run gcc");
+    assert!(status.success(), "could not build the C reference driver (needs gcc with -m32)");
+    Some(exe)
 }
 
 fn dump(g: &Gte, ret: bool) -> String {
@@ -118,23 +126,24 @@ fn dump(g: &Gte, ret: bool) -> String {
 
 #[test]
 fn matches_reference_gte() {
-    let Some(exe) = build_oracle() else {
+    let Some(exe) = build_reference_driver() else {
         return;
     };
-    let trials: u64 = std::env::var("GTE_ORACLE_TRIALS")
+    let trials: u64 = std::env::var("GTE_REFERENCE_TRIALS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(20_000);
     let cmds = script(trials);
 
     // Feed the C side from a file so a large script can't deadlock the pipe.
-    let script_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gte_oracle_script.txt");
+    let script_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gte_reference_script.txt");
     let mut text = String::new();
     for c in &cmds {
         match c {
             Cmd::Mtc2(r, v) => writeln!(text, "m {r} {v}"),
             Cmd::Ctc2(r, v) => writeln!(text, "c {r} {v}"),
             Cmd::Mfc2(r) => writeln!(text, "r {r}"),
+            Cmd::Cfc2(r) => writeln!(text, "f {r}"),
             Cmd::Cop2(op) => writeln!(text, "x {op}"),
         }
         .unwrap();
@@ -144,8 +153,8 @@ fn matches_reference_gte() {
         .stdin(File::open(&script_path).unwrap())
         .stdout(Stdio::piped())
         .output()
-        .expect("run oracle");
-    assert!(out.status.success(), "oracle crashed");
+        .expect("run reference driver");
+    assert!(out.status.success(), "reference driver crashed");
     let expected = String::from_utf8(out.stdout).unwrap();
     let mut expected = expected.lines();
 
@@ -155,12 +164,17 @@ fn matches_reference_gte() {
             Cmd::Mtc2(r, v) => gte.mtc2(*v, *r),
             Cmd::Ctc2(r, v) => gte.ctc2(*v, *r),
             Cmd::Mfc2(r) => {
-                let want = expected.next().expect("oracle output ended early");
+                let want = expected.next().expect("reference output ended early");
                 let got = gte.mfc2(*r).to_string();
                 assert_eq!(got, want, "command {i}: mfc2 r{r}");
             }
+            Cmd::Cfc2(r) => {
+                let want = expected.next().expect("reference output ended early");
+                let got = gte.cfc2(*r).to_string();
+                assert_eq!(got, want, "command {i}: cfc2 r{r}");
+            }
             Cmd::Cop2(op) => {
-                let want = expected.next().expect("oracle output ended early");
+                let want = expected.next().expect("reference output ended early");
                 let ret = gte.cop2(*op);
                 let got = dump(&gte, ret);
                 if got != want {
@@ -176,11 +190,11 @@ fn matches_reference_gte() {
                             format!("{name}: rust {} / ref {}", g[k], w[k])
                         })
                         .collect();
-                    panic!("command {i}: cop2 {op:#x} (funct {:#x}) differs:\n  {}", op & 63, diffs.join("\n  "));
+                    panic!("command {i}: cop2 {op:#x} (funct {:#x}) differs:\n  {}", op & cmd::FUNCT_MASK, diffs.join("\n  "));
                 }
             }
         }
     }
-    assert!(expected.next().is_none(), "oracle produced extra output");
+    assert!(expected.next().is_none(), "reference produced extra output");
     println!("{} commands over {trials} trials matched the reference", cmds.len());
 }

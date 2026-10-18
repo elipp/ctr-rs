@@ -62,3 +62,42 @@ fn dram_files_are_consistent() {
         println!("  entry {i}: {n} pointers");
     }
 }
+
+#[test]
+fn track_lev_files_parse() {
+    use loader::lev::{BspKind, Level};
+
+    let Some(mut b) = common::open_bigfile() else {
+        return;
+    };
+    for id in LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0 {
+        let idx = BigIndex::level(LevelId(id), Lod::OnePlayer, LevFile::Lev);
+        let file = b.big.read(&mut b.disc, idx.get()).unwrap();
+        let dram = DramFile::parse(&file).unwrap();
+        let lev = Level::parse(&dram).unwrap_or_else(|e| panic!("level {id}: {e}"));
+
+        let nv = lev.vertices.len();
+        for (i, q) in lev.quad_blocks.iter().enumerate() {
+            for &v in &q.vertex_index {
+                assert!((v as usize) < nv, "level {id}: quad {i} uses vertex {v} of {nv}");
+            }
+            let (min, max) = (q.bbox.min, q.bbox.max);
+            assert!(min.x <= max.x && min.y <= max.y && min.z <= max.z, "level {id}: quad {i} bbox");
+        }
+        let mut leaves = 0;
+        for n in &lev.bsp {
+            if let BspKind::Leaf { quad_blocks, .. } = &n.kind {
+                assert!(quad_blocks.end <= lev.quad_blocks.len(), "level {id}: leaf range");
+                leaves += 1;
+            }
+        }
+        println!(
+            "level {id:>2}: {:>5} quads {:>6} verts {:>5} bsp ({leaves} leaves) {:>3} restart pts, spawn0 {:?}",
+            lev.quad_blocks.len(),
+            nv,
+            lev.bsp.len(),
+            lev.restart_points.len(),
+            lev.driver_spawns[0].pos,
+        );
+    }
+}
