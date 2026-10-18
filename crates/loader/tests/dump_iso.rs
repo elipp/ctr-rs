@@ -7,9 +7,9 @@ use loader::disc::RawSectorReader;
 
 /// `CTR_BIN` overrides the default of `<repo>/assets/ctr-u.bin`.
 fn disc_path() -> PathBuf {
-    std::env::var_os("CTR_BIN").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../assets/ctr-u.bin")
-    })
+    std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"))
 }
 
 struct Found {
@@ -50,7 +50,10 @@ fn walk<R: Read + Seek>(
 fn dump_all_files() {
     let path = disc_path();
     if !path.exists() {
-        eprintln!("skipping: {} not found (set CTR_BIN to override)", path.display());
+        eprintln!(
+            "skipping: {} not found (set CTR_BIN to override)",
+            path.display()
+        );
         return;
     }
 
@@ -68,9 +71,11 @@ fn dump_all_files() {
     }
     println!("{} files", files.len());
 
-    assert!(!files.is_empty());
+    assert!(files.len() == 40);
     assert!(
-        files.iter().any(|f| f.path.eq_ignore_ascii_case("/SYSTEM.CNF")),
+        files
+            .iter()
+            .any(|f| f.path.eq_ignore_ascii_case("/SYSTEM.CNF")),
         "no SYSTEM.CNF in image"
     );
 }

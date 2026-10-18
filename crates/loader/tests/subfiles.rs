@@ -1,0 +1,64 @@
+mod common;
+
+use loader::bigindex::{BigIndex, LevFile, Lod};
+use loader::dram::DramFile;
+use loader::level::LevelId;
+use loader::vram::{Vram, parse_vram_file};
+
+#[test]
+fn track_vram_files_upload() {
+    let Some(mut b) = common::open_bigfile() else {
+        return;
+    };
+    let mut vram = Vram::default();
+    for id in LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0 {
+        for lod in [Lod::OnePlayer, Lod::TwoPlayer, Lod::FourPlayer] {
+            let idx = BigIndex::level(LevelId(id), lod, LevFile::Vram);
+            let file = b.big.read(&mut b.disc, idx.get()).unwrap();
+            let images = parse_vram_file(&file)
+                .unwrap_or_else(|e| panic!("level {id} {lod:?} (entry {}): {e}", idx.0));
+            assert!(!images.is_empty(), "level {id} {lod:?} has no images");
+            for img in &images {
+                vram.upload(img)
+                    .unwrap_or_else(|e| panic!("level {id} {lod:?}: {e}"));
+            }
+        }
+    }
+    assert!(vram.pixels.iter().any(|&p| p != 0));
+}
+
+/// Finds which subfiles are laid out as DRAM files (pointer map at the end)
+/// and checks that every one of them is internally consistent.
+#[test]
+fn dram_files_are_consistent() {
+    let Some(mut b) = common::open_bigfile() else {
+        return;
+    };
+    let mut with_map = Vec::new();
+    for i in 0..b.big.entries.len() {
+        let file = b.big.read(&mut b.disc, i).unwrap();
+        if file.len() < 8 {
+            continue;
+        }
+        let off = i32::from_le_bytes(file[..4].try_into().unwrap());
+        // A real pointer map ends exactly at the end of the file.
+        let ends_at_eof = off >= 0
+            && file
+                .get(4 + off as usize..4 + off as usize + 4)
+                .map(|n| 4 + off as usize + 4 + u32::from_le_bytes(n.try_into().unwrap()) as usize)
+                == Some(file.len());
+        if ends_at_eof {
+            let dram = DramFile::parse(&file).unwrap_or_else(|e| panic!("entry {i}: {e}"));
+            // Every pointer must land inside the payload.
+            for &slot in &dram.pointer_slots {
+                let target = dram.read_u32(slot) as usize;
+                assert!(target <= dram.data.len(), "entry {i}: slot {slot:#x} -> {target:#x}");
+            }
+            with_map.push((i, dram.pointer_slots.len()));
+        }
+    }
+    println!("{} entries have a pointer map at EOF", with_map.len());
+    for (i, n) in with_map.iter().take(20) {
+        println!("  entry {i}: {n} pointers");
+    }
+}
