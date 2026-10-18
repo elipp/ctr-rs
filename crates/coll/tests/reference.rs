@@ -331,6 +331,7 @@ fn matches_reference_on_random_triangles() {
         bsp: Vec::new(),
         driver_spawns: [SpawnPoint { pos: SVec3::default(), rot: SVec3::default() }; 8],
         restart_points: Vec::new(),
+        water: Default::default(),
         config_flags: 0,
         jump_vertical_speed_cap: 0,
     };

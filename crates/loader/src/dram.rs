@@ -68,7 +68,9 @@ impl DramFile {
         for raw in slots.chunks_exact(4) {
             let slot = i32::from_le_bytes(raw.try_into().unwrap()) as u32 & !3;
             if slot as usize + 4 > map_offset {
-                return Err(invalid(format!("pointer slot {slot:#x} is outside the payload")));
+                return Err(invalid(format!(
+                    "pointer slot {slot:#x} is outside the payload"
+                )));
             }
             pointer_slots.push(slot);
         }

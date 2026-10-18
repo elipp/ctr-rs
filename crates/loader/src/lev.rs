@@ -9,6 +9,7 @@
 use std::io;
 
 use crate::dram::DramFile;
+use crate::water::Water;
 
 /// 16-bit fixed-point position, as stored in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -151,6 +152,7 @@ pub struct Level {
     pub bsp: Vec<BspNode>,
     pub driver_spawns: [SpawnPoint; 8],
     pub restart_points: Vec<CheckpointNode>,
+    pub water: Water,
     pub config_flags: u32,
     pub jump_vertical_speed_cap: u8,
 }
@@ -166,7 +168,11 @@ impl<'a> Payload<'a> {
     fn bytes(&self, at: usize, len: usize) -> io::Result<&'a [u8]> {
         at.checked_add(len)
             .and_then(|end| self.0.get(at..end))
-            .ok_or_else(|| invalid(format!("LEV read of {len} bytes at {at:#x} is out of range")))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "LEV read of {len} bytes at {at:#x} is out of range"
+                ))
+            })
     }
     fn u8(&self, at: usize) -> io::Result<u8> {
         Ok(self.bytes(at, 1)?[0])
@@ -208,7 +214,12 @@ impl<'a> Payload<'a> {
         parse: impl Fn(&Self, usize) -> io::Result<T>,
     ) -> io::Result<Vec<T>> {
         // Fail on the whole range up front so a huge bogus count can't allocate.
-        self.bytes(base, count.checked_mul(stride).ok_or_else(|| invalid("LEV array too large"))?)?;
+        self.bytes(
+            base,
+            count
+                .checked_mul(stride)
+                .ok_or_else(|| invalid("LEV array too large"))?,
+        )?;
         (0..count).map(|i| parse(self, base + i * stride)).collect()
     }
 }
@@ -297,7 +308,11 @@ impl Level {
                     off if off >= quads_at && (off - quads_at) % QUAD_BLOCK_SIZE == 0 => {
                         (off - quads_at) / QUAD_BLOCK_SIZE
                     }
-                    off => return Err(invalid(format!("BSP leaf quad pointer {off:#x} is not a quad block"))),
+                    off => {
+                        return Err(invalid(format!(
+                            "BSP leaf quad pointer {off:#x} is not a quad block"
+                        )));
+                    }
                 };
                 BspKind::Leaf {
                     quad_blocks: first..first + num,
@@ -347,6 +362,7 @@ impl Level {
             bsp,
             driver_spawns,
             restart_points,
+            water: Water::parse(&file.data, verts_at, num_verts)?,
             config_flags: p.u32(LEVEL_CONFIG_FLAGS)?,
             jump_vertical_speed_cap: p.u8(LEVEL_JUMP_SPEED_CAP)?,
         })

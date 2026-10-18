@@ -73,7 +73,10 @@ impl TextureLayout {
 
     /// Texture page origin in VRAM pixels.
     pub fn tpage_xy(&self) -> (usize, usize) {
-        ((self.tpage as usize & 0xf) * 64, (self.tpage as usize >> 4 & 1) * 256)
+        (
+            (self.tpage as usize & 0xf) * 64,
+            (self.tpage as usize >> 4 & 1) * 256,
+        )
     }
 
     pub fn color_mode(&self) -> io::Result<ColorMode> {
@@ -128,8 +131,17 @@ fn group_at(dram: &DramFile, at: usize) -> io::Result<TextureGroup> {
     let layout = |i: usize| TextureLayout::parse(&bytes[i * TEXTURE_LAYOUT_SIZE..]);
     // A relocated pointer in the slot is what the game calls a "negative"
     // mosaic word; anything else is a layout.
-    let mosaic = if dram.is_pointer((at + 3 * TEXTURE_LAYOUT_SIZE) as u32) { None } else { layout(3).ok() };
-    Ok(TextureGroup { far: layout(0)?, middle: layout(1)?, near: layout(2)?, mosaic })
+    let mosaic = if dram.is_pointer((at + 3 * TEXTURE_LAYOUT_SIZE) as u32) {
+        None
+    } else {
+        layout(3).ok()
+    };
+    Ok(TextureGroup {
+        far: layout(0)?,
+        middle: layout(1)?,
+        near: layout(2)?,
+        mosaic,
+    })
 }
 
 /// Follows a quad block texture pointer (a payload offset) to its group.
@@ -148,6 +160,26 @@ pub fn resolve_texture(dram: &DramFile, ptr: u32) -> io::Result<Option<TextureGr
     group_at(dram, at).map(Some)
 }
 
+/// Follows a quad block's `texture_low` pointer. Unlike the mid-detail
+/// pointers it points at a single layout, which the game draws over the whole
+/// block when the block has no mid-detail textures (`PrepareFullDynamicLowUv`).
+/// An animated (tagged) pointer resolves to the frame saved in the file.
+pub fn resolve_low_texture(dram: &DramFile, ptr: u32) -> io::Result<Option<TextureLayout>> {
+    let at = match ptr {
+        0 => return Ok(None),
+        p if p & 1 == 1 => word_at(&dram.data, p as usize - 1)? as usize,
+        p => p as usize,
+    };
+    if at == 0 {
+        return Ok(None);
+    }
+    let bytes = dram
+        .data
+        .get(at..at + TEXTURE_LAYOUT_SIZE)
+        .ok_or_else(|| invalid(format!("low texture layout {at:#x} is outside the payload")))?;
+    TextureLayout::parse(bytes).map(Some)
+}
+
 /// `struct AnimTex`: the frames of one animated level texture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnimTex {
@@ -162,7 +194,8 @@ impl AnimTex {
     pub fn frame_at(&self, tick: i32) -> usize {
         // The C `%` could go negative for a negative offset and index out of
         // bounds; the euclidean remainder is the same for everything valid.
-        ((tick.wrapping_add(self.frame_offset as i32)) >> self.frame_skip).rem_euclid(self.frames.len() as i32) as usize
+        ((tick.wrapping_add(self.frame_offset as i32)) >> self.frame_skip)
+            .rem_euclid(self.frames.len() as i32) as usize
     }
 }
 
@@ -179,12 +212,18 @@ pub fn resolve_animation(dram: &DramFile, ptr: u32) -> io::Result<Option<AnimTex
     let i16_at = |o: usize| i16::from_le_bytes([header[o], header[o + 1]]);
     let (num_frames, frame_offset, frame_skip) = (i16_at(4), i16_at(6), i16_at(8));
     if num_frames <= 0 || !(0..16).contains(&frame_skip) {
-        return Err(invalid(format!("animated texture {at:#x}: {num_frames} frames, skip {frame_skip}")));
+        return Err(invalid(format!(
+            "animated texture {at:#x}: {num_frames} frames, skip {frame_skip}"
+        )));
     }
     let frames = (0..num_frames as usize)
         .map(|i| group_at(dram, word_at(&dram.data, at + 0xc + i * 4)? as usize))
         .collect::<io::Result<_>>()?;
-    Ok(Some(AnimTex { frame_offset, frame_skip: frame_skip as u8, frames }))
+    Ok(Some(AnimTex {
+        frame_offset,
+        frame_skip: frame_skip as u8,
+        frames,
+    }))
 }
 
 /// How one of a quad block's four faces is drawn (a 5-bit field of
@@ -201,7 +240,10 @@ pub struct FaceMode {
 impl FaceMode {
     pub fn of(block: &QuadBlock, face: usize) -> Self {
         let f = (block.draw_order_low >> (8 + 5 * face)) & 0x1f;
-        Self { rotation: (f & 7) as u8, mode: (f >> 3) as u8 }
+        Self {
+            rotation: (f & 7) as u8,
+            mode: (f >> 3) as u8,
+        }
     }
 }
 
@@ -225,7 +267,11 @@ const VERTEX_TABLE: [u32; 24] = [
 /// swaps u0 with u1 and u2 with u3); that is every odd rotation.
 pub fn face_uv_order(mode: FaceMode) -> io::Result<[usize; 4]> {
     let entry = table_entry(mode)?;
-    Ok(if entry & 0x0080_0000 != 0 { [1, 0, 3, 2] } else { [0, 1, 2, 3] })
+    Ok(if entry & 0x0080_0000 != 0 {
+        [1, 0, 3, 2]
+    } else {
+        [0, 1, 2, 3]
+    })
 }
 
 fn table_entry(mode: FaceMode) -> io::Result<u32> {
@@ -261,7 +307,12 @@ impl Vram {
 
     /// Like [`Vram::texel`], also returning the texel's semi-transparency bit
     /// (bit 15), which decides whether a semi-transparent face blends it.
-    pub fn texel_stp(&self, texture: &TextureLayout, u: u8, v: u8) -> io::Result<Option<(Rgba, bool)>> {
+    pub fn texel_stp(
+        &self,
+        texture: &TextureLayout,
+        u: u8,
+        v: u8,
+    ) -> io::Result<Option<(Rgba, bool)>> {
         let (px, py) = texture.tpage_xy();
         let at = |x: usize, y: usize| -> io::Result<u16> {
             if x >= VRAM_WIDTH || y >= VRAM_HEIGHT {
@@ -307,7 +358,10 @@ mod tests {
 
     #[test]
     fn plain_quad_is_row_major_corners() {
-        let m = FaceMode { rotation: 0, mode: 0 };
+        let m = FaceMode {
+            rotation: 0,
+            mode: 0,
+        };
         // Corners in top-left, top-right, bottom-left, bottom-right order.
         assert_eq!(face_polygon(0, m).unwrap(), [0, 4, 5, 6]);
         assert_eq!(face_polygon(3, m).unwrap(), [6, 7, 8, 3]);
@@ -330,7 +384,9 @@ mod tests {
     fn triangle_modes_have_three_distinct_vertices() {
         for mode in 1..3 {
             for rotation in 0..8 {
-                let mut p = face_polygon(0, FaceMode { rotation, mode }).unwrap().to_vec();
+                let mut p = face_polygon(0, FaceMode { rotation, mode })
+                    .unwrap()
+                    .to_vec();
                 p.sort();
                 p.dedup();
                 assert_eq!(p.len(), 3, "mode {mode} rotation {rotation}");
@@ -356,7 +412,11 @@ mod tests {
         vram.pixels[1] = 0x0030;
         // CLUT at (16, 2): entry 3 is pure red (5551).
         vram.pixels[2 * VRAM_WIDTH + 16 + 3] = 0x001f;
-        let t = TextureLayout { uv: [(0, 0); 4], clut: 2 << 6 | 1, tpage: 0 };
+        let t = TextureLayout {
+            uv: [(0, 0); 4],
+            clut: 2 << 6 | 1,
+            tpage: 0,
+        };
         assert_eq!(vram.texel(&t, 5, 0).unwrap(), Some([255, 0, 0, 255]));
         assert_eq!(vram.texel(&t, 0, 0).unwrap(), None);
     }
@@ -374,7 +434,10 @@ mod tests {
         }
         let p = dram(p, &[]);
         let a = resolve_animation(&p, 0x81).unwrap().unwrap();
-        assert_eq!(a.frames.iter().map(|g| g.near.tpage).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(
+            a.frames.iter().map(|g| g.near.tpage).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
         // (tick + 1) >> 1: ticks 0 -> 0, 1 -> 1, 3 -> 2, 5 -> 0 (wraps), negative stays in range.
         assert_eq!([0, 1, 3, 5].map(|t| a.frame_at(t)), [0, 1, 2, 0]);
         assert!(a.frame_at(-7) < 3);
@@ -389,7 +452,11 @@ mod tests {
             for rotation in 0..8 {
                 let order = face_uv_order(FaceMode { rotation, mode }).unwrap();
                 let mirrored = rotation % 2 == 1;
-                assert_eq!(order == [1, 0, 3, 2], mirrored, "mode {mode} rotation {rotation}");
+                assert_eq!(
+                    order == [1, 0, 3, 2],
+                    mirrored,
+                    "mode {mode} rotation {rotation}"
+                );
             }
         }
     }
@@ -409,9 +476,30 @@ mod tests {
     }
 
     #[test]
+    fn low_texture_is_a_single_layout() {
+        let mut p = vec![0u8; 0x100];
+        p[0x40..0x4c].copy_from_slice(&[1, 2, 0, 0, 3, 4, 0x1d, 0, 5, 6, 7, 8]);
+        p[0x80..0x84].copy_from_slice(&0x40u32.to_le_bytes());
+        let p = dram(p, &[]);
+        let t = resolve_low_texture(&p, 0x40).unwrap().unwrap();
+        assert_eq!(t.uv, [(1, 2), (3, 4), (5, 6), (7, 8)]);
+        // A tagged pointer goes through the slot, like the mid-detail ones.
+        assert_eq!(resolve_low_texture(&p, 0x81).unwrap(), Some(t));
+        assert_eq!(resolve_low_texture(&p, 0).unwrap(), None);
+        assert!(resolve_low_texture(&p, 0xfc).is_err());
+    }
+
+    #[test]
     fn blend_modes() {
-        let t = |mode: u16| TextureLayout { uv: [(0, 0); 4], clut: 0, tpage: mode << 5 };
-        assert_eq!([0, 1, 2, 3].map(|m| t(m).blend()), [Blend::Average, Blend::Add, Blend::Subtract, Blend::Opaque]);
+        let t = |mode: u16| TextureLayout {
+            uv: [(0, 0); 4],
+            clut: 0,
+            tpage: mode << 5,
+        };
+        assert_eq!(
+            [0, 1, 2, 3].map(|m| t(m).blend()),
+            [Blend::Average, Blend::Add, Blend::Subtract, Blend::Opaque]
+        );
     }
 
     #[test]

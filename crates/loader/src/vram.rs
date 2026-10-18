@@ -84,13 +84,23 @@ impl Default for Vram {
 impl Vram {
     /// Equivalent of the PSX `LoadImage`.
     pub fn upload(&mut self, img: &VramImage) -> io::Result<()> {
-        let (x, y, w, h) = (img.x as usize, img.y as usize, img.w as usize, img.h as usize);
+        let (x, y, w, h) = (
+            img.x as usize,
+            img.y as usize,
+            img.w as usize,
+            img.h as usize,
+        );
         if x + w > VRAM_WIDTH || y + h > VRAM_HEIGHT {
-            return Err(invalid(format!("image {w}x{h} at ({x},{y}) is outside VRAM")));
+            return Err(invalid(format!(
+                "image {w}x{h} at ({x},{y}) is outside VRAM"
+            )));
         }
         for row in 0..h {
             let dst = &mut self.pixels[(y + row) * VRAM_WIDTH + x..][..w];
-            for (px, src) in dst.iter_mut().zip(img.pixels[row * w * 2..][..w * 2].chunks_exact(2)) {
+            for (px, src) in dst
+                .iter_mut()
+                .zip(img.pixels[row * w * 2..][..w * 2].chunks_exact(2))
+            {
                 *px = u16::from_le_bytes(src.try_into().unwrap());
             }
         }
@@ -136,7 +146,9 @@ mod tests {
     #[test]
     fn upload_writes_rect() {
         let mut vram = Vram::default();
-        let img = parse_vram_file(&image(10, 20, 2, 2, 0xAB)).unwrap().remove(0);
+        let img = parse_vram_file(&image(10, 20, 2, 2, 0xAB))
+            .unwrap()
+            .remove(0);
         vram.upload(&img).unwrap();
         assert_eq!(vram.pixels[20 * VRAM_WIDTH + 10], 0xABAB);
         assert_eq!(vram.pixels[21 * VRAM_WIDTH + 11], 0xABAB);

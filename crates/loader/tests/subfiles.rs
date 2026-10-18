@@ -52,7 +52,10 @@ fn dram_files_are_consistent() {
             // Every pointer must land inside the payload.
             for &slot in &dram.pointer_slots {
                 let target = dram.read_u32(slot) as usize;
-                assert!(target <= dram.data.len(), "entry {i}: slot {slot:#x} -> {target:#x}");
+                assert!(
+                    target <= dram.data.len(),
+                    "entry {i}: slot {slot:#x} -> {target:#x}"
+                );
             }
             with_map.push((i, dram.pointer_slots.len()));
         }
@@ -79,15 +82,24 @@ fn track_lev_files_parse() {
         let nv = lev.vertices.len();
         for (i, q) in lev.quad_blocks.iter().enumerate() {
             for &v in &q.vertex_index {
-                assert!((v as usize) < nv, "level {id}: quad {i} uses vertex {v} of {nv}");
+                assert!(
+                    (v as usize) < nv,
+                    "level {id}: quad {i} uses vertex {v} of {nv}"
+                );
             }
             let (min, max) = (q.bbox.min, q.bbox.max);
-            assert!(min.x <= max.x && min.y <= max.y && min.z <= max.z, "level {id}: quad {i} bbox");
+            assert!(
+                min.x <= max.x && min.y <= max.y && min.z <= max.z,
+                "level {id}: quad {i} bbox"
+            );
         }
         let mut leaves = 0;
         for n in &lev.bsp {
             if let BspKind::Leaf { quad_blocks, .. } = &n.kind {
-                assert!(quad_blocks.end <= lev.quad_blocks.len(), "level {id}: leaf range");
+                assert!(
+                    quad_blocks.end <= lev.quad_blocks.len(),
+                    "level {id}: leaf range"
+                );
                 leaves += 1;
             }
         }

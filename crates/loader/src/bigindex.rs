@@ -147,10 +147,22 @@ mod tests {
     fn level_lookup() {
         let l = |id, lod, f| BigIndex::level(id, lod, f).0;
         assert_eq!(l(LevelId::DINGO_CANYON, Lod::OnePlayer, LevFile::Vram), 0);
-        assert_eq!(l(LevelId::DRAGON_MINES, Lod::FourPlayer, LevFile::Ptr), 8 + 4 + 2);
-        assert_eq!(l(LevelId::NITRO_COURT, Lod::OnePlayer, LevFile::Lev), 144 + 1);
-        assert_eq!(l(LevelId::GEM_STONE_VALLEY, Lod::OnePlayer, LevFile::Vram), 200);
-        assert_eq!(l(LevelId::MAIN_MENU_LEVEL, Lod::OnePlayer, LevFile::Vram), 215);
+        assert_eq!(
+            l(LevelId::DRAGON_MINES, Lod::FourPlayer, LevFile::Ptr),
+            8 + 4 + 2
+        );
+        assert_eq!(
+            l(LevelId::NITRO_COURT, Lod::OnePlayer, LevFile::Lev),
+            144 + 1
+        );
+        assert_eq!(
+            l(LevelId::GEM_STONE_VALLEY, Lod::OnePlayer, LevFile::Vram),
+            200
+        );
+        assert_eq!(
+            l(LevelId::MAIN_MENU_LEVEL, Lod::OnePlayer, LevFile::Vram),
+            215
+        );
         assert_eq!(
             l(LevelId::SCRAPBOOK, Lod::OnePlayer, LevFile::Vram),
             BigIndex::SCRAPBOOK.0

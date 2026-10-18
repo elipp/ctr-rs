@@ -93,7 +93,8 @@ pub fn open_bigfile(path: &std::path::Path) -> io::Result<(Disc, crate::bigfile:
     let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
     let open = || RawSectorReader::new(std::io::BufReader::new(std::fs::File::open(path)?));
 
-    let image = IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
+    let image =
+        IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
     let start = image
         .root_dir()
         .iter(&image)

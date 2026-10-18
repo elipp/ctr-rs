@@ -24,7 +24,8 @@ fn bigfile_index() {
     println!("SCRAPBOOK index = {}", BigIndex::SCRAPBOOK.0);
     assert!(BigIndex::SCRAPBOOK.get() < big.entries.len());
     for (i, e) in big.entries.iter().enumerate() {
-        let end = (e.sector_offset as u64 * USER_DATA_SIZE + e.size as u64).div_ceil(USER_DATA_SIZE);
+        let end =
+            (e.sector_offset as u64 * USER_DATA_SIZE + e.size as u64).div_ceil(USER_DATA_SIZE);
         assert!(
             end * USER_DATA_SIZE <= b.file_size,
             "entry {i} runs past end of BIGFILE.BIG"

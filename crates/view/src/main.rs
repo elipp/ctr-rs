@@ -1,8 +1,8 @@
 //! Fly-through viewer for a track's geometry (textured).
 //!
 //! `view [LEVEL_ID] [--lo]` — level id as in `loader::level::LevelId` (default 0);
-//! `--lo` shows the `color_lo` vertex colours; `--show-red` keeps the
-//! faces painted pure red, which are hidden by default. The disc image is `CTR_BIN`
+//! `--lo` shows the `color_lo` vertex colours; `--show-hidden` keeps the
+//! blocks without textures and the faces painted pure red, which are hidden by default. The disc image is `CTR_BIN`
 //! or `assets/ctr-u.bin`.
 //!
 //! A collision probe from the camera is drawn and described on screen; see
@@ -57,11 +57,7 @@ fn load_level(id: u32) -> Loaded {
     for img in parse_vram_file(&read(LevFile::Vram)).expect("parse VRAM file") {
         vram.upload(&img).expect("upload VRAM image");
     }
-    Loaded {
-        level,
-        dram,
-        vram,
-    }
+    Loaded { level, dram, vram }
 }
 
 #[derive(Resource)]
@@ -77,7 +73,7 @@ struct Textures {
 struct LowColors(bool);
 
 #[derive(Resource)]
-struct ShowRed(bool);
+struct ShowHidden(bool);
 
 #[derive(Component)]
 struct FlyCamera {
@@ -89,24 +85,20 @@ struct FlyCamera {
 fn main() {
     let mut id = 0;
     let mut low = false;
-    let mut show_red = false;
+    let mut show_hidden = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--lo" => low = true,
-            "--show-red" => show_red = true,
+            "--show-hidden" => show_hidden = true,
             n => {
                 id = n.parse().unwrap_or_else(|_| {
-                    panic!("usage: view [LEVEL_ID] [--lo] [--show-red], got `{n}`")
+                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden], got `{n}`")
                 })
             }
         }
     }
 
-    let Loaded {
-        level,
-        dram,
-        vram,
-    } = load_level(id);
+    let Loaded { level, dram, vram } = load_level(id);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
 
@@ -122,65 +114,30 @@ fn main() {
         .insert_resource(loaded)
         .insert_resource(textures)
         .insert_resource(LowColors(low))
-        .insert_resource(ShowRed(show_red))
+        .insert_resource(ShowHidden(show_hidden))
         .add_systems(Startup, setup)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
         .add_plugins(probe::ProbePlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-        .add_systems(FixedUpdate, animate)
+        .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain())
         .add_systems(Update, fly)
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    track: Res<Track>,
-    textures: Res<Textures>,
-    mut images: ResMut<Assets<Image>>,
-    low: Res<LowColors>,
-    show_red: Res<ShowRed>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
-) {
-    let level = &track.0;
-    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_red.0);
-    info!(
-        "{} quad blocks, vertices per part {:?}, {} animated faces",
-        level.quad_blocks.len(),
-        data.parts.each_ref().map(|p| p.positions.len()),
-        data.animated_faces.len()
-    );
-
-    let mut atlas = Image::new(
-        Extent3d {
-            width: data.atlas.width as u32,
-            height: data.atlas.height as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data.atlas.rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    atlas.sampler = ImageSampler::nearest();
-    let atlas = images.add(atlas);
-
+/// Spawns one entity per non-empty part, with the material its blend mode needs.
+fn spawn_parts(
+    parts: [mesh::MeshPart; PARTS],
+    base: &StandardMaterial,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
+) -> [Option<Handle<Mesh>>; PARTS] {
     let mut handles: [Option<Handle<Mesh>>; PARTS] = default();
-    let mut uvs: [Vec<[f32; 2]>; PARTS] = default();
-    let base = StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(atlas),
-        unlit: true,
-        cull_mode: None,
-        double_sided: true,
-        ..default()
-    };
-    for (i, part) in data.parts.into_iter().enumerate() {
+    for (i, part) in parts.into_iter().enumerate() {
         if part.indices.is_empty() {
             continue;
         }
-        uvs[i] = part.uvs.clone();
         let mut m = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
@@ -212,13 +169,83 @@ fn setup(
             }))),
         };
     }
+    handles
+}
+
+fn setup(
+    mut commands: Commands,
+    track: Res<Track>,
+    textures: Res<Textures>,
+    mut images: ResMut<Assets<Image>>,
+    low: Res<LowColors>,
+    show_hidden: Res<ShowHidden>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+) {
+    let level = &track.0;
+    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.0);
+    info!(
+        "{} quad blocks, vertices per part {:?}, {} animated faces",
+        level.quad_blocks.len(),
+        data.parts.each_ref().map(|p| p.positions.len()),
+        data.animated_faces.len()
+    );
+
+    let mut atlas = Image::new(
+        Extent3d {
+            width: data.atlas.width as u32,
+            height: data.atlas.height as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data.atlas.rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    atlas.sampler = ImageSampler::nearest();
+    let atlas = images.add(atlas);
+
+    let base = StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(atlas),
+        unlit: true,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    };
+    let uvs = data.parts.each_ref().map(|p| p.uvs.clone());
+    let handles = spawn_parts(
+        data.parts,
+        &base,
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut subtract_materials,
+    );
+    let water_state = WaterState {
+        water: level.water.clone(),
+        corners: data.water_corners,
+        atlas_size: data.atlas_size,
+        colors: data.water.each_ref().map(|p| p.colors.clone()),
+        uvs: data.water.each_ref().map(|p| p.uvs.clone()),
+        handles: spawn_parts(
+            data.water,
+            &base,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+        ),
+    };
+    commands.insert_resource(water_state);
+    commands.insert_resource(GameTick(0));
     commands.insert_resource(AnimState {
         shown: vec![usize::MAX; data.animations.len()],
         animations: data.animations,
         faces: data.animated_faces,
         uvs,
         handles,
-        tick: 0,
     });
 
     let spawn = level.driver_spawns[0].pos;
@@ -247,16 +274,29 @@ struct AnimState {
     uvs: [Vec<[f32; 2]>; PARTS],
     handles: [Option<Handle<Mesh>>; PARTS],
     shown: Vec<usize>,
-    /// Game ticks elapsed (`gGT->timer`).
-    tick: i32,
+}
+
+/// Game ticks elapsed (`gGT->timer`).
+#[derive(Resource)]
+struct GameTick(u32);
+
+/// The water faces: their meshes, and what the per-tick water animation patches into them.
+#[derive(Resource)]
+struct WaterState {
+    water: loader::water::Water,
+    corners: std::collections::HashMap<usize, Vec<mesh::WaterCorner>>,
+    atlas_size: [f32; 2],
+    colors: [Vec<[f32; 4]>; PARTS],
+    uvs: [Vec<[f32; 2]>; PARTS],
+    handles: [Option<Handle<Mesh>>; PARTS],
 }
 
 /// `CTR_CycleTex_LEV`, once per game tick.
-fn animate(mut state: ResMut<AnimState>, mut meshes: ResMut<Assets<Mesh>>) {
+fn animate(mut state: ResMut<AnimState>, tick: Res<GameTick>, mut meshes: ResMut<Assets<Mesh>>) {
     let state = &mut *state;
     let mut dirty = [false; PARTS];
     for (i, anim) in state.animations.iter().enumerate() {
-        let frame = anim.texture.frame_at(state.tick);
+        let frame = anim.texture.frame_at(tick.0 as i32);
         if std::mem::replace(&mut state.shown[i], frame) == frame {
             continue;
         }
@@ -272,7 +312,37 @@ fn animate(mut state: ResMut<AnimState>, mut meshes: ResMut<Assets<Mesh>>) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, state.uvs[part].clone());
         }
     }
-    state.tick += 1;
+}
+
+/// `AnimateWater1P`, once per game tick, for every water vertex.
+fn animate_water(
+    mut state: ResMut<WaterState>,
+    tick: Res<GameTick>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let state = &mut *state;
+    let [width, height] = state.atlas_size;
+    for c in state.water.animate(tick.0, |_| true) {
+        // Textured primitives get their colour doubled, as everywhere else.
+        let gray = c.gray as f32 * 2.0 / 255.0;
+        for corner in state.corners.get(&c.vertex).into_iter().flatten() {
+            state.colors[corner.part][corner.slot] = [gray, gray, gray, 1.0];
+            state.uvs[corner.part][corner.slot] = [
+                (corner.origin[0] + c.uv[0] as f32) / width,
+                (corner.origin[1] + c.uv[1] as f32) / height,
+            ];
+        }
+    }
+    for part in 0..PARTS {
+        if let Some(mut mesh) = state.handles[part].as_ref().and_then(|h| meshes.get_mut(h)) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, state.uvs[part].clone());
+        }
+    }
+}
+
+fn advance_tick(mut tick: ResMut<GameTick>) {
+    tick.0 += 1;
 }
 
 fn fly(
