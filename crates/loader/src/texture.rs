@@ -68,11 +68,24 @@ impl TextureLayout {
     }
 }
 
-/// Follows a quad block texture pointer (a payload offset) to its layout.
-/// A pointer with bit 0 set points at a slot holding the current layout
+/// `struct IconGroup4`: the same picture at decreasing distance, as the game
+/// picks it by depth (`DrawLevelOvr1P_GetProjectedMidTexture`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextureGroup {
+    pub far: TextureLayout,
+    pub middle: TextureLayout,
+    pub near: TextureLayout,
+    // The fourth slot is a pointer to hi-res mosaic data the game reloads at
+    // close range, not a layout (not supported).
+}
+
+pub const TEXTURE_GROUP_SIZE: usize = 4 * TEXTURE_LAYOUT_SIZE;
+
+/// Follows a quad block texture pointer (a payload offset) to its group.
+/// A pointer with bit 0 set points at a slot holding the current group
 /// pointer (animated textures; the slot is what `CTR_CycleTex_LEV` rewrites),
 /// so this returns whatever frame the file was saved with.
-pub fn resolve_texture(payload: &[u8], ptr: u32) -> io::Result<Option<TextureLayout>> {
+pub fn resolve_texture(payload: &[u8], ptr: u32) -> io::Result<Option<TextureGroup>> {
     let word = |at: usize| -> io::Result<u32> {
         payload
             .get(at..at + 4)
@@ -88,9 +101,14 @@ pub fn resolve_texture(payload: &[u8], ptr: u32) -> io::Result<Option<TextureLay
         return Ok(None);
     }
     let bytes = payload
-        .get(at..at + TEXTURE_LAYOUT_SIZE)
-        .ok_or_else(|| invalid(format!("texture layout {at:#x} is outside the payload")))?;
-    TextureLayout::parse(bytes).map(Some)
+        .get(at..at + TEXTURE_GROUP_SIZE)
+        .ok_or_else(|| invalid(format!("texture group {at:#x} is outside the payload")))?;
+    let layout = |i: usize| TextureLayout::parse(&bytes[i * TEXTURE_LAYOUT_SIZE..]);
+    Ok(Some(TextureGroup {
+        far: layout(0)?,
+        middle: layout(1)?,
+        near: layout(2)?,
+    }))
 }
 
 /// How one of a quad block's four faces is drawn (a 5-bit field of
@@ -240,13 +258,14 @@ mod tests {
 
     #[test]
     fn tagged_pointer_follows_the_slot() {
-        let mut p = vec![0u8; 0x40];
-        p[0x20..0x24].copy_from_slice(&0x10u32.to_le_bytes());
-        p[0x10 + 6] = 0x1d;
-        let t = resolve_texture(&p, 0x21).unwrap().unwrap();
-        assert_eq!(t.tpage, 0x1d);
+        let mut p = vec![0u8; 0x100];
+        p[0x80..0x84].copy_from_slice(&0x10u32.to_le_bytes());
+        p[0x10 + 0x18 + 6] = 0x1d;
+        let t = resolve_texture(&p, 0x81).unwrap().unwrap();
+        assert_eq!(t.near.tpage, 0x1d);
+        assert_eq!(t.far.tpage, 0);
         assert_eq!(resolve_texture(&p, 0x10).unwrap(), Some(t));
         assert_eq!(resolve_texture(&p, 0).unwrap(), None);
-        assert!(resolve_texture(&p, 0x100).is_err());
+        assert!(resolve_texture(&p, 0xf8).is_err());
     }
 }

@@ -80,7 +80,7 @@ fn toggles(keys: Res<ButtonInput<KeyCode>>, mut probe: ResMut<Probe>) {
 /// World space back to game units, saturating to the `s16` range.
 fn to_game(p: Vec3) -> SVec3 {
     let q = |v: f32| (v / SCALE).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-    SVec3 { x: q(p.x), y: q(p.y), z: q(-p.z) }
+    SVec3 { x: q(p.x), y: q(p.y), z: q(p.z) }
 }
 
 fn from_game(p: SVec3) -> Vec3 {
@@ -153,7 +153,7 @@ fn run_probe(
         let quad = &level.quad_blocks[quad_index as usize];
         let hit = from_game(sps.hit.hit_pos);
         let n = sps.hit.plane.normal;
-        let normal = Vec3::new(n.x as f32, n.y as f32, -(n.z as f32)) / 4096.0;
+        let normal = Vec3::new(n.x as f32, n.y as f32, n.z as f32) / 4096.0;
 
         let corners = sps.hit_level_triangle.map(|v| from_game(level.vertices[v.expect("hit triangle") as usize].pos));
         gizmos.linestrip(

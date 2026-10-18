@@ -1,7 +1,8 @@
-//! Fly-through viewer for a track's geometry (vertex colours only, no textures yet).
+//! Fly-through viewer for a track's geometry (textured).
 //!
 //! `view [LEVEL_ID] [--lo]` — level id as in `loader::level::LevelId` (default 0);
-//! `--lo` shows the `color_lo` vertex colours. The disc image is `CTR_BIN`
+//! `--lo` shows the `color_lo` vertex colours; `--show-red` keeps the
+//! faces painted pure red, which are hidden by default. The disc image is `CTR_BIN`
 //! or `assets/ctr-u.bin`.
 //!
 //! A collision probe from the camera is drawn and described on screen; see
@@ -16,29 +17,57 @@ mod probe;
 use std::path::PathBuf;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::asset::RenderAssetUsages;
+use bevy::image::ImageSampler;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::prelude::*;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
 use loader::lev::Level;
 use loader::level::LevelId;
+use loader::vram::{Vram, parse_vram_file};
 
-fn load_level(id: u32) -> Level {
+/// A level's geometry plus what its texture pointers need.
+struct Loaded {
+    level: Level,
+    payload: Vec<u8>,
+    vram: Vram,
+}
+
+fn load_level(id: u32) -> Loaded {
     let path = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"));
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let index = BigIndex::level(LevelId(id), Lod::OnePlayer, LevFile::Lev);
-    let file = big.read(&mut disc, index.get()).expect("read LEV from BIGFILE");
-    Level::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse LEV")
+    let mut read = |f| {
+        let index = BigIndex::level(LevelId(id), Lod::OnePlayer, f);
+        big.read(&mut disc, index.get()).expect("read level file from BIGFILE")
+    };
+    let dram = DramFile::parse(&read(LevFile::Lev)).expect("parse DRAM file");
+    let level = Level::parse(&dram).expect("parse LEV");
+    let mut vram = Vram::default();
+    for img in parse_vram_file(&read(LevFile::Vram)).expect("parse VRAM file") {
+        vram.upload(&img).expect("upload VRAM image");
+    }
+    Loaded { level, payload: dram.data, vram }
 }
 
 #[derive(Resource)]
 pub struct Track(pub Level);
 
 #[derive(Resource)]
+struct Textures {
+    payload: Vec<u8>,
+    vram: Vram,
+}
+
+#[derive(Resource)]
 struct LowColors(bool);
+
+#[derive(Resource)]
+struct ShowRed(bool);
 
 #[derive(Component)]
 struct FlyCamera {
@@ -50,12 +79,18 @@ struct FlyCamera {
 fn main() {
     let mut id = 0;
     let mut low = false;
+    let mut show_red = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--lo" => low = true,
-            n => id = n.parse().unwrap_or_else(|_| panic!("usage: view [LEVEL_ID] [--lo], got `{n}`")),
+            "--show-red" => show_red = true,
+            n => id = n.parse().unwrap_or_else(|_| panic!("usage: view [LEVEL_ID] [--lo] [--show-red], got `{n}`")),
         }
     }
+
+    let Loaded { level, payload, vram } = load_level(id);
+    let loaded = Track(level);
+    let textures = Textures { payload, vram };
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -66,8 +101,10 @@ fn main() {
             ..default()
         }))
         .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
-        .insert_resource(Track(load_level(id)))
+        .insert_resource(loaded)
+        .insert_resource(textures)
         .insert_resource(LowColors(low))
+        .insert_resource(ShowRed(show_red))
         .add_systems(Startup, setup)
         .add_plugins(probe::ProbePlugin)
         .add_systems(Update, fly)
@@ -77,12 +114,15 @@ fn main() {
 fn setup(
     mut commands: Commands,
     track: Res<Track>,
+    textures: Res<Textures>,
+    mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
+    show_red: Res<ShowRed>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let level = &track.0;
-    let data = mesh::level_mesh(level, low.0);
+    let data = mesh::level_mesh(level, &textures.payload, &textures.vram, low.0, !show_red.0);
     info!(
         "{} vertices, {} quad blocks, {} triangles",
         data.positions.len(),
@@ -93,12 +133,24 @@ fn setup(
     let mut m = Mesh::new(PrimitiveTopology::TriangleList, default());
     m.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions);
     m.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors);
+    m.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs);
+
+    let mut atlas = Image::new(
+        Extent3d { width: data.atlas.width as u32, height: data.atlas.height as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data.atlas.rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    atlas.sampler = ImageSampler::nearest();
     m.insert_indices(Indices::U32(data.indices));
 
     commands.spawn((
         Mesh3d(meshes.add(m)),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
+            base_color_texture: Some(images.add(atlas)),
+            alpha_mode: AlphaMode::Mask(0.5),
             unlit: true,
             cull_mode: None,
             double_sided: true,
