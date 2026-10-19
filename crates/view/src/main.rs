@@ -12,7 +12,10 @@
 //!
 //! Controls: hold the right mouse button to look, WASD to move, Space/Shift
 //! up/down, Ctrl to go fast, mouse wheel to change the base speed.
+//!
+//! `--drive` drives the racer instead, see `drive.rs`.
 
+mod drive;
 mod mesh;
 mod probe;
 mod subtract;
@@ -114,10 +117,12 @@ fn main() {
     let mut racer = Some(0);
     let mut low = false;
     let mut show_hidden = false;
+    let mut driving = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--lo" => low = true,
+            "--drive" => driving = true,
             "--show-hidden" => show_hidden = true,
             "--no-racer" => racer = None,
             "--racer" => {
@@ -130,12 +135,13 @@ fn main() {
             }
             n => {
                 id = n.parse().unwrap_or_else(|_| {
-                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden] [--racer N | --no-racer], got `{n}`")
+                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden] [--drive] [--racer N | --no-racer], got `{n}`")
                 })
             }
         }
     }
 
+    let character = racer.unwrap_or(0) as usize;
     let Loaded {
         level,
         dram,
@@ -144,8 +150,17 @@ fn main() {
     } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
+    let drive = driving.then(|| {
+        let model = racer.as_ref().expect("--drive needs a racer");
+        let mut anim_num_frames = [0; 8];
+        for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
+            *n = anim.num_frames;
+        }
+        drive::Drive::new(&loaded, character, anim_num_frames)
+    });
 
-    App::new()
+    let mut app = App::new();
+    app
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: format!("ctr-rs view: level {id}"),
@@ -161,11 +176,14 @@ fn main() {
         .insert_resource(ShowHidden(show_hidden))
         .add_systems(Startup, setup)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
-        .add_plugins(probe::ProbePlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-        .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain())
-        .add_systems(Update, fly)
-        .run();
+        .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
+    if let Some(drive) = drive {
+        app.insert_resource(drive).add_plugins(drive::DrivePlugin);
+    } else {
+        app.add_plugins(probe::ProbePlugin).add_systems(Update, fly);
+    }
+    app.run();
 }
 
 /// Spawns one entity per non-empty part, with the material its blend mode needs.
@@ -173,6 +191,7 @@ fn spawn_parts(
     parts: [mesh::MeshPart; PARTS],
     base: &StandardMaterial,
     transform: Transform,
+    parent: Option<Entity>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -198,6 +217,9 @@ fn spawn_parts(
             ..base.clone()
         };
         let mut entity = commands.spawn((Mesh3d(handle), transform));
+        if let Some(parent) = parent {
+            entity.insert(ChildOf(parent));
+        }
         match i {
             i if i == Part::Opaque as usize => {
                 entity.insert(MeshMaterial3d(materials.add(with(AlphaMode::Mask(0.5)))))
@@ -228,6 +250,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+    driving: Option<Res<drive::Drive>>,
 ) {
     let level = &track.0;
     let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.0);
@@ -265,6 +288,7 @@ fn setup(
         data.parts,
         &base,
         Transform::default(),
+        None,
         &mut commands,
         &mut meshes,
         &mut materials,
@@ -280,6 +304,7 @@ fn setup(
             data.water,
             &base,
             Transform::default(),
+            None,
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -300,6 +325,7 @@ fn setup(
         spawn_racer(
             model,
             level.driver_spawns[0],
+            driving.is_some(),
             &textures.vram,
             &mut commands,
             &mut images,
@@ -311,15 +337,19 @@ fn setup(
 
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(x, y + 3.0, z + 6.0),
-        FlyCamera {
-            yaw: 0.0,
-            pitch: -0.3,
-            speed: 10.0,
-        },
-    ));
+    if driving.is_some() {
+        commands.spawn((Camera3d::default(), Transform::default(), drive::ChaseCamera::new()));
+    } else {
+        commands.spawn((
+            Camera3d::default(),
+            Transform::from_xyz(x, y + 3.0, z + 6.0),
+            FlyCamera {
+                yaw: 0.0,
+                pitch: -0.3,
+                speed: 10.0,
+            },
+        ));
+    }
 }
 
 /// The instance scale `VehBirth` gives drivers (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`).
@@ -334,6 +364,7 @@ const MODEL_FORWARD_YAW: f32 = std::f32::consts::FRAC_PI_2;
 fn spawn_racer(
     model: &Model,
     spawn: loader::lev::SpawnPoint,
+    driving: bool,
     vram: &Vram,
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -373,11 +404,21 @@ fn spawn_racer(
 
     let [x, y, z] = mesh::to_world(spawn.pos);
     let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;
+    let placement = Transform::from_xyz(x, y, z)
+        .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
+    // Driving: the parts hang off an entity the sim moves, and the model is
+    // posed by that (the model itself faces along +Z, like the heading).
+    let (placement, parent) = if driving {
+        let kart = commands.spawn((drive::Kart, placement, Visibility::default())).id();
+        (Transform::default(), Some(kart))
+    } else {
+        (placement, None)
+    };
     spawn_parts(
         data.parts,
         &base,
-        Transform::from_xyz(x, y, z)
-            .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW)),
+        placement,
+        parent,
         commands,
         meshes,
         materials,

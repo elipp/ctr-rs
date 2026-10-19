@@ -7,3 +7,4 @@ edition = "2024"
 bevy = { version = "0.20.0", features = ["dynamic_linking"] }
 coll = { path = "../coll" }
 loader = { path = "../loader" }
+vehicle = { path = "../vehicle" }

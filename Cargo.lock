@@ -5689,6 +5689,7 @@ dependencies = [
  "bevy",
  "coll",
  "loader",
+ "vehicle",
 ]
 
 [[package]]

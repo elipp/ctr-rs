@@ -74,6 +74,8 @@ pub struct Animation {
     pub name: String,
     /// Playback runs at twice `frames`' rate, blending in between.
     pub interpolated: bool,
+    /// `ModelAnim::numFrames`: the frames played back (twice `frames` if interpolated).
+    pub num_frames: u16,
     pub frames: Vec<Frame>,
 }
 
@@ -253,6 +255,7 @@ fn read_animation(dram: &DramFile, at: u32, vertex_count: usize) -> io::Result<A
     Ok(Animation {
         name: name(dram, at)?,
         interpolated,
+        num_frames: count as u16,
         frames: (0..frames)
             .map(|i| read_frame(dram, at + MODEL_ANIM_SIZE + i * frame_size, vertex_count, delta))
             .collect::<io::Result<_>>()?,

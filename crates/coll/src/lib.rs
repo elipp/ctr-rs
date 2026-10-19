@@ -384,6 +384,19 @@ impl Collision {
         search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, true), self);
     }
 
+    /// `COLL_SearchBSP_CallbackPARAM` with `COLL_FIXED_BSPLEAF_TestQuadblocks`
+    /// over `sps.bbox`: the point test of `COLL_FIXED_PlayerSearch`. The
+    /// caller sets up the scratchpad (segment, bounds, flags) first.
+    pub fn search_fixed(&mut self, level: &Level) {
+        let bounds = self.sps.bbox;
+        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, false), self);
+    }
+
+    /// `COLL_FIXED_QUADBLK_TestTriangles` on a single quad block.
+    pub fn test_fixed_quadblock(&mut self, level: &Level, quad_index: u32) {
+        self.test_quadblock_triangles(level, quad_index, false);
+    }
+
     /// The setup of `COLL_MOVED_PlayerSearch` before its iterations: hit
     /// radius, the surfaces the player collides with, and an empty scrub list.
     /// Always high LOD (see the module comment). `TEST_INSTANCES` is set as in
