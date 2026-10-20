@@ -315,8 +315,8 @@ fn main() {
     .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::armadillo_tick, props::minecart_tick, fire::tick, advance_tick).chain())
-    .add_systems(Update, (switch_level, props::roll, props::armadillo_place, props::minecart_place, fire::update).chain());
+    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::tick_hazards, props::pose_hazards, fire::tick, advance_tick).chain())
+    .add_systems(Update, (switch_level, props::roll, props::place_hazards, fire::update).chain());
     let world = app.world_mut();
     let mut scene_systems = vec![world.register_system(setup)];
     if let Some(drive) = drive {
@@ -551,8 +551,10 @@ fn setup(
         handles,
     });
 
+    let hazards = hazard::Hazards::new(level, &textures.dram);
     props::spawn(
         level,
+        &hazards,
         &textures.dram,
         &textures.vram,
         &mut commands,
@@ -561,10 +563,11 @@ fn setup(
         &mut materials,
         &mut subtract_materials,
     );
-
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();
-    fire::spawn(level, &textures.dram, &textures.vram, &mut commands, &mut images, &mut meshes, &mut materials);
+    fire::spawn(hazards.fireballs.len(), &textures.dram, &textures.vram, &mut commands, &mut images, &mut meshes, &mut materials);
+    commands.insert_resource(props::Sim::new(hazards));
+
 
     if let Some(model) = &racer.0 {
         let kart = spawn_racer(
