@@ -538,9 +538,10 @@ pub fn counter_steer(d: &mut Driver, gte: &mut Gte) {
 }
 
 /// `VehPhysForce_TranslateMatrix`, without the squash and stretch: builds the
-/// matrix that faces the model along the surface normal.
+/// matrix that faces the model along the surface normal, then steps the wheelie.
 pub fn translate_matrix(d: &mut Driver, gte: &mut Gte) {
     let mut facing = d.matrix_facing_dir;
     rot_axis_angle(&mut facing, gte, d.axis_angle2_normal_vec, d.rot_curr_y as i32);
     d.matrix_facing_dir = facing;
+    crate::baked::update_matrix_animation(d);
 }

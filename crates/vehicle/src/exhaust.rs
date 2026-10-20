@@ -59,7 +59,9 @@ pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
         d.failed_boost_exhaust_timer -= 1;
     }
 
-    let m = &d.matrix_facing_dir;
+    // The pipes ride on the kart model, wheelie and all.
+    let (m, _) = crate::baked::inst_matrix(d);
+    let m = &m;
     let velocity = rotate(m, VELOCITY);
     let y = (INSTANCE_SCALE * POSITION_Y) >> 1;
     let z = (INSTANCE_SCALE * POSITION_Z) >> 4;

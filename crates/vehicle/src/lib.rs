@@ -15,6 +15,7 @@
 //! `tests/reference.rs` checks this port against the C code.
 
 pub mod angular;
+pub mod baked;
 pub mod calc;
 pub mod crash;
 pub mod exhaust;
@@ -27,6 +28,7 @@ pub mod jump_meter;
 pub mod joystick;
 pub mod linear;
 pub mod powerslide;
+pub mod rotmat;
 pub mod scrub;
 pub mod search;
 pub mod shadow;
@@ -190,6 +192,9 @@ pub mod kart_state {
 pub enum MatrixArray {
     #[default]
     None,
+    WheelieStart,
+    WheelieHold,
+    WheelieRecover,
     CrashFall,
     /// `BAKED_GTE_MATRIX_JUMP_BASE + n`: the airborne pose of a character.
     Jump(u8),
