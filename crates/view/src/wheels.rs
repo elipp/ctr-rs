@@ -32,6 +32,9 @@ pub struct Wheels {
 /// (retail sorts the sprites among the body's polygons by depth instead).
 const NEAR_SIDE_PUSH: f32 = 1.5;
 
+/// Sorts the tires after every other blended mesh but the water (in world units of view distance).
+const TIRES_SORT_BIAS: f32 = 50.0;
+
 pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -76,6 +79,9 @@ pub fn spawn(
             cull_mode: None,
             double_sided: true,
             alpha_mode: AlphaMode::Blend,
+            // Bevy sorts blended meshes by their origin, which for the track and the
+            // marks is far from where they are drawn: the tires go after both.
+            depth_bias: TIRES_SORT_BIAS,
             ..default()
         })),
         Transform::default(),

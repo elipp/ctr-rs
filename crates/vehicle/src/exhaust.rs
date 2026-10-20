@@ -2,7 +2,7 @@
 //! after the physics): whether the kart puffs smoke from its two pipes this
 //! tick, and where and how fast. The particles themselves are the renderer's.
 //!
-//! Not ported: the multiplayer thinning (`numPlyrCurrGame`), bots, the engine
+//! Not ported: the stop while the boost flame burns, the multiplayer thinning (`numPlyrCurrGame`), bots, the engine
 //! revving at the start (`revEngineState`), invisibility and the underwater
 //! bubbles; and the squash and stretch of the model's scale.
 
@@ -46,15 +46,8 @@ fn in_boost_window(d: &Driver) -> bool {
 
 /// The puffs this tick. Counts down `failed_boost_exhaust_timer`.
 pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
-    // After a failed boost the exhaust runs whatever the flame is doing.
-    if d.failed_boost_exhaust_timer == 0 {
-        // While the boost flame burns, a kart outside the window has no exhaust.
-        // (Retail asks whether the flame's instance still exists, which is not
-        // simulated; the boost's reserves are the closest thing.)
-        if !in_boost_window(d) && d.reserves > 0 {
-            return Vec::new();
-        }
-    }
+    // Retail stops the exhaust while the boost flame burns outside the window;
+    // here it always shows (the flame's lifetime is not simulated), only dark in the window.
     if d.failed_boost_exhaust_timer != 0 {
         d.failed_boost_exhaust_timer -= 1;
     }
@@ -95,7 +88,7 @@ mod tests {
     }
 
     #[test]
-    fn the_boost_window_makes_the_smoke_dark_and_a_burning_flame_stops_it() {
+    fn the_boost_window_makes_the_smoke_dark() {
         let mut d = driver();
         d.turbo_meter_room_left = 200;
         assert!(exhaust(&mut d).iter().all(|p| p.dark));
@@ -103,8 +96,7 @@ mod tests {
         d.turbo_meter_room_left = 545;
         assert!(exhaust(&mut d).iter().all(|p| !p.dark));
         d.reserves = 100;
-        assert!(exhaust(&mut d).is_empty());
-        // After a failed boost the countdown overrides that.
+        assert_eq!(exhaust(&mut d).len(), 2);
         d.failed_boost_exhaust_timer = 2;
         assert_eq!(exhaust(&mut d).len(), 2);
         assert_eq!(d.failed_boost_exhaust_timer, 1);
