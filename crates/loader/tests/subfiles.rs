@@ -98,6 +98,19 @@ fn track_lev_files_parse() {
             println!("level {id:>2}: skybox {} verts {faces} faces", sky.vertices.len());
             assert!(faces > 0, "level {id}: empty skybox");
         }
+        let mut with_model = 0;
+        for inst in lev.instances.iter().filter(|i| i.model != 0) {
+            let model = loader::model::Model::parse_at(&dram, inst.model)
+                .unwrap_or_else(|e| panic!("level {id}: instance {} model: {e}", inst.name));
+            assert!(!model.headers.is_empty(), "level {id}: instance {} has no model LOD", inst.name);
+            with_model += 1;
+        }
+        println!(
+            "level {id:>2}: {} instances, {with_model} with a model, {} scenery vertices (config flags {:#x})",
+            lev.instances.len(),
+            lev.scenery.vertices.len(),
+            lev.config_flags
+        );
         let mut leaves = 0;
         for n in &lev.bsp {
             if let BspKind::Leaf { quad_blocks, .. } = &n.kind {

@@ -173,7 +173,7 @@ pub struct KartModel {
 
 /// The pose of the animation at `frame` (`Instance::animFrame`). An animation that is
 /// interpolated stores every other frame, and an odd frame is the average of its neighbours.
-fn animation_pose(header: &loader::model::ModelHeader, index: u8, frame: i16) -> Option<loader::model::Frame> {
+pub(crate) fn animation_pose(header: &loader::model::ModelHeader, index: u8, frame: i16) -> Option<loader::model::Frame> {
     let animation = header.animations.get(index as usize)?;
     let last = animation.frames.len().checked_sub(1)?;
     let frame = frame.max(0) as usize;
@@ -199,6 +199,10 @@ fn animate_kart(
     mut shown: Local<Option<(u8, i16)>>,
 ) {
     let Some(model) = model else { return };
+    // A new model (another level or racer) comes in its neutral pose, whatever was shown before.
+    if model.is_changed() {
+        *shown = None;
+    }
     let now = (drive.driver.anim_index, drive.driver.anim_frame);
     if *shown == Some(now) {
         return;
@@ -225,7 +229,7 @@ impl Plugin for DrivePlugin {
     }
 }
 
-fn spawn_hud(mut commands: Commands) {
+pub(crate) fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         Hud,
         Text::new(""),
