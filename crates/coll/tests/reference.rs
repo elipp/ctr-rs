@@ -248,6 +248,9 @@ fn matches_reference_on_random_triangles() {
     let Some(exe) = build_driver(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"), "coll_reference", &["game/COLL.c"]) else { return };
     let empty = Level {
         instances: Vec::new(),
+        spawn_delays: Vec::new(),
+        position_paths: Vec::new(),
+        paths: Vec::new(),
         skybox: None,
         quad_blocks: Vec::new(),
         vertices: Vec::new(),

@@ -163,6 +163,14 @@ pub struct Skybox {
     pub segments: [Vec<[u16; 3]>; 8],
 }
 
+/// A point of a recorded path (`struct SpawnPosRot`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PosRot {
+    pub pos: SVec3,
+    /// Angles, 0x1000 = a full turn.
+    pub rot: SVec3,
+}
+
 /// A placed model (`struct InstDef`): a mushroom, a crate, the start banner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstDef {
@@ -182,6 +190,15 @@ pub struct InstDef {
 #[derive(Debug, Clone)]
 pub struct Level {
     pub instances: Vec<InstDef>,
+    /// How long each armadillo waits before it first moves (`ptrSpawnType1`'s spawn array), in
+    /// ticks, indexed by the digit its instance name ends in.
+    pub spawn_delays: Vec<u16>,
+    /// The position-only paths (`ptrSpawnType2`): the minecarts of Dragon Mines follow the first,
+    /// and several other objects (seals, spiders, turtles) use the others.
+    pub position_paths: Vec<Vec<SVec3>>,
+    /// The recorded paths of the rolling objects (`ptrSpawnType2_PosRot`): the snowball and the
+    /// barrels follow one each, picked by the digit their instance name ends in.
+    pub paths: Vec<Vec<PosRot>>,
     pub skybox: Option<Skybox>,
     pub quad_blocks: Vec<QuadBlock>,
     pub vertices: Vec<LevVertex>,
@@ -267,6 +284,13 @@ const LEVEL_SKYBOX: usize = 0x4;
 const LEVEL_NUM_INSTANCES: usize = 0xc;
 const LEVEL_INSTANCES: usize = 0x10;
 const INST_DEF_SIZE: usize = 0x40;
+const LEVEL_SPAWN_TYPE_1: usize = 0x134;
+const LEVEL_NUM_POSITION_PATHS: usize = 0x138;
+const LEVEL_POSITION_PATHS: usize = 0x13c;
+const LEVEL_NUM_PATHS: usize = 0x140;
+const LEVEL_PATHS: usize = 0x144;
+const PATH_ENTRY_SIZE: usize = 8;
+const POS_ROT_SIZE: usize = 0xc;
 const LEVEL_DRIVER_SPAWN: usize = 0x6c;
 const LEVEL_CONFIG_FLAGS: usize = 0xdc;
 const LEVEL_RESTART_COUNT: usize = 0x148;
@@ -319,6 +343,59 @@ impl Level {
             })?;
         }
         Ok(Some(Skybox { vertices, segments }))
+    }
+
+    /// The delays of `ST1_SPAWN`: ten halfwords at most, one for each digit a name can end in.
+    fn parse_spawn_delays(p: &Payload) -> io::Result<Vec<u16>> {
+        const ST1_SPAWN: usize = 1;
+        const DIGITS: usize = 10;
+        let Some(at) = (match p.u32(LEVEL_SPAWN_TYPE_1)? {
+            0 => None,
+            at => Some(at as usize),
+        }) else {
+            return Ok(Vec::new());
+        };
+        if p.u32(at)? as usize <= ST1_SPAWN {
+            return Ok(Vec::new());
+        }
+        // Most tracks have no such table.
+        let delays = match p.u32(at + 4 + 4 * ST1_SPAWN)? {
+            0 => return Ok(Vec::new()),
+            delays => delays as usize,
+        };
+        (0..DIGITS).map_while(|i| p.u16(delays + i * 2).ok()).map(Ok).collect()
+    }
+
+    fn parse_position_paths(p: &Payload) -> io::Result<Vec<Vec<SVec3>>> {
+        let count = p.u32(LEVEL_NUM_POSITION_PATHS)? as usize;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let at = p.ptr(LEVEL_POSITION_PATHS, "position paths")?;
+        p.array(at, count, PATH_ENTRY_SIZE, |p, at| {
+            let points = p.u32(at)? as usize;
+            if points == 0 {
+                return Ok(Vec::new());
+            }
+            let first = p.ptr(at + 4, "path positions")?;
+            p.array(first, points, 6, |p, at| p.svec3(at))
+        })
+    }
+
+    fn parse_paths(p: &Payload) -> io::Result<Vec<Vec<PosRot>>> {
+        let count = p.u32(LEVEL_NUM_PATHS)? as usize;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let at = p.ptr(LEVEL_PATHS, "recorded paths")?;
+        p.array(at, count, PATH_ENTRY_SIZE, |p, at| {
+            let points = p.u32(at)? as usize;
+            if points == 0 {
+                return Ok(Vec::new());
+            }
+            let first = p.ptr(at + 4, "path points")?;
+            p.array(first, points, POS_ROT_SIZE, |p, at| Ok(PosRot { pos: p.svec3(at)?, rot: p.svec3(at + 6)? }))
+        })
     }
 
     fn parse_instances(p: &Payload) -> io::Result<Vec<InstDef>> {
@@ -463,6 +540,9 @@ impl Level {
 
         Ok(Self {
             instances: Self::parse_instances(&p)?,
+            spawn_delays: Self::parse_spawn_delays(&p)?,
+            position_paths: Self::parse_position_paths(&p)?,
+            paths: Self::parse_paths(&p)?,
             skybox: Self::parse_skybox(&p)?,
             quad_blocks,
             vertices,
