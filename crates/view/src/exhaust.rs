@@ -88,6 +88,11 @@ pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
     (image, width, height)
 }
 
+/// How much taller than wide a retail screen pixel is: the picture is 512 by 216 pixels (`MainMain`'s
+/// draw environments) shown at 4:3. The sprites are twice as wide in the camera's space to make up
+/// for it, while the viewer's picture has square pixels, so their height needs the same stretch.
+const SCREEN_PIXEL_ASPECT: f32 = (512.0 * 3.0 / 4.0) / 216.0;
+
 /// Most quads one mesh draws.
 const MAX_QUADS: usize = 64;
 
@@ -206,7 +211,7 @@ pub fn update(
             let center = kart.translation + at / 256.0 * SCALE;
             let gain = p.tint() as f32 / 128.0;
             for (k, [x, y]) in corners.into_iter().enumerate() {
-                let corner = center + right * quarter_units_to_world(x as f32) - up * quarter_units_to_world(y as f32);
+                let corner = center + right * quarter_units_to_world(x as f32) - up * (quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT);
                 positions[n * 4 + k] = corner.to_array();
                 colors[n * 4 + k] = [gain, gain, gain, 1.0];
             }
