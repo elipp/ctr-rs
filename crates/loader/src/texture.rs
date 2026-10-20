@@ -281,6 +281,14 @@ fn table_entry(mode: FaceMode) -> io::Result<u32> {
         .ok_or_else(|| invalid(format!("face mode {} does not exist", mode.mode)))
 }
 
+/// Whether the face's polygon is drawn when it is wound the other way round on the screen:
+/// the sign bit of the mode's table entry, which the level drawing XORs with the `NCLIP` sign
+/// (`DrawLevelOvr1P_SelectDirectBit`). A block with `QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED` is
+/// drawn either way. (The table's selectors reorder the corners, mirrored modes included.)
+pub fn face_back_to_front(mode: FaceMode) -> io::Result<bool> {
+    Ok(table_entry(mode)? >> 31 != 0)
+}
+
 /// Positions in `QuadBlock::vertex_index` of the polygon vertices of `face`
 /// (0..4). Vertex k carries `TextureLayout::uv[k]`. The face is drawn as the
 /// triangles (0, 1, 2) and (3, 1, 2); in the triangle modes one vertex is

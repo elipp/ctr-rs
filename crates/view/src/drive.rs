@@ -163,6 +163,55 @@ fn pose_of(d: &Driver) -> Pose {
     }
 }
 
+/// The kart model's faces, to pose it as the sim's animation says (`anim_index`, `anim_frame`):
+/// steering plays a frame that matches the wheel, a jump or a spin-out others.
+#[derive(Resource)]
+pub struct KartModel {
+    pub header: loader::model::ModelHeader,
+    pub parts: [Option<Handle<Mesh>>; render::mesh::PARTS],
+}
+
+/// The pose of the animation at `frame` (`Instance::animFrame`). An animation that is
+/// interpolated stores every other frame, and an odd frame is the average of its neighbours.
+fn animation_pose(header: &loader::model::ModelHeader, index: u8, frame: i16) -> Option<loader::model::Frame> {
+    let animation = header.animations.get(index as usize)?;
+    let last = animation.frames.len().checked_sub(1)?;
+    let frame = frame.max(0) as usize;
+    if !animation.interpolated {
+        return animation.frames.get(frame.min(last)).cloned();
+    }
+    let from = &animation.frames[(frame >> 1).min(last)];
+    if frame & 1 == 0 {
+        return Some(from.clone());
+    }
+    let to = &animation.frames[((frame >> 1) + 1).min(last)];
+    Some(loader::model::Frame {
+        origin: from.origin,
+        vertices: from.vertices.iter().zip(&to.vertices).map(|(a, b)| std::array::from_fn(|i| (a[i] + b[i]) >> 1)).collect(),
+    })
+}
+
+/// Poses the kart's model as the sim's animation says, when that changes.
+fn animate_kart(
+    drive: Res<Drive>,
+    model: Option<Res<KartModel>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut shown: Local<Option<(u8, i16)>>,
+) {
+    let Some(model) = model else { return };
+    let now = (drive.driver.anim_index, drive.driver.anim_frame);
+    if *shown == Some(now) {
+        return;
+    }
+    let Some(frame) = animation_pose(&model.header, now.0, now.1) else { return };
+    *shown = Some(now);
+    let positions = render::mesh::model_positions(&model.header, &frame, [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3]);
+    for (handle, positions) in model.parts.iter().zip(positions) {
+        let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else { continue };
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    }
+}
+
 pub struct DrivePlugin;
 
 impl Plugin for DrivePlugin {
@@ -170,7 +219,7 @@ impl Plugin for DrivePlugin {
         app.insert_resource(crate::exhaust::Particles::new())
             .add_systems(Startup, spawn_hud)
             .add_systems(FixedUpdate, drive_tick)
-            .add_systems(Update, (show_kart, chase, hud).chain())
+            .add_systems(Update, (animate_kart, show_kart, chase, hud).chain())
             .add_systems(Update, (crate::shadow::update, crate::flame::update, crate::skid::update))
             .add_systems(PostUpdate, (crate::exhaust::update, crate::exhaust::update_sparks).before(TransformSystems::Propagate));
     }
