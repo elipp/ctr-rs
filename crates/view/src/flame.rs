@@ -20,10 +20,8 @@ use crate::subtract::SubtractMaterial;
 /// `STATIC_TURBO_EFFECT`: the model id of the first frame.
 const FIRST_MODEL_ID: i16 = 44;
 
-/// The fire is drawn while the instances' `alphaScale` is below this. Retail
-/// hides an instance with `DEPTH_FADE` when its alpha plus twice its view depth
-/// passes 0x1000; this takes a typical chase camera distance for the depth.
-const ALPHA_VISIBLE_BELOW: u16 = 0x800;
+/// `alphaScale` at which the fire is gone.
+const ALPHA_GONE: f32 = 0x1000 as f32;
 
 /// The eight frames of the racer pack, in order.
 pub fn models(pack: &DramFile) -> io::Result<Vec<Model>> {
@@ -87,11 +85,18 @@ pub fn spawn(
     }
 }
 
-/// Shows the frames the turbo is on, at its size, at the pipes.
-pub fn update(drive: Res<Drive>, mut flames: Query<(&Flame, &mut Transform, &mut Visibility)>) {
-    let turbo = drive.driver.turbo.filter(|t| !t.hidden && t.alpha_scale < ALPHA_VISIBLE_BELOW);
+/// Shows the frames the turbo is on, at its size, at the pipes, dimmed as it
+/// fades out.
+pub fn update(
+    drive: Res<Drive>,
+    mut flames: Query<(&Flame, &mut Transform, &mut Visibility, &Children)>,
+    parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<SubtractMaterial>>)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+) {
+    let turbo = drive.driver.turbo.filter(|t| !t.hidden);
     let offsets = turbo::pipe_offsets(render::wheels::DRIVER_INSTANCE_SCALE);
-    for (flame, mut transform, mut visibility) in &mut flames {
+    for (flame, mut transform, mut visibility, children) in &mut flames {
         let shown = turbo.filter(|t| t.frames()[flame.pipe] == flame.frame);
         *visibility = if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden };
         let Some(turbo) = shown else { continue };
@@ -100,5 +105,21 @@ pub fn update(drive: Res<Drive>, mut flames: Query<(&Flame, &mut Transform, &mut
         let mirror = if flame.pipe == 0 { 1.0 } else { -1.0 };
         transform.translation = Vec3::from_array(offsets[flame.pipe].map(|v| v as f32)) * SCALE;
         transform.scale = Vec3::new(size * mirror, size, size);
+
+        // Fading in the colour, and in the alpha of the blended parts.
+        let fade = (1.0 - turbo.alpha_scale as f32 / ALPHA_GONE).clamp(0.0, 1.0);
+        let dim = |m: &mut StandardMaterial| {
+            let masked = matches!(m.alpha_mode, AlphaMode::Mask(_));
+            m.base_color = Color::linear_rgba(fade, fade, fade, if masked { 1.0 } else { fade });
+        };
+        for child in children {
+            let Ok((standard, subtract)) = parts.get(*child) else { continue };
+            if let Some(mut m) = standard.and_then(|h| materials.get_mut(&h.0)) {
+                dim(&mut *m);
+            }
+            if let Some(mut m) = subtract.and_then(|h| subtract_materials.get_mut(&h.0)) {
+                dim(&mut m.base);
+            }
+        }
     }
 }

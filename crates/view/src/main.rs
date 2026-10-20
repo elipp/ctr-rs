@@ -279,6 +279,9 @@ fn main() {
 }
 
 /// Spawns one entity per non-empty part, with the material its blend mode needs.
+/// Sorts the water after every other blended mesh, the tires included.
+const WATER_SORT_BIAS: f32 = 100.0;
+
 fn spawn_parts(
     parts: [mesh::MeshPart; PARTS],
     base: &StandardMaterial,
@@ -399,7 +402,8 @@ fn setup(
         uvs: data.water.each_ref().map(|p| p.uvs.clone()),
         handles: spawn_parts(
             data.water,
-            &base,
+            // Water goes over everything blended below it, tires and all (see `wheels`).
+            &StandardMaterial { depth_bias: WATER_SORT_BIAS, ..base.clone() },
             Transform::default(),
             None,
             &mut commands,
