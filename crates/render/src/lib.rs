@@ -2,4 +2,5 @@
 //! loaded game data. The `view` crate turns these into Bevy entities.
 
 pub mod mesh;
+pub mod shadow;
 pub mod wheels;
