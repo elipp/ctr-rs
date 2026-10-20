@@ -2,7 +2,7 @@
 //! `vehicle::exhaust`, how a particle moves and looks is `render::particles`.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::NoFrustumCulling;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::image::ImageSampler;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -127,30 +127,15 @@ pub fn spawn(
         cull_mode: None,
         double_sided: true,
         alpha_mode,
-        depth_bias: crate::wheels::EFFECTS_SORT_BIAS,
         ..default()
     };
+    let layer = RenderLayers::layer(crate::KART_LAYER);
     commands.spawn((
         Smoke { mode: DrawMode::Add, width, height },
         Mesh3d(mesh()),
         MeshMaterial3d(materials.add(base(AlphaMode::Add))),
         Transform::default(),
-        NoFrustumCulling,
-    ));
-    // The sparks are untextured streaks that fade out towards their tails.
-    commands.spawn((
-        SparkLines,
-        Mesh3d(mesh()),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            unlit: true,
-            cull_mode: None,
-            double_sided: true,
-            alpha_mode: AlphaMode::Add,
-            depth_bias: crate::wheels::EFFECTS_SORT_BIAS,
-            ..default()
-        })),
-        Transform::default(),
+        layer.clone(),
         NoFrustumCulling,
     ));
     commands.spawn((
@@ -161,6 +146,30 @@ pub fn spawn(
             extension: subtract::Subtract {},
         })),
         Transform::default(),
+        layer.clone(),
+        NoFrustumCulling,
+    ));
+
+    // The sparks: untextured streaks that fade out towards their tails.
+    let mut spark_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    spark_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * MAX_QUADS]);
+    spark_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * MAX_QUADS]);
+    spark_mesh.insert_indices(Indices::U32(
+        (0..MAX_QUADS as u32).flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i)).collect(),
+    ));
+    commands.spawn((
+        SparkLines,
+        Mesh3d(meshes.add(spark_mesh)),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            alpha_mode: AlphaMode::Add,
+            ..default()
+        })),
+        Transform::default(),
+        layer,
         NoFrustumCulling,
     ));
 }
@@ -169,7 +178,7 @@ pub fn spawn(
 pub fn update(
     smoke: Query<(&Smoke, &Mesh3d)>,
     karts: Query<&Transform, With<Kart>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>)>,
     particles: Res<Particles>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -207,11 +216,11 @@ pub fn update(
     }
 }
 
-/// Lays the sparks out as streaks facing the camera, from a bright head to a dark tail.
+/// Lays the sparks out as streaks facing the camera, from a coloured head to a dark tail.
 pub fn update_sparks(
     lines: Query<&Mesh3d, With<SparkLines>>,
     karts: Query<&Transform, With<Kart>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>)>,
     particles: Res<Particles>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -235,13 +244,13 @@ pub fn update_sparks(
             let along = tail - head;
             let toward_camera = camera.translation - head;
             let side = along.cross(toward_camera).normalize_or_zero() * (SPARK_WIDTH * SCALE / 2.0);
-            let gain = p.tint() as f32 / 255.0;
-            for (k, (point, shade)) in [(head + side, gain), (head - side, gain), (tail + side, 0.0), (tail - side, 0.0)]
+            let color = p.rgb().map(|c| c as f32 / 255.0);
+            for (k, (point, shade)) in [(head + side, 1.0), (head - side, 1.0), (tail + side, 0.0), (tail - side, 0.0)]
                 .into_iter()
                 .enumerate()
             {
                 positions[n * 4 + k] = point.to_array();
-                colors[n * 4 + k] = [shade, shade, shade, 1.0];
+                colors[n * 4 + k] = [color[0] * shade, color[1] * shade, color[2] * shade, 1.0];
             }
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);

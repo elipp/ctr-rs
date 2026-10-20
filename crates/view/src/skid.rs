@@ -101,7 +101,7 @@ pub fn spawn(
 /// Lays the driver's mark segments out on the ground, as bright as their age and distance say.
 pub fn update(
     marks: Query<(&Marks, &Mesh3d)>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Marks>)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Marks>, Without<crate::OverlayCamera>)>,
     drive: Res<Drive>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,

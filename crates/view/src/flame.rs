@@ -71,8 +71,6 @@ pub fn spawn(
             atlas.sampler = ImageSampler::nearest();
             let base = StandardMaterial {
                 base_color: Color::WHITE,
-                // Behind the tires and the marks, in front of the track (see `wheels`).
-                depth_bias: crate::wheels::EFFECTS_SORT_BIAS,
                 base_color_texture: Some(images.add(atlas)),
                 unlit: true,
                 cull_mode: None,
@@ -82,7 +80,7 @@ pub fn spawn(
             let group = commands
                 .spawn((Flame { frame, pipe }, Transform::default(), Visibility::Hidden, ChildOf(kart)))
                 .id();
-            crate::spawn_parts(data.parts, &base, Transform::default(), Some(group), commands, meshes, materials, subtract_materials);
+            crate::spawn_parts(data.parts, &base, Transform::default(), Some(group), commands, meshes, materials, subtract_materials, crate::KART_LAYER);
         }
     }
 }
