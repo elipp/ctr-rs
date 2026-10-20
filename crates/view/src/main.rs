@@ -160,7 +160,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
 }
 
 #[derive(Resource)]
-pub struct Track(pub Level);
+pub struct Track(pub Level, pub LevelId);
 
 #[derive(Resource)]
 struct Textures {
@@ -281,7 +281,7 @@ fn main() {
         tiremark_icon,
         flame_models,
     } = load_level(id, racer);
-    let loaded = Track(level);
+    let loaded = Track(level, LevelId(id));
     let textures = Textures { dram, vram };
     let drive = driving.then(|| new_drive(&loaded, &racer, character));
 
@@ -361,7 +361,7 @@ fn switch_level(world: &mut World) {
     }
     world.remove_resource::<drive::KartModel>();
 
-    world.insert_resource(Track(level));
+    world.insert_resource(Track(level, LevelId(id)));
     world.insert_resource(Textures { dram, vram });
     if options.driving {
         let drive = new_drive(world.resource::<Track>(), &racer, options.racer.unwrap_or(0) as usize);
@@ -398,6 +398,12 @@ const KART_LAYER: usize = 1;
 #[derive(Component)]
 struct OverlayCamera;
 
+/// What one step of the game's draw order bias (a face filed that many ordering table slots
+/// farther back) is worth in `wgpu` constant depth bias units. Those are one ulp of the depth
+/// there, so a flush decal needs a good few of them to win against its surface.
+const DEPTH_BIAS_PER_ORDER: f32 = 8.0;
+
+/// Spawns the four parts of a model that is not layered by draw order.
 fn spawn_parts(
     parts: [mesh::MeshPart; PARTS],
     base: &StandardMaterial,
@@ -409,8 +415,29 @@ fn spawn_parts(
     subtract_materials: &mut Assets<SubtractMaterial>,
     layer: usize,
 ) -> [Option<Handle<Mesh>>; PARTS] {
-    let mut handles: [Option<Handle<Mesh>>; PARTS] = default();
-    for (i, part) in parts.into_iter().enumerate() {
+    spawn_layers(Vec::from(parts), &[], base, transform, parent, commands, meshes, materials, subtract_materials, layer)
+        .try_into()
+        .unwrap()
+}
+
+/// Spawns `parts` (slot `i` is blended as `i % PARTS`). `biases` holds the draw order bias of each
+/// group of [`PARTS`] slots, 0 for those beyond it: a face with a higher one draws behind.
+fn spawn_layers(
+    parts: Vec<mesh::MeshPart>,
+    biases: &[i32],
+    base: &StandardMaterial,
+    transform: Transform,
+    parent: Option<Entity>,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
+    layer: usize,
+) -> Vec<Option<Handle<Mesh>>> {
+    let mut handles = vec![None; parts.len()];
+    for (slot, part) in parts.into_iter().enumerate() {
+        let i = slot % PARTS;
+        let order = biases.get(slot / PARTS).copied().unwrap_or(0);
         if part.indices.is_empty() {
             continue;
         }
@@ -423,9 +450,10 @@ fn spawn_parts(
         m.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs);
         m.insert_indices(Indices::U32(part.indices));
         let handle = meshes.add(m);
-        handles[i] = Some(handle.clone());
+        handles[slot] = Some(handle.clone());
         let with = |alpha_mode| StandardMaterial {
             alpha_mode,
+            depth_bias: -(order as f32) * DEPTH_BIAS_PER_ORDER,
             ..base.clone()
         };
         let mut entity = commands.spawn((Mesh3d(handle), transform));
@@ -471,11 +499,11 @@ fn setup(
     driving: Option<Res<drive::Drive>>,
 ) {
     let level = &track.0;
-    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.show_hidden, show_hidden.cull);
+    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.show_hidden, show_hidden.cull, mesh::world_lifts(track.1));
     info!(
         "{} quad blocks, vertices per part {:?}, {} animated faces",
         level.quad_blocks.len(),
-        data.parts.each_ref().map(|p| p.positions.len()),
+        data.parts.iter().map(|p| p.positions.len()).collect::<Vec<_>>(),
         data.animated_faces.len()
     );
 
@@ -502,11 +530,12 @@ fn setup(
         double_sided: !show_hidden.cull,
         ..default()
     };
-    let uvs = data.parts.each_ref().map(|p| p.uvs.clone());
-    let scenery_positions = data.parts.each_ref().map(|p| p.positions.clone());
-    let scenery_colors = data.parts.each_ref().map(|p| p.colors.clone());
-    let handles = spawn_parts(
+    let uvs = data.parts.iter().map(|p| p.uvs.clone()).collect();
+    let scenery_positions = data.parts.iter().map(|p| p.positions.clone()).collect();
+    let scenery_colors = data.parts.iter().map(|p| p.colors.clone()).collect();
+    let handles = spawn_layers(
         data.parts,
+        &data.biases,
         &base,
         Transform::default(),
         None,
@@ -775,8 +804,8 @@ const GAME_TICK_HZ: f64 = 30.0;
 struct AnimState {
     animations: Vec<mesh::Animation>,
     faces: Vec<mesh::AnimatedFace>,
-    uvs: [Vec<[f32; 2]>; PARTS],
-    handles: [Option<Handle<Mesh>>; PARTS],
+    uvs: Vec<Vec<[f32; 2]>>,
+    handles: Vec<Option<Handle<Mesh>>>,
     shown: Vec<usize>,
 }
 
@@ -801,9 +830,9 @@ struct WaterState {
 struct SceneryState {
     scenery: loader::scenery::Scenery,
     corners: std::collections::HashMap<usize, Vec<mesh::SceneryCorner>>,
-    positions: [Vec<[f32; 3]>; PARTS],
-    colors: [Vec<[f32; 4]>; PARTS],
-    handles: [Option<Handle<Mesh>>; PARTS],
+    positions: Vec<Vec<[f32; 3]>>,
+    colors: Vec<Vec<[f32; 4]>>,
+    handles: Vec<Option<Handle<Mesh>>>,
 }
 
 /// `AnimateQuad`, once per game tick.
@@ -824,7 +853,7 @@ fn animate_scenery(mut state: ResMut<SceneryState>, tick: Res<GameTick>, mut mes
             }
         }
     }
-    for part in 0..PARTS {
+    for part in 0..state.handles.len() {
         if let Some(mut mesh) = state.handles[part].as_ref().and_then(|h| meshes.get_mut(h)) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, state.positions[part].clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
@@ -835,7 +864,7 @@ fn animate_scenery(mut state: ResMut<SceneryState>, tick: Res<GameTick>, mut mes
 /// `CTR_CycleTex_LEV`, once per game tick.
 fn animate(mut state: ResMut<AnimState>, tick: Res<GameTick>, mut meshes: ResMut<Assets<Mesh>>) {
     let state = &mut *state;
-    let mut dirty = [false; PARTS];
+    let mut dirty = vec![false; state.handles.len()];
     for (i, anim) in state.animations.iter().enumerate() {
         let frame = anim.texture.frame_at(tick.0 as i32);
         if std::mem::replace(&mut state.shown[i], frame) == frame {
