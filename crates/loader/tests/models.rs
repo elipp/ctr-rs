@@ -70,3 +70,22 @@ fn packs_carry_the_turbo_flame_models() {
         }
     }
 }
+
+/// Every racer's pack carries the model a crate breaks into (`STATIC_CRATE_EXPLOSION`, 0x26): a
+/// 12-frame animation whose frames all have faces.
+#[test]
+fn every_racer_pack_has_the_crate_explosion() {
+    let Some(mut b) = common::open_bigfile() else { return };
+    for character in 0..16 {
+        let file = b.big.read(&mut b.disc, BigIndex::ARCADE_1P_PACK.nth(character).get()).unwrap();
+        let models = loader::model::parse_pack_models(&DramFile::parse(&file).unwrap()).unwrap();
+        let model = models.iter().find(|m| m.id == 0x26).unwrap_or_else(|| panic!("racer {character}: no crate explosion"));
+        assert_eq!(model.name, "crate_explosion");
+        let header = &model.headers[0];
+        assert_eq!(header.animations.len(), 1, "racer {character}");
+        assert_eq!(header.animations[0].num_frames, 12, "racer {character}");
+        for frame in &header.animations[0].frames {
+            assert!(!header.triangles(frame).is_empty(), "racer {character}");
+        }
+    }
+}

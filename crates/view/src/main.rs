@@ -20,6 +20,7 @@
 
 mod drive;
 mod exhaust;
+mod explosion;
 mod fire;
 mod flame;
 mod probe;
@@ -69,6 +70,8 @@ struct Loaded {
     tiremark_icon: Option<Icon>,
     /// `turbo` .. `turbo7` of the racer's pack: the frames of the exhaust fire.
     flame_models: Vec<Model>,
+    /// `crate_explosion` of the racer pack: the break-up of a crate.
+    crate_explosion: Option<Model>,
 }
 
 /// The sprite and texture page file shared by every track (`shared.vrm`):
@@ -132,6 +135,13 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
             .expect("read racer pack");
         flame::models(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the turbo models")
     });
+    let crate_explosion = {
+        // Every racer's pack has the same shared models; character 0's will do without a racer.
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(racer_character.unwrap_or(0)).get())
+            .expect("read racer pack");
+        render::explosion::model(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the crate explosion")
+    };
     let wheel_icons = match racer_character {
         Some(character) if character != NITROS_OXIDE => {
             let pack = big
@@ -156,6 +166,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         smoke_icon,
         tiremark_icon,
         flame_models,
+        crate_explosion,
     }
 }
 
@@ -280,6 +291,7 @@ fn main() {
         smoke_icon,
         tiremark_icon,
         flame_models,
+        crate_explosion,
     } = load_level(id, racer);
     let loaded = Track(level, LevelId(id));
     let textures = Textures { dram, vram };
@@ -305,6 +317,7 @@ fn main() {
     .insert_resource(SmokeIcon(smoke_icon))
     .insert_resource(TiremarkIcon(tiremark_icon))
     .insert_resource(FlameModels(flame_models))
+    .insert_resource(explosion::CrateExplosion::new(crate_explosion))
     .insert_resource(options)
     .insert_resource(LevelNumber(id))
     .insert_resource(LowColors(low))
@@ -315,7 +328,7 @@ fn main() {
     .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::tick_hazards, props::pose_hazards, fire::tick, advance_tick).chain())
+    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::tick_hazards, props::pose_hazards, props::hide_fruit, props::pose_crates, explosion::spawn, explosion::animate, fire::tick, advance_tick).chain())
     .add_systems(Update, (switch_level, props::roll, props::place_hazards, fire::update).chain());
     let world = app.world_mut();
     let mut scene_systems = vec![world.register_system(setup)];
@@ -348,7 +361,7 @@ fn switch_level(world: &mut World) {
         + LevelId::DINGO_CANYON.0;
     options.racer = options.racer.map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
     world.insert_resource(options);
-    let Loaded { level, dram, vram, racer, wheel_icons, shadow_icons, smoke_icon, tiremark_icon, flame_models } =
+    let Loaded { level, dram, vram, racer, wheel_icons, shadow_icons, smoke_icon, tiremark_icon, flame_models, crate_explosion } =
         load_level(id, options.racer);
 
     // Everything in the scene has a transform (the 3D parts) or a node (the text); the window
@@ -374,6 +387,7 @@ fn switch_level(world: &mut World) {
     world.insert_resource(SmokeIcon(smoke_icon));
     world.insert_resource(TiremarkIcon(tiremark_icon));
     world.insert_resource(FlameModels(flame_models));
+    world.insert_resource(explosion::CrateExplosion::new(crate_explosion));
     world.insert_resource(LevelNumber(id));
 
     for system in world.resource::<SceneSystems>().0.clone() {

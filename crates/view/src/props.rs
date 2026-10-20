@@ -100,6 +100,39 @@ pub struct ArmadilloBody(usize);
 #[derive(Component)]
 pub struct MinecartBody(usize);
 
+/// A placed wumpa fruit (its index among `Hazards::fruit`).
+#[derive(Component)]
+pub struct FruitBody(usize);
+
+/// A placed crate (its index among `Hazards::crates`).
+#[derive(Component)]
+pub struct CrateBody(pub usize);
+
+/// Sizes the crates as the sim says: gone when hit, growing back after a while.
+pub fn pose_crates(sim: Res<Sim>, mut crates: Query<(&CrateBody, &mut Transform, &mut Visibility)>) {
+    for (body, mut transform, mut visibility) in &mut crates {
+        let scale = sim.hazards.crates[body.0].sim.scale;
+        let want = if scale == 0 { Visibility::Hidden } else { Visibility::Inherited };
+        if *visibility != want {
+            *visibility = want;
+        }
+        if scale != 0 {
+            transform.scale = Vec3::splat(scale as f32 / hazard::crates::FULL_SCALE as f32);
+        }
+    }
+}
+
+/// Hides the fruit that were picked up.
+pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>) {
+    for (body, mut visibility) in &mut fruit {
+        let collected = sim.hazards.fruit[body.0].sim.collected;
+        let want = if collected { Visibility::Hidden } else { Visibility::Inherited };
+        if *visibility != want {
+            *visibility = want;
+        }
+    }
+}
+
 /// A placed snowball or barrel (its index among `Hazards::rollers`).
 #[derive(Component)]
 pub struct Rolling(usize);
@@ -143,6 +176,8 @@ enum Hazard {
     Minecart(usize),
     Roller(usize),
     Turtle(usize),
+    Fruit(usize),
+    Crate(usize),
     /// Only its sparks show (`fire`).
     Fireball,
 }
@@ -162,6 +197,8 @@ pub fn spawn(
     by_instance.extend(hazards.armadillos.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Armadillo(i))));
     by_instance.extend(hazards.minecarts.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Minecart(i))));
     by_instance.extend(hazards.rollers.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Roller(i))));
+    by_instance.extend(hazards.crates.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Crate(i))));
+    by_instance.extend(hazards.fruit.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Fruit(i))));
     by_instance.extend(hazards.turtles.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Turtle(i))));
     by_instance.extend(hazards.fireballs.iter().map(|h| (h.instance, Hazard::Fireball)));
 
@@ -222,6 +259,10 @@ pub fn spawn(
         };
         let (transform, parent) = match by_instance.get(&n) {
             Some(&Hazard::Roller(i)) => (Transform::default(), Some(body(commands, transform, Rolling(i)))),
+            // A fruit's model hangs off a body that is hidden once it is picked up.
+            Some(&Hazard::Fruit(i)) => (Transform::default(), Some(body(commands, transform, FruitBody(i)))),
+            // A crate's model hangs off a body that shrinks when it is hit and grows back.
+            Some(&Hazard::Crate(i)) => (Transform::default(), Some(body(commands, transform, CrateBody(i)))),
             Some(&Hazard::Armadillo(i)) => {
                 let parent = body(commands, transform, ArmadilloBody(i));
                 let mut s = shown(i);

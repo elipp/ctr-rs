@@ -39,6 +39,7 @@ pub mod spin;
 pub mod stats;
 pub mod terrain;
 pub mod turbo;
+pub mod wumpa;
 
 use loader::lev::SVec3;
 use math::Vec3;
@@ -349,6 +350,10 @@ pub struct Driver {
     /// The `const_*` fields: the engine class's physics constants.
     pub stats: stats::Stats,
     pub num_wumpas: i8,
+    /// `PickupWumpaHUD`: the fruit picked up that the HUD has not given the driver yet, and the
+    /// ticks until it gives the next (see [`wumpa`]).
+    pub pickup_wumpa_collected: i32,
+    pub pickup_wumpa_cooldown: i16,
     pub accel_const: i8,
     pub turn_const: i8,
     pub turbo_const: i8,
