@@ -412,6 +412,8 @@ pub struct Driver {
     pub drift_total_time_ms: i16,
     pub num_boosts_attempted: i8,
     pub num_boosts_success: i8,
+    /// Why the last drift stopped, for the HUD; not read by the sim.
+    pub last_drift_end: Option<powerslide::DriftEnd>,
 
     /// Set when the original sets `funcPtrs[DRIVER_FUNC_INIT]` to
     /// `VehPhysProc_Driving_Init`: the next tick starts by driving again.

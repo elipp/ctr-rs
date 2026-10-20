@@ -44,6 +44,20 @@ const TURN_WOBBLE_RETURN_VELOCITY: i16 = 10;
 /// The magic number the compiler divides by 5 with.
 const DIVIDE_BY_5_MAGIC: i64 = 0x6666_6667;
 
+/// Why a drift stopped (debugging aid; the sim does not read it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriftEnd {
+    /// Countersteered for as many frames as the spin-out limit.
+    SwitchWayLimit,
+    /// Slower than half the top speed.
+    TooSlow,
+    /// `DRIVING_AGAINST_WALL`: a wall scrub the tick before.
+    WallScrape,
+    /// Brake or accel prevention.
+    Brake,
+    ButtonReleased,
+}
+
 fn abs(value: i32) -> i32 {
     if value < 0 { mips::neg_lo(value) } else { value }
 }
@@ -173,16 +187,26 @@ pub fn update(d: &mut Driver, input: &Input, env: &Env, effects: &mut Vec<Effect
     } else if d.speed_approx < 0 && d.step_flag_set & step_triggers::TURBO_PAD_MASK == 0 {
         d.no_input_timer = DRIFT_REVERSE_SPINOUT_NO_INPUT_TIMER;
         spin::first_init(d, effects);
-    } else if (d.num_frames_drifting as i32) < mips::neg_lo(frames_till_spinout)
-        // slower than half the top speed
-        || (d.speed as i32) < mips::sra(d.stats.speed_class_stat as i32, HALF_SPEED_SHIFT)
-        || d.actions_flag_set & (actions::DRIVING_AGAINST_WALL | actions::ACCEL_PREVENTION | actions::BRAKE_WITH_ACCEL) != 0
-        // the button that started the drift was let go
-        || input.buttons_held & d.button_used_to_start_drift as u32 == 0
-    {
-        // Switchway drift counts frames negative, and spins out after the negative limit too.
-        finalize(d);
-        crate::sim::driving_init(d);
+    } else {
+        // Which of the ways to stop drifting, if any (the first that holds).
+        let reason = if (d.num_frames_drifting as i32) < mips::neg_lo(frames_till_spinout) {
+            Some(DriftEnd::SwitchWayLimit)
+        } else if (d.speed as i32) < mips::sra(d.stats.speed_class_stat as i32, HALF_SPEED_SHIFT) {
+            Some(DriftEnd::TooSlow)
+        } else if d.actions_flag_set & actions::DRIVING_AGAINST_WALL != 0 {
+            Some(DriftEnd::WallScrape)
+        } else if d.actions_flag_set & (actions::ACCEL_PREVENTION | actions::BRAKE_WITH_ACCEL) != 0 {
+            Some(DriftEnd::Brake)
+        } else if input.buttons_held & d.button_used_to_start_drift as u32 == 0 {
+            Some(DriftEnd::ButtonReleased)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            d.last_drift_end = Some(reason);
+            finalize(d);
+            crate::sim::driving_init(d);
+        }
     }
 }
 

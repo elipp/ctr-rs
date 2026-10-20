@@ -169,9 +169,10 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     if down(&[KeyCode::KeyW, KeyCode::ArrowUp]) || pad_down(&[GamepadButton::South]) {
         held |= buttons::CROSS;
     }
-    let reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown])
-        || pad_down(&[GamepadButton::West, GamepadButton::DPadDown])
-        || stick.y < -0.5;
+    // Brake and reverse is only Square (West / S / Down). Pulling the left stick or the D-pad
+    // down does nothing: many pads report the D-pad as the left stick, and on retail it does not
+    // brake (it must not end a powerslide).
+    let reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown]) || pad_down(&[GamepadButton::West]);
     if reverse {
         held |= buttons::SQUARE;
     }
@@ -196,7 +197,7 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
         buttons_held: held,
         buttons_tapped: held & !previous_held,
         stick_lx,
-        stick_ly: if reverse { 0xff } else { axis(-stick.y) },
+        stick_ly: 0x80,
         stick_ry: 0x80,
     }
 }
@@ -306,7 +307,7 @@ fn hud(drive: Res<Drive>, mut text: Query<&mut Text, With<Hud>>) {
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     for mut text in &mut text {
         text.0 = format!(
-            "speed {:5}  {:?}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, R restart",
+            "speed {:5}  {:?}{}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, R restart",
             d.speed_approx,
             d.phys_state,
             if grounded { "" } else { "  airborne" },
@@ -317,6 +318,10 @@ fn hud(drive: Res<Drive>, mut text: Query<&mut Text, With<Hud>>) {
                 format!("  reserves {}", d.reserves)
             } else {
                 String::new()
+            },
+            match d.last_drift_end {
+                Some(why) => format!("  last drift ended: {why:?}"),
+                None => String::new(),
             },
         );
     }
