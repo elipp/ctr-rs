@@ -7,7 +7,9 @@
 //! looks for a driver ([`Contact`]); what hurting one does (`VehPickState_NewState`) is not ported.
 
 pub mod armadillo;
+pub mod crates;
 pub mod fireball;
+pub mod fruit;
 pub mod minecart;
 pub mod roller;
 pub mod turtle;
@@ -19,7 +21,9 @@ use vehicle::search::Instances;
 use loader::model::Model;
 
 use armadillo::Armadillo;
+use crates::{CrateBox, Kind};
 use fireball::{Fireball, Spark};
+use fruit::Fruit;
 use minecart::Minecart;
 use roller::Roller;
 use turtle::Turtle;
@@ -118,6 +122,10 @@ pub struct Hazards {
     pub minecarts: Vec<Placed<Minecart>>,
     pub rollers: Vec<Placed<Roller>>,
     pub turtles: Vec<Placed<Turtle>>,
+    pub fruit: Vec<Placed<Fruit>>,
+    pub crates: Vec<Placed<CrateBox>>,
+    /// `sdata->randomNumber`, which breaking a fruit crate advances.
+    pub random_number: i32,
     /// `ptrSpawnType2`'s first path, which the minecarts follow.
     position_path: Vec<SVec3>,
     /// `ptrSpawnType2_PosRot`, which the rollers follow.
@@ -141,6 +149,9 @@ impl Hazards {
             minecarts: Vec::new(),
             rollers: Vec::new(),
             turtles: Vec::new(),
+            fruit: Vec::new(),
+            crates: Vec::new(),
+            random_number: math::RANDOM_NUMBER_INIT,
             position_path: level.position_paths.first().cloned().unwrap_or_default(),
             roll_paths: level.paths.clone(),
             ticks: 0,
@@ -153,6 +164,10 @@ impl Hazards {
                 };
                 [animation(0), animation(1)]
             };
+            if let Some(kind) = Kind::of_model(def.model_id) {
+                hazards.crates.push(Placed { instance, sim: CrateBox::new(kind), frames: [0; 2] });
+                continue;
+            }
             match def.model_name.as_str() {
                 "armadillo" => {
                     let delay = digit(def).and_then(|d| level.spawn_delays.get(d)).copied().unwrap_or(0);
@@ -162,6 +177,7 @@ impl Hazards {
                     let frames = frames();
                     hazards.turtles.push(Placed { instance, sim: Turtle::new(def, frames[0]), frames });
                 }
+                "fruit" => hazards.fruit.push(Placed { instance, sim: Fruit::default(), frames: [0; 2] }),
                 "fireball" => hazards.fireballs.push(Placed { instance, sim: Fireball::new(def), frames: [0; 2] }),
                 "minecart" => {
                     if let Some(sim) = Minecart::new(def, &hazards.position_path) {
@@ -202,6 +218,9 @@ impl Hazards {
         for t in &mut self.turtles {
             t.sim.tick(t.frames[0]);
         }
+        for c in &mut self.crates {
+            c.sim.tick();
+        }
         for r in &self.rollers {
             let path = &self.roll_paths[r.sim.path];
             let frame = roller::frame_index(path.len(), self.ticks).expect("a path of two points or more");
@@ -220,14 +239,20 @@ impl Hazards {
 }
 
 /// What the kart's collision search does when it reaches the hitbox of one of these instances
-/// (`MetaDataMODEL::LInC`). The turtles are the only ones so far; the other models give 1, as
-/// those without an `LInC` do.
-impl Instances for &Hazards {
-    fn touch(&mut self, instance: usize, driver: &mut Driver, _: &coll::Scratchpad) -> i32 {
-        match self.turtles.iter().find(|t| t.instance == instance) {
-            Some(turtle) => turtle.sim.linc(driver),
-            None => 1,
+/// (`MetaDataMODEL::LInC`). The turtles, the wumpa fruit and the crates have one so far; the other models give 1,
+/// as those without an `LInC` do.
+impl Instances for Hazards {
+    fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &coll::Scratchpad) -> i32 {
+        if let Some(turtle) = self.turtles.iter().find(|t| t.instance == instance) {
+            return turtle.sim.linc(driver);
         }
+        if let Some(fruit) = self.fruit.iter_mut().find(|f| f.instance == instance) {
+            return fruit.sim.linc(driver, sps.input1.model_id);
+        }
+        if let Some(crate_box) = self.crates.iter_mut().find(|c| c.instance == instance) {
+            return crate_box.sim.linc(driver, sps.input1.model_id, &mut self.random_number);
+        }
+        1
     }
 }
 

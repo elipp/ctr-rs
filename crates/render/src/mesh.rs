@@ -86,7 +86,7 @@ pub enum Part {
 
 pub const PARTS: usize = 4;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MeshPart {
     pub positions: Vec<[f32; 3]>,
     pub colors: Vec<[f32; 4]>,

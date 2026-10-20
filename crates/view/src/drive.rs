@@ -58,6 +58,10 @@ fn view_of(camera: &camera::CameraDc) -> View {
 #[derive(Component)]
 struct Hud;
 
+/// The wumpa counter.
+#[derive(Component)]
+struct WumpaHud;
+
 /// Where the kart is drawn.
 #[derive(Clone, Copy)]
 struct Pose {
@@ -223,13 +227,25 @@ impl Plugin for DrivePlugin {
         app.insert_resource(crate::exhaust::Particles::new())
             .add_systems(Startup, spawn_hud)
             .add_systems(FixedUpdate, drive_tick)
-            .add_systems(Update, (animate_kart, show_kart, chase, hud).chain())
+            .add_systems(Update, (animate_kart, show_kart, chase, hud, wumpa_hud).chain())
             .add_systems(Update, (crate::shadow::update, crate::flame::update, crate::skid::update))
             .add_systems(PostUpdate, (crate::exhaust::update, crate::exhaust::update_sparks).before(TransformSystems::Propagate));
     }
 }
 
 pub(crate) fn spawn_hud(mut commands: Commands) {
+    commands.spawn((
+        WumpaHud,
+        Text::new(""),
+        TextFont { font_size: 34.0.into(), ..default() },
+        TextColor(Color::srgb(1.0, 0.65, 0.1)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            right: Val::Px(20.0),
+            ..default()
+        },
+    ));
     commands.spawn((
         Hud,
         Text::new(""),
@@ -294,7 +310,7 @@ fn drive_tick(
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     track: Res<Track>,
-    sim: Res<crate::props::Sim>,
+    mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
 ) {
     let drive = &mut *drive;
@@ -319,10 +335,13 @@ fn drive_tick(
         &track.0,
         &env,
         &input,
-        &mut &sim.hazards,
+        &mut sim.hazards,
         &mut effects,
     );
     drive.tick += 1;
+    // The pickup HUD gives the fruit that were picked up to the driver.
+    vehicle::wumpa::hud_tick(&mut drive.driver, true, &mut effects);
+
     particles.sparks(&drive.driver);
     particles.tick(&vehicle::exhaust::exhaust(&mut drive.driver));
     vehicle::skid::skidmarks(&mut drive.driver);
@@ -397,6 +416,13 @@ fn chase(
         transform.translation = eye;
         transform.look_at(target, Vec3::Y);
         transform.rotate_local_z(roll);
+    }
+}
+
+/// The wumpa count.
+fn wumpa_hud(drive: Res<Drive>, mut text: Query<&mut Text, With<WumpaHud>>) {
+    for mut text in &mut text {
+        text.0 = format!("WUMPA {}", drive.driver.num_wumpas);
     }
 }
 

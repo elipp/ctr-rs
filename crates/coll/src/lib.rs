@@ -83,6 +83,14 @@ mod triangle_id {
     pub const HI_7: u8 = 9;
 }
 
+/// `Input1.modelID` values: what is searching, which a model's `LInC` looks at.
+pub mod model_id {
+    /// `DYNAMIC_PLAYER`
+    pub const PLAYER: i16 = 0x18;
+    /// `DYNAMIC_ROBOT_CAR`
+    pub const ROBOT_CAR: i16 = 0x3f;
+}
+
 /// `COLL_MOVED_PLAYER_HIT_RADIUS`
 pub const PLAYER_HIT_RADIUS: i16 = 0x19;
 const SCRUB_DEPTH_REPEAT_STEP: i32 = 0x100;
@@ -424,6 +432,7 @@ impl Collision {
         q.quad_flags_ignored = 0;
         q.search_flags = search_flags::TEST_INSTANCES | search_flags::HIGH_LOD;
         sps.num_bsp_hitboxes_hit = 0;
+        sps.input1.model_id = model_id::PLAYER;
         sps.collision.step_flags = 0;
         self.find_scrub(None, 0);
     }

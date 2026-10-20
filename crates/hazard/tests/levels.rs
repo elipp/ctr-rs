@@ -122,7 +122,7 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
             &level,
             &IDENTITY_LIGHT_MATRIX,
             32,
-            &mut &*h,
+            &mut h.clone(),
             &mut Vec::new(),
         );
         driver.forced_jump_type
@@ -138,4 +138,92 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
         h.tick();
     }
     assert_eq!(seen, [forced_jump::LOW, forced_jump::HIGH].into());
+}
+
+#[test]
+fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
+    use coll::Collision;
+    use loader::lev::BspKind;
+    use vehicle::Driver;
+    use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
+    use vehicle::search::moved_player_search;
+
+    let Some((mut h, level)) = hazards_of(LevelId::DINGO_CANYON.0) else { return };
+    assert_eq!(h.fruit.len(), 16);
+    let center = level
+        .bsp
+        .iter()
+        .filter_map(|n| match &n.kind {
+            BspKind::Leaf { hitboxes, .. } => Some(hitboxes),
+            _ => None,
+        })
+        .flatten()
+        .find(|b| b.instance == Some(h.fruit[0].instance))
+        .expect("a fruit has a hitbox")
+        .center;
+
+    let drive_through = |h: &mut Hazards, driver: &mut Driver| {
+        driver.pos_curr = math::Vec3 {
+            x: (center.x as i32 - 150 - driver.origin_to_center.x) << 8,
+            y: (center.y as i32 + 40 - driver.origin_to_center.y) << 8,
+            z: (center.z as i32 - driver.origin_to_center.z) << 8,
+        };
+        driver.velocity.x = 300 << 8;
+        moved_player_search(driver, &mut Collision::default(), &level, &IDENTITY_LIGHT_MATRIX, 32, h, &mut Vec::new());
+    };
+
+    let mut driver = Driver::new(0, 0);
+    drive_through(&mut h, &mut driver);
+    assert!(h.fruit[0].sim.collected);
+    assert_eq!(driver.pickup_wumpa_collected, 1);
+    assert_eq!(h.fruit.iter().filter(|f| f.sim.collected).count(), 1);
+
+    // A second pass finds nothing there.
+    drive_through(&mut h, &mut driver);
+    assert_eq!(driver.pickup_wumpa_collected, 1);
+}
+
+#[test]
+fn a_kart_that_drives_through_a_crate_breaks_it() {
+    use coll::Collision;
+    use loader::lev::BspKind;
+    use vehicle::Driver;
+    use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
+    use vehicle::search::moved_player_search;
+
+    let Some((mut h, level)) = hazards_of(LevelId::DINGO_CANYON.0) else { return };
+    // 16 weapon crates and 2 fruit crates.
+    assert_eq!(h.crates.len(), 18);
+    let center = level
+        .bsp
+        .iter()
+        .filter_map(|n| match &n.kind {
+            BspKind::Leaf { hitboxes, .. } => Some(hitboxes),
+            _ => None,
+        })
+        .flatten()
+        .find(|b| b.instance == Some(h.crates[0].instance))
+        .expect("a crate has a hitbox")
+        .center;
+
+    let drive_through = |h: &mut Hazards, driver: &mut Driver| {
+        driver.pos_curr = math::Vec3 {
+            x: (center.x as i32 - 150 - driver.origin_to_center.x) << 8,
+            y: (center.y as i32 + 20 - driver.origin_to_center.y) << 8,
+            z: (center.z as i32 - driver.origin_to_center.z) << 8,
+        };
+        driver.velocity.x = 300 << 8;
+        moved_player_search(driver, &mut Collision::default(), &level, &IDENTITY_LIGHT_MATRIX, 32, h, &mut Vec::new());
+    };
+
+    let mut driver = Driver::new(0, 0);
+    drive_through(&mut h, &mut driver);
+    assert_eq!((h.crates[0].sim.scale, h.crates[0].sim.breaks), (0, 1));
+    // Hitting it again while it is gone does nothing, and it comes back by itself.
+    drive_through(&mut h, &mut driver);
+    assert_eq!(h.crates[0].sim.breaks, 1);
+    for _ in 0..100 {
+        h.tick();
+    }
+    assert_eq!(h.crates[0].sim.scale, hazard::crates::FULL_SCALE);
 }

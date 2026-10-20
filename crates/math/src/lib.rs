@@ -48,6 +48,20 @@ pub const fn fp8_mult(x: i32, y: i32) -> i32 {
     x.wrapping_mul(y) >> FRACTIONAL_BITS_8
 }
 
+/// `sdata->randomNumber` at the start of the game.
+pub const RANDOM_NUMBER_INIT: i32 = 100;
+
+/// `MixRNG_GetValue`: the generator's step, a 16-bit linear congruential generator.
+pub fn mix_rng_value(seed: i32) -> u32 {
+    (seed as u32).wrapping_mul(0x6255).wrapping_add(0x3619) & 0xffff
+}
+
+/// `MixRNG_Scramble`: advances `random_number` (`sdata->randomNumber`) and returns it, 0..=0xffff.
+pub fn mix_rng_scramble(random_number: &mut i32) -> i32 {
+    *random_number = mix_rng_value(*random_number) as i32;
+    *random_number
+}
+
 /// `clamp` / `max` / `min` from the reference.
 pub fn clamp(n: i32, lo: i32, hi: i32) -> i32 {
     if n < lo {
@@ -253,4 +267,23 @@ pub fn vector_normalize(v: &mut SVec3) -> i32 {
         v.z = (((v.z as i32) << 12) / length) as i16;
     }
     length
+}
+
+#[cfg(test)]
+mod rng_tests {
+    use super::*;
+
+    #[test]
+    fn the_generator_steps_as_the_reference_formula() {
+        let mut state = RANDOM_NUMBER_INIT;
+        let first = mix_rng_scramble(&mut state);
+        assert_eq!((first, state), (40781, 40781));
+        assert_eq!(mix_rng_value(40781) as i32, mix_rng_scramble(&mut state));
+        // It stays within 16 bits, and the state is the value.
+        for _ in 0..1000 {
+            let v = mix_rng_scramble(&mut state);
+            assert!((0..=0xffff).contains(&v));
+            assert_eq!(v, state);
+        }
+    }
 }
