@@ -180,14 +180,16 @@ pub fn run_reference(exe: &Path, script: &str) -> Vec<String> {
     let mut child = Command::new(exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("failed to run the C reference driver");
     let mut stdin = child.stdin.take().unwrap();
     let script = script.to_owned();
     let writer = std::thread::spawn(move || stdin.write_all(script.as_bytes()));
     let out = child.wait_with_output().unwrap();
-    writer.join().unwrap().unwrap();
+    // Check the exit status first: a driver that died early also breaks the pipe.
     assert!(out.status.success(), "C reference driver failed: {}", out.status);
+    writer.join().unwrap().unwrap();
     String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect()
 }
 

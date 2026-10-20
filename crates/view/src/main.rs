@@ -160,24 +160,23 @@ fn main() {
     });
 
     let mut app = App::new();
-    app
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: format!("ctr-rs view: level {id}"),
-                ..default()
-            }),
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: format!("ctr-rs view: level {id}"),
             ..default()
-        }))
-        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
-        .insert_resource(loaded)
-        .insert_resource(textures)
-        .insert_resource(Racer(racer))
-        .insert_resource(LowColors(low))
-        .insert_resource(ShowHidden(show_hidden))
-        .add_systems(Startup, setup)
-        .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
-        .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-        .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
+        }),
+        ..default()
+    }))
+    .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
+    .insert_resource(loaded)
+    .insert_resource(textures)
+    .insert_resource(Racer(racer))
+    .insert_resource(LowColors(low))
+    .insert_resource(ShowHidden(show_hidden))
+    .add_systems(Startup, setup)
+    .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
+    .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
+    .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
     if let Some(drive) = drive {
         app.insert_resource(drive).add_plugins(drive::DrivePlugin);
     } else {
@@ -338,7 +337,11 @@ fn setup(
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
     if driving.is_some() {
-        commands.spawn((Camera3d::default(), Transform::default(), drive::ChaseCamera::new()));
+        commands.spawn((
+            Camera3d::default(),
+            Transform::default(),
+            drive::ChaseCamera::new(),
+        ));
     } else {
         commands.spawn((
             Camera3d::default(),
@@ -409,7 +412,9 @@ fn spawn_racer(
     // Driving: the parts hang off an entity the sim moves, and the model is
     // posed by that (the model itself faces along +Z, like the heading).
     let (placement, parent) = if driving {
-        let kart = commands.spawn((drive::Kart, placement, Visibility::default())).id();
+        let kart = commands
+            .spawn((drive::Kart, placement, Visibility::default()))
+            .id();
         (Transform::default(), Some(kart))
     } else {
         (placement, None)
