@@ -17,6 +17,7 @@
 
 mod drive;
 mod probe;
+mod exhaust;
 mod shadow;
 mod subtract;
 mod wheels;
@@ -53,6 +54,8 @@ struct Loaded {
     wheel_icons: Vec<Icon>,
     /// Global icons 0 and 1 of the racer's pack (`shadow1`, `shadow2`).
     shadow_icons: Option<[Icon; 2]>,
+    /// The first picture of the `dustpuff` icon group: the exhaust smoke.
+    smoke_icon: Option<Icon>,
 }
 
 /// The sprite and texture page file shared by every track (`shared.vrm`):
@@ -96,6 +99,13 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         let find = |index| icons.iter().find(|i| i.global_index == index).cloned();
         Some([find(0)?, find(1)?])
     });
+    let smoke_icon = racer_character.and_then(|character| {
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
+            .expect("read racer pack");
+        let groups = parse_groups(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
+        groups.into_iter().find(|g| g.group_id == 1)?.icons.into_iter().next()
+    });
     let wheel_icons = match racer_character {
         Some(character) if character != NITROS_OXIDE => {
             let pack = big
@@ -117,6 +127,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         racer,
         wheel_icons,
         shadow_icons,
+        smoke_icon,
     }
 }
 
@@ -138,6 +149,9 @@ struct WheelIcons(Vec<Icon>);
 
 #[derive(Resource)]
 struct ShadowIcons(Option<[Icon; 2]>);
+
+#[derive(Resource)]
+struct SmokeIcon(Option<Icon>);
 
 #[derive(Resource)]
 struct LowColors(bool);
@@ -189,6 +203,7 @@ fn main() {
         racer,
         wheel_icons,
         shadow_icons,
+        smoke_icon,
     } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
@@ -215,6 +230,7 @@ fn main() {
     .insert_resource(Racer(racer))
     .insert_resource(WheelIcons(wheel_icons))
     .insert_resource(ShadowIcons(shadow_icons))
+    .insert_resource(SmokeIcon(smoke_icon))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden(show_hidden))
     .add_systems(Startup, setup)
@@ -291,6 +307,7 @@ fn setup(
     racer: Res<Racer>,
     wheel_icons: Res<WheelIcons>,
     shadow_icons: Res<ShadowIcons>,
+    smoke_icon: Res<SmokeIcon>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
     show_hidden: Res<ShowHidden>,
@@ -390,6 +407,18 @@ fn setup(
             &mut meshes,
             &mut subtract_materials,
             [&icons[0], &icons[1]],
+            &textures.vram,
+        );
+    }
+
+    if let (Some(icon), true) = (&smoke_icon.0, driving.is_some()) {
+        exhaust::spawn(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+            icon,
             &textures.vram,
         );
     }

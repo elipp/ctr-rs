@@ -168,10 +168,12 @@ pub struct DrivePlugin;
 
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_hud)
+        app.insert_resource(crate::exhaust::Particles::new())
+            .add_systems(Startup, spawn_hud)
             .add_systems(FixedUpdate, drive_tick)
             .add_systems(Update, (show_kart, chase, hud).chain())
-            .add_systems(Update, crate::shadow::update);
+            .add_systems(Update, crate::shadow::update)
+            .add_systems(PostUpdate, crate::exhaust::update.before(TransformSystems::Propagate));
     }
 }
 
@@ -233,6 +235,7 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
 
 /// One game tick of the sim.
 fn drive_tick(
+    mut particles: ResMut<crate::exhaust::Particles>,
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     track: Res<Track>,
@@ -242,6 +245,7 @@ fn drive_tick(
     if keys.pressed(KeyCode::KeyR) {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
         (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
+        particles.list.clear();
         drive.camera = camera::CameraDc::default();
     }
 
@@ -262,6 +266,7 @@ fn drive_tick(
         &mut effects,
     );
     drive.tick += 1;
+    particles.tick(&vehicle::exhaust::exhaust(&mut drive.driver));
 
     if result.mask_grab {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
