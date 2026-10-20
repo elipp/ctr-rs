@@ -93,6 +93,11 @@ fn track_lev_files_parse() {
                 "level {id}: quad {i} bbox"
             );
         }
+        if let Some(sky) = &lev.skybox {
+            let faces: usize = sky.segments.iter().map(Vec::len).sum();
+            println!("level {id:>2}: skybox {} verts {faces} faces", sky.vertices.len());
+            assert!(faces > 0, "level {id}: empty skybox");
+        }
         let mut leaves = 0;
         for n in &lev.bsp {
             if let BspKind::Leaf { quad_blocks, .. } = &n.kind {
