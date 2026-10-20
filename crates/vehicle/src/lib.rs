@@ -33,6 +33,7 @@ pub mod scrub;
 pub mod search;
 pub mod shadow;
 pub mod skid;
+pub mod sparks;
 pub mod sim;
 pub mod spin;
 pub mod stats;

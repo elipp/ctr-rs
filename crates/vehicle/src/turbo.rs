@@ -41,11 +41,12 @@ const FADE_SLOW_STEP: u16 = 0x40;
 
 /// Where the fire sits on the kart, in game units in the kart's frame
 /// (right, up, forward), for the pipe on the right and the one on the left;
-/// from the instance scale (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`).
-pub fn pipe_offsets(instance_scale: i32) -> [[i32; 3]; 2] {
-    let y = (instance_scale * 3) >> 8;
-    let z = (instance_scale * -0x34) >> 12;
-    [[(instance_scale * 9) >> 11, y, z], [(instance_scale * -0x12) >> 12, y, z]]
+/// from the instance scale per axis (so they follow the squash and stretch).
+pub fn pipe_offsets(instance_scale: [i32; 3]) -> [[i32; 3]; 2] {
+    let [sx, sy, sz] = instance_scale;
+    let y = (sy * 3) >> 8;
+    let z = (sz * -0x34) >> 12;
+    [[(sx * 9) >> 11, y, z], [(sx * -0x12) >> 12, y, z]]
 }
 
 impl Turbo {
@@ -106,7 +107,7 @@ mod tests {
 
     #[test]
     fn the_fire_sits_at_the_pipes() {
-        assert_eq!(pipe_offsets(0xccc), [[14, 38, -42], [-15, 38, -42]]);
+        assert_eq!(pipe_offsets([0xccc; 3]), [[14, 38, -42], [-15, 38, -42]]);
     }
 
     #[test]

@@ -46,6 +46,8 @@ pub mod color_flags {
     pub const DRAW_MODE_SUBTRACT: u16 = 0x40;
     /// The position is relative to the driver the particle belongs to.
     pub const DRIVER_LOCAL: u16 = 0x800;
+    /// Drawn as a line from where the particle was a tick ago, not as a sprite.
+    pub const SPECIAL_LINE: u16 = 0x1000;
 }
 
 /// `ParticleEmitterFlags`
@@ -65,7 +67,7 @@ pub enum Entry {
     Func { flags: u16, color_flags: u16, lifespan: i16 },
     /// How one axis starts (`AxisInit`): `[start, velocity, accel]` of the base
     /// value, and of the range that random values are drawn from.
-    Axis { flags: u16, axis: usize, base: [i16; 3], random: [i16; 3] },
+    Axis { flags: u16, axis: usize, base: [i32; 3], random: [i32; 3] },
 }
 
 /// `data.emSet_Exhaust_High`: the exhaust of a single player.
@@ -77,6 +79,30 @@ pub const EXHAUST_HIGH: [Entry; 7] = [
     Entry::Axis { flags: 3, axis: 5, base: [1536, 400, 0], random: [0, 0, 0] },
     Entry::Axis { flags: 3, axis: 7, base: [16384, -2560, 0], random: [0, 0, 0] },
     Entry::Axis { flags: 26, axis: 4, base: [0, 256, 0], random: [-512, -512, 0] },
+];
+
+/// `data.emSet_GroundSparks`: the burst of a hard landing.
+pub const GROUND_SPARKS: [Entry; 8] = [
+    Entry::Func { flags: 1, color_flags: 0x58a2, lifespan: 8 },
+    Entry::Axis { flags: 18, axis: 0, base: [0, -500, 0], random: [0, 1000, 0] },
+    Entry::Axis { flags: 18, axis: 2, base: [0, -500, 0], random: [0, 1000, 0] },
+    Entry::Axis { flags: 55, axis: 1, base: [2048, 1000, -300], random: [0, 800, 100] },
+    Entry::Axis { flags: 17, axis: 5, base: [131072, 0, 0], random: [0, 200, 0] },
+    Entry::Axis { flags: 3, axis: 7, base: [65280, -7680, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 3, axis: 8, base: [65280, -7680, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 3, axis: 9, base: [32768, -3840, 0], random: [0, 0, 0] },
+];
+
+/// `data.emSet_WallSparks`: a spark from a scrape along a wall.
+pub const WALL_SPARKS: [Entry; 8] = [
+    Entry::Func { flags: 1, color_flags: 0x58a2, lifespan: 8 },
+    Entry::Axis { flags: 18, axis: 0, base: [0, -500, 0], random: [0, 1000, 0] },
+    Entry::Axis { flags: 18, axis: 2, base: [0, -500, 0], random: [0, 1000, 0] },
+    Entry::Axis { flags: 22, axis: 1, base: [0, 2000, -200], random: [0, 400, 0] },
+    Entry::Axis { flags: 1, axis: 5, base: [131072, 0, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 3, axis: 7, base: [65280, -2048, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 3, axis: 8, base: [65280, -3072, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 1, axis: 9, base: [1, 0, 0], random: [0, 0, 0] },
 ];
 
 /// `MixRNG_Particles`' source: a stand-in for retail's `RngDeadCoed`.
@@ -110,6 +136,8 @@ pub struct Particle {
     pub axis_flags: u16,
     pub color_flags: u16,
     pub frames_left: i16,
+    /// Where the particle was a tick ago, for the ones drawn as lines.
+    pub previous: [i32; 3],
 }
 
 /// How the sprite is combined with the picture behind it.
@@ -124,7 +152,7 @@ pub enum DrawMode {
 impl Particle {
     /// `Particle_Init`.
     pub fn new(set: &[Entry], rng: &mut Rng) -> Particle {
-        let mut p = Particle { axes: Default::default(), axis_flags: 0, color_flags: 0, frames_left: 0 };
+        let mut p = Particle { axes: Default::default(), axis_flags: 0, color_flags: 0, frames_left: 0, previous: [0; 3] };
         for entry in set {
             match *entry {
                 Entry::Func { color_flags, lifespan, .. } => {
@@ -168,11 +196,43 @@ impl Particle {
         p
     }
 
+    /// `VehEmitter_Sparks_Ground`: one of the sparks of a landing. `back`, `side` and `push`
+    /// are the kart's axes in the world (see `vehicle::sparks::Landing`).
+    pub fn landing_spark(back: [i32; 3], side: [i32; 3], push: [i32; 3], rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&GROUND_SPARKS, rng);
+        let raw = rng.mix(0x1000);
+        let mut r = raw >> 1 & 0x7ff;
+        if raw & 1 != 0 {
+            r = -r;
+        }
+        for a in 0..3 {
+            let velocity = (p.axes[a].velocity as i32 + push[a] + ((r * side[a]) >> 12)) as i16;
+            p.axes[a].velocity = velocity;
+            p.axes[a].start += velocity as i32 + back[a];
+        }
+        p
+    }
+
+    /// `VehEmitter_Sparks_Wall`: a spark from the tire at `tire`; `rotate` turns its velocity
+    /// into the world's axes.
+    pub fn wall_spark(tire: [i32; 3], rotate: impl Fn([i32; 3]) -> [i32; 3], rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&WALL_SPARKS, rng);
+        let velocity = rotate(std::array::from_fn(|a| p.axes[a].velocity as i32));
+        for a in 0..3 {
+            p.axes[a].start += tire[a];
+            p.axes[a].velocity = velocity[a] as i16;
+        }
+        p
+    }
+
     /// `Particle_UpdateList` for one particle, once per game tick. False once it is gone.
     pub fn update(&mut self) -> bool {
         self.frames_left -= 1;
         if self.frames_left == -1 || self.color_flags & color_flags::DESTROY_NOW != 0 {
             return false;
+        }
+        if self.color_flags & color_flags::SPECIAL_LINE != 0 {
+            self.previous = self.position();
         }
         for (n, a) in self.axes.iter_mut().enumerate() {
             if self.axis_flags >> n & 1 != 0 {
@@ -225,6 +285,18 @@ impl Particle {
             return 0x80;
         }
         (self.axes[axis::COLOR_R].start.clamp(0, 0xff00) >> 8) as u8
+    }
+
+    /// Whether the particle is drawn as a line, from its head to its tail.
+    pub fn is_line(&self) -> bool {
+        self.color_flags & color_flags::SPECIAL_LINE != 0
+    }
+
+    /// Where the tail of a line is, relative to its head, in 1/256 game units: the way the
+    /// particle came in the last tick, `scale` times (65536 is once).
+    pub fn line_tail(&self) -> [i32; 3] {
+        let scale = if self.axis_flags & axis_flags::SCALE_X != 0 { self.axes[axis::SCALE_X].start } else { 0 };
+        std::array::from_fn(|a| (((self.previous[a] - self.axes[a].start) as i64 * scale as i64) >> 16) as i32)
     }
 
     /// The sprite's corners (top left, top right, bottom left, bottom right) as
@@ -308,5 +380,20 @@ mod tests {
         assert_eq!(tr[0], 2 * 2 * 32 * p.axes[axis::SCALE_X].start / 4096);
         assert_eq!(tl[1], -tr[0] / 2);
         assert_eq!(bl[1], -tl[1]);
+    }
+
+    #[test]
+    fn a_spark_is_a_streak_that_fades_out_in_eight_ticks() {
+        let mut p = Particle::landing_spark([0, 0, -0x1800], [0x1800, 0, 0], [0, 0, -0x200], &mut Rng::new(3));
+        assert!(p.is_line());
+        let mut ticks = 0;
+        while p.update() {
+            ticks += 1;
+            // The tail trails behind the way the spark moves, about twice its last step.
+            let tail = p.line_tail();
+            let step: Vec<_> = (0..3).map(|a| p.axes[a].start - p.previous[a]).collect();
+            assert!((0..3).all(|a| (tail[a] + 2 * step[a]).abs() <= 2 * step[a].abs() / 4 + 2), "{tail:?} {step:?}");
+        }
+        assert_eq!(ticks, 8);
     }
 }

@@ -35,6 +35,9 @@ const NEAR_SIDE_PUSH: f32 = 1.5;
 /// Sorts the tires after every other blended mesh but the water (in world units of view distance).
 const TIRES_SORT_BIAS: f32 = 50.0;
 
+/// The flame and the smoke come out behind the kart, so they sort after the tires.
+pub const EFFECTS_SORT_BIAS: f32 = 75.0;
+
 pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -99,7 +102,11 @@ pub fn update(
     drive: Option<Res<crate::drive::Drive>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let wheel_rotation = drive.map(|d| d.wheel_rotation());
+    let wheel_rotation = drive.as_ref().map(|d| d.wheel_rotation());
+    // The tires sit at the kart's squashed and stretched size.
+    let scale = drive
+        .map(|d| [d.driver.inst_scale_x, d.driver.inst_scale_y, d.driver.inst_scale_z].map(i32::from))
+        .unwrap_or([DRIVER_INSTANCE_SCALE; 3]);
     let Some(eye) = cameras.iter().next().map(|t| t.translation) else {
         return;
     };
@@ -114,7 +121,7 @@ pub fn update(
         let quads = wheel_quads(
             pose.translation,
             Mat3::from_quat(pose.rotation),
-            DRIVER_INSTANCE_SCALE,
+            scale,
             wheels.wheel_size,
             wheel_rotation.unwrap_or(0),
             eye,

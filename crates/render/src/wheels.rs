@@ -64,11 +64,11 @@ pub struct WheelQuad {
 /// `DrawTiresSolid_BuildWheelLocalPairs`: for each wheel its centre (in
 /// 1/4 game units, `scale` = the instance scale, 0x1000 = 1.0), and the "rim"
 /// vector whose direction is the axle (4096 = unit length).
-fn local_pairs(scale: i32, wheel_rotation: i16) -> [(Vec3, Vec3); WHEELS] {
-    let x = ((scale * 0x90) >> 12) as f32;
-    let y = ((scale * 0x40) >> 12) as f32;
-    let front_z = ((scale * 0xc7) >> 12) as f32;
-    let rear_z = ((scale * -0x60) >> 12) as f32;
+fn local_pairs(scale: [i32; 3], wheel_rotation: i16) -> [(Vec3, Vec3); WHEELS] {
+    let x = ((scale[0] * 0x90) >> 12) as f32;
+    let y = ((scale[1] * 0x40) >> 12) as f32;
+    let front_z = ((scale[2] * 0xc7) >> 12) as f32;
+    let rear_z = ((scale[2] * -0x60) >> 12) as f32;
     let centers = [
         Vec3::new(x, y, front_z),
         Vec3::new(-x, y, front_z),
@@ -99,9 +99,9 @@ fn sprite_for(angle: f32) -> usize {
 /// Where a kart's wheels are drawn for a camera at `eye`.
 ///
 /// `position` and `rotation` are the kart's (instance) pose in world units,
-/// `scale` the instance scale (0x1000 = 1.0) and `wheel_size` retail's
+/// `scale` the instance scale per axis (0x1000 = 1.0) and `wheel_size` retail's
 /// `Driver::wheelSize`.
-pub fn wheel_quads(position: Vec3, rotation: Mat3, scale: i32, wheel_size: i32, wheel_rotation: i16, eye: Vec3) -> [WheelQuad; WHEELS] {
+pub fn wheel_quads(position: Vec3, rotation: Mat3, scale: [i32; 3], wheel_size: i32, wheel_rotation: i16, eye: Vec3) -> [WheelQuad; WHEELS] {
     let radius = radius(wheel_size);
     let pairs = local_pairs(scale, wheel_rotation);
     std::array::from_fn(|i| {
@@ -202,13 +202,13 @@ mod tests {
     #[test]
     fn side_on_wheel_is_flat_and_end_on_wheel_faces_the_camera() {
         let eye_side = Vec3::new(500.0, 0.2, 0.0);
-        let quads = wheel_quads(Vec3::ZERO, Mat3::IDENTITY, 0xccc, WHEEL_SIZE, 0, eye_side);
+        let quads = wheel_quads(Vec3::ZERO, Mat3::IDENTITY, [0xccc; 3], WHEEL_SIZE, 0, eye_side);
         // Looking along the axle: the picture of the tyre seen from the side. (The rim vector
         // is the axle plus the wheel's offset, so retail's side-on view is a little short of 16.)
         assert!(quads[0].sprite >= 14, "{}", quads[0].sprite);
         assert!(quads[0].near_side && !quads[1].near_side);
         let eye_front = Vec3::new(0.0, 0.2, 500.0);
-        let quads = wheel_quads(Vec3::ZERO, Mat3::IDENTITY, 0xccc, WHEEL_SIZE, 0, eye_front);
+        let quads = wheel_quads(Vec3::ZERO, Mat3::IDENTITY, [0xccc; 3], WHEEL_SIZE, 0, eye_front);
         // Looking across the axle: the thin tread.
         assert!(quads[0].sprite <= 1, "{}", quads[0].sprite);
         // The square is as big as the picture says: 2 * 12.8 game units.

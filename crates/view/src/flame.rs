@@ -71,6 +71,8 @@ pub fn spawn(
             atlas.sampler = ImageSampler::nearest();
             let base = StandardMaterial {
                 base_color: Color::WHITE,
+                // Behind the tires and the marks, in front of the track (see `wheels`).
+                depth_bias: crate::wheels::EFFECTS_SORT_BIAS,
                 base_color_texture: Some(images.add(atlas)),
                 unlit: true,
                 cull_mode: None,
@@ -95,7 +97,7 @@ pub fn update(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
     let turbo = drive.driver.turbo.filter(|t| !t.hidden);
-    let offsets = turbo::pipe_offsets(render::wheels::DRIVER_INSTANCE_SCALE);
+    let offsets = turbo::pipe_offsets([drive.driver.inst_scale_x, drive.driver.inst_scale_y, drive.driver.inst_scale_z].map(i32::from));
     for (flame, mut transform, mut visibility, children) in &mut flames {
         let shown = turbo.filter(|t| t.frames()[flame.pipe] == flame.frame);
         *visibility = if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden };
