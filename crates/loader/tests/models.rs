@@ -52,3 +52,21 @@ fn racer_models_parse_and_have_textures() {
         }
     }
 }
+
+/// The racer pack carries the shared models (the turbo flame among them).
+#[test]
+fn packs_carry_the_turbo_flame_models() {
+    let Some(mut b) = common::open_bigfile() else { return };
+    for character in 0..16 {
+        let file = b.big.read(&mut b.disc, BigIndex::ARCADE_1P_PACK.nth(character).get()).unwrap();
+        let models = loader::model::parse_pack_models(&DramFile::parse(&file).unwrap()).unwrap();
+        if character == 0 {
+            for m in &models {
+                eprintln!("{:?} id {} lods {}", m.name, m.id, m.headers.len());
+            }
+        }
+        for id in 0x2c..=0x33 {
+            assert!(models.iter().any(|m| m.id == id), "character {character}: no model {id:#x}");
+        }
+    }
+}

@@ -34,6 +34,7 @@ pub mod sim;
 pub mod spin;
 pub mod stats;
 pub mod terrain;
+pub mod turbo;
 
 use loader::lev::SVec3;
 use math::Vec3;
@@ -297,6 +298,8 @@ pub struct Driver {
     pub speedometer_needle_value: i16,
 
     pub reserves: i16,
+    /// The exhaust fire of the boost, while there is one.
+    pub turbo: Option<turbo::Turbo>,
     pub turbo_outside_timer: i16,
     pub turbo_meter_room_left: i16,
     pub wall_rub_timer: i16,

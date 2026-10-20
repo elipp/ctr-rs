@@ -1,13 +1,13 @@
 //! `VehFire_Increment`: a boost. Adds to the reserves (the turbo's remaining
-//! time) and raises the speed cap that goes with them.
+//! time) and raises the speed cap that goes with them, and lights the exhaust
+//! fire (`turbo`) or restarts it.
 //!
-//! Not modelled: the turbo's fire (a thread with two instances), its sound and
-//! the camera shake. They are presentation; the only simulation state they hold
-//! is the audio cooldown, which only gates the sound. The ghost tape is not
-//! recorded either.
+//! Not modelled: the sound, which only has the audio cooldown for state. The
+//! ghost tape is not recorded either.
 
 use math::mips;
 
+use crate::turbo::Turbo;
 use crate::{Driver, Effect, actions, kart_state, step_triggers};
 
 /// `TurboType`
@@ -21,6 +21,10 @@ pub mod turbo_type {
 }
 
 const FIRE_SPEED_CAP_SHIFT: u32 = 8;
+const VISIBILITY_COOLDOWN: i16 = 0x60;
+const FIRE_SIZE_SHIFT: u32 = 6;
+const FIRE_SIZE_BASE: i32 = 5;
+const FIRE_SIZE_MAX: i32 = 8;
 const RUMBLE_CHANNEL: u8 = 8;
 const RUMBLE_FORCE: u8 = 0x7f;
 
@@ -38,6 +42,20 @@ pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effect
     // Clear the turbo input latch and mark an outside turbo.
     d.actions_flag_set = (d.actions_flag_set & !actions::TURBO_INPUT_LATCH) | actions::NEW_BOOST;
 
+    // A fire that burns is reused; its pop (a short hidden spell) marks every boost
+    // but a turbo pad's, which is one long boost.
+    match &mut d.turbo {
+        Some(t) => {
+            if ty & turbo_type::TURBO_PAD == 0 {
+                t.hidden = true;
+                t.fire_visibility_cooldown = VISIBILITY_COOLDOWN;
+            }
+            t.fire_disappear_countdown = -1;
+            t.alpha_scale = 0;
+        }
+        None => d.turbo = Some(Turbo::new(ty & turbo_type::POWER_SLIDE_HANG_TIME != 0)),
+    }
+
     let single = d.stats.single_turbo_speed as i32;
     let sacred = d.stats.sacred_fire_speed as i32;
     let new_speed_cap = mips::add_lo(mips::sra(mips::mul_lo(fire_level, mips::sub_lo(sacred, single)), FIRE_SPEED_CAP_SHIFT), single);
@@ -49,6 +67,9 @@ pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effect
         || (sacred < d.fire_speed_cap as i32 && d.step_flag_set & step_triggers::SUPER_TURBO_PAD == 0)
     {
         d.fire_speed_cap = new_speed_cap as i16;
+        if let Some(t) = &mut d.turbo {
+            t.fire_size = ((fire_level >> FIRE_SIZE_SHIFT) + FIRE_SIZE_BASE).min(FIRE_SIZE_MAX) as i16;
+        }
     }
 
     if ty & turbo_type::TURBO_ITEM != 0 {

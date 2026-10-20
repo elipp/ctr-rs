@@ -67,7 +67,7 @@ struct Pose {
 
 #[derive(Resource)]
 pub struct Drive {
-    driver: Driver,
+    pub(crate) driver: Driver,
     coll: Collision,
     character: usize,
     anim_num_frames: [u16; 8],
@@ -172,7 +172,7 @@ impl Plugin for DrivePlugin {
             .add_systems(Startup, spawn_hud)
             .add_systems(FixedUpdate, drive_tick)
             .add_systems(Update, (show_kart, chase, hud).chain())
-            .add_systems(Update, crate::shadow::update)
+            .add_systems(Update, (crate::shadow::update, crate::flame::update))
             .add_systems(PostUpdate, crate::exhaust::update.before(TransformSystems::Propagate));
     }
 }
@@ -267,6 +267,7 @@ fn drive_tick(
     );
     drive.tick += 1;
     particles.tick(&vehicle::exhaust::exhaust(&mut drive.driver));
+    vehicle::turbo::tick(&mut drive.driver, env.elapsed_time_ms as i16);
 
     if result.mask_grab {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
