@@ -399,7 +399,10 @@ fn hud(drive: Res<Drive>, mut text: Query<&mut Text, With<Hud>>) {
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     for mut text in &mut text {
         text.0 = format!(
-            "speed {:5}  {:?}{}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, R restart",
+            "pos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, R restart",
+            d.pos_curr.x >> 8,
+            d.pos_curr.y >> 8,
+            d.pos_curr.z >> 8,
             d.speed_approx,
             d.phys_state,
             if grounded { "" } else { "  airborne" },

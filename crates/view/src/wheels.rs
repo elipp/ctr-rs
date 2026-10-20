@@ -90,7 +90,7 @@ pub fn spawn(
 pub fn update(
     wheels: Query<(&Wheels, &Mesh3d)>,
     karts: Query<&Transform, Without<Wheels>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<crate::OverlayCamera>)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
     drive: Option<Res<crate::drive::Drive>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {

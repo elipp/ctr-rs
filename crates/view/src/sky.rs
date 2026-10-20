@@ -19,7 +19,7 @@ use render::mesh::to_world;
 const SKY_LAYER: usize = 2;
 
 #[derive(Component)]
-struct SkyCamera;
+pub struct SkyCamera;
 
 pub struct SkyPlugin;
 

@@ -183,7 +183,7 @@ pub fn spawn(
 pub fn update(
     smoke: Query<(&Smoke, &Mesh3d)>,
     karts: Query<&Transform, With<Kart>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
     particles: Res<Particles>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -225,7 +225,7 @@ pub fn update(
 pub fn update_sparks(
     lines: Query<&Mesh3d, With<SparkLines>>,
     karts: Query<&Transform, With<Kart>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
     particles: Res<Particles>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,

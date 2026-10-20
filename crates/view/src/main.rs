@@ -4,7 +4,7 @@
 //! `loader::level::LevelId` (default 0); `--racer N` puts racer model N (0 Crash,
 //! 1 Cortex, ... as `GAME_CHARACTER_IDS`; default 0) at the first starting grid slot;
 //! `--lo` shows the `color_lo` vertex colours; `--no-cull` draws the level's back faces, which the game does not; `--show-hidden` keeps the
-//! blocks without textures and the faces painted pure red, which are hidden by default. The disc image is `CTR_BIN`
+//! blocks without textures and the faces with a pure red corner, which are hidden by default. The disc image is `CTR_BIN`
 //! or `assets/ctr-u.bin`.
 //!
 //! A collision probe from the camera is drawn and described on screen; see
