@@ -15,6 +15,8 @@
  *   M <searchFlags> <wanted> <ignored> <doorFlags> <current xyz> <next xyz> <radius>
  *          one sweep of COLL_MOVED_PlayerSearch (its lines setting up the
  *          scratchpad, then COLL_MOVED_BSPLEAF_TestQuadblocks over the BSP)
+ *   K <n> then n file offsets
+ *          marks those hitboxes as already hit (bspHitboxesHit)
  *   F <quad index or -1> <triangle id>
  *          COLL_MOVED_FindScrub
  *
@@ -92,6 +94,24 @@ int main(void)
 				}
 				sps.Union.QuadBlockColl.hitPos = sps.Input1.pos;
 				COLL_SearchBSP_CallbackPARAM(mesh.bspRoot, &sps.bbox, COLL_MOVED_BSPLEAF_TestQuadblocks, &sps);
+			}
+			pstate();
+			break;
+		}
+		case 'K':
+		{
+			int n = rd();
+			sps.numBspHitboxesHit = n;
+			for (int i = 0; i < n; i++)
+			{
+				int offset = rd();
+				sps.bspHitboxesHit[i] = NULL;
+				for (int k = 0; k < numAllHitboxes; k++)
+				{
+					struct BSP *h = allHitboxes[k];
+					if ((int)((u16)h->data.hitbox.unk18 | ((u32)(u16)h->data.hitbox.unk1A << 16)) == offset)
+						sps.bspHitboxesHit[i] = h;
+				}
 			}
 			pstate();
 			break;

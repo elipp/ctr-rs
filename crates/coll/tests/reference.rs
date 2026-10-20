@@ -17,7 +17,7 @@ use std::path::Path;
 use coll::{Collision, search_flags};
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::dram::DramFile;
-use loader::lev::{Level, SVec3, SpawnPoint};
+use loader::lev::{BspKind, Level, SVec3, SpawnPoint};
 use loader::level::LevelId;
 use support::{Rng, build_driver, describe_level, dump, index, run_reference, vec3};
 
@@ -51,6 +51,8 @@ enum Query {
         quad: Option<u32>,
         triangle_id: i32,
     },
+    /// `bspHitboxesHit`: hitboxes (by file offset) the search skips.
+    Mark(Vec<u32>),
 }
 
 impl Query {
@@ -67,6 +69,9 @@ impl Query {
                 format!("M {flags} {} {} {}{}{} {radius}", *wanted as i32, *ignored as i32, *door_flags as i32, vec3(*current), vec3(*next))
             }
             Query::Scrub { quad, triangle_id } => format!("F {} {triangle_id}", index(*quad)),
+            Query::Mark(offsets) => {
+                format!("K {}{}", offsets.len(), offsets.iter().map(|o| format!(" {o}")).collect::<String>())
+            }
         }
     }
 
@@ -103,6 +108,13 @@ impl Query {
             }
             Query::Scrub { quad, triangle_id } => {
                 c.find_scrub(*quad, *triangle_id);
+                dump(c)
+            }
+            Query::Mark(offsets) => {
+                c.sps.num_bsp_hitboxes_hit = offsets.len() as i32;
+                for (slot, &offset) in c.sps.bsp_hitboxes_hit.iter_mut().zip(offsets) {
+                    *slot = Some(offset);
+                }
                 dump(c)
             }
             Query::Barycentrics(v) => {
@@ -191,6 +203,59 @@ fn moved_queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
     out
 }
 
+/// Sweeps through and around the hitboxes of the level, with some instances not drawn (so not
+/// hit) and, now and then, the flag that makes any hitbox in reach a hit. Quad blocks are mostly
+/// ignored, to see the hitboxes alone.
+fn hitbox_queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
+    let hitboxes: Vec<_> = level
+        .bsp
+        .iter()
+        .filter_map(|n| match &n.kind {
+            BspKind::Leaf { hitboxes, .. } => Some(hitboxes),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut out = Vec::new();
+    if hitboxes.is_empty() {
+        return out;
+    }
+    for _ in 0..trials {
+        let h = hitboxes[rng.below(hitboxes.len() as u64) as usize];
+        let r = h.radius as i32;
+        // From around the sphere, to around it: mostly passing through or grazing it.
+        let around = |rng: &mut Rng, v: i16| v.wrapping_add(rng.range(-2 * r - 0x30, 2 * r + 0x30) as i16);
+        let current = SVec3 { x: around(rng, h.center.x), y: around(rng, h.center.y), z: around(rng, h.center.z) };
+        let next = if rng.below(8) == 0 {
+            current
+        } else {
+            SVec3 { x: around(rng, h.center.x), y: around(rng, h.center.y), z: around(rng, h.center.z) }
+        };
+        let mut flags = search_flags::HIGH_LOD | search_flags::TEST_INSTANCES;
+        if rng.below(10) == 0 {
+            flags |= search_flags::FORCE_INSTANCE_HIT;
+        }
+        // Now and then some are already dealt with, as after an earlier sweep of the step.
+        if rng.below(5) == 0 {
+            let n = rng.below(4) as usize;
+            out.push(Query::Mark((0..n).map(|_| hitboxes[rng.below(hitboxes.len() as u64) as usize].offset).collect()));
+            if n > 0 && rng.below(2) == 0 {
+                out.push(Query::Mark(vec![h.offset]));
+            }
+        }
+        out.push(Query::Moved {
+            flags,
+            wanted: [0, 0, 0x3000][rng.below(3) as usize],
+            ignored: 0,
+            door_flags: 0,
+            current,
+            next,
+            radius: if rng.below(3) == 0 { rng.range(0, 0x100) } else { 0x19 },
+        });
+    }
+    out
+}
+
 fn synthetic_queries(rng: &mut Rng, trials: u64) -> Vec<Query> {
     let mut out = Vec::new();
     for _ in 0..trials {
@@ -207,7 +272,8 @@ fn synthetic_queries(rng: &mut Rng, trials: u64) -> Vec<Query> {
     out
 }
 
-fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) {
+/// Returns how many moved queries touched an instance hitbox.
+fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) -> u32 {
     let mut script = describe_level(level);
     for q in queries {
         script.push_str(&q.script());
@@ -217,7 +283,7 @@ fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) {
     assert_eq!(reference.len(), queries.len(), "{what}: driver printed {} lines for {} queries", reference.len(), queries.len());
 
     let mut c = Collision::default();
-    let (mut failures, mut hits) = (0, 0);
+    let (mut failures, mut hits, mut touched) = (0, 0, 0);
     // How often each `reorder_result` (-1..=6) was the final hit of a moved query.
     let mut clips = [0u32; 8];
     for (i, (q, want)) in queries.iter().zip(&reference).enumerate() {
@@ -228,6 +294,9 @@ fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) {
         if matches!(q, Query::Moved { .. }) && c.sps.did_touch_quadblock > 0 {
             clips[(c.sps.hit.reorder_result + 1) as usize] += 1;
         }
+        if matches!(q, Query::Moved { .. }) && c.sps.did_touch_hitbox > 0 {
+            touched += 1;
+        }
         if &got != want {
             failures += 1;
             if failures <= 3 {
@@ -237,6 +306,7 @@ fn compare(what: &str, level: &Level, exe: &Path, queries: &[Query]) {
     }
     eprintln!("{what}: {} queries, {hits} with a hit, moved hits by clip result (-1..6): {clips:?}", queries.len());
     assert_eq!(failures, 0, "{what}: {failures} of {} queries differ from the reference", queries.len());
+    touched
 }
 
 fn trials() -> u64 {
@@ -277,5 +347,33 @@ fn matches_reference_on_tracks() {
         let level = Level::parse(&DramFile::parse(&file).unwrap()).unwrap();
         compare(&format!("level {id}"), &level, &exe, &queries(&level, &mut rng, trials()));
         compare(&format!("level {id} moved"), &level, &exe, &moved_queries(&level, &mut rng, trials()));
+
+        // The same level with some instances not drawn.
+        let mut hidden = level.clone();
+        for inst in &mut hidden.instances {
+            if rng.below(4) == 0 {
+                inst.flags &= !coll::instance::DRAW_COLLISION_MASK;
+            }
+        }
+        // And with hitboxes the real ones are not: cylinders (no Y axis), and a Y range.
+        for node in &mut hidden.bsp {
+            if let BspKind::Leaf { hitboxes, .. } = &mut node.kind {
+                for h in hitboxes {
+                    match rng.below(4) {
+                        0 => h.flag &= !0x40,
+                        1 => {
+                            h.flag |= 0x20;
+                            h.id = -(rng.range(0, 2 * h.radius as i32) as i16);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let queries = hitbox_queries(&hidden, &mut rng, trials());
+        let touched = compare(&format!("level {id} hitboxes"), &hidden, &exe, &queries);
+        if touched > 0 {
+            eprintln!("level {id}: {touched} hitbox queries touched a hitbox");
+        }
     }
 }

@@ -16,7 +16,7 @@
 use bevy::prelude::*;
 use coll::Collision;
 use vehicle::shadow::{GroundShadow, ground_shadow};
-use vehicle::sim::{spawn, tick};
+use vehicle::sim::{spawn, tick_with};
 use vehicle::{Driver, Effect, Env, Input, buttons};
 
 use crate::Track;
@@ -294,6 +294,7 @@ fn drive_tick(
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     track: Res<Track>,
+    sim: Res<crate::props::Sim>,
     mut drive: ResMut<Drive>,
 ) {
     let drive = &mut *drive;
@@ -312,12 +313,13 @@ fn drive_tick(
         ..Env::default()
     };
     let mut effects = Vec::new();
-    let result = tick(
+    let result = tick_with(
         &mut drive.driver,
         &mut drive.coll,
         &track.0,
         &env,
         &input,
+        &mut &sim.hazards,
         &mut effects,
     );
     drive.tick += 1;

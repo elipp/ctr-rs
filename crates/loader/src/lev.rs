@@ -99,6 +99,31 @@ impl BspChild {
     }
 }
 
+/// An instance's hitbox, which the leaves it touches list (`struct BSP` as `data.hitbox`): a sphere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BspHitbox {
+    /// Where the entry is in the file: the game tells hitboxes apart by address.
+    pub offset: u32,
+    /// `BspHitboxFlag` in the low byte, `BspHitboxClass` in the high one.
+    pub flag: u16,
+    pub id: i16,
+    pub bbox: BoundingBox,
+    pub center: SVec3,
+    pub radius: i16,
+    /// The `InstDef` it belongs to: an index into [`Level::instances`].
+    pub instance: Option<usize>,
+}
+
+impl BspHitbox {
+    /// `BSP_HITBOX_COLLIDABLE`
+    pub const COLLIDABLE: u16 = 0x80;
+
+    /// `Coll_BspHitboxClass`
+    pub fn class(&self) -> u8 {
+        (self.flag >> 8) as u8
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BspKind {
     Branch {
@@ -109,8 +134,8 @@ pub enum BspKind {
     Leaf {
         /// Range into [`Level::quad_blocks`].
         quad_blocks: std::ops::Range<usize>,
-        /// Payload offset of the hitbox list (0 = none).
-        hitbox_array: u32,
+        /// The instance hitboxes of the leaf (`bspHitboxArray`, up to its zero flag).
+        hitboxes: Vec<BspHitbox>,
     },
 }
 
@@ -426,6 +451,33 @@ impl Level {
         })
     }
 
+    /// The hitboxes at `at` (0 = none), up to the entry with a zero flag.
+    fn parse_hitboxes(p: &Payload, at: usize, instances_at: usize, num_instances: usize) -> io::Result<Vec<BspHitbox>> {
+        let mut hitboxes = Vec::new();
+        if at == 0 {
+            return Ok(hitboxes);
+        }
+        while p.u16(at + hitboxes.len() * BSP_SIZE)? != 0 {
+            let at = at + hitboxes.len() * BSP_SIZE;
+            let inst_def = p.u32(at + 0x1c)? as usize;
+            let instance = inst_def
+                .checked_sub(instances_at)
+                .filter(|off| inst_def != 0 && off % INST_DEF_SIZE == 0)
+                .map(|off| off / INST_DEF_SIZE)
+                .filter(|&i| i < num_instances);
+            hitboxes.push(BspHitbox {
+                offset: at as u32,
+                flag: p.u16(at)?,
+                id: p.i16(at + 2)?,
+                bbox: p.bbox(at + 4)?,
+                center: p.svec3(at + 0x10)?,
+                radius: p.i16(at + 0x16)?,
+                instance,
+            });
+        }
+        Ok(hitboxes)
+    }
+
     pub fn parse(file: &DramFile) -> io::Result<Self> {
         let p = Payload(&file.data);
 
@@ -479,6 +531,8 @@ impl Level {
             })
         })?;
 
+        let instances_at = p.u32(LEVEL_INSTANCES)? as usize;
+        let num_instances = p.u32(LEVEL_NUM_INSTANCES)? as usize;
         let bsp = p.array(bsp_at, num_bsp, BSP_SIZE, |p, at| {
             let flag = p.u16(at)?;
             let kind = if flag & 1 == 0 {
@@ -504,7 +558,7 @@ impl Level {
                 };
                 BspKind::Leaf {
                     quad_blocks: first..first + num,
-                    hitbox_array: p.u32(at + 0x14)?,
+                    hitboxes: Self::parse_hitboxes(&p, p.u32(at + 0x14)? as usize, instances_at, num_instances)?,
                 }
             };
             Ok(BspNode {

@@ -1,13 +1,50 @@
 //! `COLL_MOVED_PlayerSearch`: moves the driver along its velocity against the
 //! track, scraping along whatever it hits.
 
-use coll::{Collision, FRACTION_ONE, search_flags};
+use coll::instance::{CLASS_TOUCH, DRAW_COLLISION_MASK, LINC_USES_INSTDEF};
+use coll::{Collision, FRACTION_ONE, Scratchpad, search_flags};
+use loader::lev::BspHitbox;
 use loader::lev::{Level, SVec3, quad_flags};
 use math::mips;
 
 use crate::scrub::{self, Impact, LightMatrix, scrub_id};
 use crate::{Driver, Effect, collision_flags};
 
+/// `MetaDataMODEL::LInC` of the level's models: what a hitbox the player touches does.
+pub trait Instances {
+    /// `LInC` of the model of `instance` (an index into `Level::instances`), when the player
+    /// touches its hitbox. `sps` has the hit. The result is the game's: 2 means it was dealt
+    /// with and the driver goes on as if nothing was there; 0 or 1 that the driver collides with
+    /// it like a surface (1 is also what a model without an `LInC` gives).
+    fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &Scratchpad) -> i32;
+}
+
+/// No model has an `LInC`: every hitbox a driver reaches is a surface.
+pub struct NoInstances;
+
+impl Instances for NoInstances {
+    fn touch(&mut self, _: usize, _: &mut Driver, _: &Scratchpad) -> i32 {
+        1
+    }
+}
+
+/// `CollMoved_PlayerSearch_RunHitboxLInC`, for the hitbox the search ended on.
+fn run_hitbox_linc(d: &mut Driver, coll: &Collision, level: &Level, instances: &mut dyn Instances) -> i32 {
+    let Some(hit) = coll.sps.bsp_hitbox else { return 1 };
+    let Some(instance) = hit.instance else { return 1 };
+    if hit.flag & BspHitbox::COLLIDABLE != 0 {
+        // Only an instance that is drawn can be hit.
+        if coll.instance_flags(level, instance) & DRAW_COLLISION_MASK == 0 {
+            return 1;
+        }
+    } else if hit.flag & LINC_USES_INSTDEF == 0 {
+        return 1;
+    }
+    instances.touch(instance, d, &coll.sps)
+}
+
+/// `COLL_HITBOX_SCRUB_DEPTH_BONUS`
+const HITBOX_SCRUB_DEPTH_BONUS: i32 = 0x200;
 /// The most sweeps a single step makes before giving up.
 const MAX_SWEEPS: u32 = 15;
 /// Stop once less than this much of the step's velocity is left (4.12).
@@ -23,7 +60,7 @@ fn step_velocity(velocity: i32, elapsed_ms: i32, multiplier: i32) -> i32 {
 
 /// The sphere's centre in the scratchpad's units: `pos_curr` is 24.8, the
 /// scratchpad 1/256 of that, offset by `origin_to_center`.
-fn sphere_center(d: &Driver, pos: math::Vec3) -> SVec3 {
+pub fn sphere_center(d: &Driver, pos: math::Vec3) -> SVec3 {
     let axis = |origin_to_center: i32, pos: i32| mips::add_lo(origin_to_center as u16 as i32, mips::sra(pos, 8)) as i16;
     SVec3 {
         x: axis(d.origin_to_center.x, pos.x),
@@ -34,14 +71,15 @@ fn sphere_center(d: &Driver, pos: math::Vec3) -> SVec3 {
 
 /// `COLL_MOVED_PlayerSearch`. `elapsed_ms` is `gGT->elapsedTimeMS`; `coll`
 /// carries the scratchpad and the GTE. `light_matrix` is what impacts are
-/// transformed by, normally [`scrub::IDENTITY_LIGHT_MATRIX`]. Instance
-/// hitboxes are not ported, so only track quad blocks are tested.
+/// transformed by, normally [`scrub::IDENTITY_LIGHT_MATRIX`]. `instances` is what touching the
+/// hitboxes of the level's instances does.
 pub fn moved_player_search(
     d: &mut Driver,
     coll: &mut Collision,
     level: &Level,
     light_matrix: &LightMatrix,
     elapsed_ms: i32,
+    instances: &mut dyn Instances,
     effects: &mut Vec<Effect>,
 ) {
     let mut multiplier = FRACTION_ONE;
@@ -85,7 +123,29 @@ pub fn moved_player_search(
             d.pos_curr.z = mips::add_lo(d.pos_curr.z, mips::sra(mips::mul_lo(velocity.z, hit_fraction), 12));
         }
 
-        assert_eq!(sps.did_touch_hitbox, 0, "instance hitboxes are not ported");
+        if sps.did_touch_hitbox != 0 {
+            let Some(hit) = sps.bsp_hitbox else { break };
+            coll.sps.quad_block_coll.search_flags &= !search_flags::REUSE_NORMALS;
+            d.collision_flags &= !collision_flags::SURFACE_PUSHBACK;
+
+            let result = run_hitbox_linc(d, coll, level, instances);
+            if result == 2 || hit.class == CLASS_TOUCH {
+                coll.store_hitbox();
+            } else {
+                coll.find_scrub(Some(hit.scrub_key()), 0);
+                let depth = coll.sps.input1.scrub_depth as u16 as i32;
+                coll.sps.input1.scrub_depth = mips::add_lo(depth, HITBOX_SCRUB_DEPTH_BONUS) as i16;
+
+                let impact = scrub::scrub_impact(d, coll, level, light_matrix, scrub::surface(hit.class as usize), effects);
+                if impact == Impact::None {
+                    coll.store_hitbox();
+                }
+                if impact == Impact::Slammed {
+                    return;
+                }
+            }
+            continue;
+        }
         let Some(quad_index) = sps.hit.quad.filter(|_| sps.did_touch_quadblock != 0) else {
             break;
         };

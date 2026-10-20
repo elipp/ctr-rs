@@ -2,7 +2,7 @@
 //! and a pure `tick`, so they can go in the rollback state next to the drivers: [`Hazards`] is
 //! all of a level's, built from its definition and cloneable.
 //!
-//! The armadillos of Dingo Canyon, the fireballs of Mystery Caves, the minecarts of Dragon Mines,
+//! The armadillos of Dingo Canyon, the fireballs and the turtles of Mystery Caves, the minecarts of Dragon Mines,
 //! and the snowball and the barrels that roll along recorded paths. Each tick says where a hazard
 //! looks for a driver ([`Contact`]); what hurting one does (`VehPickState_NewState`) is not ported.
 
@@ -10,15 +10,19 @@ pub mod armadillo;
 pub mod fireball;
 pub mod minecart;
 pub mod roller;
+pub mod turtle;
 
 use loader::dram::DramFile;
 use loader::lev::{InstDef, Level, PosRot, SVec3};
+use vehicle::Driver;
+use vehicle::search::Instances;
 use loader::model::Model;
 
 use armadillo::Armadillo;
 use fireball::{Fireball, Spark};
 use minecart::Minecart;
 use roller::Roller;
+use turtle::Turtle;
 
 /// `VEH_PICK_DAMAGE_*`: what a hit does to the driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +117,7 @@ pub struct Hazards {
     pub fireballs: Vec<Placed<Fireball>>,
     pub minecarts: Vec<Placed<Minecart>>,
     pub rollers: Vec<Placed<Roller>>,
+    pub turtles: Vec<Placed<Turtle>>,
     /// `ptrSpawnType2`'s first path, which the minecarts follow.
     position_path: Vec<SVec3>,
     /// `ptrSpawnType2_PosRot`, which the rollers follow.
@@ -135,6 +140,7 @@ impl Hazards {
             fireballs: Vec::new(),
             minecarts: Vec::new(),
             rollers: Vec::new(),
+            turtles: Vec::new(),
             position_path: level.position_paths.first().cloned().unwrap_or_default(),
             roll_paths: level.paths.clone(),
             ticks: 0,
@@ -151,6 +157,10 @@ impl Hazards {
                 "armadillo" => {
                     let delay = digit(def).and_then(|d| level.spawn_delays.get(d)).copied().unwrap_or(0);
                     hazards.armadillos.push(Placed { instance, sim: Armadillo::new(def, delay), frames: frames() });
+                }
+                "turtle" => {
+                    let frames = frames();
+                    hazards.turtles.push(Placed { instance, sim: Turtle::new(def, frames[0]), frames });
                 }
                 "fireball" => hazards.fireballs.push(Placed { instance, sim: Fireball::new(def), frames: [0; 2] }),
                 "minecart" => {
@@ -189,6 +199,9 @@ impl Hazards {
         for m in &mut self.minecarts {
             tick.contacts.push(m.sim.tick(&self.position_path, m.frames[0]));
         }
+        for t in &mut self.turtles {
+            t.sim.tick(t.frames[0]);
+        }
         for r in &self.rollers {
             let path = &self.roll_paths[r.sim.path];
             let frame = roller::frame_index(path.len(), self.ticks).expect("a path of two points or more");
@@ -203,6 +216,18 @@ impl Hazards {
         let path = &self.roll_paths[self.rollers[roller].sim.path];
         let at = |tick: u32| path[roller::frame_index(path.len(), tick).expect("a path of two points or more")];
         (at(self.ticks), at(self.ticks + 1))
+    }
+}
+
+/// What the kart's collision search does when it reaches the hitbox of one of these instances
+/// (`MetaDataMODEL::LInC`). The turtles are the only ones so far; the other models give 1, as
+/// those without an `LInC` do.
+impl Instances for &Hazards {
+    fn touch(&mut self, instance: usize, driver: &mut Driver, _: &coll::Scratchpad) -> i32 {
+        match self.turtles.iter().find(|t| t.instance == instance) {
+            Some(turtle) => turtle.sim.linc(driver),
+            None => 1,
+        }
     }
 }
 

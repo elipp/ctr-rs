@@ -89,6 +89,10 @@ pub struct Armadillos(Vec<Shown>);
 #[derive(Resource, Default)]
 pub struct Minecarts(Vec<Shown>);
 
+/// The turtles stay where they are placed; only their animation is the sim's.
+#[derive(Resource, Default)]
+pub struct Turtles(Vec<Shown>);
+
 /// The entity of a placed armadillo or minecart (its index in [`Armadillos`] or [`Minecarts`]).
 #[derive(Component)]
 pub struct ArmadilloBody(usize);
@@ -138,6 +142,7 @@ enum Hazard {
     Armadillo(usize),
     Minecart(usize),
     Roller(usize),
+    Turtle(usize),
     /// Only its sparks show (`fire`).
     Fireball,
 }
@@ -157,11 +162,13 @@ pub fn spawn(
     by_instance.extend(hazards.armadillos.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Armadillo(i))));
     by_instance.extend(hazards.minecarts.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Minecart(i))));
     by_instance.extend(hazards.rollers.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Roller(i))));
+    by_instance.extend(hazards.turtles.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Turtle(i))));
     by_instance.extend(hazards.fireballs.iter().map(|h| (h.instance, Hazard::Fireball)));
 
     let mut props = Props::default();
     let mut armadillos = Armadillos::default();
     let mut minecarts = Minecarts::default();
+    let mut turtles = Turtles::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
     let mut gte = gte::Gte::default();
     for (n, inst) in level.instances.iter().enumerate().filter(|(_, i)| i.model != 0) {
@@ -229,6 +236,12 @@ pub fn spawn(
                 minecarts.0.push(s);
                 continue;
             }
+            Some(&Hazard::Turtle(i)) => {
+                let mut s = shown(i);
+                s.parts = spawn_parts(data.parts, &base, transform, None, commands, meshes, materials, subtract_materials, 0);
+                turtles.0.push(s);
+                continue;
+            }
             _ => (transform, None),
         };
         let parts = spawn_parts(data.parts, &base, transform, parent, commands, meshes, materials, subtract_materials, 0);
@@ -237,16 +250,18 @@ pub fn spawn(
         }
     }
     info!(
-        "{} placed models, {} animated, {} armadillos, {} minecarts, {} rollers",
+        "{} placed models, {} animated, {} armadillos, {} minecarts, {} rollers, {} turtles",
         level.instances.len(),
         props.0.len(),
         armadillos.0.len(),
         minecarts.0.len(),
-        hazards.rollers.len()
+        hazards.rollers.len(),
+        turtles.0.len()
     );
     commands.insert_resource(props);
     commands.insert_resource(armadillos);
     commands.insert_resource(minecarts);
+    commands.insert_resource(turtles);
 }
 
 /// After a tick of the hazards: the armadillos and the minecarts take their new place and the
@@ -255,8 +270,12 @@ pub fn pose_hazards(
     sim: Res<Sim>,
     mut armadillos: ResMut<Armadillos>,
     mut minecarts: ResMut<Minecarts>,
+    mut turtles: ResMut<Turtles>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    for t in &mut turtles.0 {
+        t.pose((0, sim.hazards.turtles[t.index].sim.anim_frame), &mut meshes);
+    }
     for a in &mut armadillos.0 {
         let h = &sim.hazards.armadillos[a.index].sim;
         a.moved(h.pos, &h.matrix());
