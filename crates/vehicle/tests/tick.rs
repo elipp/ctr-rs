@@ -402,17 +402,67 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
     out
 }
 
+/// A copy of a reference source with `edits` applied, for the places where
+/// ctr-native cannot be compared with the port as it is. Each edit must match
+/// exactly once, so a changed reference is noticed. The copy goes next to the C
+/// driver; the reference itself is left alone. Returns the copy's path.
+fn patched(source: &str, edits: &[(&str, &str)]) -> Option<std::path::PathBuf> {
+    let path = support::reference_dir().join(source);
+    let mut text = std::fs::read_to_string(&path).ok()?;
+    for (old, new) in edits {
+        assert_eq!(text.matches(old).count(), 1, "{source} changed in the reference; update this patch: {old}");
+        text = text.replace(old, new);
+    }
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("patched_{}", Path::new(source).file_name()?.to_str()?));
+    std::fs::write(&out, text).unwrap();
+    Some(out)
+}
+
+/// `VehPhysProc.c` with the one retail behaviour ctr-native loses restored: at
+/// `gasClearSteerFlags` it clears the reverse-steer latches in
+/// `actionsFlagSetNext`, but `gasDone` then overwrites that with the unmasked
+/// copy. (Retail has one register for both; the port follows retail.)
+fn retail_veh_phys_proc() -> Option<std::path::PathBuf> {
+    let header = format!("#include \"{}\"", support::reference_dir().join("game/Vehicle/VehCommon.h").display());
+    patched(
+        "game/Vehicle/VehPhysProc.c",
+        &[
+            (
+                "actionsFlagSetNext = actionsFlagSetCopy & ~(ACTION_REVERSE_STEER_LEFT | ACTION_REVERSE_STEER_RIGHT);",
+                "actionsFlagSetCopy &= ~(ACTION_REVERSE_STEER_LEFT | ACTION_REVERSE_STEER_RIGHT);",
+            ),
+            ("#include \"VehCommon.h\"", &header),
+        ],
+    )
+}
+
+/// `COLL.c` with `ScrubImpact`'s LLV0 light matrix loaded with the identity
+/// before it is used. Retail uses whatever the renderer last left in the GTE
+/// (and the rest of the tick overwrites it, too); the port passes
+/// `scrub::IDENTITY_LIGHT_MATRIX` instead.
+fn coll_with_identity_light_matrix() -> Option<std::path::PathBuf> {
+    patched(
+        "game/COLL.c",
+        &[(
+            "internal Vec3 CollMoved_ScrubImpact_GteLLV0(s32 x, s32 y, s32 z)\n{\n",
+            "internal Vec3 CollMoved_ScrubImpact_GteLLV0(s32 x, s32 y, s32 z)\n{\n\tCTC2(0x1000, 8);\n\tCTC2(0, 9);\n\tCTC2(0x1000, 10);\n\tCTC2(0, 11);\n\tCTC2(0x1000, 12);\n",
+        )],
+    )
+}
+
 #[test]
 fn matches_reference_on_tracks() {
     let driver_c = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/tick.c");
+    let (Some(proc_c), Some(coll_c)) = (retail_veh_phys_proc(), coll_with_identity_light_matrix()) else { return };
     let Some(exe) = build_driver(
         &driver_c,
         "vehicle_tick",
         &[
-            "game/COLL.c",
+            coll_c.to_str().unwrap(),
             "game/Vehicle/VehCalc.c",
+            "game/Vehicle/VehFrame.c",
             "game/Vehicle/VehAfterColl.c",
-            "game/Vehicle/VehPhysProc.c",
+            proc_c.to_str().unwrap(),
             "game/Vehicle/VehPhysGeneral.c",
             "game/Vehicle/VehPhysForce.c",
             "game/Vehicle/VehPhysCrash.c",

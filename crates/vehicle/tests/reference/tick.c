@@ -36,6 +36,8 @@ struct GameTracker gGT;
 struct Level level;
 struct GamepadSystem pads;
 struct Model model;
+/* The baked animation matrices are not ported; the C animation only needs somewhere to read them from. */
+struct MatrixND bakedDummy[256];
 struct ModelHeader modelHeader;
 struct ModelAnim *modelAnims[8];
 struct ModelAnim modelAnimData[8];
@@ -171,6 +173,13 @@ static int terrainIndex(struct Terrain *t)
 	return (int)(t - data.MetaDataTerrain);
 }
 
+/* The real VehPhysForce_TranslateMatrix also squashes and stretches the model, animates the baked
+ * matrices and emits the wake; none of that is ported, only its facing matrix is. */
+static void oracle_translate_matrix(struct Thread *t, struct Driver *drv)
+{
+	VehPhysForce_RotAxisAngle(&drv->matrixFacingDir, CTR_VECTOR_DATA(&(drv->AxisAngle2_normalVec)), drv->rotCurr.y);
+}
+
 static void set_state(int state, int initPending)
 {
 	memset(d.funcPtrs, 0, sizeof(d.funcPtrs));
@@ -199,7 +208,7 @@ static void set_state(int state, int initPending)
 	d.funcPtrs[DRIVER_FUNC_APPLY_FORCES] = VehPhysForce_OnApplyForces;
 	d.funcPtrs[DRIVER_FUNC_COLL_MOVED] = COLL_MOVED_PlayerSearch;
 	d.funcPtrs[DRIVER_FUNC_COLL_FIXED] = COLL_FIXED_PlayerSearch;
-	d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = VehPhysForce_TranslateMatrix;
+	d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = oracle_translate_matrix;
 	if (initPending)
 		d.funcPtrs[DRIVER_FUNC_INIT] = VehPhysProc_Driving_Init;
 }
@@ -274,7 +283,14 @@ int main(void)
 	gGT.level1 = &level;
 	gGT.numPlyrCurrGame = 1;
 	level.ptr_mesh_info = &mesh;
+	for (int i = 0; i < BAKED_GTE_MATRIX_COUNT; i++)
+	{
+		data.bakedGteMath[i].physEntry = bakedDummy;
+		data.bakedGteMath[i].numEntries = 256;
+	}
 	thread.inst = &inst;
+	thread.modelIndex = DYNAMIC_PLAYER;
+	inst.thread = &thread;
 	d.instSelf = &inst;
 	inst.model = &model;
 	model.numHeaders = 1;
@@ -388,6 +404,9 @@ int main(void)
 					continue;
 				if (i == DRIVER_FUNC_ANIMATE && fn != (DriverFunc)VehPhysProc_SlamWall_Animate)
 					continue;
+				/* Driving_Init installs the real one again. */
+				if (i == DRIVER_FUNC_TRANSLATE_MATRIX)
+					fn = oracle_translate_matrix;
 				fn(&thread, &d);
 				if (i == DRIVER_FUNC_INIT && d.funcPtrs[DRIVER_FUNC_UPDATE] == (DriverFunc)VehPhysProc_Driving_Update)
 					d.funcPtrs[DRIVER_FUNC_UPDATE] = oracle_driving_update;

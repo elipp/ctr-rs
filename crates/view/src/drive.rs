@@ -61,7 +61,16 @@ impl Drive {
     pub fn new(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> Drive {
         let (driver, coll) = Drive::birth(track, character, anim_num_frames);
         let pose = pose_of(&driver);
-        Drive { driver, coll, character, anim_num_frames, tick: 0, held: 0, previous: pose, current: pose }
+        Drive {
+            driver,
+            coll,
+            character,
+            anim_num_frames,
+            tick: 0,
+            held: 0,
+            previous: pose,
+            current: pose,
+        }
     }
 
     fn birth(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> (Driver, Collision) {
@@ -93,7 +102,10 @@ fn pose_of(d: &Driver) -> Pose {
         ((d.pos_curr.y >> 8) + offset_y) as f32,
         (d.pos_curr.z >> 8) as f32,
     ) * SCALE;
-    Pose { translation, rotation }
+    Pose {
+        translation,
+        rotation,
+    }
 }
 
 pub struct DrivePlugin;
@@ -110,51 +122,82 @@ fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         Hud,
         Text::new(""),
-        Node { position_type: PositionType::Absolute, bottom: Val::Px(8.0), left: Val::Px(8.0), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(8.0),
+            left: Val::Px(8.0),
+            ..default()
+        },
     ));
 }
 
-fn read_input(keys: &ButtonInput<KeyCode>, previous_held: u32) -> Input {
+fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held: u32) -> Input {
     let down = |codes: &[KeyCode]| codes.iter().any(|&k| keys.pressed(k));
+    let pad_down = |codes: &[GamepadButton]| pads.iter().any(|p| p.any_pressed(codes.iter().copied()));
+    // Analog left stick of the first pad that has it pushed, deadzone already applied.
+    let stick = pads.iter().map(|p| p.left_stick()).find(|s| *s != Vec2::ZERO).unwrap_or(Vec2::ZERO);
+
     let mut held = 0;
-    if down(&[KeyCode::KeyW, KeyCode::ArrowUp]) {
+    if down(&[KeyCode::KeyW, KeyCode::ArrowUp]) || pad_down(&[GamepadButton::South]) {
         held |= buttons::CROSS;
     }
-    let reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown]);
+    let reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown])
+        || pad_down(&[GamepadButton::West, GamepadButton::DPadDown])
+        || stick.y < -0.5;
     if reverse {
         held |= buttons::SQUARE;
     }
-    if down(&[KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+    if down(&[KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ShiftRight])
+        || pad_down(&[GamepadButton::RightTrigger, GamepadButton::RightTrigger2])
+    {
         held |= buttons::R1;
     }
-    let left = down(&[KeyCode::KeyA, KeyCode::ArrowLeft]);
-    let right = down(&[KeyCode::KeyD, KeyCode::ArrowRight]);
+    let left = down(&[KeyCode::KeyA, KeyCode::ArrowLeft]) || pad_down(&[GamepadButton::DPadLeft]);
+    let right = down(&[KeyCode::KeyD, KeyCode::ArrowRight]) || pad_down(&[GamepadButton::DPadRight]);
+    // Sticks: 0 is left, 0x80 the middle, 0xff right (and back for LY).
+    let axis = |v: f32| (0x80 as f32 + v * 127.0).round().clamp(0.0, 255.0) as u8;
+    let stick_lx = match (left, right) {
+        (true, false) => 0,
+        (false, true) => 0xff,
+        _ => axis(stick.x),
+    };
     Input {
         buttons_held: held,
         buttons_tapped: held & !previous_held,
-        // Sticks: 0 is left, 0x80 the middle, 0xff right (and back for LY).
-        stick_lx: match (left, right) {
-            (true, false) => 0,
-            (false, true) => 0xff,
-            _ => 0x80,
-        },
-        stick_ly: if reverse { 0xff } else { 0x80 },
+        stick_lx,
+        stick_ly: if reverse { 0xff } else { axis(-stick.y) },
         stick_ry: 0x80,
     }
 }
 
 /// One game tick of the sim.
-fn drive_tick(keys: Res<ButtonInput<KeyCode>>, track: Res<Track>, mut drive: ResMut<Drive>) {
+fn drive_tick(
+    keys: Res<ButtonInput<KeyCode>>,
+    pads: Query<&Gamepad>,
+    track: Res<Track>,
+    mut drive: ResMut<Drive>,
+) {
     let drive = &mut *drive;
     if keys.pressed(KeyCode::KeyR) {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
         (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
     }
 
-    let input = read_input(&keys, drive.held);
+    let input = read_input(&keys, &pads, drive.held);
     drive.held = input.buttons_held;
-    let env = Env { elapsed_event_time: drive.tick as i32 * 32, timer: drive.tick, ..Env::default() };
-    let result = tick(&mut drive.driver, &mut drive.coll, &track.0, &env, &input, &mut Vec::new());
+    let env = Env {
+        elapsed_event_time: drive.tick as i32 * 32,
+        timer: drive.tick,
+        ..Env::default()
+    };
+    let result = tick(
+        &mut drive.driver,
+        &mut drive.coll,
+        &track.0,
+        &env,
+        &input,
+        &mut Vec::new(),
+    );
     drive.tick += 1;
 
     if result.mask_grab {
@@ -170,12 +213,19 @@ fn drive_tick(keys: Res<ButtonInput<KeyCode>>, track: Res<Track>, mut drive: Res
 fn interpolated(drive: &Drive, fixed: &Time<Fixed>) -> Pose {
     let t = fixed.overstep_fraction();
     Pose {
-        translation: drive.previous.translation.lerp(drive.current.translation, t),
+        translation: drive
+            .previous
+            .translation
+            .lerp(drive.current.translation, t),
         rotation: drive.previous.rotation.slerp(drive.current.rotation, t),
     }
 }
 
-fn show_kart(drive: Res<Drive>, fixed: Res<Time<Fixed>>, mut karts: Query<&mut Transform, With<Kart>>) {
+fn show_kart(
+    drive: Res<Drive>,
+    fixed: Res<Time<Fixed>>,
+    mut karts: Query<&mut Transform, With<Kart>>,
+) {
     let pose = interpolated(&drive, &fixed);
     for mut transform in &mut karts {
         transform.translation = pose.translation;
