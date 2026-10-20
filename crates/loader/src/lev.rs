@@ -3,7 +3,7 @@
 //! A LEV file is a [`DramFile`](crate::dram::DramFile); every pointer in it is
 //! an offset into the payload. This module decodes the parts needed for
 //! collision and physics: the quad-block mesh, vertices, the BSP tree, driver
-//! spawns and restart points. Textures, skybox, instances and visibility data
+//! spawns and restart points, and the skybox. Instances and visibility data
 //! are not parsed yet.
 
 use std::io;
@@ -145,8 +145,26 @@ pub struct CheckpointNode {
     pub next_right: u8,
 }
 
+/// A skybox vertex (`struct ShortVertex`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkyVertex {
+    pub pos: SVec3,
+    pub color: [u8; 3],
+}
+
+/// The sky dome (`struct Skybox`): gouraud triangles around the camera, split into
+/// 8 segments by heading. The game draws the 4 segments nearest the camera's yaw;
+/// the rest are out of view anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skybox {
+    pub vertices: Vec<SkyVertex>,
+    /// Per segment, triangles as indices into [`Skybox::vertices`].
+    pub segments: [Vec<[u16; 3]>; 8],
+}
+
 #[derive(Debug, Clone)]
 pub struct Level {
+    pub skybox: Option<Skybox>,
     pub quad_blocks: Vec<QuadBlock>,
     pub vertices: Vec<LevVertex>,
     pub bsp: Vec<BspNode>,
@@ -226,6 +244,7 @@ impl<'a> Payload<'a> {
 
 // `struct Level` field offsets
 const LEVEL_MESH_INFO: usize = 0x0;
+const LEVEL_SKYBOX: usize = 0x4;
 const LEVEL_DRIVER_SPAWN: usize = 0x6c;
 const LEVEL_CONFIG_FLAGS: usize = 0xdc;
 const LEVEL_RESTART_COUNT: usize = 0x148;
@@ -237,7 +256,49 @@ const VERTEX_SIZE: usize = 0x10;
 const BSP_SIZE: usize = 0x20;
 const CHECKPOINT_SIZE: usize = 0xc;
 
+const SKY_VERTEX_SIZE: usize = 12;
+const SKY_FACE_SIZE: usize = 8;
+
 impl Level {
+    fn parse_skybox(p: &Payload) -> io::Result<Option<Skybox>> {
+        let Some(sky) = (match p.u32(LEVEL_SKYBOX)? {
+            0 => None,
+            at => Some(at as usize),
+        }) else {
+            return Ok(None);
+        };
+        let num_vertex = p.u32(sky)? as usize;
+        let verts_at = p.ptr(sky + 4, "skybox vertex array")?;
+        let vertices = p.array(verts_at, num_vertex, SKY_VERTEX_SIZE, |p, at| {
+            let c = p.bytes(at + 8, 3)?;
+            Ok(SkyVertex {
+                pos: p.svec3(at)?,
+                color: [c[0], c[1], c[2]],
+            })
+        })?;
+        let mut segments: [Vec<[u16; 3]>; 8] = Default::default();
+        for (i, segment) in segments.iter_mut().enumerate() {
+            let count = p.i16(sky + 8 + i * 2)?.max(0) as usize;
+            if count == 0 {
+                continue;
+            }
+            let faces_at = p.ptr(sky + 0x18 + i * 4, "skybox faces")?;
+            *segment = p.array(faces_at, count, SKY_FACE_SIZE, |p, at| {
+                let mut tri = [0u16; 3];
+                for (k, v) in tri.iter_mut().enumerate() {
+                    let offset = p.u16(at + k * 2)? as usize;
+                    let index = offset / SKY_VERTEX_SIZE;
+                    if offset % SKY_VERTEX_SIZE != 0 || index >= num_vertex {
+                        return Err(invalid(format!("skybox face vertex offset {offset:#x}")));
+                    }
+                    *v = index as u16;
+                }
+                Ok(tri)
+            })?;
+        }
+        Ok(Some(Skybox { vertices, segments }))
+    }
+
     pub fn parse(file: &DramFile) -> io::Result<Self> {
         let p = Payload(&file.data);
 
@@ -357,6 +418,7 @@ impl Level {
         };
 
         Ok(Self {
+            skybox: Self::parse_skybox(&p)?,
             quad_blocks,
             vertices,
             bsp,

@@ -21,6 +21,7 @@ mod flame;
 mod probe;
 mod shadow;
 mod skid;
+mod sky;
 mod subtract;
 mod wheels;
 
@@ -275,7 +276,7 @@ fn main() {
     .add_systems(Startup, setup)
     // After the cameras and karts have moved this frame, before their transforms propagate.
     .add_systems(PostUpdate, wheels::update.before(TransformSystems::Propagate))
-    
+    .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
     .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
@@ -504,17 +505,29 @@ fn setup(
         );
     }
 
+    // The sky camera clears the picture; the main camera draws over it.
+    let sky_clear = if level.skybox.is_some() { ClearColorConfig::None } else { ClearColorConfig::Default };
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
     if driving.is_some() {
         // The game projects with a screen distance of 256 for a 512 pixel wide
         // screen: 90 degrees across, 73.7 degrees up at 4:3.
-        let projection = Projection::Perspective(PerspectiveProjection {
+        let perspective = PerspectiveProjection {
             fov: 2.0 * (0.75f32).atan(),
             ..default()
-        });
+        };
+        if let Some(skybox) = &level.skybox {
+            sky::spawn(&mut commands, &mut meshes, &mut materials, skybox, perspective.clone());
+        }
+        let projection = Projection::Perspective(perspective);
         commands
-            .spawn((Camera3d::default(), projection.clone(), Transform::default(), drive::ChaseCamera::new()))
+            .spawn((
+                Camera3d::default(),
+                Camera { clear_color: sky_clear, ..default() },
+                projection.clone(),
+                Transform::default(),
+                drive::ChaseCamera::new(),
+            ))
             .with_child((
                 OverlayCamera,
                 Camera3d::default(),
@@ -525,8 +538,12 @@ fn setup(
                 RenderLayers::layer(KART_LAYER),
             ));
     } else {
+        if let Some(skybox) = &level.skybox {
+            sky::spawn(&mut commands, &mut meshes, &mut materials, skybox, default());
+        }
         commands.spawn((
             Camera3d::default(),
+            Camera { clear_color: sky_clear, ..default() },
             Transform::from_xyz(x, y + 3.0, z + 6.0),
             FlyCamera {
                 yaw: 0.0,
