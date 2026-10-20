@@ -16,8 +16,9 @@
 //! `--drive` drives the racer instead, see `drive.rs`.
 
 mod drive;
-mod probe;
 mod exhaust;
+mod flame;
+mod probe;
 mod shadow;
 mod subtract;
 mod wheels;
@@ -56,6 +57,8 @@ struct Loaded {
     shadow_icons: Option<[Icon; 2]>,
     /// The first picture of the `dustpuff` icon group: the exhaust smoke.
     smoke_icon: Option<Icon>,
+    /// `turbo` .. `turbo7` of the racer's pack: the frames of the exhaust fire.
+    flame_models: Vec<Model>,
 }
 
 /// The sprite and texture page file shared by every track (`shared.vrm`):
@@ -106,6 +109,12 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         let groups = parse_groups(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
         groups.into_iter().find(|g| g.group_id == 1)?.icons.into_iter().next()
     });
+    let flame_models = racer_character.map_or_else(Vec::new, |character| {
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
+            .expect("read racer pack");
+        flame::models(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the turbo models")
+    });
     let wheel_icons = match racer_character {
         Some(character) if character != NITROS_OXIDE => {
             let pack = big
@@ -128,6 +137,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         wheel_icons,
         shadow_icons,
         smoke_icon,
+        flame_models,
     }
 }
 
@@ -152,6 +162,9 @@ struct ShadowIcons(Option<[Icon; 2]>);
 
 #[derive(Resource)]
 struct SmokeIcon(Option<Icon>);
+
+#[derive(Resource)]
+struct FlameModels(Vec<Model>);
 
 #[derive(Resource)]
 struct LowColors(bool);
@@ -204,6 +217,7 @@ fn main() {
         wheel_icons,
         shadow_icons,
         smoke_icon,
+        flame_models,
     } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
@@ -231,6 +245,7 @@ fn main() {
     .insert_resource(WheelIcons(wheel_icons))
     .insert_resource(ShadowIcons(shadow_icons))
     .insert_resource(SmokeIcon(smoke_icon))
+    .insert_resource(FlameModels(flame_models))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden(show_hidden))
     .add_systems(Startup, setup)
@@ -308,6 +323,7 @@ fn setup(
     wheel_icons: Res<WheelIcons>,
     shadow_icons: Res<ShadowIcons>,
     smoke_icon: Res<SmokeIcon>,
+    flame_models: Res<FlameModels>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
     show_hidden: Res<ShowHidden>,
@@ -386,7 +402,7 @@ fn setup(
     });
 
     if let Some(model) = &racer.0 {
-        spawn_racer(
+        let kart = spawn_racer(
             model,
             level.driver_spawns[0],
             driving.is_some(),
@@ -398,6 +414,18 @@ fn setup(
             &mut materials,
             &mut subtract_materials,
         );
+        if let Some(kart) = kart {
+            flame::spawn(
+                &mut commands,
+                &mut images,
+                &mut meshes,
+                &mut materials,
+                &mut subtract_materials,
+                &flame_models.0,
+                &textures.vram,
+                kart,
+            );
+        }
     }
 
     if let (Some(icons), true) = (&shadow_icons.0, driving.is_some()) {
@@ -470,7 +498,7 @@ fn spawn_racer(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
-) {
+) -> Option<Entity> {
     let header = &model.headers[0];
     let frame = header
         .animations
@@ -528,6 +556,7 @@ fn spawn_racer(
         materials,
         subtract_materials,
     );
+    parent
 }
 
 /// The game logic and its texture animation run at this rate; rendering may

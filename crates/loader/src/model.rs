@@ -104,19 +104,37 @@ const END_OF_COMMANDS: u32 = 0xffff_ffff;
 
 impl Model {
     pub fn parse(dram: &DramFile) -> io::Result<Self> {
-        let count = half(dram, 0x12)?;
-        let headers = word(dram, 0x14)?;
+        Self::parse_at(dram, 0)
+    }
+
+    /// The model whose `struct Model` starts at `at` in the payload.
+    pub fn parse_at(dram: &DramFile, at: u32) -> io::Result<Self> {
+        let count = half(dram, at + 0x12)?;
+        let headers = word(dram, at + 0x14)?;
         if !(0..=16).contains(&count) {
             return Err(invalid(format!("implausible LOD count {count}")));
         }
         Ok(Self {
-            name: name(dram, 0)?,
-            id: half(dram, 0x10)?,
+            name: name(dram, at)?,
+            id: half(dram, at + 0x10)?,
             headers: (0..count as u32)
                 .map(|i| ModelHeader::parse(dram, headers + i * MODEL_HEADER_SIZE))
                 .collect::<io::Result<_>>()?,
         })
     }
+}
+
+/// The models a pack carries after its icon lookup (`GAME_PLAYER_OBJECT_LIST`,
+/// `ptrMPK + 4`): a list of model pointers that ends at a null.
+pub fn parse_pack_models(dram: &DramFile) -> io::Result<Vec<Model>> {
+    let mut models = Vec::new();
+    for i in 1.. {
+        match word(dram, i * 4)? {
+            0 => break,
+            at => models.push(Model::parse_at(dram, at)?),
+        }
+    }
+    Ok(models)
 }
 
 impl ModelHeader {
