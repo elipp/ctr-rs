@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use loader::dram::DramFile;
+use loader::level::LevelId;
 use loader::lev::{BspKind, Level, QuadBlock, SVec3, quad_flags};
 use loader::model::{Frame, ModelHeader};
 use loader::texture::{
@@ -24,6 +25,16 @@ pub fn to_world(p: SVec3) -> [f32; 3] {
     [p.x as f32 * SCALE, p.y as f32 * SCALE, p.z as f32 * SCALE]
 }
 
+/// Quad blocks the retail game draws wrongly, which are drawn higher here by this many game units:
+/// a boost pad lying flush on the road, whose ordering table slots tie with the road's, loses to it
+/// in places even on the console, and no draw order bias can fix a tie. Only the picture moves.
+pub fn world_lifts(level: LevelId) -> &'static [(usize, i16)] {
+    match level {
+        LevelId::SEWER_SPEEDWAY => &[(1649, 4)],
+        _ => &[],
+    }
+}
+
 /// `QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED`
 const QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED: u32 = 0x8000_0000;
 
@@ -31,17 +42,13 @@ fn is_marker_red(c: [u8; 4]) -> bool {
     c[..3] == [255, 0, 0]
 }
 
-/// A block that is only there to be hit or to flag the track, which the game does not show: a
-/// `SKIP_WATER_LIST` block that is either a wall (`COLLISION_SURFACE` without `GROUND`) or
-/// `NO_COLLISION_RESPONSE` (a trigger or kill plane, which may well be a floor). The level paints
-/// them red, black or magenta, with a fade into its colours, and a flat marker texture; they are
-/// hidden whole, whatever their colours are.
+/// A block that is only there to be hit or to flag the track, which the game does not show: every
+/// `SKIP_WATER_LIST` block (walls, trigger and kill planes, and the `GROUND | CAMERA_SEARCH` planes
+/// the camera follows, which lie flush on the visible floor). On all tracks they share one flat
+/// marker texture, and the level paints them red, black or magenta; they are hidden whole,
+/// whatever their colours are.
 fn is_collision_wall(quad: &QuadBlock) -> bool {
-    let flags = quad.flags;
-    let wall = quad_flags::COLLISION_SURFACE | quad_flags::SKIP_WATER_LIST;
-    flags & (wall | quad_flags::GROUND) == wall
-        || flags & (quad_flags::SKIP_WATER_LIST | quad_flags::NO_COLLISION_RESPONSE)
-            == (quad_flags::SKIP_WATER_LIST | quad_flags::NO_COLLISION_RESPONSE)
+    quad.flags & quad_flags::SKIP_WATER_LIST != 0
 }
 
 /// Textures are decoded into 256x256 tiles (a whole texture page seen through
@@ -123,7 +130,13 @@ pub struct SceneryCorner {
 }
 
 pub struct LevelMesh {
-    pub parts: [MeshPart; PARTS],
+    /// The solid faces in groups of [`PARTS`]: slot `layer * PARTS + part` holds the faces of
+    /// [`LevelMesh::biases`]`[layer]` that reach the screen as `part`.
+    pub parts: Vec<MeshPart>,
+    /// The draw order bias of each layer of [`LevelMesh::parts`]: the game files a face in its
+    /// ordering table `bias` slots farther back (negative: nearer), so that a face lying flush on
+    /// another one (a boost pad, a decal) is drawn after it. Layer 0 is bias 0.
+    pub biases: Vec<i32>,
     /// Scenery corners by level vertex index.
     pub scenery_corners: HashMap<usize, Vec<SceneryCorner>>,
     /// The water faces, kept apart so that only they are rewritten each tick.
@@ -240,6 +253,7 @@ pub fn level_mesh(
     low_colors: bool,
     hide_unseen: bool,
     cull: bool,
+    lifts: &[(usize, i16)],
 ) -> LevelMesh {
     let mut atlas = AtlasBuilder {
         vram,
@@ -248,7 +262,8 @@ pub fn level_mesh(
     };
     atlas.tiles.push(vec![255; TILE * TILE * 4]);
 
-    let mut parts: [MeshPart; PARTS] = Default::default();
+    let mut parts: Vec<MeshPart> = (0..PARTS).map(|_| MeshPart::default()).collect();
+    let mut biases = vec![0];
     let mut water: [MeshPart; PARTS] = Default::default();
     let mut water_corners: HashMap<usize, Vec<WaterCorner>> = HashMap::new();
     // Blocks of BSP leaves flagged as water are drawn by the water list.
@@ -272,6 +287,7 @@ pub fn level_mesh(
 
     for (block_index, quad) in level.quad_blocks.iter().enumerate() {
         let is_water = water_blocks.contains(&block_index);
+        let lift = lifts.iter().find(|l| l.0 == block_index).map_or(0.0, |l| l.1 as f32 * SCALE);
         if hide_unseen && !is_water && is_collision_wall(quad) {
             continue;
         }
@@ -286,7 +302,10 @@ pub fn level_mesh(
         } else {
             None
         };
-        let mut faces: Vec<(u32, Option<TextureLayout>, [usize; 4], [usize; 4], bool)> = Vec::new();
+        // The ordering table slot offset of a face: a byte of the block each (`DrawLevelOvr1P_GetProjectedOtIndex`).
+        let [low_order, ..] = quad.draw_order_low.to_le_bytes().map(|b| b as i8);
+        let face_order = quad.draw_order_high.to_le_bytes().map(|b| b as i8);
+        let mut faces: Vec<(u32, Option<TextureLayout>, [usize; 4], [usize; 4], bool, i8)> = Vec::new();
         if is_water {
             // The water list draws the block's faces with the environment map's
             // palette and page; the UVs come from the animated vertices.
@@ -296,10 +315,10 @@ pub fn level_mesh(
             };
             for face in 0..if is_quad { 4 } else { 3 } {
                 let slots = face_polygon(face, plain).unwrap();
-                faces.push((0, level.water.env_map, slots, [0, 1, 2, 3], face_back_to_front(plain).unwrap()));
+                faces.push((0, level.water.env_map, slots, [0, 1, 2, 3], face_back_to_front(plain).unwrap(), 0));
             }
         } else if let Some(low) = low {
-            faces.push((0, Some(low), [0, 1, 2, 3], [0, 1, 2, 3], face_back_to_front(FaceMode { rotation: 0, mode: 0 }).unwrap()));
+            faces.push((0, Some(low), [0, 1, 2, 3], [0, 1, 2, 3], face_back_to_front(FaceMode { rotation: 0, mode: 0 }).unwrap(), low_order));
         } else if no_mid && hide_unseen {
             // No texture at all: the game has nothing to draw for this block.
             continue;
@@ -317,12 +336,12 @@ pub fn level_mesh(
                     },
                 };
                 if let (Ok(slots), Ok(uv_order)) = (face_polygon(face, mode), face_uv_order(mode)) {
-                    faces.push((ptr, texture, slots, uv_order, face_back_to_front(mode).unwrap_or(false)));
+                    faces.push((ptr, texture, slots, uv_order, face_back_to_front(mode).unwrap_or(false), face_order[face]));
                 }
             }
         }
 
-        for (ptr, texture, slots, uv_order, back_to_front) in faces {
+        for (ptr, texture, slots, uv_order, back_to_front, order) in faces {
             if hide_unseen
                 && !is_water
                 && slots
@@ -338,13 +357,21 @@ pub fn level_mesh(
                 None => &untextured,
             };
 
+            let layer = biases.iter().position(|&b| b == order as i32).unwrap_or_else(|| {
+                biases.push(order as i32);
+                parts.extend((0..PARTS).map(|_| MeshPart::default()));
+                biases.len() - 1
+            });
             for &(part, kind) in face_passes {
                 let tile = texture.as_ref().map(|t| atlas.tile(t, kind));
-                let out = &mut if is_water { &mut water } else { &mut parts }[part as usize];
+                // Water is drawn by its own list, which has no bias to apply.
+                let flat = if is_water { part as usize } else { layer * PARTS + part as usize };
+                let out = &mut if is_water { &mut water[flat] } else { &mut parts[flat] };
                 let base = out.positions.len();
                 for (k, &slot) in slots.iter().enumerate() {
                     let v = &level.vertices[quad.vertex_index[slot] as usize];
-                    out.positions.push(to_world(v.pos));
+                    let [x, y, z] = to_world(v.pos);
+                    out.positions.push([x, y + lift, z]);
                     let c = if low_colors { v.color_lo } else { v.color_hi };
                     let gain = if texture.is_some() {
                         2.0 / 255.0
@@ -360,7 +387,7 @@ pub fn level_mesh(
                     out.colors.push([r, g, b, 1.0]);
                     if !is_water && scenery.contains(&(quad.vertex_index[slot] as usize)) {
                         scenery_corners.entry(quad.vertex_index[slot] as usize).or_default().push(SceneryCorner {
-                            part: part as usize,
+                            part: flat,
                             slot: out.positions.len() - 1,
                             gain,
                         });
@@ -401,7 +428,7 @@ pub fn level_mesh(
                 }
 
                 if let Some(anim) = &anim {
-                    let index = *animation_of.entry((ptr, part as usize)).or_insert_with(|| {
+                    let index = *animation_of.entry((ptr, flat)).or_insert_with(|| {
                         let uvs = anim
                             .frames
                             .iter()
@@ -417,7 +444,7 @@ pub fn level_mesh(
                         animations.len() - 1
                     });
                     animated_faces.push(AnimatedFace {
-                        part: part as usize,
+                        part: flat,
                         first_vertex: base,
                         animation: index,
                         uv_order,
@@ -440,6 +467,7 @@ pub fn level_mesh(
         .for_each(norm);
     LevelMesh {
         parts,
+        biases,
         water,
         water_corners,
         scenery_corners,
@@ -608,7 +636,7 @@ mod tests {
             for img in parse_vram_file(&read(LevFile::Vram)).unwrap() {
                 vram.upload(&img).unwrap();
             }
-            let m = level_mesh(&level, &dram, &vram, false, true, true);
+            let m = level_mesh(&level, &dram, &vram, false, true, true, world_lifts(LevelId(id)));
             for p in m.parts.iter().chain(&m.water) {
                 assert_eq!(p.positions.len(), p.uvs.len());
                 assert_eq!(p.positions.len(), p.colors.len());
@@ -624,6 +652,10 @@ mod tests {
                 m.water.iter().any(|p| !p.indices.is_empty()),
                 "level {id}"
             );
+            assert_eq!(m.parts.len(), m.biases.len() * PARTS);
+            for corner in m.scenery_corners.values().flatten() {
+                assert!(corner.slot < m.parts[corner.part].positions.len(), "level {id}");
+            }
             for f in &m.animated_faces {
                 assert!(f.first_vertex + 4 <= m.parts[f.part].positions.len());
                 assert_eq!(
@@ -662,8 +694,9 @@ mod tests {
             }
             assert!(up > down, "level {id}: flat triangles facing up {up}, down {down}");
             println!(
-                "level {id}: verts {:?}, {} animations on {} faces, atlas {}x{}",
-                m.parts.each_ref().map(|p| p.positions.len()),
+                "level {id}: verts {:?}, biases {:?}, {} animations on {} faces, atlas {}x{}",
+                m.parts.iter().map(|p| p.positions.len()).collect::<Vec<_>>(),
+                m.biases,
                 m.animations.len(),
                 m.animated_faces.len(),
                 m.atlas.width,
@@ -672,3 +705,5 @@ mod tests {
         }
     }
 }
+
+
