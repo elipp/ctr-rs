@@ -14,11 +14,15 @@
 //! up/down, Ctrl to go fast, mouse wheel to change the base speed.
 //!
 //! `--drive` drives the racer instead, see `drive.rs`.
+//!
+//! `]` / Page Up and `[` / Page Down switch to the next and the previous level; `.` and `,` to the
+//! next and the previous racer.
 
 mod drive;
 mod exhaust;
 mod flame;
 mod probe;
+mod props;
 mod shadow;
 mod skid;
 mod sky;
@@ -42,7 +46,7 @@ use loader::lev::Level;
 use loader::level::LevelId;
 use loader::model::Model;
 use loader::vram::{Vram, parse_vram_file};
-use render::mesh::{self, PARTS, Part};
+use render::mesh::{self, PARTS, Part, to_world};
 use subtract::SubtractMaterial;
 
 /// `NITROS_OXIDE` in `GAME_CHARACTER_IDS` order.
@@ -193,6 +197,38 @@ struct ShowHidden {
     cull: bool,
 }
 
+/// The racers in `GAME_CHARACTER_IDS` order.
+const CHARACTERS: [&str; 16] = [
+    "Crash", "Cortex", "Tiny", "Coco", "N. Gin", "Dingo", "Polar", "Pura", "Pinstripe", "Papu", "Roo", "Joe",
+    "N. Tropy", "Penta", "Fake Crash", "Oxide",
+];
+
+/// What the command line asked for, to load the next level the same way.
+#[derive(Resource, Clone, Copy)]
+struct Options {
+    /// The character of the racer on the grid, none for `--no-racer`.
+    racer: Option<u32>,
+    driving: bool,
+}
+
+/// The level shown, a `LevelId`.
+#[derive(Resource)]
+struct LevelNumber(u32);
+
+/// The systems that build the scene, to run again for another level: `setup`, then the text overlay.
+#[derive(Resource)]
+struct SceneSystems(Vec<bevy::ecs::system::SystemId>);
+
+/// A drive-mode state for `track`: the kart on its first starting slot.
+fn new_drive(track: &Track, racer: &Option<Model>, character: usize) -> drive::Drive {
+    let model = racer.as_ref().expect("--drive needs a racer");
+    let mut anim_num_frames = [0; 8];
+    for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
+        *n = anim.num_frames;
+    }
+    drive::Drive::new(track, character, anim_num_frames)
+}
+
 #[derive(Component)]
 struct FlyCamera {
     yaw: f32,
@@ -232,6 +268,7 @@ fn main() {
     }
 
     let character = racer.unwrap_or(0) as usize;
+    let options = Options { racer, driving };
     let Loaded {
         level,
         dram,
@@ -245,19 +282,15 @@ fn main() {
     } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
-    let drive = driving.then(|| {
-        let model = racer.as_ref().expect("--drive needs a racer");
-        let mut anim_num_frames = [0; 8];
-        for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
-            *n = anim.num_frames;
-        }
-        drive::Drive::new(&loaded, character, anim_num_frames)
-    });
+    let drive = driving.then(|| new_drive(&loaded, &racer, character));
 
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("ctr-rs view: level {id}"),
+            title: match options.racer {
+                Some(racer) => format!("ctr-rs view: level {id}, {}", CHARACTERS[racer as usize]),
+                None => format!("ctr-rs view: level {id}"),
+            },
             ..default()
         }),
         ..default()
@@ -271,6 +304,8 @@ fn main() {
     .insert_resource(SmokeIcon(smoke_icon))
     .insert_resource(TiremarkIcon(tiremark_icon))
     .insert_resource(FlameModels(flame_models))
+    .insert_resource(options)
+    .insert_resource(LevelNumber(id))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden { show_hidden, cull })
     .add_systems(Startup, setup)
@@ -279,13 +314,76 @@ fn main() {
     .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-    .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
+    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, advance_tick).chain())
+    .add_systems(Update, switch_level);
+    let world = app.world_mut();
+    let mut scene_systems = vec![world.register_system(setup)];
     if let Some(drive) = drive {
+        scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         app.insert_resource(drive).add_plugins(drive::DrivePlugin);
     } else {
+        scene_systems.push(app.world_mut().register_system(probe::spawn_text));
         app.add_plugins(probe::ProbePlugin).add_systems(Update, fly);
     }
+    app.insert_resource(SceneSystems(scene_systems));
     app.run();
+}
+
+/// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
+/// the previous racer. It loads right here (the window stands still meanwhile) and builds the scene
+/// from scratch.
+fn switch_level(world: &mut World) {
+    let keys = world.resource::<ButtonInput<KeyCode>>();
+    let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
+    let step = |next: &[KeyCode], previous: &[KeyCode]| pressed(next) as i32 - pressed(previous) as i32;
+    let level_step = step(&[KeyCode::BracketRight, KeyCode::PageUp], &[KeyCode::BracketLeft, KeyCode::PageDown]);
+    let racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
+    let mut options = *world.resource::<Options>();
+    if level_step == 0 && (racer_step == 0 || options.racer.is_none()) {
+        return;
+    }
+    let levels = (LevelId::TURBO_TRACK.0 - LevelId::DINGO_CANYON.0 + 1) as i32;
+    let id = (world.resource::<LevelNumber>().0 as i32 - LevelId::DINGO_CANYON.0 as i32 + level_step).rem_euclid(levels) as u32
+        + LevelId::DINGO_CANYON.0;
+    options.racer = options.racer.map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
+    world.insert_resource(options);
+    let Loaded { level, dram, vram, racer, wheel_icons, shadow_icons, smoke_icon, tiremark_icon, flame_models } =
+        load_level(id, options.racer);
+
+    // Everything in the scene has a transform (the 3D parts) or a node (the text); the window
+    // and the gamepads have neither.
+    let scene: Vec<Entity> = world.query_filtered::<Entity, Or<(With<Transform>, With<Node>)>>().iter(world).collect();
+    for entity in scene {
+        if let Ok(entity) = world.get_entity_mut(entity) {
+            entity.despawn();
+        }
+    }
+    world.remove_resource::<drive::KartModel>();
+
+    world.insert_resource(Track(level));
+    world.insert_resource(Textures { dram, vram });
+    if options.driving {
+        let drive = new_drive(world.resource::<Track>(), &racer, options.racer.unwrap_or(0) as usize);
+        world.insert_resource(drive);
+        world.insert_resource(exhaust::Particles::new());
+    }
+    world.insert_resource(Racer(racer));
+    world.insert_resource(WheelIcons(wheel_icons));
+    world.insert_resource(ShadowIcons(shadow_icons));
+    world.insert_resource(SmokeIcon(smoke_icon));
+    world.insert_resource(TiremarkIcon(tiremark_icon));
+    world.insert_resource(FlameModels(flame_models));
+    world.insert_resource(LevelNumber(id));
+
+    for system in world.resource::<SceneSystems>().0.clone() {
+        world.run_system(system).expect("scene system runs");
+    }
+    for mut window in world.query::<&mut Window>().iter_mut(world) {
+        window.title = match options.racer {
+            Some(racer) => format!("ctr-rs view: level {id}, {}", CHARACTERS[racer as usize]),
+            None => format!("ctr-rs view: level {id}"),
+        };
+    }
 }
 
 /// Spawns one entity per non-empty part, with the material its blend mode needs.
@@ -404,6 +502,8 @@ fn setup(
         ..default()
     };
     let uvs = data.parts.each_ref().map(|p| p.uvs.clone());
+    let scenery_positions = data.parts.each_ref().map(|p| p.positions.clone());
+    let scenery_colors = data.parts.each_ref().map(|p| p.colors.clone());
     let handles = spawn_parts(
         data.parts,
         &base,
@@ -415,6 +515,13 @@ fn setup(
         &mut subtract_materials,
         0,
     );
+    commands.insert_resource(SceneryState {
+        scenery: level.scenery.clone(),
+        corners: data.scenery_corners,
+        positions: scenery_positions,
+        colors: scenery_colors,
+        handles: handles.clone(),
+    });
     let water_state = WaterState {
         water: level.water.clone(),
         corners: data.water_corners,
@@ -442,6 +549,17 @@ fn setup(
         uvs,
         handles,
     });
+
+    props::spawn(
+        level,
+        &textures.dram,
+        &textures.vram,
+        &mut commands,
+        &mut images,
+        &mut meshes,
+        &mut materials,
+        &mut subtract_materials,
+    );
 
     if let Some(model) = &racer.0 {
         let kart = spawn_racer(
@@ -667,6 +785,43 @@ struct WaterState {
     colors: [Vec<[f32; 4]>; PARTS],
     uvs: [Vec<[f32; 2]>; PARTS],
     handles: [Option<Handle<Mesh>>; PARTS],
+}
+
+/// The swaying scenery (`AnimateQuad`): the vertices' mesh corners, and the meshes' arrays that
+/// each tick patches.
+#[derive(Resource)]
+struct SceneryState {
+    scenery: loader::scenery::Scenery,
+    corners: std::collections::HashMap<usize, Vec<mesh::SceneryCorner>>,
+    positions: [Vec<[f32; 3]>; PARTS],
+    colors: [Vec<[f32; 4]>; PARTS],
+    handles: [Option<Handle<Mesh>>; PARTS],
+}
+
+/// `AnimateQuad`, once per game tick.
+fn animate_scenery(mut state: ResMut<SceneryState>, tick: Res<GameTick>, mut meshes: ResMut<Assets<Mesh>>) {
+    let state = &mut *state;
+    if state.scenery.vertices.is_empty() {
+        return;
+    }
+    for update in state.scenery.animate(tick.0, |_| true) {
+        let Some(corners) = state.corners.get(&update.vertex) else { continue };
+        for corner in corners {
+            if let Some(pos) = update.pos {
+                state.positions[corner.part][corner.slot] = to_world(pos);
+            }
+            if let Some([r, g, b, _]) = update.color {
+                let [r, g, b] = [r, g, b].map(|c| c as f32 * corner.gain);
+                state.colors[corner.part][corner.slot] = [r, g, b, 1.0];
+            }
+        }
+    }
+    for part in 0..PARTS {
+        if let Some(mut mesh) = state.handles[part].as_ref().and_then(|h| meshes.get_mut(h)) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, state.positions[part].clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
+        }
+    }
 }
 
 /// `CTR_CycleTex_LEV`, once per game tick.

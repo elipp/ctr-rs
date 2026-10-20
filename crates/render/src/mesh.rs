@@ -113,8 +113,19 @@ pub struct WaterCorner {
     pub origin: [f32; 2],
 }
 
+/// One mesh vertex of a face on a scenery vertex (a swaying plant), patched every game tick.
+pub struct SceneryCorner {
+    pub part: usize,
+    /// Index into the part's vertex arrays (in [`LevelMesh::parts`]).
+    pub slot: usize,
+    /// What the vertex colour byte becomes in the mesh: the game doubles it on textured faces.
+    pub gain: f32,
+}
+
 pub struct LevelMesh {
     pub parts: [MeshPart; PARTS],
+    /// Scenery corners by level vertex index.
+    pub scenery_corners: HashMap<usize, Vec<SceneryCorner>>,
     /// The water faces, kept apart so that only they are rewritten each tick.
     pub water: [MeshPart; PARTS],
     /// Water corners by level vertex index.
@@ -253,6 +264,8 @@ pub fn level_mesh(
             }
         }
     }
+    let scenery: HashSet<usize> = level.scenery.vertices.iter().map(|v| v.vertex).collect();
+    let mut scenery_corners: HashMap<usize, Vec<SceneryCorner>> = HashMap::new();
     let mut animations: Vec<Animation> = Vec::new();
     let mut animation_of: HashMap<(u32, usize), usize> = HashMap::new();
     let mut animated_faces = Vec::new();
@@ -345,6 +358,13 @@ pub fn level_mesh(
                         [c[0], c[1], c[2]].map(|c| c as f32 * gain)
                     };
                     out.colors.push([r, g, b, 1.0]);
+                    if !is_water && scenery.contains(&(quad.vertex_index[slot] as usize)) {
+                        scenery_corners.entry(quad.vertex_index[slot] as usize).or_default().push(SceneryCorner {
+                            part: part as usize,
+                            slot: out.positions.len() - 1,
+                            gain,
+                        });
+                    }
                     if let (true, Some(tile)) = (is_water, tile) {
                         water_corners
                             .entry(quad.vertex_index[slot] as usize)
@@ -422,6 +442,7 @@ pub fn level_mesh(
         parts,
         water,
         water_corners,
+        scenery_corners,
         atlas_size: [atlas.width as f32, atlas.height as f32],
         atlas,
         animations,

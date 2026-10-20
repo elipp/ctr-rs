@@ -3786,6 +3786,7 @@ version = "0.1.0"
 dependencies = [
  "gte",
  "hadris-iso",
+ "math",
 ]
 
 [[package]]
@@ -5710,6 +5711,7 @@ dependencies = [
  "bevy",
  "camera",
  "coll",
+ "gte",
  "loader",
  "render",
  "vehicle",

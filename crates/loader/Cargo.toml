@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 hadris-iso = "2.5.0"
 gte = { path = "../gte" }
+math = { path = "../math" }

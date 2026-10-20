@@ -3,12 +3,13 @@
 //! A LEV file is a [`DramFile`](crate::dram::DramFile); every pointer in it is
 //! an offset into the payload. This module decodes the parts needed for
 //! collision and physics: the quad-block mesh, vertices, the BSP tree, driver
-//! spawns and restart points, and the skybox. Instances and visibility data
-//! are not parsed yet.
+//! spawns and restart points, the skybox and the placed models. Visibility data
+//! is not parsed yet.
 
 use std::io;
 
 use crate::dram::DramFile;
+use crate::scenery::Scenery;
 use crate::water::Water;
 
 /// 16-bit fixed-point position, as stored in the file.
@@ -162,8 +163,25 @@ pub struct Skybox {
     pub segments: [Vec<[u16; 3]>; 8],
 }
 
+/// A placed model (`struct InstDef`): a mushroom, a crate, the start banner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstDef {
+    pub name: String,
+    /// Payload offset of the `struct Model` (0 = none).
+    pub model: u32,
+    /// 0x1000 = 1.0
+    pub scale: SVec3,
+    pub color_rgba: u32,
+    pub flags: u32,
+    pub pos: SVec3,
+    /// Angles, 0x1000 = a full turn.
+    pub rot: SVec3,
+    pub model_id: i32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Level {
+    pub instances: Vec<InstDef>,
     pub skybox: Option<Skybox>,
     pub quad_blocks: Vec<QuadBlock>,
     pub vertices: Vec<LevVertex>,
@@ -171,6 +189,7 @@ pub struct Level {
     pub driver_spawns: [SpawnPoint; 8],
     pub restart_points: Vec<CheckpointNode>,
     pub water: Water,
+    pub scenery: Scenery,
     pub config_flags: u32,
     pub jump_vertical_speed_cap: u8,
 }
@@ -245,6 +264,9 @@ impl<'a> Payload<'a> {
 // `struct Level` field offsets
 const LEVEL_MESH_INFO: usize = 0x0;
 const LEVEL_SKYBOX: usize = 0x4;
+const LEVEL_NUM_INSTANCES: usize = 0xc;
+const LEVEL_INSTANCES: usize = 0x10;
+const INST_DEF_SIZE: usize = 0x40;
 const LEVEL_DRIVER_SPAWN: usize = 0x6c;
 const LEVEL_CONFIG_FLAGS: usize = 0xdc;
 const LEVEL_RESTART_COUNT: usize = 0x148;
@@ -297,6 +319,28 @@ impl Level {
             })?;
         }
         Ok(Some(Skybox { vertices, segments }))
+    }
+
+    fn parse_instances(p: &Payload) -> io::Result<Vec<InstDef>> {
+        let count = p.u32(LEVEL_NUM_INSTANCES)? as usize;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let at = p.ptr(LEVEL_INSTANCES, "instance definitions")?;
+        p.array(at, count, INST_DEF_SIZE, |p, at| {
+            let name = p.bytes(at, 0x10)?;
+            let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+            Ok(InstDef {
+                name: String::from_utf8_lossy(&name[..len]).into_owned(),
+                model: p.u32(at + 0x10)?,
+                scale: p.svec3(at + 0x14)?,
+                color_rgba: p.u32(at + 0x1c)?,
+                flags: p.u32(at + 0x20)?,
+                pos: p.svec3(at + 0x30)?,
+                rot: p.svec3(at + 0x36)?,
+                model_id: p.u32(at + 0x3c)? as i32,
+            })
+        })
     }
 
     pub fn parse(file: &DramFile) -> io::Result<Self> {
@@ -418,6 +462,7 @@ impl Level {
         };
 
         Ok(Self {
+            instances: Self::parse_instances(&p)?,
             skybox: Self::parse_skybox(&p)?,
             quad_blocks,
             vertices,
@@ -425,6 +470,7 @@ impl Level {
             driver_spawns,
             restart_points,
             water: Water::parse(&file.data, verts_at, num_verts)?,
+            scenery: Scenery::parse(&file.data, verts_at, num_verts)?,
             config_flags: p.u32(LEVEL_CONFIG_FLAGS)?,
             jump_vertical_speed_cap: p.u8(LEVEL_JUMP_SPEED_CAP)?,
         })

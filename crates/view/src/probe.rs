@@ -52,7 +52,7 @@ impl Plugin for ProbePlugin {
     }
 }
 
-fn spawn_text(mut commands: Commands) {
+pub(crate) fn spawn_text(mut commands: Commands) {
     commands.spawn((
         ProbeText,
         Text::new(""),

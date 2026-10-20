@@ -247,6 +247,7 @@ fn trials() -> u64 {
 fn matches_reference_on_random_triangles() {
     let Some(exe) = build_driver(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"), "coll_reference", &["game/COLL.c"]) else { return };
     let empty = Level {
+        instances: Vec::new(),
         skybox: None,
         quad_blocks: Vec::new(),
         vertices: Vec::new(),
@@ -254,6 +255,7 @@ fn matches_reference_on_random_triangles() {
         driver_spawns: [SpawnPoint { pos: SVec3::default(), rot: SVec3::default() }; 8],
         restart_points: Vec::new(),
         water: Default::default(),
+        scenery: Default::default(),
         config_flags: 0,
         jump_vertical_speed_cap: 0,
     };
