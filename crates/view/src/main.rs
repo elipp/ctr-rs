@@ -20,6 +20,7 @@ mod exhaust;
 mod flame;
 mod probe;
 mod shadow;
+mod skid;
 mod subtract;
 mod wheels;
 
@@ -57,6 +58,8 @@ struct Loaded {
     shadow_icons: Option<[Icon; 2]>,
     /// The first picture of the `dustpuff` icon group: the exhaust smoke.
     smoke_icon: Option<Icon>,
+    /// Global icon `tiremark` of the racer's pack: the skid marks.
+    tiremark_icon: Option<Icon>,
     /// `turbo` .. `turbo7` of the racer's pack: the frames of the exhaust fire.
     flame_models: Vec<Model>,
 }
@@ -102,6 +105,13 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         let find = |index| icons.iter().find(|i| i.global_index == index).cloned();
         Some([find(0)?, find(1)?])
     });
+    let tiremark_icon = racer_character.and_then(|character| {
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
+            .expect("read racer pack");
+        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
+        icons.into_iter().find(|i| i.global_index == skid::TIREMARK_ICON)
+    });
     let smoke_icon = racer_character.and_then(|character| {
         let pack = big
             .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
@@ -137,6 +147,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         wheel_icons,
         shadow_icons,
         smoke_icon,
+        tiremark_icon,
         flame_models,
     }
 }
@@ -162,6 +173,9 @@ struct ShadowIcons(Option<[Icon; 2]>);
 
 #[derive(Resource)]
 struct SmokeIcon(Option<Icon>);
+
+#[derive(Resource)]
+struct TiremarkIcon(Option<Icon>);
 
 #[derive(Resource)]
 struct FlameModels(Vec<Model>);
@@ -217,6 +231,7 @@ fn main() {
         wheel_icons,
         shadow_icons,
         smoke_icon,
+        tiremark_icon,
         flame_models,
     } = load_level(id, racer);
     let loaded = Track(level);
@@ -245,6 +260,7 @@ fn main() {
     .insert_resource(WheelIcons(wheel_icons))
     .insert_resource(ShadowIcons(shadow_icons))
     .insert_resource(SmokeIcon(smoke_icon))
+    .insert_resource(TiremarkIcon(tiremark_icon))
     .insert_resource(FlameModels(flame_models))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden(show_hidden))
@@ -323,6 +339,7 @@ fn setup(
     wheel_icons: Res<WheelIcons>,
     shadow_icons: Res<ShadowIcons>,
     smoke_icon: Res<SmokeIcon>,
+    tiremark_icon: Res<TiremarkIcon>,
     flame_models: Res<FlameModels>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
@@ -435,6 +452,18 @@ fn setup(
             &mut meshes,
             &mut subtract_materials,
             [&icons[0], &icons[1]],
+            &textures.vram,
+        );
+    }
+
+    if let (Some(icon), true) = (&tiremark_icon.0, driving.is_some()) {
+        skid::spawn(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+            icon,
             &textures.vram,
         );
     }

@@ -45,18 +45,8 @@ pub struct Smoke {
     height: i32,
 }
 
-/// Most quads one mesh draws.
-const MAX_QUADS: usize = 64;
-
-pub fn spawn(
-    commands: &mut Commands,
-    images: &mut Assets<Image>,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    subtract_materials: &mut Assets<SubtractMaterial>,
-    icon: &Icon,
-    vram: &Vram,
-) {
+/// The picture of an icon as a texture, and its size in texels.
+pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
     let (u0, v0) = icon.layout.uv[0];
     let width = icon.layout.uv[1].0 as i32 - u0 as i32 + 1;
     let height = icon.layout.uv[2].1 as i32 - v0 as i32 + 1;
@@ -76,6 +66,22 @@ pub fn spawn(
         RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::nearest();
+    (image, width, height)
+}
+
+/// Most quads one mesh draws.
+const MAX_QUADS: usize = 64;
+
+pub fn spawn(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
+    icon: &Icon,
+    vram: &Vram,
+) {
+    let (image, width, height) = icon_image(icon, vram);
     let image = images.add(image);
 
     let mut mesh = || {
