@@ -118,7 +118,7 @@ fn flag_names(flags: u16) -> String {
 fn run_probe(
     track: Res<Track>,
     mut probe: ResMut<Probe>,
-    camera: Single<&Transform, (With<Camera3d>, Without<crate::OverlayCamera>)>,
+    camera: Single<&Transform, (With<Camera3d>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
     mut text: Single<&mut Text, With<ProbeText>>,
     mut gizmos: Gizmos,
 ) {

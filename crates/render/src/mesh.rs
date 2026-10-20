@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use loader::dram::DramFile;
-use loader::lev::{BspKind, Level, SVec3};
+use loader::lev::{BspKind, Level, QuadBlock, SVec3, quad_flags};
 use loader::model::{Frame, ModelHeader};
 use loader::texture::{
     AnimTex, Blend, FaceMode, TextureLayout, face_back_to_front, face_polygon, face_uv_order, resolve_animation,
@@ -29,6 +29,19 @@ const QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED: u32 = 0x8000_0000;
 
 fn is_marker_red(c: [u8; 4]) -> bool {
     c[..3] == [255, 0, 0]
+}
+
+/// A block that is only there to be hit or to flag the track, which the game does not show: a
+/// `SKIP_WATER_LIST` block that is either a wall (`COLLISION_SURFACE` without `GROUND`) or
+/// `NO_COLLISION_RESPONSE` (a trigger or kill plane, which may well be a floor). The level paints
+/// them red, black or magenta, with a fade into its colours, and a flat marker texture; they are
+/// hidden whole, whatever their colours are.
+fn is_collision_wall(quad: &QuadBlock) -> bool {
+    let flags = quad.flags;
+    let wall = quad_flags::COLLISION_SURFACE | quad_flags::SKIP_WATER_LIST;
+    flags & (wall | quad_flags::GROUND) == wall
+        || flags & (quad_flags::SKIP_WATER_LIST | quad_flags::NO_COLLISION_RESPONSE)
+            == (quad_flags::SKIP_WATER_LIST | quad_flags::NO_COLLISION_RESPONSE)
 }
 
 /// Textures are decoded into 256x256 tiles (a whole texture page seen through
@@ -246,6 +259,9 @@ pub fn level_mesh(
 
     for (block_index, quad) in level.quad_blocks.iter().enumerate() {
         let is_water = water_blocks.contains(&block_index);
+        if hide_unseen && !is_water && is_collision_wall(quad) {
+            continue;
+        }
         // Triangle-shaped blocks repeat the third corner in slot 3.
         let is_quad = quad.vertex_index[2] != quad.vertex_index[3];
 
@@ -298,7 +314,7 @@ pub fn level_mesh(
                 && !is_water
                 && slots
                     .iter()
-                    .all(|&s| is_marker_red(level.vertices[quad.vertex_index[s] as usize].color_hi))
+                    .any(|&s| is_marker_red(level.vertices[quad.vertex_index[s] as usize].color_hi))
             {
                 continue;
             }
