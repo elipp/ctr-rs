@@ -146,19 +146,17 @@ pub fn update(
                 [gain, gain, gain, 1.0]
             });
             let mut corners = s.corners.map(point);
-            if s.age == 0 {
-                // The head (the far end, a step ahead of the newest strip) reaches where
-                // the tire is at the newest tick; the drawn tire is `behind` of a tick short of it.
-                let older = segments.iter().find(|o| o.tire == s.tire && o.age == 1);
-                if let Some(older) = older {
-                    let middle = |c: &[Vec3]| (c[0] + c[1]) / 2.0;
-                    let step = middle(&corners[..2]) - middle(&older.corners.map(point)[..2]);
-                    let (tail, head) = (middle(&corners[..2]), middle(&corners[2..]));
-                    let pulled = head - step * behind;
-                    // Never behind the strip it grows from.
-                    let shift = if (pulled - tail).dot(head - tail) > 0.0 { -step * behind } else { tail - head };
-                    corners[2] += shift;
-                    corners[3] += shift;
+            // The kart is drawn `behind` of a tick short of the newest tick, which is where the newest
+            // strip and the head ahead of it are. They slide back with it, and the segment before
+            // them, which ends at that strip, stretches to follow. Retail does not interpolate.
+            if s.age <= 1 {
+                let tick = |age| segments.iter().find(|o| o.tire == s.tire && o.age == age);
+                if let (Some(newest), Some(older)) = (tick(0), tick(1)) {
+                    let middle = |c: [[i16; 3]; 4]| (point(c[0]) + point(c[1])) / 2.0;
+                    let slide = (middle(older.corners) - middle(newest.corners)) * behind;
+                    for corner in &mut corners[if s.age == 0 { 0 } else { 2 }..] {
+                        *corner += slide;
+                    }
                 }
             }
             for (k, corner) in corners.into_iter().enumerate() {
