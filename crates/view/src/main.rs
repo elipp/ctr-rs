@@ -3,7 +3,7 @@
 //! `view [LEVEL_ID] [--lo] [--racer N | --no-racer]` — level id as in
 //! `loader::level::LevelId` (default 0); `--racer N` puts racer model N (0 Crash,
 //! 1 Cortex, ... as `GAME_CHARACTER_IDS`; default 0) at the first starting grid slot;
-//! `--lo` shows the `color_lo` vertex colours; `--show-hidden` keeps the
+//! `--lo` shows the `color_lo` vertex colours; `--no-cull` draws the level's back faces, which the game does not; `--show-hidden` keeps the
 //! blocks without textures and the faces painted pure red, which are hidden by default. The disc image is `CTR_BIN`
 //! or `assets/ctr-u.bin`.
 //!
@@ -184,8 +184,13 @@ struct FlameModels(Vec<Model>);
 #[derive(Resource)]
 struct LowColors(bool);
 
+/// The viewer's switches that are not about the data: `--show-hidden` and `--no-cull`.
 #[derive(Resource)]
-struct ShowHidden(bool);
+struct ShowHidden {
+    show_hidden: bool,
+    /// Whether the level's back faces are culled, as the game does.
+    cull: bool,
+}
 
 #[derive(Component)]
 struct FlyCamera {
@@ -199,6 +204,7 @@ fn main() {
     let mut racer = Some(0);
     let mut low = false;
     let mut show_hidden = false;
+    let mut cull = true;
     let mut driving = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -206,6 +212,7 @@ fn main() {
             "--lo" => low = true,
             "--drive" => driving = true,
             "--show-hidden" => show_hidden = true,
+            "--no-cull" => cull = false,
             "--no-racer" => racer = None,
             "--racer" => {
                 racer = Some(
@@ -217,7 +224,7 @@ fn main() {
             }
             n => {
                 id = n.parse().unwrap_or_else(|_| {
-                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden] [--drive] [--racer N | --no-racer], got `{n}`")
+                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden] [--no-cull] [--drive] [--racer N | --no-racer], got `{n}`")
                 })
             }
         }
@@ -264,7 +271,7 @@ fn main() {
     .insert_resource(TiremarkIcon(tiremark_icon))
     .insert_resource(FlameModels(flame_models))
     .insert_resource(LowColors(low))
-    .insert_resource(ShowHidden(show_hidden))
+    .insert_resource(ShowHidden { show_hidden, cull })
     .add_systems(Startup, setup)
     // After the cameras and karts have moved this frame, before their transforms propagate.
     .add_systems(PostUpdate, wheels::update.before(TransformSystems::Propagate))
@@ -364,7 +371,7 @@ fn setup(
     driving: Option<Res<drive::Drive>>,
 ) {
     let level = &track.0;
-    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.0);
+    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.show_hidden, show_hidden.cull);
     info!(
         "{} quad blocks, vertices per part {:?}, {} animated faces",
         level.quad_blocks.len(),
@@ -390,8 +397,9 @@ fn setup(
         base_color: Color::WHITE,
         base_color_texture: Some(atlas),
         unlit: true,
-        cull_mode: None,
-        double_sided: true,
+        // The level winds its faces as the game's `NCLIP` test draws them (see `level_mesh`).
+        cull_mode: show_hidden.cull.then_some(bevy::render::render_resource::Face::Back),
+        double_sided: !show_hidden.cull,
         ..default()
     };
     let uvs = data.parts.each_ref().map(|p| p.uvs.clone());
@@ -597,7 +605,7 @@ fn spawn_racer(
     if !wheel_icons.is_empty() {
         wheels::spawn(commands, images, meshes, materials, wheel_icons, vram, anchor);
     }
-    spawn_parts(
+    let parts = spawn_parts(
         data.parts,
         &base,
         placement,
@@ -608,6 +616,9 @@ fn spawn_racer(
         subtract_materials,
         KART_LAYER,
     );
+    if driving {
+        commands.insert_resource(drive::KartModel { header: header.clone(), parts });
+    }
     parent
 }
 

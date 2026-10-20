@@ -7,7 +7,7 @@ use loader::dram::DramFile;
 use loader::lev::{BspKind, Level, SVec3};
 use loader::model::{Frame, ModelHeader};
 use loader::texture::{
-    AnimTex, Blend, FaceMode, TextureLayout, face_polygon, face_uv_order, resolve_animation,
+    AnimTex, Blend, FaceMode, TextureLayout, face_back_to_front, face_polygon, face_uv_order, resolve_animation,
     resolve_low_texture, resolve_texture,
 };
 use loader::vram::Vram;
@@ -23,6 +23,9 @@ pub const SCALE: f32 = 0.01;
 pub fn to_world(p: SVec3) -> [f32; 3] {
     [p.x as f32 * SCALE, p.y as f32 * SCALE, p.z as f32 * SCALE]
 }
+
+/// `QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED`
+const QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED: u32 = 0x8000_0000;
 
 fn is_marker_red(c: [u8; 4]) -> bool {
     c[..3] == [255, 0, 0]
@@ -198,6 +201,10 @@ fn passes(blend: Blend) -> &'static [(Part, TileKind)] {
 /// product with the texel clamps, as there. Untextured faces sample the white
 /// tile and keep their colour as is.
 ///
+/// `cull` winds the triangles as the game's `NCLIP` test draws them (front faces counter-clockwise,
+/// as Bevy has it) and adds the other winding to the blocks that are double sided, so that the
+/// back faces can be culled.
+///
 /// `hide_unseen` drops blocks without any texture (the game has nothing to draw
 /// for them) and, as a viewer heuristic rather than game logic, faces whose
 /// corners are all pure (255, 0, 0) vertex colour: the visibility data and quad
@@ -208,6 +215,7 @@ pub fn level_mesh(
     vram: &Vram,
     low_colors: bool,
     hide_unseen: bool,
+    cull: bool,
 ) -> LevelMesh {
     let mut atlas = AtlasBuilder {
         vram,
@@ -249,7 +257,7 @@ pub fn level_mesh(
         } else {
             None
         };
-        let mut faces: Vec<(u32, Option<TextureLayout>, [usize; 4], [usize; 4])> = Vec::new();
+        let mut faces: Vec<(u32, Option<TextureLayout>, [usize; 4], [usize; 4], bool)> = Vec::new();
         if is_water {
             // The water list draws the block's faces with the environment map's
             // palette and page; the UVs come from the animated vertices.
@@ -259,10 +267,10 @@ pub fn level_mesh(
             };
             for face in 0..if is_quad { 4 } else { 3 } {
                 let slots = face_polygon(face, plain).unwrap();
-                faces.push((0, level.water.env_map, slots, [0, 1, 2, 3]));
+                faces.push((0, level.water.env_map, slots, [0, 1, 2, 3], face_back_to_front(plain).unwrap()));
             }
         } else if let Some(low) = low {
-            faces.push((0, Some(low), [0, 1, 2, 3], [0, 1, 2, 3]));
+            faces.push((0, Some(low), [0, 1, 2, 3], [0, 1, 2, 3], face_back_to_front(FaceMode { rotation: 0, mode: 0 }).unwrap()));
         } else if no_mid && hide_unseen {
             // No texture at all: the game has nothing to draw for this block.
             continue;
@@ -280,12 +288,12 @@ pub fn level_mesh(
                     },
                 };
                 if let (Ok(slots), Ok(uv_order)) = (face_polygon(face, mode), face_uv_order(mode)) {
-                    faces.push((ptr, texture, slots, uv_order));
+                    faces.push((ptr, texture, slots, uv_order, face_back_to_front(mode).unwrap_or(false)));
                 }
             }
         }
 
-        for (ptr, texture, slots, uv_order) in faces {
+        for (ptr, texture, slots, uv_order, back_to_front) in faces {
             if hide_unseen
                 && !is_water
                 && slots
@@ -339,12 +347,20 @@ pub fn level_mesh(
                     });
                 }
                 // The game draws (0, 1, 2) and (3, 1, 2); a repeated vertex degenerates one of them.
+                // (3, 1, 2) goes in as (1, 3, 2), the same triangle wound like the first.
                 let ids: [u16; 4] = slots.map(|s| quad.vertex_index[s]);
-                for tri in [[0, 1, 2], [3, 1, 2]] {
-                    let [a, b, c] = tri;
+                // The game draws a face that is wound clockwise on its screen (y down), or the other way
+                // round for the modes in `face_back_to_front`; Bevy's front is counter-clockwise.
+                let wound: [[usize; 3]; 2] = if back_to_front { [[0, 1, 2], [1, 3, 2]] } else { [[0, 2, 1], [1, 2, 3]] };
+                let double_sided = quad.draw_order_low & QUADBLOCK_DRAW_ORDER_LOW_DOUBLE_SIDED != 0;
+                for (tri, original) in wound.into_iter().zip([[0, 1, 2], [3, 1, 2]]) {
+                    let [a, b, c] = original;
                     let degenerate = ids[a] == ids[b] || ids[b] == ids[c] || ids[a] == ids[c];
                     if !degenerate {
                         out.indices.extend(tri.map(|k| (base + k) as u32));
+                        if cull && double_sided {
+                            out.indices.extend([tri[0], tri[2], tri[1]].map(|k| (base + k) as u32));
+                        }
                     }
                 }
 
@@ -454,6 +470,26 @@ pub fn model_mesh(header: &ModelHeader, frame: &Frame, vram: &Vram, inst_scale: 
     ModelMesh { parts, atlas }
 }
 
+/// The positions of the parts [`model_mesh`] makes of `header` in `frame`, for a model whose
+/// pose changes but not its faces: the triangles come in the same order, so these replace
+/// the parts' positions without building the atlas again.
+pub fn model_positions(header: &ModelHeader, frame: &Frame, inst_scale: [i16; 3]) -> [Vec<[f32; 3]>; PARTS] {
+    let k: [f32; 3] =
+        std::array::from_fn(|a| header.scale[a] as f32 / 4096.0 * inst_scale[a] as f32 / 4096.0 * SCALE);
+    let mut parts: [Vec<[f32; 3]>; PARTS] = Default::default();
+    for tri in header.triangles(frame) {
+        let texture = tri.texture.checked_sub(1).and_then(|i| header.textures.get(i)).copied();
+        let face_passes = match &texture {
+            Some(t) => passes(t.blend()),
+            None => &[(Part::Opaque, TileKind::Full)],
+        };
+        for &(part, _) in face_passes {
+            parts[part as usize].extend(tri.positions.map(|p| [p[0] as f32 * k[0], p[1] as f32 * k[1], p[2] as f32 * k[2]]));
+        }
+    }
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +520,15 @@ mod tests {
             let header = &model.headers[0];
             let frame = &header.animations[0].frames[10];
             let m = model_mesh(header, frame, &vram, [0xccc; 3]);
+            let positions = model_positions(header, frame, [0xccc; 3]);
+            for (part, p) in m.parts.iter().zip(&positions) {
+                assert_eq!(&part.positions, p, "racer {character}");
+            }
+            // Another pose has the same faces in the same order.
+            let other = model_positions(header, &header.animations[0].frames[3], [0xccc; 3]);
+            for (a, b) in positions.iter().zip(&other) {
+                assert_eq!(a.len(), b.len(), "racer {character}");
+            }
             let vertices: usize = m.parts.iter().map(|p| p.positions.len()).sum();
             assert!(vertices >= 3 * header.triangles(frame).len(), "racer {character}");
             for p in &m.parts {
@@ -526,7 +571,7 @@ mod tests {
             for img in parse_vram_file(&read(LevFile::Vram)).unwrap() {
                 vram.upload(&img).unwrap();
             }
-            let m = level_mesh(&level, &dram, &vram, false, true);
+            let m = level_mesh(&level, &dram, &vram, false, true, true);
             for p in m.parts.iter().chain(&m.water) {
                 assert_eq!(p.positions.len(), p.uvs.len());
                 assert_eq!(p.positions.len(), p.colors.len());
@@ -565,6 +610,20 @@ mod tests {
                 m.atlas.height > TILE,
                 "level {id}: no textures were decoded"
             );
+            // The faces face one way: of the triangles that lie flat, most point up.
+            let (mut up, mut down) = (0, 0);
+            for part in &m.parts {
+                for t in part.indices.chunks(3) {
+                    let [a, b, c] = [0, 1, 2].map(|i| part.positions[t[i] as usize]);
+                    let (u, v) = (std::array::from_fn::<f32, 3, _>(|k| b[k] - a[k]), std::array::from_fn::<f32, 3, _>(|k| c[k] - a[k]));
+                    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                    let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    if n[1].abs() > 0.9 * length {
+                        if n[1] > 0.0 { up += 1 } else { down += 1 }
+                    }
+                }
+            }
+            assert!(up > down, "level {id}: flat triangles facing up {up}, down {down}");
             println!(
                 "level {id}: verts {:?}, {} animations on {} faces, atlas {}x{}",
                 m.parts.each_ref().map(|p| p.positions.len()),
