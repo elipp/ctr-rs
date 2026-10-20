@@ -1,7 +1,7 @@
 //! The wheels of a kart as Bevy entities; the placement is `render::wheels`.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::NoFrustumCulling;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::image::ImageSampler;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -31,12 +31,6 @@ pub struct Wheels {
 /// the camera's side of the kart, so that the kart's body does not cut into them
 /// (retail sorts the sprites among the body's polygons by depth instead).
 const NEAR_SIDE_PUSH: f32 = 1.5;
-
-/// Sorts the tires after every other blended mesh but the water (in world units of view distance).
-const TIRES_SORT_BIAS: f32 = 50.0;
-
-/// The flame and the smoke come out behind the kart, so they sort after the tires.
-pub const EFFECTS_SORT_BIAS: f32 = 75.0;
 
 pub fn spawn(
     commands: &mut Commands,
@@ -82,12 +76,10 @@ pub fn spawn(
             cull_mode: None,
             double_sided: true,
             alpha_mode: AlphaMode::Blend,
-            // Bevy sorts blended meshes by their origin, which for the track and the
-            // marks is far from where they are drawn: the tires go after both.
-            depth_bias: TIRES_SORT_BIAS,
             ..default()
         })),
         Transform::default(),
+        RenderLayers::layer(crate::KART_LAYER),
         // The squares move with the camera; the mesh's bounds are those of its first frame.
         NoFrustumCulling,
     ));
@@ -98,7 +90,7 @@ pub fn spawn(
 pub fn update(
     wheels: Query<(&Wheels, &Mesh3d)>,
     karts: Query<&Transform, Without<Wheels>>,
-    cameras: Query<&Transform, With<Camera3d>>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<crate::OverlayCamera>)>,
     drive: Option<Res<crate::drive::Drive>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {

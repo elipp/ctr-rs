@@ -299,6 +299,19 @@ impl Particle {
         std::array::from_fn(|a| (((self.previous[a] - self.axes[a].start) as i64 * scale as i64) >> 16) as i32)
     }
 
+    /// The colour of a line particle (`Particle_SetColors`): the grey of its red channel,
+    /// or its own green and blue where it has them.
+    pub fn rgb(&self) -> [u8; 3] {
+        let channel = |axis: usize| (self.axes[axis].start.clamp(0, 0xff00) >> 8) as u8;
+        if self.axis_flags & axis_flags::COLOR_R == 0 {
+            return [0x80; 3];
+        }
+        let red = channel(axis::COLOR_R);
+        let green = if self.axis_flags & axis_flags::COLOR_G != 0 { channel(axis::COLOR_G) } else { red };
+        let blue = if self.axis_flags & axis_flags::COLOR_B != 0 { channel(axis::COLOR_B) } else { red };
+        [red, green, blue]
+    }
+
     /// The sprite's corners (top left, top right, bottom left, bottom right) as
     /// offsets from its centre across the screen, in quarter game units with y
     /// down, for an icon `width` by `height` texels (`Particle_RenderList`).
@@ -395,5 +408,20 @@ mod tests {
             assert!((0..3).all(|a| (tail[a] + 2 * step[a]).abs() <= 2 * step[a].abs() / 4 + 2), "{tail:?} {step:?}");
         }
         assert_eq!(ticks, 8);
+    }
+}
+
+#[cfg(test)]
+mod spark_colour_tests {
+    use super::*;
+
+    #[test]
+    fn sparks_are_yellow() {
+        let mut p = Particle::landing_spark([0; 3], [0; 3], [0; 3], &mut Rng::new(3));
+        assert_eq!(p.rgb(), [255, 255, 128]);
+        p.update();
+        assert_eq!(p.rgb(), [225, 225, 113]);
+        let w = Particle::wall_spark([0; 3], |v| v, &mut Rng::new(3));
+        assert_eq!(w.rgb(), [255, 255, 0]);
     }
 }

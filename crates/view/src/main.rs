@@ -27,6 +27,7 @@ mod wheels;
 use std::path::PathBuf;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -267,6 +268,7 @@ fn main() {
     .add_systems(Startup, setup)
     // After the cameras and karts have moved this frame, before their transforms propagate.
     .add_systems(PostUpdate, wheels::update.before(TransformSystems::Propagate))
+    
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
     .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
@@ -279,8 +281,15 @@ fn main() {
 }
 
 /// Spawns one entity per non-empty part, with the material its blend mode needs.
-/// Sorts the water after every other blended mesh, the tires included.
-const WATER_SORT_BIAS: f32 = 100.0;
+/// The render layer of everything of the kart: its body, wheels, fire, smoke and sparks. A second
+/// camera draws them over the rest with a fresh depth buffer, which is the closest thing to retail
+/// giving them a slot of their own in the ordering table (it has no depth buffer): they are
+/// ordered among themselves by depth, and never hidden by the track.
+const KART_LAYER: usize = 1;
+
+/// The camera that draws [`KART_LAYER`].
+#[derive(Component)]
+struct OverlayCamera;
 
 fn spawn_parts(
     parts: [mesh::MeshPart; PARTS],
@@ -291,6 +300,7 @@ fn spawn_parts(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
+    layer: usize,
 ) -> [Option<Handle<Mesh>>; PARTS] {
     let mut handles: [Option<Handle<Mesh>>; PARTS] = default();
     for (i, part) in parts.into_iter().enumerate() {
@@ -315,6 +325,7 @@ fn spawn_parts(
         if let Some(parent) = parent {
             entity.insert(ChildOf(parent));
         }
+        entity.insert(RenderLayers::layer(layer));
         match i {
             i if i == Part::Opaque as usize => {
                 entity.insert(MeshMaterial3d(materials.add(with(AlphaMode::Mask(0.5)))))
@@ -393,6 +404,7 @@ fn setup(
         &mut meshes,
         &mut materials,
         &mut subtract_materials,
+        0,
     );
     let water_state = WaterState {
         water: level.water.clone(),
@@ -402,14 +414,14 @@ fn setup(
         uvs: data.water.each_ref().map(|p| p.uvs.clone()),
         handles: spawn_parts(
             data.water,
-            // Water goes over everything blended below it, tires and all (see `wheels`).
-            &StandardMaterial { depth_bias: WATER_SORT_BIAS, ..base.clone() },
+            &base,
             Transform::default(),
             None,
             &mut commands,
             &mut meshes,
             &mut materials,
             &mut subtract_materials,
+            0,
         ),
     };
     commands.insert_resource(water_state);
@@ -487,17 +499,23 @@ fn setup(
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
     if driving.is_some() {
-        commands.spawn((
-            Camera3d::default(),
-            // The game projects with a screen distance of 256 for a 512 pixel wide
-            // screen: 90 degrees across, 73.7 degrees up at 4:3.
-            Projection::Perspective(PerspectiveProjection {
-                fov: 2.0 * (0.75f32).atan(),
-                ..default()
-            }),
-            Transform::default(),
-            drive::ChaseCamera::new(),
-        ));
+        // The game projects with a screen distance of 256 for a 512 pixel wide
+        // screen: 90 degrees across, 73.7 degrees up at 4:3.
+        let projection = Projection::Perspective(PerspectiveProjection {
+            fov: 2.0 * (0.75f32).atan(),
+            ..default()
+        });
+        commands
+            .spawn((Camera3d::default(), projection.clone(), Transform::default(), drive::ChaseCamera::new()))
+            .with_child((
+                OverlayCamera,
+                Camera3d::default(),
+                // After the main camera, on top of its picture, with only the depth buffer cleared.
+                Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+                projection,
+                Transform::default(),
+                RenderLayers::layer(KART_LAYER),
+            ));
     } else {
         commands.spawn((
             Camera3d::default(),
@@ -588,6 +606,7 @@ fn spawn_racer(
         meshes,
         materials,
         subtract_materials,
+        KART_LAYER,
     );
     parent
 }
