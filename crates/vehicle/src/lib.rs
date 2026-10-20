@@ -28,6 +28,7 @@ pub mod linear;
 pub mod powerslide;
 pub mod scrub;
 pub mod search;
+pub mod shadow;
 pub mod sim;
 pub mod spin;
 pub mod stats;

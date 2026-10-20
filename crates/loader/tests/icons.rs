@@ -22,3 +22,15 @@ fn packs_have_the_wheel_icons() {
         assert_eq!(wheels.icons.len(), 17, "character {character}");
     }
 }
+
+#[test]
+fn packs_have_the_shadow_icons() {
+    let Some(mut b) = common::open_bigfile() else { return };
+    for character in 0..16 {
+        let file = b.big.read(&mut b.disc, BigIndex::ARCADE_1P_PACK.nth(character).get()).unwrap();
+        let icons = loader::icons::parse_icons(&DramFile::parse(&file).unwrap()).unwrap();
+        for i in icons.iter().filter(|i| (0..4).contains(&i.global_index)) {
+            eprintln!("{character}: {:?} {} {:?}", i.name, i.global_index, i.layout);
+        }
+    }
+}

@@ -59,6 +59,21 @@ fn icon_at(dram: &DramFile, at: u32) -> io::Result<Icon> {
     })
 }
 
+/// Parses the flat icon array of the `LevTexLookup` a pack starts with
+/// (`DecalGlobal_Store` files them by `global_index`).
+pub fn parse_icons(dram: &DramFile) -> io::Result<Vec<Icon>> {
+    let lookup = word(dram, 0)?;
+    if lookup == 0 {
+        return Ok(Vec::new());
+    }
+    let count = word(dram, lookup)?;
+    let first = word(dram, lookup + 4)?;
+    if count > 0x1000 {
+        return Err(invalid(format!("implausible icon count {count}")));
+    }
+    (0..count).map(|i| icon_at(dram, first + i * 0x20)).collect()
+}
+
 /// Parses the `LevTexLookup` a pack starts with into its icon groups.
 pub fn parse_groups(dram: &DramFile) -> io::Result<Vec<IconGroup>> {
     let lookup = word(dram, 0)?;

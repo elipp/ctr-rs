@@ -17,6 +17,7 @@
 
 mod drive;
 mod probe;
+mod shadow;
 mod subtract;
 mod wheels;
 
@@ -31,7 +32,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
-use loader::icons::{Icon, parse_groups};
+use loader::icons::{Icon, parse_groups, parse_icons};
 use loader::lev::Level;
 use loader::level::LevelId;
 use loader::model::Model;
@@ -50,6 +51,8 @@ struct Loaded {
     racer: Option<Model>,
     /// The icons of the racer's wheel sprites (`tireAnim`); none for Oxide, who has no wheels.
     wheel_icons: Vec<Icon>,
+    /// Global icons 0 and 1 of the racer's pack (`shadow1`, `shadow2`).
+    shadow_icons: Option<[Icon; 2]>,
 }
 
 /// The sprite and texture page file shared by every track (`shared.vrm`):
@@ -85,6 +88,14 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
             .expect("read racer model");
         Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model")
     });
+    let shadow_icons = racer_character.and_then(|character| {
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
+            .expect("read racer pack");
+        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
+        let find = |index| icons.iter().find(|i| i.global_index == index).cloned();
+        Some([find(0)?, find(1)?])
+    });
     let wheel_icons = match racer_character {
         Some(character) if character != NITROS_OXIDE => {
             let pack = big
@@ -105,6 +116,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         vram,
         racer,
         wheel_icons,
+        shadow_icons,
     }
 }
 
@@ -123,6 +135,9 @@ struct Racer(Option<Model>);
 
 #[derive(Resource)]
 struct WheelIcons(Vec<Icon>);
+
+#[derive(Resource)]
+struct ShadowIcons(Option<[Icon; 2]>);
 
 #[derive(Resource)]
 struct LowColors(bool);
@@ -173,6 +188,7 @@ fn main() {
         vram,
         racer,
         wheel_icons,
+        shadow_icons,
     } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
@@ -198,6 +214,7 @@ fn main() {
     .insert_resource(textures)
     .insert_resource(Racer(racer))
     .insert_resource(WheelIcons(wheel_icons))
+    .insert_resource(ShadowIcons(shadow_icons))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden(show_hidden))
     .add_systems(Startup, setup)
@@ -273,6 +290,7 @@ fn setup(
     textures: Res<Textures>,
     racer: Res<Racer>,
     wheel_icons: Res<WheelIcons>,
+    shadow_icons: Res<ShadowIcons>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
     show_hidden: Res<ShowHidden>,
@@ -362,6 +380,17 @@ fn setup(
             &mut meshes,
             &mut materials,
             &mut subtract_materials,
+        );
+    }
+
+    if let (Some(icons), true) = (&shadow_icons.0, driving.is_some()) {
+        shadow::spawn(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut subtract_materials,
+            [&icons[0], &icons[1]],
+            &textures.vram,
         );
     }
 

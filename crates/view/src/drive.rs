@@ -15,6 +15,7 @@
 
 use bevy::prelude::*;
 use coll::Collision;
+use vehicle::shadow::{GroundShadow, ground_shadow};
 use vehicle::sim::{spawn, tick};
 use vehicle::{Driver, Effect, Env, Input, buttons};
 
@@ -74,6 +75,8 @@ pub struct Drive {
     held: u32,
     previous: Pose,
     current: Pose,
+    shadow_previous: Option<GroundShadow>,
+    shadow_current: Option<GroundShadow>,
     camera: camera::CameraDc,
     previous_view: View,
     current_view: View,
@@ -98,7 +101,27 @@ impl Drive {
             held: 0,
             previous: pose,
             current: pose,
+            shadow_previous: None,
+            shadow_current: None,
         }
+    }
+
+    /// The ground shadow between the last two ticks (`t` of the way to the
+    /// latest): its centre, orientation and the height that scales it.
+    pub fn shadow(&self, t: f32) -> Option<(Vec3, Mat3, f32)> {
+        let now = self.shadow_current?;
+        let before = self.shadow_previous.unwrap_or(now);
+        let place = |s: &GroundShadow| Vec3::new(s.x as f32, s.y as f32, s.z as f32) * SCALE;
+        let orient = |s: &GroundShadow| {
+            let column = |c: usize| Vec3::new(s.axes.m[0][c] as f32, s.axes.m[1][c] as f32, s.axes.m[2][c] as f32) / 4096.0;
+            let (up, forward) = (column(1).normalize_or_zero(), column(2).normalize_or_zero());
+            Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
+        };
+        Some((
+            place(&before).lerp(place(&now), t),
+            Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
+            before.height as f32 + (now.height - before.height) as f32 * t,
+        ))
     }
 
     /// `Driver::wheelRotation`: the front wheels' steering.
@@ -147,7 +170,8 @@ impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_hud)
             .add_systems(FixedUpdate, drive_tick)
-            .add_systems(Update, (show_kart, chase, hud).chain());
+            .add_systems(Update, (show_kart, chase, hud).chain())
+            .add_systems(Update, crate::shadow::update);
     }
 }
 
@@ -258,6 +282,8 @@ fn drive_tick(
     };
     drive.camera.follow_driver(&drive.driver, &track.0, &camera_input);
 
+    drive.shadow_previous = drive.shadow_current;
+    drive.shadow_current = ground_shadow(&drive.driver, &mut drive.coll.gte.clone());
     drive.previous = drive.current;
     drive.current = pose_of(&drive.driver);
     drive.previous_view = drive.current_view;
