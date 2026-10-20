@@ -18,7 +18,7 @@ use std::path::Path;
 use coll::Collision;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::dram::DramFile;
-use loader::lev::{Level, SVec3};
+use loader::lev::{BspKind, Level, SVec3};
 use loader::level::LevelId;
 use math::Vec3;
 use support::{Rng, build_driver, describe_level, dump, run_reference};
@@ -117,7 +117,7 @@ impl Case {
         c.door_access_flags = self.door_flags;
 
         let mut effects = Vec::new();
-        moved_player_search(&mut d, c, level, &self.light_matrix, self.elapsed_ms, &mut effects);
+        moved_player_search(&mut d, c, level, &self.light_matrix, self.elapsed_ms, &mut vehicle::search::NoInstances, &mut effects);
 
         let mut o = join(&fields(&d));
         o.push_str(" |");
@@ -153,12 +153,27 @@ fn trig_script() -> String {
 fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
     let mut out = Vec::new();
     let identity = [0x1000, 0, 0, 0, 0x1000, 0, 0, 0, 0x1000];
+    let hitboxes: Vec<_> = level
+        .bsp
+        .iter()
+        .filter_map(|n| match &n.kind {
+            BspKind::Leaf { hitboxes, .. } => Some(hitboxes),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     for _ in 0..trials {
         let quad = &level.quad_blocks[rng.below(level.quad_blocks.len() as u64) as usize];
         let (a, b) = (quad.bbox.min, quad.bbox.max);
         let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32);
-        // Sphere centre in the scratchpad's units, a little above the quad.
-        let centre = [pick(rng, a.x, b.x), pick(rng, a.y, b.y) + rng.range(0, 0x30), pick(rng, a.z, b.z)];
+        // Sphere centre in the scratchpad's units, a little above the quad; or one time in
+        // four around a hitbox, where it can reach it.
+        let mut centre = [pick(rng, a.x, b.x), pick(rng, a.y, b.y) + rng.range(0, 0x30), pick(rng, a.z, b.z)];
+        if !hitboxes.is_empty() && rng.below(4) == 0 {
+            let h = hitboxes[rng.below(hitboxes.len() as u64) as usize];
+            let reach = 2 * h.radius as i32 + 0x40;
+            centre = [h.center.x, h.center.y, h.center.z].map(|c| c as i32 + rng.range(-reach, reach));
+        }
         let origin_to_center = Vec3 { x: 0, y: rng.range(0, 0x30), z: 0 };
         let shift = [0, 1, 3, 5][rng.below(4) as usize];
         let speed = |rng: &mut Rng| rng.range(-0x1000, 0x1000) << shift;
@@ -253,8 +268,8 @@ fn matches_reference_on_tracks() {
     };
     let Some(mut b) = common::open_bigfile() else { return };
     let mut rng = Rng(0x51f1_5a4d_0f3c_77b1);
-    // (searches that hit, slammed, swept more than once, projected along a wall)
-    let mut totals = [0u32; 4];
+    // (searches that hit, slammed, swept more than once, projected along a wall, touched a hitbox)
+    let mut totals = [0u32; 5];
 
     for id in LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0 {
         let idx = BigIndex::level(LevelId(id), Lod::OnePlayer, LevFile::Lev);
@@ -276,13 +291,14 @@ fn matches_reference_on_tracks() {
 
         let mut collision = Collision::default();
         let (mut failures, mut hits, mut slams) = (0, 0, 0);
-        let (mut multi, mut projected) = (0, 0);
+        let (mut multi, mut projected, mut hitbox) = (0, 0, 0);
         for (i, (case, want)) in cases.iter().zip(&reference).enumerate() {
             let got = case.run(&mut collision, &level);
             hits += (collision.sps.did_touch_quadblock > 0) as u32;
             slams += got.contains(" S 6 ") as u32;
             multi += (collision.sps.num_scrub_triangles > 1) as u32;
             projected += (collision.sps.quad_block_coll.search_flags & coll::search_flags::WALL_PROJECTION_DONE != 0) as u32;
+            hitbox += (collision.sps.num_bsp_hitboxes_hit > 0 || collision.sps.num_scrub_triangles > 0 && got.contains(" 2147")) as u32;
             if &got != want.trim_end() && got.trim_start() != want.trim_start() {
                 failures += 1;
                 if failures <= 3 {
@@ -290,12 +306,12 @@ fn matches_reference_on_tracks() {
                 }
             }
         }
-        eprintln!("level {id}: {} cases, {hits} with a hit, {slams} slams, {multi} with several scrubs, {projected} wall projections", cases.len());
-        totals = [totals[0] + hits, totals[1] + slams, totals[2] + multi, totals[3] + projected];
+        eprintln!("level {id}: {} cases, {hits} with a hit, {slams} slams, {multi} with several scrubs, {projected} wall projections, {hitbox} hitbox hits", cases.len());
+        totals = [totals[0] + hits, totals[1] + slams, totals[2] + multi, totals[3] + projected, totals[4] + hitbox];
         assert_eq!(failures, 0, "level {id}: {failures} of {} cases differ from the reference", cases.len());
     }
-    eprintln!("total (hit, slam, multi, projected): {totals:?}");
-    assert!(totals.iter().all(|&n| n > 0), "the cases do not cover hits, slams, repeated scrubs and wall projection: {totals:?}");
+    eprintln!("total (hit, slam, multi, projected, hitbox): {totals:?}");
+    assert!(totals.iter().all(|&n| n > 0), "the cases do not cover hits, slams, repeated scrubs, wall projection and hitboxes: {totals:?}");
 }
 
 /// `SCRUBS` against the `MetaDataScrub` initialiser in the reference source.

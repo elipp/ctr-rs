@@ -77,3 +77,65 @@ fn a_roller_is_drawn_between_its_frame_and_the_next() {
     h.tick();
     assert_eq!(h.roller_frames(0), (path[1], path[2]));
 }
+
+#[test]
+fn a_kart_that_drives_into_a_turtle_is_thrown() {
+    use coll::Collision;
+    use loader::lev::BspKind;
+    use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
+    use vehicle::search::moved_player_search;
+    use vehicle::{Driver, forced_jump};
+
+    let Some((mut h, level)) = hazards_of(LevelId::MYSTERY_CAVES.0) else { return };
+    assert_eq!(h.turtles.len(), 10);
+    assert!(h.turtles.iter().all(|t| t.frames[0] == 11));
+    let hitbox_of = |instance: usize| {
+        level
+            .bsp
+            .iter()
+            .filter_map(|n| match &n.kind {
+                BspKind::Leaf { hitboxes, .. } => Some(hitboxes),
+                _ => None,
+            })
+            .flatten()
+            .find(|b| b.instance == Some(instance))
+            .map(|b| b.center)
+    };
+    assert!(h.turtles.iter().all(|t| hitbox_of(t.instance).is_some()), "every turtle has a hitbox");
+
+    // A kart driving through the first turtle's hitbox, from 200 units before its centre to 200
+    // after, at the given `speed_approx`: the jump it is given, if any.
+    let center = hitbox_of(h.turtles[0].instance).unwrap();
+    let drive_through = |h: &Hazards, speed_approx: i16| {
+        let mut driver = Driver::new(0, 0);
+        driver.pos_curr = math::Vec3 {
+            x: (center.x as i32 - 200 - driver.origin_to_center.x) << 8,
+            // Above the floor, within the hitbox's reach.
+            y: (center.y as i32 + 100 - driver.origin_to_center.y) << 8,
+            z: (center.z as i32 - driver.origin_to_center.z) << 8,
+        };
+        driver.velocity.x = 400 << 8;
+        driver.speed_approx = speed_approx;
+        moved_player_search(
+            &mut driver,
+            &mut Collision::default(),
+            &level,
+            &IDENTITY_LIGHT_MATRIX,
+            32,
+            &mut &*h,
+            &mut Vec::new(),
+        );
+        driver.forced_jump_type
+    };
+
+    // Over the whole cycle it is thrown both low (fully down) and high, and never when slow.
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..200 {
+        let jump = drive_through(&h, 0x2000);
+        assert_eq!(jump == forced_jump::LOW, h.turtles[0].sim.state == hazard::turtle::State::FullyDown);
+        seen.insert(jump);
+        assert_eq!(drive_through(&h, 0x1400), forced_jump::NONE);
+        h.tick();
+    }
+    assert_eq!(seen, [forced_jump::LOW, forced_jump::HIGH].into());
+}

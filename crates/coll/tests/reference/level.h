@@ -20,6 +20,9 @@ static struct mesh_info mesh;
 static struct ScratchpadStructExtended ext;
 #define sps (ext.scratchpadStruct)
 static int numQuads;
+/* Every hitbox in the order of the level description, to look them up by file offset. */
+static struct BSP *allHitboxes[8192];
+static int numAllHitboxes;
 /* Stands in for the null quad that empty BSP leaves point at: never matches. */
 static struct QuadBlock dummyQuad;
 
@@ -40,6 +43,11 @@ static void rdvec(SVec3 *v)
 
 static int quadIndex(struct QuadBlock *q)
 {
+	/* The scrub list keys hitboxes by address, cast to a quad block: print what the Rust side's
+	   `HitboxHit::scrub_key` is, 0x80000000 and the file offset. */
+	for (int k = 0; k < numAllHitboxes; k++)
+		if ((void *)q == (void *)allHitboxes[k])
+			return (int)(0x80000000u | (u32)(u16)allHitboxes[k]->data.hitbox.unk18 | ((u32)(u16)allHitboxes[k]->data.hitbox.unk1A << 16));
 	return (q && q != &dummyQuad) ? (int)(q - quads) : -1;
 }
 
@@ -85,6 +93,8 @@ static void pstate(void)
 	pvec(sps.candidateDelta);
 	printf(" %d %d %d %d %d", sps.candidate.triangleID, sps.hit.triangleID, sps.hit.reorderResult, sps.hit.normalAxis, sps.Input1.scrubDepth);
 	printf(" %d %d %d", searchVertIndex(sps.hitBspSearchTriangle.v0), searchVertIndex(sps.hitBspSearchTriangle.v1), searchVertIndex(sps.hitBspSearchTriangle.v2));
+	printf(" %d %d %d", sps.boolDidTouchHitbox, sps.numBspHitboxesHit,
+	       sps.bspHitbox ? (int)((u16)sps.bspHitbox->data.hitbox.unk18 | ((u32)(u16)sps.bspHitbox->data.hitbox.unk1A << 16)) : -1);
 	printf(" %d %d", sps.Union.QuadBlockColl.searchFlags, ext.numTriangles);
 	for (int i = 0; i < ext.numTriangles; i++)
 		printf(" %d %d %d", quadIndex(ext.bspSearchTriangle[i].quadblock), ext.bspSearchTriangle[i].triangleID, ext.bspSearchTriangle[i].scrubDepth);
@@ -162,6 +172,33 @@ static int read_level_block(char cmd)
 				int count = rd();
 				b->data.leaf.ptrQuadBlockArray = count ? &quads[first] : &dummyQuad;
 				b->data.leaf.numQuads = count;
+				/* The leaf's hitboxes, then the zero flag that ends the list. Their file
+				   offset goes in the unused halves of `hitbox` (to tell them apart). */
+				int numHitboxes = rd();
+				struct BSP *hitboxes = calloc(numHitboxes + 1, sizeof(*hitboxes));
+				for (int k = 0; k < numHitboxes; k++)
+				{
+					struct BSP *h = &hitboxes[k];
+					allHitboxes[numAllHitboxes++] = h;
+					h->flag = rd();
+					h->id = rd();
+					rdvec(&h->box.min);
+					rdvec(&h->box.max);
+					rdvec(&h->data.hitbox.center);
+					h->data.hitbox.radius = rd();
+					u32 offset = (u32)rd();
+					h->data.hitbox.unk18 = (s16)(offset & 0xffff);
+					h->data.hitbox.unk1A = (s16)(offset >> 16);
+					int instFlags = rd();
+					if (rd())
+					{
+						struct InstDef *def = calloc(1, sizeof(*def));
+						def->ptrInstance = calloc(1, sizeof(struct Instance));
+						def->ptrInstance->flags = (u32)instFlags;
+						h->data.hitbox.instDef = def;
+					}
+				}
+				b->data.leaf.bspHitboxArray = numHitboxes ? hitboxes : NULL;
 			}
 		}
 		mesh.numBspNodes = n;

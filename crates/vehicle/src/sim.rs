@@ -19,7 +19,7 @@ use crate::jump::jump_and_friction;
 use crate::linear::phys_linear;
 use crate::{powerslide, spin};
 use crate::scrub::IDENTITY_LIGHT_MATRIX;
-use crate::search::moved_player_search;
+use crate::search::{Instances, NoInstances, moved_player_search};
 use crate::stats::{CHARACTER_ENGINES, Stats};
 use crate::terrain::terrain_type;
 use crate::{Driver, Effect, Env, Input, PhysState, actions, kart_state, rain_cloud};
@@ -240,6 +240,19 @@ pub struct TickResult {
 /// One 30 Hz tick of a driver: every stage of `MainFrame`'s loop over the
 /// driver's procedures. `effects` collects the sounds and rumble.
 pub fn tick(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, input: &Input, effects: &mut Vec<Effect>) -> TickResult {
+    tick_with(d, coll, level, env, input, &mut NoInstances, effects)
+}
+
+/// [`tick`], where `instances` is what touching the hitboxes of the level's instances does.
+pub fn tick_with(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    env: &Env,
+    input: &Input,
+    instances: &mut dyn Instances,
+    effects: &mut Vec<Effect>,
+) -> TickResult {
     // DRIVER_FUNC_INIT
     if d.init_pending {
         init_stage(d);
@@ -279,7 +292,7 @@ pub fn tick(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, inpu
     on_apply_forces(d, coll, env, level, effects);
 
     // DRIVER_FUNC_COLL_MOVED
-    moved_player_search(d, coll, level, &IDENTITY_LIGHT_MATRIX, env.elapsed_time_ms, effects);
+    moved_player_search(d, coll, level, &IDENTITY_LIGHT_MATRIX, env.elapsed_time_ms, instances, effects);
 
     // DRIVER_FUNC_COLLIDE_DRIVERS: nothing to collide with, but the turbo pads are here.
     collide_drivers(d, effects);

@@ -35,6 +35,19 @@ pub fn reference_dir() -> PathBuf {
 /// Builds a C driver against the reference `ctr-native`; `sources` are
 /// extra files of the reference to link, relative to it.
 pub fn build_driver(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<PathBuf> {
+    // Tests of one binary run in parallel and want the same driver: it is built once, so that none
+    // is run while another is writing it.
+    static BUILT: std::sync::Mutex<Vec<(String, Option<PathBuf>)>> = std::sync::Mutex::new(Vec::new());
+    let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, exe)) = built.iter().find(|(name, _)| name == exe_name) {
+        return exe.clone();
+    }
+    let exe = build_driver_now(driver, exe_name, sources);
+    built.push((exe_name.to_owned(), exe.clone()));
+    exe
+}
+
+fn build_driver_now(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<PathBuf> {
     let reference = reference_dir();
     if !reference.exists() {
         eprintln!("skipping: {} not found", reference.display());
@@ -108,8 +121,18 @@ pub fn describe_level(level: &Level) -> String {
                     write!(s, " {raw}").unwrap();
                 }
             }
-            BspKind::Leaf { quad_blocks, .. } => {
-                write!(s, "1 {} {}", quad_blocks.start, quad_blocks.len()).unwrap();
+            BspKind::Leaf { quad_blocks, hitboxes } => {
+                write!(s, "1 {} {} {}", quad_blocks.start, quad_blocks.len(), hitboxes.len()).unwrap();
+                for h in hitboxes {
+                    let (a, b) = (h.bbox.min, h.bbox.max);
+                    let flags = h.instance.map_or(0, |i| level.instances[i].flags as i32);
+                    write!(
+                        s,
+                        " {} {} {} {} {} {} {} {}{} {} {} {} {}",
+                        h.flag, h.id, a.x, a.y, a.z, b.x, b.y, b.z, vec3(h.center), h.radius, h.offset, flags, h.instance.is_some() as u8
+                    )
+                    .unwrap();
+                }
             }
         }
         s.push('\n');
@@ -164,9 +187,11 @@ pub fn dump(c: &Collision) -> String {
     .unwrap();
     let h = s.hit_search_triangle;
     write!(o, " {} {} {}", index(h[0]), index(h[1]), index(h[2])).unwrap();
+    write!(o, " {} {} {}", s.did_touch_hitbox, s.num_bsp_hitboxes_hit, s.bsp_hitbox.map_or(-1, |h| h.offset as i64)).unwrap();
     write!(o, " {} {}", s.quad_block_coll.search_flags, s.num_scrub_triangles).unwrap();
     for t in &s.scrub_triangles[..s.num_scrub_triangles as usize] {
-        write!(o, " {} {} {}", index(t.quad), t.triangle_id, t.scrub_depth).unwrap();
+        // A hitbox's key is above `i32::MAX` here, as the C driver prints it.
+        write!(o, " {} {} {}", index(t.quad.map(|q| q as i32)), t.triangle_id, t.scrub_depth).unwrap();
     }
     for v in &s.search_vert {
         o += &vec3(v.pos);

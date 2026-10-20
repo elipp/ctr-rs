@@ -3227,6 +3227,7 @@ dependencies = [
 name = "hazard"
 version = "0.1.0"
 dependencies = [
+ "coll",
  "gte",
  "hadris-iso",
  "loader",

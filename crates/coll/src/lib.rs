@@ -14,8 +14,6 @@
 //! * the low-LOD path for moved searches (the fixed one, used by the camera's
 //!   ground search, is ported but not yet tested against the reference; every
 //!   racer and bot search sets [`search_flags::HIGH_LOD`]);
-//! * instance hitboxes (`COLL_FIXED_BSPLEAF_TestInstance`, `INSTANC_TestPoint`),
-//!   which need the instance and thread model;
 //! * the `ThBuckColl` view of the scratchpad union, which overlays
 //!   `QuadBlockColl` and is only used by those searches;
 //! * `COLL_MOVED_PlayerSearch` and `COLL_MOVED_ScrubImpact` themselves, which
@@ -25,6 +23,8 @@
 //! Pointers in the reference scratchpad (quad blocks, level vertices) are
 //! indices into [`Level`] here. `tests/reference.rs` checks this port against
 //! the C code on real tracks.
+
+pub mod instance;
 
 use gte::{Gte, cmd, ctrl, data};
 use loader::lev::{BspChild, BspKind, BspNode, Level, QuadBlock, SVec3, quad_flags};
@@ -217,6 +217,11 @@ pub struct Scratchpad {
     pub hit: SearchResult,
     pub hit_fraction: i32,
     pub num_bsp_hitboxes_hit: i32,
+    /// `bspHitbox`: the instance hitbox the search ended on.
+    pub bsp_hitbox: Option<instance::HitboxHit>,
+    /// `bspHitboxesHit`, the first `num_bsp_hitboxes_hit`: file offsets of the hitboxes already
+    /// dealt with, which the search skips.
+    pub bsp_hitboxes_hit: [Option<u32>; MAX_SCRUB_TRIANGLES],
     pub hit_barycentrics: Barycentrics,
     /// Level vertices of the hit triangle.
     pub hit_level_triangle: [Option<u32>; 3],
@@ -241,6 +246,10 @@ pub struct Collision {
     /// `sdata->doorAccessFlags`: door quad blocks whose terrain type matches
     /// are passable to moved searches.
     pub door_access_flags: u32,
+    /// The `flags` of the level's instances (`Instance::flags`), where the game has changed them;
+    /// those past its end have their `InstDef` flags. A hitbox of an instance without
+    /// `DRAW_COLLISION_MASK` bits is not tested.
+    pub instance_flags: Vec<u32>,
 }
 
 fn pack(lo: i32, hi: i32) -> u32 {
@@ -402,7 +411,7 @@ impl Collision {
     /// The setup of `COLL_MOVED_PlayerSearch` before its iterations: hit
     /// radius, the surfaces the player collides with, and an empty scrub list.
     /// Always high LOD (see the module comment). `TEST_INSTANCES` is set as in
-    /// the original, but there are no instance hitboxes to test yet.
+    /// the original.
     pub fn begin_player_search(&mut self) {
         let radius = PLAYER_HIT_RADIUS;
         let sps = &mut self.sps;
@@ -498,12 +507,13 @@ impl Collision {
         // not meaningful, so it is modelled as a quad that never matches.
         if quad_blocks.is_empty() {
             self.sps.candidate.quad = None;
-            return;
         }
         for i in quad_blocks.clone() {
             self.test_quadblock_triangles(level, i as u32, moved);
         }
-        // Instance hitboxes (`COLL_SEARCH_TEST_INSTANCES`) are not ported yet.
+        if self.sps.quad_block_coll.search_flags & search_flags::TEST_INSTANCES != 0 {
+            self.test_leaf_instances(level, leaf);
+        }
     }
 
     /// `COLL_FIXED_QUADBLK_TestTriangles` (high LOD only), or with `moved`
