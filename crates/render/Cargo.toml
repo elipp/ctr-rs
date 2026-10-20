@@ -1,0 +1,10 @@
+[package]
+name = "render"
+version = "0.1.0"
+edition = "2024"
+
+# Engine-independent render-side logic: what to draw, as plain arrays and vectors.
+[dependencies]
+glam = "0.33"
+loader = { path = "../loader" }
+math = { path = "../math" }

@@ -19,7 +19,7 @@ use vehicle::sim::{spawn, tick};
 use vehicle::{Driver, Effect, Env, Input, buttons};
 
 use crate::Track;
-use crate::mesh::SCALE;
+use render::mesh::SCALE;
 
 /// The kart model's entity: its pose is the interpolated pose of the sim.
 #[derive(Component)]
@@ -99,6 +99,11 @@ impl Drive {
             previous: pose,
             current: pose,
         }
+    }
+
+    /// `Driver::wheelRotation`: the front wheels' steering.
+    pub fn wheel_rotation(&self) -> i16 {
+        self.driver.wheel_rotation
     }
 
     fn birth(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> (Driver, Collision) {
