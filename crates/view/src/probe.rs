@@ -14,7 +14,7 @@ use coll::{Collision, search_flags};
 use loader::lev::{SVec3, quad_flags};
 
 use crate::Track;
-use crate::mesh::{SCALE, to_world};
+use render::mesh::{SCALE, to_world};
 
 /// Length of the downward probe, in game units.
 const DOWN_REACH: f32 = 0x800 as f32;

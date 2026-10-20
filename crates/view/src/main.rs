@@ -16,9 +16,9 @@
 //! `--drive` drives the racer instead, see `drive.rs`.
 
 mod drive;
-mod mesh;
 mod probe;
 mod subtract;
+mod wheels;
 
 use std::path::PathBuf;
 
@@ -31,12 +31,16 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
+use loader::icons::{Icon, parse_groups};
 use loader::lev::Level;
 use loader::level::LevelId;
 use loader::model::Model;
 use loader::vram::{Vram, parse_vram_file};
-use mesh::{PARTS, Part};
+use render::mesh::{self, PARTS, Part};
 use subtract::SubtractMaterial;
+
+/// `NITROS_OXIDE` in `GAME_CHARACTER_IDS` order.
+const NITROS_OXIDE: u32 = 15;
 
 /// A level's geometry plus what its texture pointers need.
 struct Loaded {
@@ -44,6 +48,8 @@ struct Loaded {
     dram: DramFile,
     vram: Vram,
     racer: Option<Model>,
+    /// The icons of the racer's wheel sprites (`tireAnim`); none for Oxide, who has no wheels.
+    wheel_icons: Vec<Icon>,
 }
 
 /// The sprite and texture page file shared by every track (`shared.vrm`):
@@ -72,17 +78,33 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
     for img in parse_vram_file(&shared).expect("parse shared VRAM file") {
         vram.upload(&img).expect("upload shared VRAM image");
     }
+    let racer_character = racer;
     let racer = racer.map(|character| {
         let file = big
             .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character).get())
             .expect("read racer model");
         Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model")
     });
+    let wheel_icons = match racer_character {
+        Some(character) if character != NITROS_OXIDE => {
+            let pack = big
+                .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
+                .expect("read racer pack");
+            parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
+                .expect("parse racer pack icons")
+                .into_iter()
+                .find(|g| g.group_id == 0)
+                .expect("racer pack has the tire icon group")
+                .icons
+        }
+        _ => Vec::new(),
+    };
     Loaded {
         level,
         dram,
         vram,
         racer,
+        wheel_icons,
     }
 }
 
@@ -98,6 +120,9 @@ struct Textures {
 /// The racer model shown on the grid.
 #[derive(Resource)]
 struct Racer(Option<Model>);
+
+#[derive(Resource)]
+struct WheelIcons(Vec<Icon>);
 
 #[derive(Resource)]
 struct LowColors(bool);
@@ -147,6 +172,7 @@ fn main() {
         dram,
         vram,
         racer,
+        wheel_icons,
     } = load_level(id, racer);
     let loaded = Track(level);
     let textures = Textures { dram, vram };
@@ -171,9 +197,12 @@ fn main() {
     .insert_resource(loaded)
     .insert_resource(textures)
     .insert_resource(Racer(racer))
+    .insert_resource(WheelIcons(wheel_icons))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden(show_hidden))
     .add_systems(Startup, setup)
+    // After the cameras and karts have moved this frame, before their transforms propagate.
+    .add_systems(PostUpdate, wheels::update.before(TransformSystems::Propagate))
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
     .add_systems(FixedUpdate, (animate, animate_water, advance_tick).chain());
@@ -243,6 +272,7 @@ fn setup(
     track: Res<Track>,
     textures: Res<Textures>,
     racer: Res<Racer>,
+    wheel_icons: Res<WheelIcons>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
     show_hidden: Res<ShowHidden>,
@@ -326,6 +356,7 @@ fn setup(
             level.driver_spawns[0],
             driving.is_some(),
             &textures.vram,
+            &wheel_icons.0,
             &mut commands,
             &mut images,
             &mut meshes,
@@ -362,7 +393,7 @@ fn setup(
 }
 
 /// The instance scale `VehBirth` gives drivers (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`).
-const DRIVER_INSTANCE_SCALE: i16 = 0xccc;
+const DRIVER_INSTANCE_SCALE: i16 = render::wheels::DRIVER_INSTANCE_SCALE as i16;
 
 /// Racer models face along +X, while a driver's heading (`spawn.rot.y`) points along
 /// +Z: a quarter turn clockwise seen from above (Bevy's +Y is up, so negative).
@@ -375,6 +406,7 @@ fn spawn_racer(
     spawn: loader::lev::SpawnPoint,
     driving: bool,
     vram: &Vram,
+    wheel_icons: &[Icon],
     commands: &mut Commands,
     images: &mut Assets<Image>,
     meshes: &mut Assets<Mesh>,
@@ -417,14 +449,17 @@ fn spawn_racer(
         .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
     // Driving: the parts hang off an entity the sim moves, and the model is
     // posed by that (the model itself faces along +Z, like the heading).
-    let (placement, parent) = if driving {
+    let (placement, parent, anchor) = if driving {
         let kart = commands
             .spawn((drive::Kart, placement, Visibility::default()))
             .id();
-        (Transform::default(), Some(kart))
+        (Transform::default(), Some(kart), wheels::Anchor::Kart(kart))
     } else {
-        (placement, None)
+        (placement, None, wheels::Anchor::Fixed(placement))
     };
+    if !wheel_icons.is_empty() {
+        wheels::spawn(commands, images, meshes, materials, wheel_icons, vram, anchor);
+    }
     spawn_parts(
         data.parts,
         &base,
