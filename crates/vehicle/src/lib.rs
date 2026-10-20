@@ -340,6 +340,7 @@ pub struct Driver {
     pub anim_frame: i16,
     pub inst_scale_x: i16,
     pub inst_scale_y: i16,
+    pub inst_scale_z: i16,
     pub matrix_array: MatrixArray,
     pub matrix_index: u8,
 

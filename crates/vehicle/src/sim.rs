@@ -13,7 +13,7 @@ use math::mips;
 use crate::angular::phys_angular;
 use crate::calc::interp_by_speed;
 use crate::fixed::fixed_player_search;
-use crate::force::{collide_drivers, on_apply_forces, rot_axis_angle, translate_matrix};
+use crate::force::{KART_SCALE_BASE, collide_drivers, on_apply_forces, rot_axis_angle, translate_matrix};
 use crate::frame;
 use crate::jump::jump_and_friction;
 use crate::linear::phys_linear;
@@ -44,6 +44,9 @@ impl Driver {
             stats: Stats::for_class(CHARACTER_ENGINES[character]),
             axis_angle1_normal_vec: SVec3 { x: 0, y: 0x1000, z: 0 },
             axis_angle2_normal_vec: SVec3 { x: 0, y: 0x1000, z: 0 },
+            inst_scale_x: KART_SCALE_BASE as i16,
+            inst_scale_y: KART_SCALE_BASE as i16,
+            inst_scale_z: KART_SCALE_BASE as i16,
             num_frames_spent_steering: STEER_RESET_FRAMES,
             terrain_meta1: terrain_type::NONE,
             terrain_meta2: terrain_type::NONE,

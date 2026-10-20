@@ -537,11 +537,131 @@ pub fn counter_steer(d: &mut Driver, gte: &mut Gte) {
     d.accel = SVec3 { x: x as i16, y: y as i16, z: z as i16 };
 }
 
-/// `VehPhysForce_TranslateMatrix`, without the squash and stretch: builds the
-/// matrix that faces the model along the surface normal, then steps the wheelie.
+/// `VEH_PHYS_FORCE_KART_SCALE_BASE`: the kart's scale when it is neither squashed nor stretched.
+pub const KART_SCALE_BASE: i32 = 0xccc;
+const MASK_GRAB_SCALE_XZ_FACTOR: i32 = 0x28;
+const MIN_SQUASH_XZ_SCALE: i32 = 0x400;
+const TARGET_SQUISH_DEFAULT: i32 = -800;
+const SQUISH_DEADBAND: i32 = 0x960;
+const AIR_SQUISH_MIN: i32 = -800;
+const LANDING_SQUISH_MIN: i32 = -0x640;
+const SQUISH_MAX: i32 = 800;
+const HAZARD_BLINK_MASK: i16 = 0x80;
+const FALL_STRETCH_HEIGHT_MAX: i32 = 0xa00;
+const FALL_STRETCH_MIN: i32 = 0x280;
+const FALL_STRETCH_MAX: i32 = 0x320;
+const SQUISH_INTERP_SPEED: i32 = 300;
+const SQUISH_SCALE_INTERP_SPEED: i32 = 0xa0;
+const SQUISH_SCALE_XZ_FACTOR: i32 = 0xa0;
+
+/// `VehPhysForce_TranslateMatrix_Div256TowardZero`
+fn div256_toward_zero(value: i32) -> i32 {
+    mips::sra(if value < 0 { mips::add_lo(value, 0xff) } else { value }, 8)
+}
+
+/// The squash and stretch of the kart model (the first part of `VehPhysForce_TranslateMatrix`):
+/// it stretches in the air, and squashes on landing and when it takes off.
+///
+/// Not ported: the squish by a crushing hazard (`squishTimer`) and the TNT box's wobble.
+fn squash_stretch(d: &mut Driver) {
+    if d.kart_state == kart_state::WARP_PAD {
+        return;
+    }
+    let squish = d.jump_squish_stretch as i32;
+
+    if d.kart_state == kart_state::MASK_GRABBED && d.actions_flag_set & actions::TOUCH_GROUND == 0 {
+        d.inst_scale_y = mips::add_lo(squish, KART_SCALE_BASE) as i16;
+        let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * MASK_GRAB_SCALE_XZ_FACTOR)).max(MIN_SQUASH_XZ_SCALE);
+        (d.inst_scale_x, d.inst_scale_z) = (xz as i16, xz as i16);
+        return;
+    }
+
+    let jump_height = d.jump_height_curr as i32;
+    let mut target = TARGET_SQUISH_DEFAULT;
+
+    if d.actions_flag_set & actions::JUMP_STARTED == 0 {
+        let current = d.jump_squish_stretch2 as i32;
+        let weighted = jump_height * 7;
+        target = mips::sll(mips::sub_lo(current, mips::sra(mips::add_lo(current * 9, weighted), 4)), 2);
+        if target.abs() < SQUISH_DEADBAND {
+            target = 0;
+        }
+        if (d.actions_flag_set | d.actions_flag_set_prev_frame) & actions::STARTED_TOUCH_GROUND != 0 {
+            target = target.max(LANDING_SQUISH_MIN);
+        } else {
+            target = target.max(AIR_SQUISH_MIN);
+        }
+        target = target.min(SQUISH_MAX);
+    }
+
+    if d.hazard_timer > 0 && d.hazard_timer & HAZARD_BLINK_MASK == 0 && target > TARGET_SQUISH_DEFAULT {
+        target = TARGET_SQUISH_DEFAULT;
+    }
+
+    // Falling stretches the kart more the farther it falls.
+    if d.actions_flag_set & actions::TOUCH_GROUND == 0 && jump_height < 0 {
+        let stretch = crate::calc::map_to_range(-jump_height, 0, FALL_STRETCH_HEIGHT_MAX, FALL_STRETCH_MIN, FALL_STRETCH_MAX);
+        target = target.max(stretch);
+        d.jump_squish_stretch2 = jump_height as i16;
+    }
+
+    if (d.jump_squish_stretch as i32).abs() < target.abs() {
+        d.jump_squish_stretch = target as i16;
+    }
+    d.jump_squish_stretch = interp_by_speed(d.jump_squish_stretch as i32, SQUISH_INTERP_SPEED, 0) as i16;
+    d.jump_squish_stretch2 = mips::sra(mips::add_lo(d.jump_squish_stretch2 as i32 * 9, jump_height * 7), 4) as i16;
+
+    let squish = d.jump_squish_stretch as i32;
+    d.inst_scale_y =
+        interp_by_speed(d.inst_scale_y as i32, SQUISH_SCALE_INTERP_SPEED, mips::add_lo(squish, KART_SCALE_BASE)) as i16;
+    let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * SQUISH_SCALE_XZ_FACTOR));
+    d.inst_scale_x = interp_by_speed(d.inst_scale_x as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
+    d.inst_scale_z = interp_by_speed(d.inst_scale_z as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
+}
+
+/// `VehPhysForce_TranslateMatrix`: squashes and stretches the model, builds the
+/// matrix that faces it along the surface normal, then steps the wheelie.
 pub fn translate_matrix(d: &mut Driver, gte: &mut Gte) {
+    squash_stretch(d);
     let mut facing = d.matrix_facing_dir;
     rot_axis_angle(&mut facing, gte, d.axis_angle2_normal_vec, d.rot_curr_y as i32);
     d.matrix_facing_dir = facing;
     crate::baked::update_matrix_animation(d);
+}
+
+#[cfg(test)]
+mod squash_tests {
+    use super::*;
+
+    fn kart() -> Driver {
+        let mut d = Driver::new(0, 0);
+        d.actions_flag_set = actions::TOUCH_GROUND;
+        d
+    }
+
+    #[test]
+    fn a_kart_on_the_ground_keeps_its_size() {
+        let mut d = kart();
+        for _ in 0..10 {
+            squash_stretch(&mut d);
+        }
+        assert_eq!([d.inst_scale_x, d.inst_scale_y, d.inst_scale_z], [0xccc; 3]);
+    }
+
+    #[test]
+    fn a_fall_stretches_the_kart_tall_and_thin_and_it_recovers() {
+        let mut d = kart();
+        d.actions_flag_set = 0;
+        d.jump_height_curr = -0x800;
+        squash_stretch(&mut d);
+        assert!(d.inst_scale_y > 0xccc && d.inst_scale_x < 0xccc && d.inst_scale_z < 0xccc);
+        assert_eq!(d.inst_scale_x, d.inst_scale_z);
+
+        d.actions_flag_set = actions::TOUCH_GROUND;
+        d.jump_height_curr = 0;
+        for _ in 0..200 {
+            squash_stretch(&mut d);
+        }
+        assert_eq!([d.inst_scale_x, d.inst_scale_y, d.inst_scale_z], [0xccc; 3]);
+    }
 }
