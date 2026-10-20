@@ -63,6 +63,7 @@ struct Hud;
 struct Pose {
     translation: Vec3,
     rotation: Quat,
+    scale: Vec3,
 }
 
 #[derive(Resource)]
@@ -138,29 +139,25 @@ impl Drive {
     }
 }
 
-/// The pose of the model: its position, and the orientation the sim builds from
-/// the surface normal and the heading (`matrixFacingDir`; its second column is
-/// up, the third forwards).
+/// The pose of the model, from the matrix the sim gives the kart's instance (the
+/// surface and heading, and the wheelie on top): its third column is forward and its
+/// second up. The squash of the wheelie goes in the scale.
 fn pose_of(d: &Driver) -> Pose {
-    let m = &d.matrix_facing_dir.m;
-    let column = |c: usize| Vec3::new(m[0][c] as f32, m[1][c] as f32, m[2][c] as f32) / 4096.0;
-    let up = column(1).normalize_or_zero();
-    let forward = column(2).normalize_or_zero();
-    let rotation = if up == Vec3::ZERO || forward == Vec3::ZERO {
+    let (matrix, t) = vehicle::baked::inst_matrix(d);
+    let column = |c: usize| Vec3::new(matrix.m[0][c] as f32, matrix.m[1][c] as f32, matrix.m[2][c] as f32) / 4096.0;
+    let (side, up, forward) = (column(0), column(1), column(2));
+    let rotation = if up.length_squared() == 0.0 || forward.length_squared() == 0.0 {
         Quat::IDENTITY
     } else {
-        Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
+        let right = up.cross(forward).normalize_or_zero();
+        let forward = right.cross(up.normalize_or_zero());
+        Quat::from_mat3(&Mat3::from_cols(right, up.normalize_or_zero(), forward.normalize_or_zero()))
     };
-    // `pos_curr` has 8 fractional bits; the model sits a little higher when it bounces.
-    let offset_y = (d.screen_offset_y as i32 * 3) >> 3;
-    let translation = Vec3::new(
-        (d.pos_curr.x >> 8) as f32,
-        ((d.pos_curr.y >> 8) + offset_y) as f32,
-        (d.pos_curr.z >> 8) as f32,
-    ) * SCALE;
+    let scale = Vec3::new(side.length(), up.length(), forward.length());
     Pose {
-        translation,
+        translation: Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) * SCALE,
         rotation,
+        scale: if scale.min_element() > 0.0 { scale } else { Vec3::ONE },
     }
 }
 
@@ -309,6 +306,7 @@ fn interpolated(drive: &Drive, fixed: &Time<Fixed>) -> Pose {
             .translation
             .lerp(drive.current.translation, t),
         rotation: drive.previous.rotation.slerp(drive.current.rotation, t),
+        scale: drive.previous.scale.lerp(drive.current.scale, t),
     }
 }
 
@@ -321,6 +319,7 @@ fn show_kart(
     for mut transform in &mut karts {
         transform.translation = pose.translation;
         transform.rotation = pose.rotation;
+        transform.scale = pose.scale;
     }
 }
 

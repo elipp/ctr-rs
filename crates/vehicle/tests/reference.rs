@@ -70,6 +70,9 @@ fn fields(d: &Driver) -> Vec<i64> {
     o.extend([d.anim_index as i64, d.anim_frame as i64, d.inst_scale_x as i64, d.inst_scale_y as i64]);
     o.push(match d.matrix_array {
         MatrixArray::None => 0,
+        MatrixArray::WheelieStart => 1,
+        MatrixArray::WheelieHold => 2,
+        MatrixArray::WheelieRecover => 3,
         MatrixArray::CrashFall => 4,
         MatrixArray::Jump(n) => n as i64,
     });

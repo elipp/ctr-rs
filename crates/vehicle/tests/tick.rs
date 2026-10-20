@@ -146,6 +146,9 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
         "d.matrixArray",
         match d.matrix_array {
             MatrixArray::None => 0,
+            MatrixArray::WheelieStart => 1,
+            MatrixArray::WheelieHold => 2,
+            MatrixArray::WheelieRecover => 3,
             MatrixArray::CrashFall => 4,
             MatrixArray::Jump(n) => n,
         }

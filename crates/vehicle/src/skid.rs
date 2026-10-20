@@ -5,12 +5,11 @@
 //! The renderer joins each tick's strip to the one before it.
 //!
 //! Not ported: the marks' draw order bytes (`depthBiasNormal`/`Secondary`; the
-//! renderer's depth test stands in), and the wheelie, which does not exist yet
-//! (`BAKED_GTE_MATRIX_WHEELIE_*`) and so never changes which tires skid.
+//! renderer's depth test stands in).
 
 use crate::exhaust::rotate;
 use crate::terrain::{TERRAINS, terrain_flags};
-use crate::{Driver, actions};
+use crate::{Driver, MatrixArray, actions};
 
 /// One tire's strip: the two ends across the tire, in game units.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -59,6 +58,16 @@ pub fn skidmarks(d: &mut Driver) {
         d.actions_flag_set |= actions::BACK_SKID | actions::FRONT_SKID;
     }
 
+    // The wheelie: rearing up the kart skids on its back tires, and a lifted nose on neither front tire.
+    match d.matrix_array {
+        MatrixArray::WheelieStart => {
+            d.actions_flag_set |= actions::BACK_SKID;
+            d.actions_flag_set &= !actions::FRONT_SKID;
+        }
+        MatrixArray::WheelieHold | MatrixArray::WheelieRecover => d.actions_flag_set &= !actions::FRONT_SKID,
+        _ => {}
+    }
+
     let skidding = d.actions_flag_set & (actions::BACK_SKID | actions::FRONT_SKID) != 0;
     if d.actions_flag_set & actions::TOUCH_GROUND == 0 || !skidding || (d.speed_approx as i32).abs() < MIN_SPEED {
         return;
@@ -71,12 +80,7 @@ pub fn skidmarks(d: &mut Driver) {
     let lateral = [sin >> 12, cos >> 12];
     let flags = forced as u8;
 
-    let m = d.matrix_facing_dir;
-    let origin = [
-        d.pos_curr.x >> 8,
-        (d.pos_curr.y >> 8) + ((d.screen_offset_y as i32 * 3) >> 3),
-        d.pos_curr.z >> 8,
-    ];
+    let (m, origin) = crate::baked::inst_matrix(d);
     let current = d.skidmark_frame_index as usize;
     let previous = (current + FRAME_COUNT as usize - 1) % FRAME_COUNT as usize;
 
