@@ -141,7 +141,7 @@ impl Drive {
 
 /// The pose of the model, from the matrix the sim gives the kart's instance (the
 /// surface and heading, and the wheelie on top): its third column is forward and its
-/// second up. The squash of the wheelie goes in the scale.
+/// second up. The squash of the wheelie and the instance's own squash and stretch go in the scale.
 fn pose_of(d: &Driver) -> Pose {
     let (matrix, t) = vehicle::baked::inst_matrix(d);
     let column = |c: usize| Vec3::new(matrix.m[0][c] as f32, matrix.m[1][c] as f32, matrix.m[2][c] as f32) / 4096.0;
@@ -153,7 +153,9 @@ fn pose_of(d: &Driver) -> Pose {
         let forward = right.cross(up.normalize_or_zero());
         Quat::from_mat3(&Mat3::from_cols(right, up.normalize_or_zero(), forward.normalize_or_zero()))
     };
-    let scale = Vec3::new(side.length(), up.length(), forward.length());
+    // The squash and stretch of the instance, on top of the wheelie's.
+    let inst = Vec3::new(d.inst_scale_x as f32, d.inst_scale_y as f32, d.inst_scale_z as f32) / vehicle::force::KART_SCALE_BASE as f32;
+    let scale = Vec3::new(side.length(), up.length(), forward.length()) * inst;
     Pose {
         translation: Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) * SCALE,
         rotation,
