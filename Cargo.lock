@@ -3228,6 +3228,7 @@ name = "hazard"
 version = "0.1.0"
 dependencies = [
  "gte",
+ "hadris-iso",
  "loader",
  "math",
  "vehicle",

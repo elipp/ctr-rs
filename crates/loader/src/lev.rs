@@ -177,6 +177,8 @@ pub struct InstDef {
     pub name: String,
     /// Payload offset of the `struct Model` (0 = none).
     pub model: u32,
+    /// The name in that `struct Model`: what picks the object's behaviour (`"armadillo"`).
+    pub model_name: String,
     /// 0x1000 = 1.0
     pub scale: SVec3,
     pub color_rgba: u32,
@@ -405,11 +407,15 @@ impl Level {
         }
         let at = p.ptr(LEVEL_INSTANCES, "instance definitions")?;
         p.array(at, count, INST_DEF_SIZE, |p, at| {
-            let name = p.bytes(at, 0x10)?;
-            let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+            let text = |bytes: &[u8]| {
+                let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                String::from_utf8_lossy(&bytes[..len]).into_owned()
+            };
+            let model = p.u32(at + 0x10)?;
             Ok(InstDef {
-                name: String::from_utf8_lossy(&name[..len]).into_owned(),
-                model: p.u32(at + 0x10)?,
+                name: text(p.bytes(at, 0x10)?),
+                model,
+                model_name: if model == 0 { String::new() } else { text(p.bytes(model as usize, 0x10)?) },
                 scale: p.svec3(at + 0x14)?,
                 color_rgba: p.u32(at + 0x1c)?,
                 flags: p.u32(at + 0x20)?,
