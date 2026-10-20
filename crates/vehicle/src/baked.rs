@@ -1,10 +1,10 @@
-//! `data.bakedGteMath`, so far the wheelie: the kart rears up while a boost at
-//! full fire speed burns, and settles back down after it. Each tick of the
+//! `data.bakedGteMath`, so far the wheelie (the kart rears up while a boost at
+//! full fire speed burns, and settles back down after it) and the airborne poses. Each tick of the
 //! animation is a rotation and a squash (`Vector_BakeMatrixTable`) that
 //! `VehPhysForce_TranslateMatrix_UpdateInstanceMatrix` puts on the facing matrix,
 //! with an offset of the kart's origin that follows it.
 //!
-//! The crash fall, squish recovery, blasted and airborne tables are not ported:
+//! The crash fall, squish recovery and blasted tables are not ported:
 //! with those arrays the instance matrix is the facing matrix.
 
 use gte::Gte;
@@ -54,6 +54,91 @@ pub const WHEELIE_RECOVER: [Entry; 9] = [
     Entry { offset: [0, -142, -220], rot: [-2, 0, 0], scale: [3989, 4202, 3989] },
 ];
 
+/// `BAKED_GTE_MATRIX_JUMP_BASE`: the airborne poses start at this array.
+const JUMP_BASE: u8 = 7;
+
+/// The airborne pose per character (`matArr07` ..): the kart tilts and lifts a little more
+/// the longer it is in the air, over four steps.
+pub const JUMP: [[Entry; 4]; 13] = [
+    [
+        Entry { offset: [-209, 664, 179], rot: [-3, 2, -41], scale: [4096, 4096, 4096] },
+        Entry { offset: [-672, 2127, 574], rot: [-6, 9, -132], scale: [4096, 4096, 4096] },
+        Entry { offset: [-1133, 3591, 969], rot: [-10, 15, -224], scale: [4096, 4096, 4096] },
+        Entry { offset: [-1343, 4255, 1149], rot: [-11, 18, -265], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-157, 43, 121], rot: [-49, 0, -27], scale: [4096, 4096, 4096] },
+        Entry { offset: [-503, 137, 389], rot: [-153, 0, -88], scale: [4096, 4096, 4096] },
+        Entry { offset: [-849, 231, 656], rot: [-256, 0, -148], scale: [4096, 4096, 4096] },
+        Entry { offset: [-1006, 275, 778], rot: [-303, 0, -176], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [78, 328, -103], rot: [35, 0, -17], scale: [4096, 4096, 4096] },
+        Entry { offset: [252, 1051, -330], rot: [113, 0, -56], scale: [4096, 4096, 4096] },
+        Entry { offset: [425, 1774, -557], rot: [192, 0, -96], scale: [4096, 4096, 4096] },
+        Entry { offset: [505, 2103, -659], rot: [227, 0, -113], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-83, 252, 0], rot: [-20, 0, -10], scale: [4096, 4096, 4096] },
+        Entry { offset: [-267, 808, 0], rot: [-62, 0, -32], scale: [4096, 4096, 4096] },
+        Entry { offset: [-452, 1364, 0], rot: [-103, 0, -54], scale: [4096, 4096, 4096] },
+        Entry { offset: [-536, 1617, 0], rot: [-121, 0, -64], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [11, 176, -96], rot: [19, 0, -13], scale: [4096, 4096, 4096] },
+        Entry { offset: [38, 566, -310], rot: [60, 0, -44], scale: [4096, 4096, 4096] },
+        Entry { offset: [62, 954, -524], rot: [102, 0, -74], scale: [4096, 4096, 4096] },
+        Entry { offset: [74, 1131, -621], rot: [121, 0, -88], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-107, 313, -298], rot: [31, 0, -14], scale: [4096, 4096, 4096] },
+        Entry { offset: [-342, 1004, -954], rot: [100, 0, -44], scale: [4096, 4096, 4096] },
+        Entry { offset: [-576, 1693, -1610], rot: [169, 0, -75], scale: [4096, 4096, 4096] },
+        Entry { offset: [-684, 2008, -1909], rot: [201, 0, -89], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-61, 81, 115], rot: [-20, 0, -11], scale: [4096, 4096, 4096] },
+        Entry { offset: [-196, 259, 369], rot: [-64, 0, -37], scale: [4096, 4096, 4096] },
+        Entry { offset: [-331, 437, 625], rot: [-108, 0, -63], scale: [4096, 4096, 4096] },
+        Entry { offset: [-393, 519, 740], rot: [-128, 0, -75], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-62, 180, -81], rot: [20, 0, -9], scale: [4096, 4096, 4096] },
+        Entry { offset: [-199, 578, -260], rot: [65, 0, -30], scale: [4096, 4096, 4096] },
+        Entry { offset: [-336, 976, -440], rot: [111, 0, -51], scale: [4096, 4096, 4096] },
+        Entry { offset: [-399, 1157, -521], rot: [131, 0, -61], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-150, 114, 0], rot: [-4, 0, -28], scale: [4096, 4096, 4096] },
+        Entry { offset: [-481, 363, 0], rot: [-13, 0, -92], scale: [4096, 4096, 4096] },
+        Entry { offset: [-812, 613, 0], rot: [-22, 0, -155], scale: [4096, 4096, 4096] },
+        Entry { offset: [-963, 727, 0], rot: [-26, 0, -184], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [0, 57, 38], rot: [-7, 0, -2], scale: [4096, 4096, 4096] },
+        Entry { offset: [0, 199, 132], rot: [-25, 0, -7], scale: [4096, 4096, 4096] },
+        Entry { offset: [0, 374, 247], rot: [-47, 0, -14], scale: [4096, 4096, 4096] },
+        Entry { offset: [0, 533, 352], rot: [-67, 0, -20], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [0, 238, -83], rot: [18, 0, -6], scale: [4096, 4096, 4096] },
+        Entry { offset: [0, 761, -267], rot: [58, 0, -20], scale: [4096, 4096, 4096] },
+        Entry { offset: [0, 1284, -450], rot: [98, 0, -34], scale: [4096, 4096, 4096] },
+        Entry { offset: [0, 1523, -534], rot: [117, 0, -40], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-145, 0, 148], rot: [-19, 0, -14], scale: [4096, 4096, 4096] },
+        Entry { offset: [-463, 0, 475], rot: [-62, 0, -45], scale: [4096, 4096, 4096] },
+        Entry { offset: [-782, 0, 803], rot: [-105, 0, -76], scale: [4096, 4096, 4096] },
+        Entry { offset: [-927, 0, 951], rot: [-125, 0, -91], scale: [4096, 4096, 4096] },
+    ],
+    [
+        Entry { offset: [-237, 373, 55], rot: [-10, 0, -19], scale: [4096, 4096, 4096] },
+        Entry { offset: [-760, 1196, 174], rot: [-34, 0, -62], scale: [4096, 4096, 4096] },
+        Entry { offset: [-1281, 2018, 294], rot: [-58, 0, -105], scale: [4096, 4096, 4096] },
+        Entry { offset: [-1520, 2392, 349], rot: [-69, 0, -125], scale: [4096, 4096, 4096] },
+    ],
+];
 
 const BLEND_FULL: i32 = 0x100;
 
@@ -63,6 +148,7 @@ fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
         MatrixArray::WheelieStart => Some(&WHEELIE_START),
         MatrixArray::WheelieHold => Some(&WHEELIE_HOLD),
         MatrixArray::WheelieRecover => Some(&WHEELIE_RECOVER),
+        MatrixArray::Jump(n) => JUMP.get(n.checked_sub(JUMP_BASE)? as usize).map(|e| e.as_slice()),
         _ => None,
     }
 }
@@ -217,5 +303,22 @@ mod tests {
         // Not ported arrays leave the facing matrix alone.
         d.matrix_array = MatrixArray::CrashFall;
         assert_eq!(inst_matrix(&d).0, plain);
+    }
+
+    #[test]
+    fn the_airborne_pose_tilts_the_kart_more_as_the_jump_goes_on() {
+        let mut d = boosting();
+        let (plain, _) = inst_matrix(&d);
+        d.matrix_array = MatrixArray::Jump(JUMP_BASE);
+        let poses: Vec<_> = (0..4)
+            .map(|i| {
+                d.matrix_index = i;
+                inst_matrix(&d)
+            })
+            .collect();
+        assert!(poses.iter().all(|(m, _)| *m != plain));
+        // Oxide's first step is about 0.8 units up, the last 16.
+        assert_eq!(poses[0].1[1], 664 >> 8);
+        assert_eq!(poses[3].1[1], 4255 >> 8);
     }
 }
