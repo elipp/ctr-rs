@@ -2,6 +2,7 @@
 //! eight ticks between two points, turning towards their direction a little each tick. The
 //! three carts are spread over the path by the digit their names end in.
 
+use math::Wrap;
 use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
 use vehicle::rotmat::convert_rot_to_matrix;
@@ -15,7 +16,7 @@ const ROT_SPEED: i32 = 0x20;
 const HIT_RADIUS: u32 = 0x10000;
 
 fn s16(v: i32) -> i16 {
-    v as i16
+    v.wrap_i16()
 }
 
 /// `struct Minecart` and the parts of its `Instance` the code changes.
@@ -186,7 +187,7 @@ mod tests {
         // A straight road along +x: the direction is the other way round, and so is the yaw.
         let path: Vec<_> = (0..10).map(|i| SVec3 { x: i * 80, y: 0, z: 0 }).collect();
         let mut cart = Minecart::new(&def("minecart#0"), &path).unwrap();
-        assert_eq!(cart.rot_desired.y, (math::ratan2(-80, 0) - 0x800) as i16);
+        assert_eq!(cart.rot_desired.y, (math::ratan2(-80, 0) - 0x800).wrap_i16());
         for _ in 0..40 {
             cart.tick(&path, 10);
         }

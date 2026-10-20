@@ -12,6 +12,7 @@ mod common;
 #[path = "../../coll/tests/support/mod.rs"]
 mod support;
 
+use math::Wrap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -180,9 +181,9 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
         let flags = |rng: &mut Rng, bits: &[u32]| bits.iter().filter(|_| rng.below(2) == 0).fold(0, |a, b| a | b);
 
         let mut d = Driver {
-            driver_id: rng.below(8) as u8,
+            driver_id: rng.below(8).wrap_u8(),
             kart_state: [0, 0, 1, 2, 5][rng.below(5) as usize],
-            simp_turn_state: rng.range(-2, 2) as i8,
+            simp_turn_state: rng.range(-2, 2).wrap_i8(),
             origin_to_center,
             pos_curr: Vec3 {
                 x: (centre[0] - origin_to_center.x) << 8 | rng.range(0, 255),
@@ -194,25 +195,25 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
             actions_flag_set_prev_frame: flags(rng, &[0x1]),
             under_driver: [None, None, Some(rng.below(level.quad_blocks.len() as u64) as u32)][rng.below(3) as usize],
             v_shift_count: [0, 0, 1, 7][rng.below(4) as usize],
-            speed_approx: rng.range(-0x500, 0x1200) as i16,
-            jump_height_curr: rng.range(-0x400, 0x400) as i16,
+            speed_approx: rng.range(-0x500, 0x1200).wrap_i16(),
+            jump_height_curr: rng.range(-0x400, 0x400).wrap_i16(),
             fire_speed: [0, 0, 0, 5][rng.below(4) as usize],
-            reserves: rng.range(0, 0x100) as i16,
-            turbo_outside_timer: rng.range(0, 0x100) as i16,
+            reserves: rng.range(0, 0x100).wrap_i16(),
+            turbo_outside_timer: rng.range(0, 0x100).wrap_i16(),
             wall_rub_timer: [0, 0, 0x40][rng.below(3) as usize],
-            wall_rub_speed_limit: rng.range(0, 0x4000) as i16,
-            angle: rng.range(-0x800, 0x7ff) as i16,
-            rot_curr_w: rng.range(-0x800, 0x7ff) as i16,
-            turn_angle_curr: rng.range(-0x100, 0x100) as i16,
+            wall_rub_speed_limit: rng.range(0, 0x4000).wrap_i16(),
+            angle: rng.range(-0x800, 0x7ff).wrap_i16(),
+            rot_curr_w: rng.range(-0x800, 0x7ff).wrap_i16(),
+            turn_angle_curr: rng.range(-0x100, 0x100).wrap_i16(),
             ..Driver::default()
         };
         // Scribble over fields the search only writes, so stale values show.
         let mut junk = || rng.range(-9, 9);
         (d.x_speed, d.y_speed, d.z_speed) = (junk(), junk(), junk());
-        d.anim_index = rng.below(5) as u8;
-        d.anim_frame = rng.range(0, 9) as i16;
-        (d.inst_scale_x, d.inst_scale_y) = (rng.range(0, 0x1000) as i16, rng.range(0, 0x1000) as i16);
-        d.matrix_index = rng.below(4) as u8;
+        d.anim_index = rng.below(5).wrap_u8();
+        d.anim_frame = rng.range(0, 9).wrap_i16();
+        (d.inst_scale_x, d.inst_scale_y) = (rng.range(0, 0x1000).wrap_i16(), rng.range(0, 0x1000).wrap_i16());
+        d.matrix_index = rng.below(4).wrap_u8();
         for field in [
             &mut d.speed,
             &mut d.base_speed,
@@ -230,17 +231,17 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
             &mut d.jump_squish_stretch,
             &mut d.jump_squish_stretch2,
         ] {
-            *field = rng.range(-9, 9) as i16;
+            *field = rng.range(-9, 9).wrap_i16();
         }
-        d.screen_offset_y = rng.range(-9, 9) as i8;
-        d.distance_from_ground = rng.range(-9, 9) as i16;
-        d.collision_flags = flags(rng, &[0x1, 0x2, 0x4, 0x8]) as u16;
+        d.screen_offset_y = rng.range(-9, 9).wrap_i8();
+        d.distance_from_ground = rng.range(-9, 9).wrap_i16();
+        d.collision_flags = flags(rng, &[0x1, 0x2, 0x4, 0x8]).wrap_u16();
 
         let light_matrix = if rng.below(2) == 0 {
             identity
         } else {
             // Rotation-like: entries up to one unit.
-            std::array::from_fn(|_| rng.range(-0x1000, 0x1000) as i16)
+            std::array::from_fn(|_| rng.range(-0x1000, 0x1000).wrap_i16())
         };
         out.push(Case {
             elapsed_ms: [32, 32, 33, 16][rng.below(4) as usize],

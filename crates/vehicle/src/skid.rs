@@ -7,6 +7,7 @@
 //! Not ported: the marks' draw order bytes (`depthBiasNormal`/`Secondary`; the
 //! renderer's depth test stands in).
 
+use math::{Bits, Wrap};
 use crate::exhaust::rotate;
 use crate::terrain::{TERRAINS, terrain_flags};
 use crate::{Driver, MatrixArray, actions};
@@ -73,7 +74,7 @@ pub fn skidmarks(d: &mut Driver) {
         return;
     }
 
-    let angle = d.axis_rotation_x as i32 as u32;
+    let angle = i32::from(d.axis_rotation_x).bits();
     let (sin, cos) = (math::sin(angle) * LATERAL_SCALE, math::cos(angle) * LATERAL_SCALE);
     // Across the tire, and the extension in front of the strip.
     let width = [(math::cos(angle) * WIDTH_SCALE) >> 12, (math::sin(angle) * -WIDTH_SCALE) >> 12];
@@ -86,7 +87,7 @@ pub fn skidmarks(d: &mut Driver) {
 
     let put = |d: &mut Driver, slot: usize, t: usize, x: i32, y: i32, z: i32, w: [i32; 2]| {
         d.skidmarks[slot][t] = Mark {
-            edge: [[(x + w[0]) as i16, y as i16, (z + w[1]) as i16], [(x - w[0]) as i16, y as i16, (z - w[1]) as i16]],
+            edge: [[(x + w[0]).wrap_i16(), y.wrap_i16(), (z + w[1]).wrap_i16()], [(x - w[0]).wrap_i16(), y.wrap_i16(), (z - w[1]).wrap_i16()]],
             flags,
         };
     };

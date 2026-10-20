@@ -17,6 +17,7 @@
 
 mod matrix;
 
+use math::{Bits, Wrap};
 use coll::Collision;
 use loader::lev::{Level, SVec3};
 use math::{Vec3, mips};
@@ -168,8 +169,8 @@ impl CameraDc {
     /// the ground there is `coll.sps.quad_block_coll.hit_pos.y`.
     fn find_closest_quadblock(&mut self, level: &Level, pos: Vec3) -> bool {
         let sps = &mut self.coll.sps;
-        let low = SVec3 { x: pos.x as i16, y: (pos.y as i16).wrapping_sub(0x800), z: pos.z as i16 };
-        let high = SVec3 { x: pos.x as i16, y: (pos.y as i16).wrapping_add(0x100), z: pos.z as i16 };
+        let low = SVec3 { x: pos.x.wrap_i16(), y: (pos.y.wrap_i16()).wrapping_sub(0x800), z: pos.z.wrap_i16() };
+        let high = SVec3 { x: pos.x.wrap_i16(), y: (pos.y.wrap_i16()).wrapping_add(0x100), z: pos.z.wrap_i16() };
 
         sps.input1.pos = low;
         sps.quad_block_coll.pos = high;
@@ -231,8 +232,8 @@ impl CameraDc {
         // The camera turns with the kart's heading and the camera spin of a drift.
         let mut rot = SVec3 {
             x: PITCH,
-            y: ((d.rot_curr_w as i32 + d.angle as i32 + 0x800 + reverse_angle) & 0xfff) as i16,
-            z: mips::mul_lo(self.desired_rot_x as i32, -2) as i16,
+            y: ((d.rot_curr_w as i32 + d.angle as i32 + 0x800 + reverse_angle) & 0xfff).wrap_i16(),
+            z: mips::mul_lo(self.desired_rot_x as i32, -2).wrap_i16(),
         };
         // (Leaves the matrix in the GTE.)
         convert_rot_to_matrix(gte, rot);
@@ -251,7 +252,8 @@ impl CameraDc {
             zoom.speed_max as i32,
             zoom.dist_min as i32,
             zoom.dist_max as i32,
-        ) as i16 as i32;
+        )
+        .sext16();
 
         let fire = &mut self.fire_speed_zoom;
         if fire.timer == 0 {
@@ -271,17 +273,17 @@ impl CameraDc {
                 fire.timer = 0;
             }
         }
-        distance = (distance + (fire.distance_offset >> 8)) as i16 as i32;
+        distance = (distance + (fire.distance_offset >> 8)).sext16();
 
         let rotate = |gte: &mut gte::Gte, v: SVec3| -> (i32, i32, i32) {
-            gte.mtc2(v.x as u16 as u32 | (v.y as u16 as u32) << 16, gte::data::VXY0);
-            gte.mtc2(v.z as i32 as u32, gte::data::VZ0);
+            gte.mtc2(v.x.zext16().bits() | (v.y.zext16().bits()) << 16, gte::data::VXY0);
+            gte.mtc2(i32::from(v.z).bits(), gte::data::VZ0);
             gte.cop2(vehicle::force::mvmva(1, 0, 0, 3, 0));
             (gte.mfc2(gte::data::MAC1) as i32, gte.mfc2(gte::data::MAC2) as i32, gte.mfc2(gte::data::MAC3) as i32)
         };
 
         // The camera is behind the look-at point by `distance`, turned by the matrix.
-        let (mut pos_x, mut pos_y, mut pos_z) = rotate(gte, SVec3 { x: 0, y: 0, z: distance as i16 });
+        let (mut pos_x, mut pos_y, mut pos_z) = rotate(gte, SVec3 { x: 0, y: 0, z: distance.wrap_i16() });
         // ... and a little to the side by the kart's roll.
         let side = rotate(gte, SVec3 { x: 0, y: 0x40, z: 0 });
 
@@ -295,7 +297,7 @@ impl CameraDc {
         // The look-at point turns with the model's own turn, too.
         rot.x = PITCH;
         rot.z = 0;
-        rot.y = ((d.rot_curr_w as i32 + d.angle as i32 + d.turn_angle_curr as i32 + 0x800 + reverse_angle) & 0xfff) as i16;
+        rot.y = ((d.rot_curr_w as i32 + d.angle as i32 + d.turn_angle_curr as i32 + 0x800 + reverse_angle) & 0xfff).wrap_i16();
         convert_rot_to_matrix(gte, rot);
 
         // A kart that is not damaged is looked at from slightly above.
@@ -312,7 +314,7 @@ impl CameraDc {
         }
 
         let (rx, ry, rz) = rotate(gte, SVec3 { x: 0, y: 0, z: self.damage_pitch_offset });
-        let (rx, ry, rz) = (rx.clamp(-0x8000, 0x7fff) as i16 as i32, ry.clamp(-0x8000, 0x7fff) as i16 as i32, rz.clamp(-0x8000, 0x7fff) as i16 as i32);
+        let (rx, ry, rz) = (rx.clamp(-0x8000, 0x7fff).sext16(), ry.clamp(-0x8000, 0x7fff).sext16(), rz.clamp(-0x8000, 0x7fff).sext16());
         delta.x += rx;
         delta.z += rz;
         delta.y += ry + zoom.angle[2] as i32;
@@ -324,7 +326,8 @@ impl CameraDc {
                 mips::mul_lo(0x100 - zoom.angle[1] as i32, d.rot_curr_z as i32),
             ),
             8,
-        ) as i16;
+        )
+        .wrap_i16();
 
         // Keep above the track.
         let kart_y = mips::sra(d.pos_curr.y, 8);
@@ -343,7 +346,7 @@ impl CameraDc {
                 settled = true;
             } else {
                 smoothing.frames_remaining = HEIGHT_SMOOTHING_FRAMES;
-                smoothing.start_offset = (pos_y as i16).wrapping_sub(kart_y as i16);
+                smoothing.start_offset = (pos_y.wrap_i16()).wrapping_sub(kart_y.wrap_i16());
             }
         } else {
             let quad = &level.quad_blocks[self.coll.sps.hit.quad.unwrap() as usize];
@@ -362,7 +365,7 @@ impl CameraDc {
             }
         }
         if !settled {
-            smoothing.current_offset = (pos_y as i16).wrapping_sub(kart_y as i16);
+            smoothing.current_offset = (pos_y.wrap_i16()).wrapping_sub(kart_y.wrap_i16());
         }
 
         // A track with water the mask grab can drop you in keeps the camera above sea level.
@@ -372,10 +375,10 @@ impl CameraDc {
 
         // The direction from the look-at point to the camera is the push buffer's rotation.
         let dir = Vec3 { x: pos_x - delta.x, y: pos_y - delta.y, z: pos_z - delta.z };
-        self.pb_rot.y = math::ratan2(dir.x, dir.z) as i16;
+        self.pb_rot.y = math::ratan2(dir.x, dir.z).wrap_i16();
         let flat = math::square_root0_stub(mips::add_lo(mips::mul_lo(dir.x, dir.x), mips::mul_lo(dir.z, dir.z)));
-        self.pb_rot.x = (0x800 - math::ratan2(dir.y, flat)) as i16;
-        self.pb_rot.z = mips::sra(mips::mul_lo(zoom.angle[0] as i32, self.desired_rot_x as i32), 8) as i16;
+        self.pb_rot.x = (0x800 - math::ratan2(dir.y, flat)).wrap_i16();
+        self.pb_rot.z = mips::sra(mips::mul_lo(zoom.angle[0] as i32, self.desired_rot_x as i32), 8).wrap_i16();
 
         // The push buffer follows the camera, within a little slack.
         let pos = Vec3 { x: pos_x, y: pos_y, z: pos_z };
@@ -388,9 +391,9 @@ impl CameraDc {
         correction.y = correction.y.clamp(-PUSH_BUFFER_CORRECTION_LIMIT, PUSH_BUFFER_CORRECTION_LIMIT);
         correction.z = correction.z.clamp(-PUSH_BUFFER_CORRECTION_LIMIT, PUSH_BUFFER_CORRECTION_LIMIT);
 
-        self.pb_pos.x = self.pb_pos.x.wrapping_add((copy.x as i16).wrapping_add(correction.x as i16));
-        self.pb_pos.y = self.pb_pos.y.wrapping_add((copy.y as i16).wrapping_add(correction.y as i16));
-        self.pb_pos.z = self.pb_pos.z.wrapping_add((copy.z as i16).wrapping_add(correction.z as i16));
+        self.pb_pos.x = self.pb_pos.x.wrapping_add((copy.x.wrap_i16()).wrapping_add(correction.x.wrap_i16()));
+        self.pb_pos.y = self.pb_pos.y.wrapping_add((copy.y.wrap_i16()).wrapping_add(correction.y.wrap_i16()));
+        self.pb_pos.z = self.pb_pos.z.wrapping_add((copy.z.wrap_i16()).wrapping_add(correction.z.wrap_i16()));
 
         self.camera_pos = pos;
         self.look_at_pos = delta;

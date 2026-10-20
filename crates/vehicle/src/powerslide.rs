@@ -10,6 +10,7 @@
 //! The time spent drifting (`timeSpentDrifting`, for the end-of-race stats) is
 //! not kept.
 
+use math::Wrap;
 use gte::Gte;
 use math::mips;
 
@@ -95,10 +96,10 @@ pub fn init(d: &mut Driver) {
 
     // The character's drift stat, plus the turning stat's share.
     let drift = mips::sll(mips::add_lo(d.stats.drift_turn_base as i32, turn_const_term(d, DRIFT_TURN_CONST_SHIFT)), 8);
-    d.mult_drift = drift as i16;
+    d.mult_drift = drift.wrap_i16();
     // Steering right drifts right.
     if d.simp_turn_state < 0 {
-        d.mult_drift = mips::neg_lo(drift) as i16;
+        d.mult_drift = mips::neg_lo(drift).wrap_i16();
     }
 
     d.num_frames_drifting = 0;
@@ -112,7 +113,7 @@ pub fn init(d: &mut Driver) {
     d.time_until_drift_spinout = 0;
 
     // The turbo meter starts empty: the room left to fill is its whole length.
-    d.turbo_meter_room_left = mips::sll(d.stats.turbo_max_room as i32, FRAME_TIME_SHIFT) as i16;
+    d.turbo_meter_room_left = mips::sll(d.stats.turbo_max_room as i32, FRAME_TIME_SHIFT).wrap_i16();
 
     d.phys_state = PhysState::PowerSlide;
     // `PowerSlide_InitSetUpdate` arms the update on the next tick.
@@ -123,7 +124,7 @@ pub fn init(d: &mut Driver) {
 /// while (see `PhysAngular`).
 fn finalize(d: &mut Driver) {
     d.previous_frame_mult_drift = d.mult_drift;
-    d.time_until_drift_spinout = mips::sll(d.stats.drift_release_turn_assist_frames as i32, FRAME_TIME_SHIFT) as i16;
+    d.time_until_drift_spinout = mips::sll(d.stats.drift_release_turn_assist_frames as i32, FRAME_TIME_SHIFT).wrap_i16();
 }
 
 /// `VehPhysProc_PowerSlide_Update`
@@ -147,24 +148,24 @@ pub fn update(d: &mut Driver, input: &Input, env: &Env, effects: &mut Vec<Effect
                     effects,
                 );
 
-                d.num_boosts_success = mips::add_lo(d.num_boosts_success as u8 as i32, 1) as i8;
+                d.num_boosts_success = mips::add_lo(d.num_boosts_success.zext8(), 1).wrap_i8();
 
                 if (d.num_boosts_success as i32) < DRIFT_MAX_BOOSTS {
                     d.actions_flag_set |= actions::TURBO_INPUT_LATCH;
                 }
 
-                d.drift_boost_time_ms = mips::sll(d.stats.drift_boost_duration_frames as i32, FRAME_TIME_SHIFT) as i16;
+                d.drift_boost_time_ms = mips::sll(d.stats.drift_boost_duration_frames as i32, FRAME_TIME_SHIFT).wrap_i16();
             } else {
                 d.failed_boost_exhaust_timer = DRIFT_FAILED_BOOST_EXHAUST_TIMER;
             }
 
             d.turbo_meter_room_left = 0;
-            d.num_boosts_attempted = mips::add_lo(d.num_boosts_attempted as u8 as i32, 1) as i8;
+            d.num_boosts_attempted = mips::add_lo(d.num_boosts_attempted.zext8(), 1).wrap_i8();
         }
     } else if d.turbo_meter_room_left != 0 {
         // The meter runs down by the time passed.
-        let meter_left = mips::sub_lo(d.turbo_meter_room_left as u16 as i32, env.elapsed_time_ms as u16 as i32);
-        d.turbo_meter_room_left = meter_left as i16;
+        let meter_left = mips::sub_lo(d.turbo_meter_room_left.zext16(), env.elapsed_time_ms.zext16());
+        d.turbo_meter_room_left = meter_left.wrap_i16();
 
         if mips::sll(meter_left, 16) < 0 {
             d.turbo_meter_room_left = 0;
@@ -172,10 +173,10 @@ pub fn update(d: &mut Driver, input: &Input, env: &Env, effects: &mut Vec<Effect
 
         if d.turbo_meter_room_left == 0 {
             effects.push(Effect::Sound { id: DRIFT_METER_FULL_FX, echo: (d.actions_flag_set >> 16) & 1 != 0 });
-            d.num_boosts_attempted = mips::add_lo(d.num_boosts_attempted as u8 as i32, DRIFT_MAX_BOOSTS) as i8;
+            d.num_boosts_attempted = mips::add_lo(d.num_boosts_attempted.zext8(), DRIFT_MAX_BOOSTS).wrap_i8();
         }
     } else if (d.num_boosts_attempted as i32) < DRIFT_MAX_BOOSTS {
-        d.turbo_meter_room_left = mips::sll(d.stats.turbo_max_room as i32, FRAME_TIME_SHIFT) as i16;
+        d.turbo_meter_room_left = mips::sll(d.stats.turbo_max_room as i32, FRAME_TIME_SHIFT).wrap_i16();
     }
 
     let frames_till_spinout = d.stats.drifting_frames_till_spinout as i32;
@@ -223,7 +224,7 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     // The direction of travel catches up with the axis the lean is around.
     let wrapped_axis_angle = mips::add_lo(mips::sub_lo(d.axis_rotation_x as i32, d.angle as i32), 0x800) & 0xfff;
     let mut axis_angle_delta = wrapped_axis_angle - 0x800;
-    let angle = d.angle as u16 as i32;
+    let angle = d.angle.zext16();
     if axis_angle_delta != 0 {
         axis_angle_delta = mips::sra(axis_angle_delta, DRIFT_ANGLE_LERP_SHIFT);
         if axis_angle_delta == 0 {
@@ -238,8 +239,8 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
             axis_angle_delta = mips::neg_lo(step_limit);
         }
 
-        d.angle = mips::add_lo(angle, axis_angle_delta) as i16;
-        d.axis_rotation_x = (mips::sub_lo(d.axis_rotation_x as u16 as i32, axis_angle_delta) & 0xfff) as i16;
+        d.angle = mips::add_lo(angle, axis_angle_delta).wrap_i16();
+        d.axis_rotation_x = (mips::sub_lo(d.axis_rotation_x.zext16(), axis_angle_delta) & 0xfff).wrap_i16();
     }
 
     // The camera swings round to the side of the drift.
@@ -252,9 +253,9 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         }
 
         let max_rotation_step = (stats.drift_camera_lerp_step as i32).min(rotation_step);
-        d.rot_prev[3] = interp_by_speed(d.rot_prev[3] as i32, 8, max_rotation_step) as i16;
+        d.rot_prev[3] = interp_by_speed(d.rot_prev[3] as i32, 8, max_rotation_step).wrap_i16();
         let rotation_product = mips::mul_lo(d.rot_prev[3] as i32, elapsed);
-        d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, rotation_product >> DRIFT_MS_SCALE_SHIFT, camera_spin_rate) as i16;
+        d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, rotation_product >> DRIFT_MS_SCALE_SHIFT, camera_spin_rate).wrap_i16();
     }
 
     let steer_input_range = mips::add_lo(stats.turn_rate as i32, turn_const_term(d, STEER_TURN_CONST_SHIFT));
@@ -311,17 +312,17 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     // Frames spent drifting count up on the left and down on the right (the
     // spin-out comes at either limit), and wind back to zero while not steering.
     if desired_spin_rate != 0 && drift_turn_input > 0 {
-        d.num_frames_drifting = (d.num_frames_drifting as u16).wrapping_add(1) as i16;
+        d.num_frames_drifting = (d.num_frames_drifting.wrap_u16()).wrapping_add(1).wrap_i16();
         if d.num_frames_drifting < 0 {
             d.num_frames_drifting = 0;
         }
     } else if desired_spin_rate != 0 && drift_turn_input < 0 {
-        d.num_frames_drifting = (d.num_frames_drifting as u16).wrapping_sub(1) as i16;
+        d.num_frames_drifting = (d.num_frames_drifting.wrap_u16()).wrapping_sub(1).wrap_i16();
         if d.num_frames_drifting > 0 {
             d.num_frames_drifting = 0;
         }
     } else {
-        d.num_frames_drifting = interp_by_speed(d.num_frames_drifting as i32, 1, 0) as i16;
+        d.num_frames_drifting = interp_by_speed(d.num_frames_drifting as i32, 1, 0).wrap_i16();
     }
 
     if spin_rate_negated {
@@ -352,8 +353,8 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     let drift_turn_product = drift_turn_scaled as i64 * DIVIDE_BY_5_MAGIC;
     let drift_turn_quotient = mips::sub_lo(mips::sra((drift_turn_product >> 32) as i32, 1), mips::sra(drift_turn_scaled, 31));
 
-    d.rotation_spin_rate = current_spin_rate as i16;
-    let signed_spin_rate = current_spin_rate as i16 as i32;
+    d.rotation_spin_rate = current_spin_rate.wrap_i16();
+    let signed_spin_rate = current_spin_rate.sext16();
 
     let mut drift_turn_angle = map_to_range(
         abs(drift_turn_input),
@@ -392,7 +393,7 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         if drift_turn_angle == 0 {
             drift_turn_angle = 1;
         }
-        d.turn_angle_curr = mips::add_lo(d.turn_angle_curr as u16 as i32, drift_turn_angle) as i16;
+        d.turn_angle_curr = mips::add_lo(d.turn_angle_curr.zext16(), drift_turn_angle).wrap_i16();
     }
 
     // Close to the spin-out, the model wobbles.
@@ -402,7 +403,7 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
             d.turn_wobble_timer = TURN_WOBBLE_START_TIMER;
             d.turn_wobble_velocity = TURN_WOBBLE_START_VELOCITY;
             if drift_turn_input < 0 {
-                d.turn_wobble_velocity = mips::neg_lo(d.turn_wobble_velocity as i32) as i16;
+                d.turn_wobble_velocity = mips::neg_lo(d.turn_wobble_velocity as i32).wrap_i16();
             }
         }
     } else {
@@ -415,25 +416,25 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
 
     let wobble_angle_next;
     if d.turn_wobble_timer != 0 {
-        d.turn_wobble_timer = (d.turn_wobble_timer as u16).wrapping_sub(1) as i16;
-        wobble_angle_next = (d.turn_wobble_angle as u16).wrapping_add(d.turn_wobble_velocity as u16);
+        d.turn_wobble_timer = (d.turn_wobble_timer.wrap_u16()).wrapping_sub(1).wrap_i16();
+        wobble_angle_next = (d.turn_wobble_angle.wrap_u16()).wrapping_add(d.turn_wobble_velocity.wrap_u16());
     } else {
         d.turn_wobble_velocity = TURN_WOBBLE_RETURN_VELOCITY;
         if 0 < d.turn_wobble_angle {
-            d.turn_wobble_velocity = mips::neg_lo(d.turn_wobble_velocity as i32) as i16;
+            d.turn_wobble_velocity = mips::neg_lo(d.turn_wobble_velocity as i32).wrap_i16();
         }
-        wobble_angle_next = interp_by_speed(d.turn_wobble_angle as i32, abs(d.turn_wobble_velocity as i32), 0) as u16;
+        wobble_angle_next = interp_by_speed(d.turn_wobble_angle as i32, abs(d.turn_wobble_velocity as i32), 0).wrap_u16();
     }
-    d.turn_wobble_angle = wobble_angle_next as i16;
+    d.turn_wobble_angle = wobble_angle_next.wrap_i16();
 
     let amp_turn_state = mips::add_lo(signed_spin_rate, drift_turn_input);
-    d.amp_turn_state = amp_turn_state as i16;
+    d.amp_turn_state = amp_turn_state.wrap_i16();
 
-    d.angle = (mips::add_lo(d.angle as u16 as i32, mips::sra(mips::mul_lo(amp_turn_state, elapsed), ANGLE_INTEGRATION_SHIFT)) & 0xfff) as i16;
+    d.angle = (mips::add_lo(d.angle.zext16(), mips::sra(mips::mul_lo(amp_turn_state, elapsed), ANGLE_INTEGRATION_SHIFT)) & 0xfff).wrap_i16();
 
     // After a successful boost, the lean kicks outwards for a while.
     if d.drift_boost_time_ms != 0 {
-        d.drift_boost_time_ms = mips::sub_lo(d.drift_boost_time_ms as u16 as i32, elapsed as u16 as i32) as i16;
+        d.drift_boost_time_ms = mips::sub_lo(d.drift_boost_time_ms.zext16(), elapsed.zext16()).wrap_i16();
         if d.drift_boost_time_ms < 0 {
             d.drift_boost_time_ms = 0;
         }
@@ -442,16 +443,16 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         if d.turn_angle_curr < 0 {
             axis_kick = mips::neg_lo(axis_kick);
         }
-        d.axis_rotation_x = (mips::add_lo(d.axis_rotation_x as u16 as i32, axis_kick) & 0xfff) as i16;
+        d.axis_rotation_x = (mips::add_lo(d.axis_rotation_x.zext16(), axis_kick) & 0xfff).wrap_i16();
     }
 
-    d.rot_curr_y = mips::add_lo(d.turn_wobble_angle as u16 as i32, mips::add_lo(d.angle as u16 as i32, d.turn_angle_curr as u16 as i32)) as i16;
+    d.rot_curr_y = mips::add_lo(d.turn_wobble_angle.zext16(), mips::add_lo(d.angle.zext16(), d.turn_angle_curr.zext16())).wrap_i16();
 
     // The meter for the turn ramp counts milliseconds.
-    d.drift_total_time_ms = mips::add_lo(d.drift_total_time_ms as u16 as i32, elapsed as u16 as i32) as i16;
+    d.drift_total_time_ms = mips::add_lo(d.drift_total_time_ms.zext16(), elapsed.zext16()).wrap_i16();
     let ramp_time = mips::sll(stats.drift_turn_ramp_frames as i32, FRAME_TIME_SHIFT);
     if d.drift_total_time_ms as i32 > ramp_time {
-        d.drift_total_time_ms = ramp_time as i16;
+        d.drift_total_time_ms = ramp_time.wrap_i16();
     }
 
     let mut moving = d.matrix_moving_dir;

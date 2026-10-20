@@ -12,6 +12,7 @@
 //! Not ported: the instance's lighting (`UpdateLighting`: `alphaScale`), the
 //! reflection split-lines, and the compressed normal stored in the instance.
 
+use math::{Bits, Wrap};
 use coll::{Collision, search_flags};
 use gte::data;
 use loader::lev::{Level, SVec3, quad_flags};
@@ -45,8 +46,8 @@ fn abs(value: i32) -> i32 {
 /// kart's position for the point test, and the surfaces it collides with.
 fn setup_search(d: &mut Driver, coll: &mut Collision) {
     let pos = [mips::sra(d.pos_curr.x, 8), mips::sra(d.pos_curr.y, 8), mips::sra(d.pos_curr.z, 8)];
-    let bottom = SVec3 { x: pos[0] as i16, y: mips::add_lo(pos[1], -BOTTOM_Y_OFFSET) as i16, z: pos[2] as i16 };
-    let top = SVec3 { x: pos[0] as i16, y: mips::add_lo(pos[1], TOP_Y_OFFSET) as i16, z: pos[2] as i16 };
+    let bottom = SVec3 { x: pos[0].wrap_i16(), y: mips::add_lo(pos[1], -BOTTOM_Y_OFFSET).wrap_i16(), z: pos[2].wrap_i16() };
+    let top = SVec3 { x: pos[0].wrap_i16(), y: mips::add_lo(pos[1], TOP_Y_OFFSET).wrap_i16(), z: pos[2].wrap_i16() };
 
     d.actions_flag_set &= !actions::ENGINE_ECHO;
 
@@ -73,9 +74,9 @@ fn normalize(x: i32, y: i32, z: i32) -> SVec3 {
     let sum = mips::add_lo(mips::add_lo(mips::mul_lo(x, x), mips::mul_lo(y, y)), mips::mul_lo(z, z)) as u32;
     let len = (fast_sqrt(sum, NORMAL_SQRT_SHIFT) >> 12) as i32;
     SVec3 {
-        x: mips::div(mips::sll(x, 12), len) as i16,
-        y: mips::div(mips::sll(y, 12), len) as i16,
-        z: mips::div(mips::sll(z, 12), len) as i16,
+        x: mips::div(mips::sll(x, 12), len).wrap_i16(),
+        y: mips::div(mips::sll(y, 12), len).wrap_i16(),
+        z: mips::div(mips::sll(z, 12), len).wrap_i16(),
     }
 }
 
@@ -217,7 +218,7 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
         } else {
             let terrain = level.quad_blocks[quad as usize].terrain_type;
             if terrain != terrain_type::ICE && d.current_terrain == terrain_type::ICE {
-                d.terrain_friction_timer = 0xfec0u16 as i16;
+                d.terrain_friction_timer = 0xfec0_u16.wrap_i16();
             }
             d.current_terrain = terrain;
         }
@@ -251,8 +252,8 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
         d.current_terrain = terrain_type::NONE;
         d.actions_flag_set &= !actions::TOUCH_GROUND;
 
-        d.jump_landing_boost = (d.jump_landing_boost as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
-        d.jump_coyote_timer_ms = (d.jump_coyote_timer_ms as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
+        d.jump_landing_boost = (d.jump_landing_boost.wrap_u16()).wrapping_add(env.elapsed_time_ms.wrap_u16()).wrap_i16();
+        d.jump_coyote_timer_ms = (d.jump_coyote_timer_ms.wrap_u16()).wrapping_sub(env.elapsed_time_ms.wrap_u16()).wrap_i16();
         if d.jump_coyote_timer_ms < 0 {
             d.jump_coyote_timer_ms = 0;
         }
@@ -278,8 +279,8 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
     // After being hit, the car wobbles.
     if d.hazard_timer > 0 {
         let (sin, cos) = math::sin_cos(mips::mul_lo(d.hazard_timer as i32, HAZARD_WOBBLE_ANGLE_STEP) as u32);
-        let x = mips::sra(mips::mul_lo(sin, HAZARD_WOBBLE_AMPLITUDE), HAZARD_WOBBLE_SHIFT) as i16;
-        let z = mips::sra(mips::mul_lo(cos, HAZARD_WOBBLE_AMPLITUDE), HAZARD_WOBBLE_SHIFT) as i16;
+        let x = mips::sra(mips::mul_lo(sin, HAZARD_WOBBLE_AMPLITUDE), HAZARD_WOBBLE_SHIFT).wrap_i16();
+        let z = mips::sra(mips::mul_lo(cos, HAZARD_WOBBLE_AMPLITUDE), HAZARD_WOBBLE_SHIFT).wrap_i16();
         let gte = &mut coll.gte;
         gte.mtc2(mips::pack_s16_pair(x as i32, 0), data::VXY0);
         gte.mtc2(mips::pack_s16_pair(z as i32, 0), data::VZ0);
@@ -292,10 +293,10 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
 
     // The tilt of the model sideways.
     {
-        let (sin, cos) = math::sin_cos(d.angle as i32 as u32);
+        let (sin, cos) = math::sin_cos(i32::from(d.angle).bits());
         let n = d.axis_angle2_normal_vec;
         let numerator = mips::add_lo(mips::mul_lo(mips::neg_lo(n.x as i32), cos), mips::mul_lo(n.z as i32, sin));
-        d.rot_curr_z = math::ratan2(mips::sra(numerator, 12), n.y as i32) as i16;
+        d.rot_curr_z = math::ratan2(mips::sra(numerator, 12), n.y as i32).wrap_i16();
     }
 
     // The kart bounces slightly on bumpy surfaces (`screen_offset_y`).
@@ -325,24 +326,24 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
     }
 
     if d.distance_from_ground == 0 {
-        let next = (d.screen_offset_y as u8).wrapping_sub(4) as i8;
+        let next = (d.screen_offset_y.wrap_u8()).wrapping_sub(4).wrap_i8();
         if d.screen_offset_y > 0 {
             d.screen_offset_y = next;
             if next < 1 {
                 d.screen_offset_y = 0;
                 if terrain.flags & terrain_flags::ONESHOT_GROUND_SOUND != 0 {
-                    effects.push(Effect::Sound { id: terrain.sound as u8, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+                    effects.push(Effect::Sound { id: terrain.sound.wrap_u8(), echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
                 }
             }
         }
-        let next = (d.screen_offset_y as u8).wrapping_sub(4) as i8;
+        let next = (d.screen_offset_y.wrap_u8()).wrapping_sub(4).wrap_i8();
         d.screen_offset_y = next;
         if next < 0 {
             d.screen_offset_y = 0;
         }
     } else {
         d.distance_from_ground -= 1;
-        d.screen_offset_y = (d.screen_offset_y as u8).wrapping_add(3) as i8;
+        d.screen_offset_y = (d.screen_offset_y.wrap_u8()).wrapping_add(3).wrap_i8();
     }
 
     if d.pos_curr.y < -0x8000 && level.config_flags & 2 != 0 {

@@ -4,6 +4,7 @@
 //! own turn (`turn_angle_curr`, the drift-like swing of the car body), and
 //! builds `matrixMovingDir`.
 
+use math::Wrap;
 use gte::Gte;
 use math::mips;
 
@@ -57,7 +58,7 @@ fn lerp_to_forwards(d: &mut Driver, current_angle: i32, current_velocity: i32, t
                 desired = lerp_quarter_strength(d.stats.model_turn_negative_return_strength as i32, mips::sub_lo(target, angle));
             } else {
                 desired = lerp_quarter_strength(d.stats.model_turn_counter_steer_strength as i32, mips::sub_lo(target, angle));
-                d.turn_angle_lerp_target = target as i16;
+                d.turn_angle_lerp_target = target.wrap_i16();
             }
         }
     }
@@ -79,9 +80,9 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     }
     lerp_step = lerp_step.min(stats.drift_camera_lerp_step as i32);
     let previous_rot = interp_by_speed(d.rot_prev[3] as i32, 8, lerp_step);
-    d.rot_prev[3] = previous_rot as i16;
+    d.rot_prev[3] = previous_rot.wrap_i16();
     let interpolated_rot = interp_by_speed(remaining_rot, mips::sra(mips::mul_lo(previous_rot, elapsed), 5), 0);
-    d.rot_curr_w = interpolated_rot as i16;
+    d.rot_curr_w = interpolated_rot.wrap_i16();
 
     // Local copy of the actions: the steer-left flip below is not written back.
     let mut actions = d.actions_flag_set;
@@ -145,8 +146,8 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
             current_rate = mips::neg_lo(current_rate);
         }
     }
-    rotation = current_rate as i16 as i32;
-    d.rotation_spin_rate = current_rate as i16;
+    rotation = current_rate.sext16();
+    d.rotation_spin_rate = current_rate.wrap_i16();
 
     // After a drift is released, the spin-out timer adds a decaying turn.
     let spinout_time = d.time_until_drift_spinout as i32;
@@ -154,10 +155,10 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         let previous_frame_drift = d.previous_frame_mult_drift as i32;
         let spin = map_to_range(spinout_time, 0, 0x140, 0, previous_frame_drift);
         rotation = mips::add_lo(rotation, spin);
-        d.time_until_drift_spinout = mips::sub_lo(spinout_time, elapsed).max(0) as i16;
+        d.time_until_drift_spinout = mips::sub_lo(spinout_time, elapsed).max(0).wrap_i16();
     }
 
-    let class_speed_packed = mips::sll(stats.speed_class_stat as u16 as i32, 16);
+    let class_speed_packed = mips::sll(stats.speed_class_stat.zext16(), 16);
     let class_speed = mips::sra(class_speed_packed, 16);
     let turn_resist_max_product = mips::mul_lo(stats.turn_resist_max as i32, class_speed);
     let turn_resist_min_product = mips::mul_lo(stats.turn_resist_min as i32, class_speed);
@@ -203,14 +204,14 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     // Spins the car's body back to face forwards when the drifting ends.
     let mut turn_angle = d.turn_angle_curr as i32;
     let lerp_result = lerp_to_forwards(d, turn_angle, turn_angle_value, lerp_target);
-    d.turn_angle_lerp_vel = lerp_result as i16;
-    turn_angle_value = lerp_result as i16 as i32;
+    d.turn_angle_lerp_vel = lerp_result.wrap_i16();
+    turn_angle_value = lerp_result.sext16();
 
     if terrain.turn_angle_scale != 0x100 {
         turn_angle_value = mips::sra(mips::mul_lo(terrain.turn_angle_scale, turn_angle_value), 8);
     }
     turn_angle = mips::add_lo(turn_angle, mips::sra(mips::mul_lo(turn_angle_value, elapsed), 5));
-    d.turn_angle_curr = turn_angle as i16;
+    d.turn_angle_curr = turn_angle.wrap_i16();
 
     // Above a walking pace, on the ground, the steering accelerates.
     if speed_approx >= 0x300 && actions & actions::TOUCH_GROUND != 0 {
@@ -224,7 +225,7 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
             stats.steer_accel_stage1_max_steer as i32,
         );
         let scaled = mips::sra(mips::mul_lo(stats.steer_accel_turn_vel_scale as i32, abs(rotation)), 8);
-        d.num_frames_spent_steering = mips::add_lo(frames, 1) as i16;
+        d.num_frames_spent_steering = mips::add_lo(frames, 1).wrap_i16();
 
         // The higher the value of the acceleration, the more steering is "locked up".
         if scaled < acceleration {
@@ -275,9 +276,9 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         wobble_velocity = if 0 < wobble_angle { -10 } else { 10 };
         wobble_angle = interp_by_speed(wobble_angle, abs(wobble_velocity), 0);
     }
-    d.turn_wobble_timer = wobble_timer as i16;
-    d.turn_wobble_angle = wobble_angle as i16;
-    d.turn_wobble_velocity = wobble_velocity as i16;
+    d.turn_wobble_timer = wobble_timer.wrap_i16();
+    d.turn_wobble_angle = wobble_angle.wrap_i16();
+    d.turn_wobble_velocity = wobble_velocity.wrap_i16();
 
     // The direction of travel turns by the turn angle (in the air, by less) ...
     let mut angle = d.angle as i32;
@@ -287,12 +288,12 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         angle = mips::sub_lo(angle, rotation_delta) & 0xfff;
     }
     // ... and by the steering rotation.
-    d.amp_turn_state = rotation as i16;
+    d.amp_turn_state = rotation.wrap_i16();
     angle = mips::add_lo(angle, mips::sra(mips::mul_lo(rotation, elapsed), 13)) & 0xfff;
-    d.angle = angle as i16;
+    d.angle = angle.wrap_i16();
 
     // The model is drawn facing the direction of travel plus the swings.
-    d.rot_curr_y = mips::add_lo(mips::add_lo(angle, turn_angle), wobble_angle) as i16;
+    d.rot_curr_y = mips::add_lo(mips::add_lo(angle, turn_angle), wobble_angle).wrap_i16();
 
     // Lean of the body.
     if actions & actions::ACCEL_PREVENTION != 0 || d.accel_tap_count >= ACCEL_TAP_STEER_COUNT {
@@ -302,7 +303,7 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     }
 
     let axis_delta = mips::sra(mips::mul_lo(rotation, elapsed), 13);
-    d.axis_rotation_x = (mips::add_lo(d.axis_rotation_x as u16 as i32, axis_delta) & 0xfff) as i16;
+    d.axis_rotation_x = (mips::add_lo(d.axis_rotation_x.zext16(), axis_delta) & 0xfff).wrap_i16();
 
     let mut moving = d.matrix_moving_dir;
     rot_axis_angle(&mut moving, gte, d.axis_angle1_normal_vec, angle);

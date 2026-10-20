@@ -2,6 +2,7 @@
 //! `COLL_MOVED_ScrubImpact`, which turns a hit from the moved search into a
 //! change of the driver's velocity.
 
+use math::{Bits, Wrap};
 use coll::{Collision, clip};
 use gte::{ctrl, data};
 use loader::lev::{Level, SVec3, quad_flags};
@@ -95,7 +96,7 @@ fn load_light_matrix(gte: &mut gte::Gte, m: &LightMatrix) {
     gte.ctc2(pack(m[2], m[3]), ctrl::L_MATRIX + 1);
     gte.ctc2(pack(m[4], m[5]), ctrl::L_MATRIX + 2);
     gte.ctc2(pack(m[6], m[7]), ctrl::L_MATRIX + 3);
-    gte.ctc2(m[8] as i32 as u32, ctrl::L33);
+    gte.ctc2(i32::from(m[8]).bits(), ctrl::L33);
 }
 
 /// `CollMoved_ScrubImpact_GteLLV0`: `x, y, z` through the light matrix.
@@ -113,9 +114,9 @@ fn project_wall_velocity(gte: &mut gte::Gte, normal: SVec3, old_vel_x: i32, old_
     gte.mtc2(old_vel_x as u32, data::IR1);
     gte.mtc2(0, data::IR2);
     gte.mtc2(old_vel_z as u32, data::IR3);
-    gte.ctc2(normal.x as i32 as u32, ctrl::R_MATRIX);
-    gte.ctc2(normal.y as i32 as u32, ctrl::R22R23);
-    gte.ctc2(normal.z as i32 as u32, ctrl::R33);
+    gte.ctc2(i32::from(normal.x).bits(), ctrl::R_MATRIX);
+    gte.ctc2(i32::from(normal.y).bits(), ctrl::R22R23);
+    gte.ctc2(i32::from(normal.z).bits(), ctrl::R33);
 
     gte.cop2(OP_SF1);
 
@@ -179,9 +180,9 @@ pub fn scrub_impact(
                 .wrapping_add(mips::mul_lo(diff_z, diff_z) as u32);
             let len = calc::fast_sqrt(squares, 0) as i32;
 
-            normal.x = mips::div(mips::sll(diff_x, 12), len) as i16;
-            normal.y = mips::div(mips::sll(diff_y, 12), len) as i16;
-            normal.z = mips::div(mips::sll(diff_z, 12), len) as i16;
+            normal.x = mips::div(mips::sll(diff_x, 12), len).wrap_i16();
+            normal.y = mips::div(mips::sll(diff_y, 12), len).wrap_i16();
+            normal.z = mips::div(mips::sll(diff_z, 12), len).wrap_i16();
         }
     }
 
@@ -220,7 +221,7 @@ pub fn scrub_impact(
     let faster_rub_active = if d.wall_rub_timer == 0 { 0x3e7ff < scrub_speed } else { (d.wall_rub_speed_limit as i32) < scrub_speed };
     if !faster_rub_active {
         d.wall_rub_timer = WALL_RUB_TIMER_START;
-        d.wall_rub_speed_limit = scrub_speed as i16;
+        d.wall_rub_speed_limit = scrub_speed.wrap_i16();
         d.pos_wall_coll = sps.hit.hit_pos;
     }
 

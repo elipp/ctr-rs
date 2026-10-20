@@ -1,6 +1,7 @@
 //! `RB_Fireball_ThTick`: a ball of fire shoots out of the lava of Mystery Caves, up and back
 //! down, and again. The ball itself is never drawn; it leaves a trail of sparks.
 
+use math::Wrap;
 use loader::lev::InstDef;
 
 use crate::{Contact, Damage, Shape};
@@ -79,7 +80,7 @@ impl Fireball {
             // The spark goes against the ball's vertical motion.
             let vel_y = (-(self.vel_y as i32) * SPARK_SPEED_SCALE).clamp(-SPARK_SPEED_LIMIT, SPARK_SPEED_LIMIT);
             step = Some(Step {
-                spark: Spark { pos: self.pos, vel_y: vel_y as i16 },
+                spark: Spark { pos: self.pos, vel_y: vel_y.wrap_i16() },
                 contact: Contact { pos: self.pos, damage: Damage::Burn, hit_radius: HIT_RADIUS, sound: 0, shape: Shape::Sphere },
             });
         }

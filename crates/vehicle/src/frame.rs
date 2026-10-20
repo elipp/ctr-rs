@@ -7,6 +7,7 @@
 //! Left out: the TNT crate on the head (`instTntRecv` is never set, since the
 //! driver holds no items) and the burn smoke particles.
 
+use math::Wrap;
 use math::mips;
 
 use crate::calc::{interp_by_speed, map_to_range};
@@ -92,7 +93,7 @@ pub fn driving(d: &mut Driver) {
                 return;
             }
             d.anim_index = desired;
-            d.anim_frame = start_frame(desired as i32, num_frames) as i16;
+            d.anim_frame = start_frame(desired as i32, num_frames).wrap_i16();
             d.matrix_array = MatrixArray::None;
             d.matrix_index = 0;
             // ... and plays the new animation.
@@ -100,15 +101,15 @@ pub fn driving(d: &mut Driver) {
             let speed = match d.anim_index {
                 ANIM_DRIVE => TRANSITION_DRIVE_SPEED,
                 ANIM_MATRIX_FIRST => {
-                    d.matrix_index = d.anim_frame as u8;
+                    d.matrix_index = d.anim_frame.wrap_u8();
                     TRANSITION_MATRIX_SPEED
                 }
                 _ => TRANSITION_DEFAULT_SPEED,
             };
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, speed, num_frames) as i16;
+            d.anim_frame = interp_by_speed(d.anim_frame as i32, speed, num_frames).wrap_i16();
 
             if (d.anim_index as u32).wrapping_sub(ANIM_MATRIX_FIRST as u32) < MATRIX_ANIM_COUNT {
-                d.matrix_index = d.anim_frame as u8;
+                d.matrix_index = d.anim_frame.wrap_u8();
                 if d.matrix_index == 0 {
                     d.matrix_array = MatrixArray::None;
                     d.matrix_index = 0;
@@ -127,7 +128,7 @@ pub fn driving(d: &mut Driver) {
                     mips::sub_lo(mips::sll((burn_timer >> BURN_TIMER_SHIFT) % BURN_FRAME_PERIOD, BURN_FRAME_SHIFT), BURN_FRAME_BIAS),
                     mips::sra(num_frames, 1),
                 );
-                d.anim_frame = target as i16;
+                d.anim_frame = target.wrap_i16();
             } else if d.actions_flag_set & crate::actions::ACCEL_PREVENTION != 0 {
                 target = map_to_range(
                     -(d.amp_turn_state as i32),
@@ -141,10 +142,10 @@ pub fn driving(d: &mut Driver) {
                 let turn_max = d.stats.turn_rate as i32;
                 target = map_to_range(-turn_input, -turn_max, turn_max, 0, num_frames - 1);
             }
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, target) as i16;
+            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, target).wrap_i16();
         }
         ANIM_AIRBORNE => {
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1) as i16;
+            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1).wrap_i16();
 
             if d.kart_state == kart_state::MASK_GRABBED {
                 return;
@@ -160,10 +161,10 @@ pub fn driving(d: &mut Driver) {
             // Oxide's pose is the first of the jump matrices.
             let index = if character == NITROS_OXIDE { 0 } else { character };
             d.matrix_array = MatrixArray::Jump(index + AIRBORNE_MATRIX_BASE);
-            d.matrix_index = d.anim_frame as u8;
+            d.matrix_index = d.anim_frame.wrap_u8();
         }
         _ => {
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1) as i16;
+            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1).wrap_i16();
         }
     }
 }
@@ -192,13 +193,13 @@ pub fn spinning(d: &mut Driver) {
         }
 
         if d.anim_index != ANIM_DRIVE {
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, SPIN_INTERP_SPEED, target) as i16;
+            d.anim_frame = interp_by_speed(d.anim_frame as i32, SPIN_INTERP_SPEED, target).wrap_i16();
             return;
         }
     }
 
     let target = if d.spin_dir() >= 0 { num_frames - 1 } else { 0 };
-    d.anim_frame = interp_by_speed(d.anim_frame as i32, SPIN_INTERP_SPEED, target) as i16;
+    d.anim_frame = interp_by_speed(d.anim_frame as i32, SPIN_INTERP_SPEED, target).wrap_i16();
 }
 
 /// `VehFrameProc_LastSpin`
@@ -220,5 +221,5 @@ pub fn last_spin(d: &mut Driver) {
     if d.turn_angle_curr < 0 && d.turn_angle_lerp_vel > 0 {
         target = 0;
     }
-    d.anim_frame = interp_by_speed(d.anim_frame as i32, LAST_SPIN_INTERP_SPEED, target) as i16;
+    d.anim_frame = interp_by_speed(d.anim_frame as i32, LAST_SPIN_INTERP_SPEED, target).wrap_i16();
 }

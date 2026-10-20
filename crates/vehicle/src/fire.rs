@@ -5,6 +5,7 @@
 //! Not modelled: the sound, which only has the audio cooldown for state. The
 //! ghost tape is not recorded either.
 
+use math::Wrap;
 use math::mips;
 
 use crate::turbo::Turbo;
@@ -66,9 +67,9 @@ pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effect
         || (d.fire_speed_cap as i32) < new_speed_cap
         || (sacred < d.fire_speed_cap as i32 && d.step_flag_set & step_triggers::SUPER_TURBO_PAD == 0)
     {
-        d.fire_speed_cap = new_speed_cap as i16;
+        d.fire_speed_cap = new_speed_cap.wrap_i16();
         if let Some(t) = &mut d.turbo {
-            t.fire_size = ((fire_level >> FIRE_SIZE_SHIFT) + FIRE_SIZE_BASE).min(FIRE_SIZE_MAX) as i16;
+            t.fire_size = ((fire_level >> FIRE_SIZE_SHIFT) + FIRE_SIZE_BASE).min(FIRE_SIZE_MAX).wrap_i16();
         }
     }
 
@@ -80,16 +81,16 @@ pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effect
         // Adds the reserves on the first frame on the turbo pad, then holds
         // them until the first frame off it.
         let old_outside_timer = d.turbo_outside_timer as i32;
-        let delta = mips::sub_lo(reserves, d.turbo_outside_timer as u16 as i32);
+        let delta = mips::sub_lo(reserves, d.turbo_outside_timer.zext16());
         if old_outside_timer < reserves {
-            d.reserves = mips::add_lo(d.reserves as u16 as i32, delta) as i16;
-            d.turbo_outside_timer = reserves as i16;
+            d.reserves = mips::add_lo(d.reserves.zext16(), delta).wrap_i16();
+            d.turbo_outside_timer = reserves.wrap_i16();
         }
     } else if ty & turbo_type::SUPER_ENGINE == 0 {
         // Start line, hang time, powerslide.
-        d.reserves = mips::add_lo(d.reserves as u16 as i32, reserves) as i16;
+        d.reserves = mips::add_lo(d.reserves.zext16(), reserves).wrap_i16();
     } else if (d.reserves as i32) < reserves {
-        d.reserves = reserves as i16;
+        d.reserves = reserves.wrap_i16();
     }
 
     effects.push(Effect::CameraFireSpeedZoom { driver_id: d.driver_id });

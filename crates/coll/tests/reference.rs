@@ -12,6 +12,7 @@ mod common;
 
 mod support;
 
+use math::Wrap;
 use std::path::Path;
 
 use coll::{Collision, search_flags};
@@ -96,7 +97,7 @@ impl Query {
                 let q = &mut c.sps.quad_block_coll;
                 (q.search_flags, q.quad_flags_wanted, q.quad_flags_ignored) = (*flags, *wanted, *ignored);
                 c.door_access_flags = *door_flags;
-                let r = *radius as i16;
+                let r = radius.wrap_i16();
                 c.sps.input1.hit_radius = r;
                 c.sps.input1.hit_radius_squared = *radius * *radius;
                 c.sps.quad_block_coll.hit_radius = r;
@@ -130,7 +131,7 @@ fn random_vec(rng: &mut Rng, bits: u32) -> SVec3 {
     let r = |rng: &mut Rng| {
         let b = rng.below(bits as u64 + 1) as u32;
         let v = (rng.next() >> 40) as i32 & ((1 << b) - 1);
-        (if rng.below(2) == 0 { -v } else { v }) as i16
+        (if rng.below(2) == 0 { -v } else { v }).wrap_i16()
     };
     SVec3 { x: r(rng), y: r(rng), z: r(rng) }
 }
@@ -143,7 +144,7 @@ fn queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
     for _ in 0..trials {
         let quad = &level.quad_blocks[rng.below(level.quad_blocks.len() as u64) as usize];
         let (a, b) = (quad.bbox.min, quad.bbox.max);
-        let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32) as i16;
+        let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32).wrap_i16();
         let (x, y, z) = (pick(rng, a.x, b.x), pick(rng, a.y, b.y), pick(rng, a.z, b.z));
         let (up, down) = (rng.range(0, 0x400), rng.range(0, 0x400));
         let (sx, sz) = (rng.range(-0x180, 0x180), rng.range(-0x180, 0x180));
@@ -155,8 +156,8 @@ fn queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
             flags,
             wanted: wanted[rng.below(wanted.len() as u64) as usize],
             ignored: ignored[rng.below(ignored.len() as u64) as usize],
-            top: SVec3 { x: x.wrapping_add(sx as i16), y: y.wrapping_add(up as i16), z: z.wrapping_add(sz as i16) },
-            bottom: SVec3 { x, y: y.wrapping_sub(down as i16), z },
+            top: SVec3 { x: x.wrapping_add(sx.wrap_i16()), y: y.wrapping_add(up.wrap_i16()), z: z.wrapping_add(sz.wrap_i16()) },
+            bottom: SVec3 { x, y: y.wrapping_sub(down.wrap_i16()), z },
             radius: rng.range(0, 0x100),
         });
     }
@@ -172,11 +173,11 @@ fn moved_queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
     for _ in 0..trials {
         let quad = &level.quad_blocks[rng.below(level.quad_blocks.len() as u64) as usize];
         let (a, b) = (quad.bbox.min, quad.bbox.max);
-        let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32) as i16;
+        let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32).wrap_i16();
         let (x, y, z) = (pick(rng, a.x, b.x), pick(rng, a.y, b.y), pick(rng, a.z, b.z));
         // Mostly slow movements that end near the surface, some fast ones.
         let reach = [0x20, 0x60, 0x200][rng.below(3) as usize];
-        let step = |rng: &mut Rng, v: i16| v.wrapping_add(rng.range(-reach, reach) as i16);
+        let step = |rng: &mut Rng, v: i16| v.wrapping_add(rng.range(-reach, reach).wrap_i16());
         let mut flags = search_flags::HIGH_LOD;
         if rng.below(4) == 0 {
             flags |= search_flags::REUSE_NORMALS;
@@ -224,7 +225,7 @@ fn hitbox_queries(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Query> {
         let h = hitboxes[rng.below(hitboxes.len() as u64) as usize];
         let r = h.radius as i32;
         // From around the sphere, to around it: mostly passing through or grazing it.
-        let around = |rng: &mut Rng, v: i16| v.wrapping_add(rng.range(-2 * r - 0x30, 2 * r + 0x30) as i16);
+        let around = |rng: &mut Rng, v: i16| v.wrapping_add(rng.range(-2 * r - 0x30, 2 * r + 0x30).wrap_i16());
         let current = SVec3 { x: around(rng, h.center.x), y: around(rng, h.center.y), z: around(rng, h.center.z) };
         let next = if rng.below(8) == 0 {
             current
@@ -262,8 +263,8 @@ fn synthetic_queries(rng: &mut Rng, trials: u64) -> Vec<Query> {
         let bits = [6, 10, 14, 15, 16][rng.below(5) as usize];
         let v = [random_vec(rng, bits), random_vec(rng, bits), random_vec(rng, bits)];
         out.push(Query::NormVec {
-            dividend: rng.range(-0x8000, 0x7fff) as i16,
-            bit_shift: rng.below(32) as u8,
+            dividend: rng.range(-0x8000, 0x7fff).wrap_i16(),
+            bit_shift: rng.below(32).wrap_u8(),
             lod_shift: [0, 2][rng.below(2) as usize],
             v,
         });
@@ -363,7 +364,7 @@ fn matches_reference_on_tracks() {
                         0 => h.flag &= !0x40,
                         1 => {
                             h.flag |= 0x20;
-                            h.id = -(rng.range(0, 2 * h.radius as i32) as i16);
+                            h.id = -(rng.range(0, 2 * h.radius as i32).wrap_i16());
                         }
                         _ => {}
                     }

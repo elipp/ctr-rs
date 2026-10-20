@@ -19,6 +19,7 @@ mod common;
 #[allow(dead_code)]
 mod support;
 
+use math::Wrap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -88,7 +89,7 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
     v3!("d.posPrev", d.pos_prev);
     v3!("d.velocity", d.velocity);
     v3!("d.originToCenter", d.origin_to_center);
-    push!("d.collisionFlags", d.collision_flags as i16);
+    push!("d.collisionFlags", d.collision_flags.wrap_i16());
     push!("d.stepFlagSet", d.step_flag_set as i32);
     push!("d.actionsFlagSet", d.actions_flag_set as i32);
     push!("d.actionsFlagSetPrevFrame", d.actions_flag_set_prev_frame as i32);
@@ -319,14 +320,14 @@ fn frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
                 8 => held |= buttons::CROSS | buttons::SQUARE,
                 _ => {}
             }
-            ry = if rng.below(8) == 0 { rng.range(0, 255) as u8 } else { 0x80 };
+            ry = if rng.below(8) == 0 { rng.range(0, 255).wrap_u8() } else { 0x80 };
         }
         if rng.below(8) == 0 {
             lx = match rng.below(5) {
                 0 => 0x80,
                 1 => 0,
                 2 => 0xff,
-                _ => rng.range(0, 255) as u8,
+                _ => rng.range(0, 255).wrap_u8(),
             };
         }
         if rng.below(30) == 0 {
@@ -448,7 +449,7 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
             driver.pos_curr.z = at(rng, a.z, b.z) << 8;
             driver.pos_curr.y = (b.y as i32 + rng.range(0x10, 0x60)) << 8;
             driver.pos_prev = driver.pos_curr;
-            driver.angle = rng.range(0, 0xfff) as i16;
+            driver.angle = rng.range(0, 0xfff).wrap_i16();
             driver.rot_curr_y = driver.angle;
             driver.rot_prev = [0, driver.angle, 0, 0];
             driver.last_valid = None;

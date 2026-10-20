@@ -6,6 +6,7 @@
 //! the model and the baked wheelie matrices (`TranslateMatrix` only builds the
 //! facing matrix here; the rest is presentation), and the wake particles.
 
+use math::{Bits, Wrap};
 use coll::Collision;
 use gte::{Gte, ctrl, data};
 use loader::lev::{Level, SVec3};
@@ -59,11 +60,11 @@ fn mac(gte: &mut Gte) -> (i32, i32, i32) {
 /// velocity.
 pub fn convert_speed_to_vec(d: &Driver, velocity: &mut Vec3) {
     let speed = d.speed as i32;
-    let (sine, cosine) = math::sin_cos(d.axis_rotation_y as i32 as u32);
+    let (sine, cosine) = math::sin_cos(i32::from(d.axis_rotation_y).bits());
     velocity.y = mips::sra(mips::mul_lo(speed, sine), 12);
     let y_component = mips::sra(mips::mul_lo(speed, cosine), 12);
 
-    let (sine, cosine) = math::sin_cos(d.axis_rotation_x as i32 as u32);
+    let (sine, cosine) = math::sin_cos(i32::from(d.axis_rotation_x).bits());
     velocity.x = mips::sra(mips::mul_lo(y_component, sine), 12);
     velocity.z = mips::sra(mips::mul_lo(y_component, cosine), 12);
 }
@@ -260,14 +261,14 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
             if timer > 0 {
                 timer = 0;
             }
-            d.terrain_friction_timer = timer as i16;
+            d.terrain_friction_timer = timer.wrap_i16();
         } else if timer > 0 {
             timer = mips::sub_lo(timer, elapsed);
             if timer < 0 {
                 timer = 0;
             }
             perpendicular = mips::add_lo(perpendicular, mips::sra(mips::mul_lo(perpendicular, boost), 8));
-            d.terrain_friction_timer = timer as i16;
+            d.terrain_friction_timer = timer.wrap_i16();
             if perpendicular < 0 {
                 perpendicular = 0;
             }
@@ -485,22 +486,22 @@ pub fn rot_axis_angle(m: &mut Matrix, gte: &mut Gte, normal: SVec3, angle: i32) 
         out_z = mips::add_lo(scaled_cos_y, div_z);
     }
 
-    let column = [out_x as i16, out_y as i16, out_z as i16];
+    let column = [out_x.wrap_i16(), out_y.wrap_i16(), out_z.wrap_i16()];
     m.m[0][2] = column[0];
     m.m[1][2] = column[1];
     m.m[2][2] = column[2];
 
     // The first column: the GTE's cross product of the normal and the third column.
-    gte.ctc2(normal.x as i32 as u32, ctrl::R_MATRIX);
-    gte.ctc2(normal.y as i32 as u32, ctrl::R22R23);
-    gte.ctc2(normal.z as i32 as u32, ctrl::R33);
-    gte.mtc2(column[0] as i32 as u32, data::IR1);
-    gte.mtc2(column[1] as i32 as u32, data::IR2);
-    gte.mtc2(column[2] as i32 as u32, data::IR3);
+    gte.ctc2(i32::from(normal.x).bits(), ctrl::R_MATRIX);
+    gte.ctc2(i32::from(normal.y).bits(), ctrl::R22R23);
+    gte.ctc2(i32::from(normal.z).bits(), ctrl::R33);
+    gte.mtc2(i32::from(column[0]).bits(), data::IR1);
+    gte.mtc2(i32::from(column[1]).bits(), data::IR2);
+    gte.mtc2(i32::from(column[2]).bits(), data::IR3);
     gte.cop2(OP_SF1);
-    m.m[0][0] = gte.mfc2(data::MAC1) as i16;
-    m.m[1][0] = gte.mfc2(data::MAC2) as i16;
-    m.m[2][0] = gte.mfc2(data::MAC3) as i16;
+    m.m[0][0] = gte.mfc2(data::MAC1).wrap_i16();
+    m.m[1][0] = gte.mfc2(data::MAC2).wrap_i16();
+    m.m[2][0] = gte.mfc2(data::MAC3).wrap_i16();
 }
 
 /// `VehPhysForce_CounterSteer`: the sideways push that turning the model
@@ -530,11 +531,11 @@ pub fn counter_steer(d: &mut Driver, gte: &mut Gte) {
     let sine = math::sin(angle as u32);
 
     value = mips::sra(mips::mul_lo(value, sine), 12);
-    gte.mtc2(value as u16 as u32, data::VXY0);
+    gte.mtc2(value.zext16().bits(), data::VXY0);
     gte.mtc2(0, data::VZ0);
     gte.cop2(mvmva(1, 0, 0, 3, 0));
     let (x, y, z) = mac(gte);
-    d.accel = SVec3 { x: x as i16, y: y as i16, z: z as i16 };
+    d.accel = SVec3 { x: x.wrap_i16(), y: y.wrap_i16(), z: z.wrap_i16() };
 }
 
 /// `VEH_PHYS_FORCE_KART_SCALE_BASE`: the kart's scale when it is neither squashed nor stretched.
@@ -570,9 +571,9 @@ fn squash_stretch(d: &mut Driver) {
     let squish = d.jump_squish_stretch as i32;
 
     if d.kart_state == kart_state::MASK_GRABBED && d.actions_flag_set & actions::TOUCH_GROUND == 0 {
-        d.inst_scale_y = mips::add_lo(squish, KART_SCALE_BASE) as i16;
+        d.inst_scale_y = mips::add_lo(squish, KART_SCALE_BASE).wrap_i16();
         let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * MASK_GRAB_SCALE_XZ_FACTOR)).max(MIN_SQUASH_XZ_SCALE);
-        (d.inst_scale_x, d.inst_scale_z) = (xz as i16, xz as i16);
+        (d.inst_scale_x, d.inst_scale_z) = (xz.wrap_i16(), xz.wrap_i16());
         return;
     }
 
@@ -602,21 +603,21 @@ fn squash_stretch(d: &mut Driver) {
     if d.actions_flag_set & actions::TOUCH_GROUND == 0 && jump_height < 0 {
         let stretch = crate::calc::map_to_range(-jump_height, 0, FALL_STRETCH_HEIGHT_MAX, FALL_STRETCH_MIN, FALL_STRETCH_MAX);
         target = target.max(stretch);
-        d.jump_squish_stretch2 = jump_height as i16;
+        d.jump_squish_stretch2 = jump_height.wrap_i16();
     }
 
     if (d.jump_squish_stretch as i32).abs() < target.abs() {
-        d.jump_squish_stretch = target as i16;
+        d.jump_squish_stretch = target.wrap_i16();
     }
-    d.jump_squish_stretch = interp_by_speed(d.jump_squish_stretch as i32, SQUISH_INTERP_SPEED, 0) as i16;
-    d.jump_squish_stretch2 = mips::sra(mips::add_lo(d.jump_squish_stretch2 as i32 * 9, jump_height * 7), 4) as i16;
+    d.jump_squish_stretch = interp_by_speed(d.jump_squish_stretch as i32, SQUISH_INTERP_SPEED, 0).wrap_i16();
+    d.jump_squish_stretch2 = mips::sra(mips::add_lo(d.jump_squish_stretch2 as i32 * 9, jump_height * 7), 4).wrap_i16();
 
     let squish = d.jump_squish_stretch as i32;
     d.inst_scale_y =
-        interp_by_speed(d.inst_scale_y as i32, SQUISH_SCALE_INTERP_SPEED, mips::add_lo(squish, KART_SCALE_BASE)) as i16;
+        interp_by_speed(d.inst_scale_y as i32, SQUISH_SCALE_INTERP_SPEED, mips::add_lo(squish, KART_SCALE_BASE)).wrap_i16();
     let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * SQUISH_SCALE_XZ_FACTOR));
-    d.inst_scale_x = interp_by_speed(d.inst_scale_x as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
-    d.inst_scale_z = interp_by_speed(d.inst_scale_z as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
+    d.inst_scale_x = interp_by_speed(d.inst_scale_x as i32, SQUISH_SCALE_INTERP_SPEED, xz).wrap_i16();
+    d.inst_scale_z = interp_by_speed(d.inst_scale_z as i32, SQUISH_SCALE_INTERP_SPEED, xz).wrap_i16();
 }
 
 /// `VehPhysForce_TranslateMatrix`: squashes and stretches the model, builds the

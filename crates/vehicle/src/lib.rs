@@ -41,6 +41,7 @@ pub mod terrain;
 pub mod turbo;
 pub mod wumpa;
 
+use math::{Bits, Wrap};
 use loader::lev::SVec3;
 use math::Vec3;
 
@@ -132,8 +133,8 @@ impl Matrix {
     /// The five words the GTE rotation registers (`R11R12` .. `R33`) hold.
     pub fn words(&self) -> [u32; 5] {
         let m = &self.m;
-        let pack = |lo: i16, hi: i16| lo as u16 as u32 | (hi as u16 as u32) << 16;
-        [pack(m[0][0], m[0][1]), pack(m[0][2], m[1][0]), pack(m[1][1], m[1][2]), pack(m[2][0], m[2][1]), m[2][2] as u16 as u32]
+        let pack = |lo: i16, hi: i16| lo.zext16().bits() | (hi.zext16().bits()) << 16;
+        [pack(m[0][0], m[0][1]), pack(m[0][2], m[1][0]), pack(m[1][1], m[1][2]), pack(m[2][0], m[2][1]), m[2][2].zext16().bits()]
     }
 }
 

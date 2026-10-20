@@ -14,6 +14,7 @@ pub mod minecart;
 pub mod roller;
 pub mod turtle;
 
+use math::Wrap;
 use loader::dram::DramFile;
 use loader::lev::{InstDef, Level, PosRot, SVec3};
 use vehicle::Driver;
@@ -93,7 +94,7 @@ pub(crate) fn interpolate(current: i16, desired: i16, speed: i32) -> i16 {
     } else {
         current as i32 - speed
     };
-    (result & 0xfff) as i16
+    (result & 0xfff).wrap_i16()
 }
 
 /// A hazard and the instance of the level that it moves (an index into `Level::instances`).

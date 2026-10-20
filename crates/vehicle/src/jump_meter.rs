@@ -8,6 +8,7 @@
 //!
 //! Not kept: the end-of-race jump statistics (`timeSpentJumping`, `highestJump`).
 
+use math::Wrap;
 use math::mips;
 
 use crate::fire::{self, turbo_type};
@@ -37,7 +38,7 @@ pub fn update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
             if d.jump_meter_timer == 0 {
                 d.jump_meter = 0;
             } else {
-                d.jump_meter_timer = mips::sub_lo(d.jump_meter_timer as i32, env.elapsed_time_ms) as i16;
+                d.jump_meter_timer = mips::sub_lo(d.jump_meter_timer as i32, env.elapsed_time_ms).wrap_i16();
                 if d.jump_meter_timer < 0 {
                     d.jump_meter_timer = 0;
                 }
@@ -58,7 +59,7 @@ pub fn update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
             effects.push(Effect::Voiceline { id: LANDING_VOICELINE_ID, driver_id: d.driver_id, priority: LANDING_VOICELINE_PRIORITY });
         }
 
-        d.jump_meter = (d.jump_landing_boost as i32).min(METER_MAX) as i16;
+        d.jump_meter = (d.jump_landing_boost as i32).min(METER_MAX).wrap_i16();
         d.jump_meter_timer = METER_DISPLAY_TIMER;
     }
 }

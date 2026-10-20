@@ -5,6 +5,7 @@
 //!
 //! Not ported: the multiplayer thinning and the rumble that goes with the wall.
 
+use math::Wrap;
 use crate::exhaust::rotate;
 use crate::terrain::{TERRAINS, terrain_flags};
 use crate::{Driver, actions, kart_state};
@@ -62,7 +63,7 @@ pub fn wall(d: &Driver) -> Option<Wall> {
     let z = if speed > WALL_MIN_SPEED { WALL_FORWARD_Z } else if speed < -WALL_MIN_SPEED { WALL_REVERSE_Z } else { return None };
     let (m, _) = crate::baked::inst_matrix(d);
     // The vectors go through 16 bits, as on the GTE.
-    let short = |v: [i32; 3]| v.map(|c| c as i16 as i32);
+    let short = |v: [i32; 3]| v.map(|c| c.sext16());
     let left = short(rotate(&m, [WALL_LEFT_X, WALL_Y, z]));
     let right = short(rotate(&m, [WALL_RIGHT_X, WALL_Y, z]));
 
@@ -72,7 +73,7 @@ pub fn wall(d: &Driver) -> Option<Wall> {
         (d.pos_wall_coll.y as i32) << 8,
         (d.pos_wall_coll.z as i32) << 8,
     ];
-    let to_wall: [i32; 3] = std::array::from_fn(|a| (to_wall[a] - [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z][a]) as i16 as i32);
+    let to_wall: [i32; 3] = std::array::from_fn(|a| (to_wall[a] - [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z][a]).sext16());
     let along = |tire: [i32; 3]| (0..3).map(|a| tire[a] * to_wall[a]).sum::<i32>() >> 12;
     let tire = if along(left) < along(right) { right } else { left };
     Some(Wall { tire, matrix: m })

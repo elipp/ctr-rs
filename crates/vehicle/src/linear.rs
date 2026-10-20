@@ -14,6 +14,7 @@
 //! and `actionsFlagSetNext` are one register, native has two variables). This
 //! follows retail.
 
+use math::Wrap;
 use math::mips;
 
 use crate::calc::{interp_by_speed, map_to_range};
@@ -67,7 +68,7 @@ fn abs(value: i32) -> i32 {
 fn count_down(timer: &mut i16, neg_ms: i32) {
     if *timer > 0 {
         let value = mips::add_lo(*timer as i32, neg_ms);
-        *timer = value.max(0) as i16;
+        *timer = value.max(0).wrap_i16();
     }
 }
 
@@ -271,7 +272,7 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     count_down(&mut d.clock_receive, neg_ms);
     count_down(&mut d.accel_tap_window_timer, neg_ms);
     if d.jump_ten_buffer > 0 {
-        d.jump_ten_buffer = mips::sub_lo(d.jump_ten_buffer as i32, 1) as i16;
+        d.jump_ten_buffer = mips::sub_lo(d.jump_ten_buffer as i32, 1).wrap_i16();
     }
 
     // === Hazard (blinking after being hit) ===
@@ -304,7 +305,7 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
             if timer > -1 {
                 timer = -2;
             }
-            d.hazard_timer = timer as i16;
+            d.hazard_timer = timer.wrap_i16();
         }
         Some(hazard) => {
             let low_speed = approx_speed < 0x101;
@@ -321,12 +322,12 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
                 let trig = math::sin(mips::sll(clock, 4) as u32);
                 waddle = mips::add_lo(waddle, mips::sra(trig, 5));
                 waddle = mips::add_lo(waddle, mips::sra(approx_speed, 8).min(0x20));
-                effects.push(Effect::ShockForce { driver_id: d.driver_id, a: 4, b: mips::add_lo(waddle, 0x18) as u8 });
+                effects.push(Effect::ShockForce { driver_id: d.driver_id, a: 4, b: mips::add_lo(waddle, 0x18).wrap_u8() });
                 abs(hazard) | 1
             } else {
                 mips::neg_lo(abs(hazard)) | 1
             };
-            d.hazard_timer = timer as u16 as i16;
+            d.hazard_timer = timer.wrap_i16();
         }
     }
 
@@ -354,7 +355,7 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     // Tapping L1 or R1 starts a jump, and picks the button a drift is held with.
     let jump_taps = tapped & JUMP_BUTTON_MASK;
     if jump_taps != 0 && d.kart_state != kart_state::DRIFTING {
-        d.button_used_to_start_drift = (if jump_taps == JUMP_BUTTON_MASK { buttons::R1 } else { jump_taps }) as i16;
+        d.button_used_to_start_drift = (if jump_taps == JUMP_BUTTON_MASK { buttons::R1 } else { jump_taps }).wrap_i16();
         if rain != rain_cloud::JUMP_LOCKOUT {
             d.jump_ten_buffer = JUMP_BUFFER_FRAMES;
             a |= actions::JUMP_BUTTON_HELD;
@@ -384,11 +385,11 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     // A change of direction of the gas counts as a tap.
     if (d.fire_speed > 0) != (gas_target > 0) {
         if d.accel_tap_window_timer != 0 {
-            d.accel_tap_count = (d.accel_tap_count as u16).wrapping_add(1) as i16;
+            d.accel_tap_count = (d.accel_tap_count.wrap_u16()).wrapping_add(1).wrap_i16();
         }
         d.accel_tap_window_timer = ACCEL_TAP_WINDOW_MS;
     }
-    d.fire_speed = gas_target as i16;
+    d.fire_speed = gas_target.wrap_i16();
 
     // The terrain scales the target speed (unless braking).
     if a & (actions::MASK_WEAPON | actions::BRAKE_WITH_ACCEL) == 0 {
@@ -398,8 +399,8 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
             target_base = mips::sra(mips::mul_lo(multiplier, target_base), 8);
         }
     }
-    d.terrain_scaled_base_speed = target_base as i16;
-    d.base_speed = gas_target as i16;
+    d.terrain_scaled_base_speed = target_base.wrap_i16();
+    d.base_speed = gas_target.wrap_i16();
 
     // === Steering ===
     let stick_lx = if env.end_of_race { STICK_CENTER } else { input.stick_lx as i32 };
@@ -415,7 +416,7 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
         mips::neg_lo(strength_absolute(stick_lx, STEER_BRAKE_STRENGTH))
     } else {
         // Braking with the gas down: as speed increases, turn rate decreases.
-        let class_speed = mips::sra(mips::sll(d.stats.speed_class_stat as u16 as i32, 16), 17);
+        let class_speed = mips::sra(mips::sll(d.stats.speed_class_stat.zext16(), 16), 17);
         let strength = map_to_range(abs(d.speed as i32), BRAKE_HIGH_SPEED_THRESHOLD, class_speed, STEER_BRAKE_STRENGTH, default_strength);
         mips::neg_lo(strength_absolute(stick_lx, strength))
     };
@@ -431,11 +432,11 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
         a |= actions::STEER_LEFT;
         d.num_frames_spent_steering = 0;
     }
-    d.simp_turn_state = steer as i8;
+    d.simp_turn_state = steer.wrap_i8();
 
     // The front wheels follow the stick.
     let wheel = strength_absolute(stick_lx, WHEEL_ROTATION_STRENGTH);
-    d.wheel_rotation = interp_by_speed(d.wheel_rotation as i32, WHEEL_ROTATION_INTERP_STEP, mips::neg_lo(wheel)) as i16;
+    d.wheel_rotation = interp_by_speed(d.wheel_rotation as i32, WHEEL_ROTATION_INTERP_STEP, mips::neg_lo(wheel)).wrap_i16();
 
     d.actions_flag_set = a;
 }

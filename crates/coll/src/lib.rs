@@ -26,6 +26,7 @@
 
 pub mod instance;
 
+use math::{Bits, Wrap};
 use gte::{Gte, cmd, ctrl, data};
 use loader::lev::{BspChild, BspKind, BspNode, Level, QuadBlock, SVec3, quad_flags};
 use math::mips;
@@ -283,7 +284,7 @@ fn coords(p: SVec3) -> [i32; 3] {
 }
 
 fn sv(x: i32, y: i32, z: i32) -> SVec3 {
-    SVec3 { x: x as i16, y: y as i16, z: z as i16 }
+    SVec3 { x: x.wrap_i16(), y: y.wrap_i16(), z: z.wrap_i16() }
 }
 
 /// `COLL_FIXED_TRIANGL_Barycentrics`: the point on edge `v1`-`v2` closest to
@@ -319,9 +320,9 @@ pub fn triangle_barycentrics(gte: &mut Gte, v1: SVec3, v2: SVec3, point: SVec3) 
     load_ir(gte, edge.0, edge.1, edge.2);
     gte.cop2(GPL_SF1);
     SVec3 {
-        x: gte.mfc2(data::MAC1) as i16,
-        y: gte.mfc2(data::MAC2) as i16,
-        z: gte.mfc2(data::MAC3) as i16,
+        x: gte.mfc2(data::MAC1).wrap_i16(),
+        y: gte.mfc2(data::MAC2).wrap_i16(),
+        z: gte.mfc2(data::MAC3).wrap_i16(),
     }
 }
 
@@ -369,8 +370,8 @@ impl Collision {
         let sps = &mut self.sps;
         let radius_squared = mips::mul_lo(hit_radius, hit_radius);
 
-        sps.input1.hit_radius = hit_radius as i16;
-        sps.quad_block_coll.hit_radius = hit_radius as i16;
+        sps.input1.hit_radius = hit_radius.wrap_i16();
+        sps.quad_block_coll.hit_radius = hit_radius.wrap_i16();
         sps.did_touch_hitbox = 0;
         sps.num_triangles_tested = 0;
         sps.did_touch_quadblock = 0;
@@ -461,7 +462,7 @@ impl Collision {
             let (current, next) = (current as i32, next as i32);
             let min = mips::sub_lo(next, radius).min(mips::sub_lo(current, radius));
             let max = mips::add_lo(current, radius).max(mips::add_lo(next, radius));
-            (min as i16, max as i16)
+            (min.wrap_i16(), max.wrap_i16())
         };
         (sps.bbox.min.x, sps.bbox.max.x) = axis(current.x, next.x);
         (sps.bbox.min.y, sps.bbox.max.y) = axis(current.y, next.y);
@@ -491,7 +492,7 @@ impl Collision {
                     tri.scrub_depth = mips::add_lo(tri.scrub_depth, SCRUB_DEPTH_REPEAT_STEP);
                 }
                 sps.quad_block_coll.search_flags = flags | search_flags::REPEAT_SCRUB;
-                sps.input1.scrub_depth = tri.scrub_depth as i16;
+                sps.input1.scrub_depth = tri.scrub_depth.wrap_i16();
                 return;
             }
         }
@@ -593,7 +594,7 @@ impl Collision {
             let vertex = &level.vertices[index as usize];
             bsv.level_vertex = Some(index as u32);
             bsv.pos = vertex.pos;
-            bsv.normal_axis = vertex.flags as i16;
+            bsv.normal_axis = vertex.flags.wrap_i16();
         }
     }
 
@@ -603,7 +604,7 @@ impl Collision {
 
         // Always 2 for low poly (big block).
         self.sps.collision.tri_normal_lod_shift = 2;
-        self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift as u8;
+        self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift.wrap_u8();
 
         let has_second_triangle = self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
         if has_second_triangle {
@@ -618,7 +619,7 @@ impl Collision {
         self.load_scratchpad_verts(level, quad);
 
         self.sps.collision.tri_normal_lod_shift = 0;
-        self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift as u8;
+        self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift.wrap_u8();
 
         let has_second_triangle = self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
         if has_second_triangle {
@@ -646,9 +647,9 @@ impl Collision {
         let edge_a = (p3.x as i32 - v1x, p3.y as i32 - v1y, p3.z as i32 - v1z);
         let edge_b = (p2.x as i32 - v1x, p2.y as i32 - v1y, p2.z as i32 - v1z);
 
-        gte.ctc2(edge_a.0 as u16 as u32, ctrl::R_MATRIX);
-        gte.ctc2(edge_a.1 as u16 as u32, ctrl::R22R23);
-        gte.ctc2(edge_a.2 as u16 as u32, ctrl::R33);
+        gte.ctc2(edge_a.0.zext16().bits(), ctrl::R_MATRIX);
+        gte.ctc2(edge_a.1.zext16().bits(), ctrl::R22R23);
+        gte.ctc2(edge_a.2.zext16().bits(), ctrl::R33);
         load_ir(gte, edge_b.0, edge_b.1, edge_b.2);
 
         let lod_shift = sps.collision.tri_normal_lod_shift as u32;
@@ -663,7 +664,7 @@ impl Collision {
         ];
 
         gte.ctc2(pack(v1x, v1y), ctrl::R_MATRIX);
-        gte.ctc2(v1z as u16 as u32, ctrl::R13R21);
+        gte.ctc2(v1z.zext16().bits(), ctrl::R13R21);
 
         for c in &mut n {
             *c = mips::sra(mips::mul_lo(mips::sra(*c, lod_shift), scale), normal_shift);
@@ -671,14 +672,14 @@ impl Collision {
 
         load_ir(gte, n[0], n[1], n[2]);
         let bsv = &mut sps.search_vert[v1];
-        bsv.plane.normal.x = n[0] as i16;
-        bsv.plane.normal.y = n[1] as i16;
+        bsv.plane.normal.x = n[0].wrap_i16();
+        bsv.plane.normal.y = n[1].wrap_i16();
 
         gte.cop2(RTIR);
         let plane = gte.mfc2(data::MAC1) as i32;
 
-        bsv.plane.normal.z = n[2] as i16;
-        bsv.plane.half_distance = mips::sra(plane, 1) as i16;
+        bsv.plane.normal.z = n[2].wrap_i16();
+        bsv.plane.half_distance = mips::sra(plane, 1).wrap_i16();
 
         let (ax, ay, az) = (abs(n[0]), abs(n[1]), abs(n[2]));
         let mut dominant = normal_axis::Z;
@@ -826,8 +827,8 @@ impl Collision {
         }
 
         sps.hit.quad = Some(quad_index);
-        sps.hit_barycentrics.v1 = bary_a as i16;
-        sps.hit_barycentrics.v2 = bary_b as i16;
+        sps.hit_barycentrics.v1 = bary_a.wrap_i16();
+        sps.hit_barycentrics.v2 = bary_b.wrap_i16();
         sps.hit_level_triangle = [
             sps.search_vert[v1].level_vertex,
             sps.search_vert[bary_v1].level_vertex,
@@ -965,7 +966,7 @@ impl Collision {
         let plane = sps.candidate.plane;
         let normal_zw = pack(plane.normal.z as i32, plane.half_distance as i32) as i32;
 
-        if quad.flags & quad_flags::DOOR != 0 && (quad.terrain_type as i8 as i32 & self.door_access_flags as i32) != 0 {
+        if quad.flags & quad_flags::DOOR != 0 && (quad.terrain_type.sext8() & self.door_access_flags as i32) != 0 {
             return;
         }
 
@@ -986,10 +987,10 @@ impl Collision {
             plane_near = mips::neg_lo(plane_near);
             plane_far = mips::neg_lo(plane_far);
             let n = &mut sps.candidate.plane.normal;
-            n.x = mips::neg_lo(n.x as i32) as i16;
-            n.y = mips::neg_lo(n.y as i32) as i16;
-            n.z = mips::neg_lo(n.z as i32) as i16;
-            sps.candidate.plane.half_distance = mips::neg_lo(sps.candidate.plane.half_distance as i32) as i16;
+            n.x = mips::neg_lo(n.x as i32).wrap_i16();
+            n.y = mips::neg_lo(n.y as i32).wrap_i16();
+            n.z = mips::neg_lo(n.z as i32).wrap_i16();
+            sps.candidate.plane.half_distance = mips::neg_lo(sps.candidate.plane.half_distance as i32).wrap_i16();
         }
 
         sps.num_triangles_tested = sps.num_triangles_tested.wrapping_add(1);
@@ -1031,7 +1032,7 @@ impl Collision {
             mips::sub_lo(pos.y as i32, hit[1]),
             mips::sub_lo(pos.z as i32, hit[2]),
         );
-        sps.hit_search_triangle = [Some(v1 as u8), Some(v2 as u8), Some(v3 as u8)];
+        sps.hit_search_triangle = [Some(v1.wrap_u8()), Some(v2.wrap_u8()), Some(v3.wrap_u8())];
 
         let reorder_result = self.reorder_normals(v1, v2, v3);
         if reorder_result < 0 {
@@ -1049,9 +1050,9 @@ impl Collision {
 
         let d = sps.candidate_delta;
         gte.ctc2(pack(d.x as i32, d.y as i32), ctrl::R_MATRIX);
-        gte.ctc2(d.z as i32 as u32, ctrl::R13R21);
+        gte.ctc2(i32::from(d.z).bits(), ctrl::R13R21);
         gte.mtc2(pack(d.x as i32, d.y as i32), data::VXY0);
-        gte.mtc2(d.z as i32 as u32, data::VZ0);
+        gte.mtc2(i32::from(d.z).bits(), data::VZ0);
         gte.cop2(MVMVA_R_V0);
         let distance_squared = gte.mfc2(data::MAC1) as i32;
 
@@ -1095,7 +1096,7 @@ impl Collision {
         sps.hit.push_out = sps.candidate.push_out;
         sps.hit.quad = Some(quad_index);
         sps.hit.triangle_id = sps.candidate.triangle_id;
-        sps.hit.reorder_result = reorder_result as i8;
+        sps.hit.reorder_result = reorder_result.wrap_i8();
 
         if distance <= 0 {
             sps.quad_block_coll.hit_pos = start;

@@ -1,6 +1,7 @@
 //! `COLL_MOVED_PlayerSearch`: moves the driver along its velocity against the
 //! track, scraping along whatever it hits.
 
+use math::Wrap;
 use coll::instance::{CLASS_TOUCH, DRAW_COLLISION_MASK, LINC_USES_INSTDEF};
 use coll::{Collision, FRACTION_ONE, Scratchpad, search_flags};
 use loader::lev::BspHitbox;
@@ -61,7 +62,7 @@ fn step_velocity(velocity: i32, elapsed_ms: i32, multiplier: i32) -> i32 {
 /// The sphere's centre in the scratchpad's units: `pos_curr` is 24.8, the
 /// scratchpad 1/256 of that, offset by `origin_to_center`.
 pub fn sphere_center(d: &Driver, pos: math::Vec3) -> SVec3 {
-    let axis = |origin_to_center: i32, pos: i32| mips::add_lo(origin_to_center as u16 as i32, mips::sra(pos, 8)) as i16;
+    let axis = |origin_to_center: i32, pos: i32| mips::add_lo(origin_to_center.zext16(), mips::sra(pos, 8)).wrap_i16();
     SVec3 {
         x: axis(d.origin_to_center.x, pos.x),
         y: axis(d.origin_to_center.y, pos.y),
@@ -133,8 +134,8 @@ pub fn moved_player_search(
                 coll.store_hitbox();
             } else {
                 coll.find_scrub(Some(hit.scrub_key()), 0);
-                let depth = coll.sps.input1.scrub_depth as u16 as i32;
-                coll.sps.input1.scrub_depth = mips::add_lo(depth, HITBOX_SCRUB_DEPTH_BONUS) as i16;
+                let depth = coll.sps.input1.scrub_depth.zext16();
+                coll.sps.input1.scrub_depth = mips::add_lo(depth, HITBOX_SCRUB_DEPTH_BONUS).wrap_i16();
 
                 let impact = scrub::scrub_impact(d, coll, level, light_matrix, scrub::surface(hit.class as usize), effects);
                 if impact == Impact::None {

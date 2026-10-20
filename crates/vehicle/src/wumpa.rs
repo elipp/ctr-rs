@@ -2,6 +2,7 @@
 //! the queue of the pickup HUD (`PickupWumpaHUD`), which gives the driver one every six ticks
 //! while the fruit flies to the counter (`UI_RenderFrame`), through `RB_Player_ModifyWumpa`.
 
+use math::Wrap;
 use crate::{Driver, Effect, actions};
 
 /// `DRIVER_WUMPA_MAX_COUNT`, and `DRIVER_WUMPA_JUICED_COUNT`: a full count is a juiced up kart.
@@ -18,7 +19,7 @@ const SOUND_JUICED_UP: u8 = 0x41;
 /// kart was just juiced up (the HUD flashes).
 pub fn gain_wumpa(d: &mut Driver, effects: &mut Vec<Effect>) -> bool {
     let before = d.num_wumpas as i32;
-    d.num_wumpas = (before + 1).clamp(0, MAX_COUNT) as i8;
+    d.num_wumpas = (before + 1).clamp(0, MAX_COUNT).wrap_i8();
     let juiced = before < JUICED_COUNT && d.num_wumpas as i32 == JUICED_COUNT;
     if juiced {
         effects.push(Effect::Sound { id: SOUND_JUICED_UP, echo: false });

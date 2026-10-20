@@ -7,6 +7,7 @@
 //! The squish recovery and blasted tables are not ported:
 //! with those arrays the instance matrix is the facing matrix.
 
+use math::Wrap;
 use gte::Gte;
 use loader::lev::SVec3;
 
@@ -191,7 +192,7 @@ pub fn bake(gte: &mut Gte, entry: &Entry) -> Matrix {
 fn remap_index(index: u8, from: usize, to: usize) -> u8 {
     let quotient = ((index as i32) << 8) / (from as i32 - 1);
     let blend = (BLEND_FULL - quotient).clamp(0, BLEND_FULL);
-    ((blend * (to as i32 - 1)) >> 8) as u8
+    ((blend * (to as i32 - 1)) >> 8).wrap_u8()
 }
 
 /// `VehPhysForce_TranslateMatrix_UpdateMatrixAnimation`, for the wheelie:
@@ -335,10 +336,10 @@ mod tests {
         let (first, t) = inst_matrix(&d);
         assert_ne!(first, plain);
         assert_eq!(t[1], 5954 >> 8);
-        d.matrix_index = CRASH_FALL.len() as u8 - 1;
+        d.matrix_index = CRASH_FALL.len().wrap_u8() - 1;
         assert_ne!(inst_matrix(&d).0, plain);
         // Past the end, the animation is over.
-        d.matrix_index = CRASH_FALL.len() as u8;
+        d.matrix_index = CRASH_FALL.len().wrap_u8();
         assert_eq!(inst_matrix(&d).0, plain);
     }
 

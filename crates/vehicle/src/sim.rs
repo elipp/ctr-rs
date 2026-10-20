@@ -6,6 +6,7 @@
 //! the other states a driver can be in (the rev-engine start, the mask grab,
 //! being blasted).
 
+use math::Wrap;
 use coll::Collision;
 use loader::lev::{Level, SVec3};
 use math::mips;
@@ -40,13 +41,13 @@ impl Driver {
     pub fn new(driver_id: u8, character: usize) -> Driver {
         Driver {
             driver_id,
-            character: character as u8,
+            character: character.wrap_u8(),
             stats: Stats::for_class(CHARACTER_ENGINES[character]),
             axis_angle1_normal_vec: SVec3 { x: 0, y: 0x1000, z: 0 },
             axis_angle2_normal_vec: SVec3 { x: 0, y: 0x1000, z: 0 },
-            inst_scale_x: KART_SCALE_BASE as i16,
-            inst_scale_y: KART_SCALE_BASE as i16,
-            inst_scale_z: KART_SCALE_BASE as i16,
+            inst_scale_x: KART_SCALE_BASE.wrap_i16(),
+            inst_scale_y: KART_SCALE_BASE.wrap_i16(),
+            inst_scale_z: KART_SCALE_BASE.wrap_i16(),
             num_frames_spent_steering: STEER_RESET_FRAMES,
             terrain_meta1: terrain_type::NONE,
             terrain_meta2: terrain_type::NONE,
@@ -73,8 +74,8 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     d.actions_flag_set |= actions::BEHIND_START_LINE;
     d.distance_to_finish_checkpoint = level.restart_points.first().map_or(0, |p| (p.dist_to_finish as u32) << 3);
 
-    let bottom = SVec3 { x: spawn.pos.x, y: (spawn.pos.y as i32 + SPAWN_BOTTOM_Y_OFFSET) as i16, z: spawn.pos.z };
-    let top = SVec3 { x: bottom.x, y: (bottom.y as i32 - SPAWN_PROBE_TOP_Y_OFFSET) as i16, z: bottom.z };
+    let bottom = SVec3 { x: spawn.pos.x, y: (spawn.pos.y as i32 + SPAWN_BOTTOM_Y_OFFSET).wrap_i16(), z: spawn.pos.z };
+    let top = SVec3 { x: bottom.x, y: (bottom.y as i32 - SPAWN_PROBE_TOP_Y_OFFSET).wrap_i16(), z: bottom.z };
     coll.search_quadblocks(level, top, bottom, 0);
 
     if coll.sps.did_touch_quadblock != 0 {
@@ -95,7 +96,7 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     d.quad_block_height = mips::sll(hit_pos.y as i32, 8);
 
     d.rot_curr_x = spawn.rot.x;
-    d.rot_curr_y = ((spawn.rot.y as i32 + 0x400) & 0xfff) as i16;
+    d.rot_curr_y = ((spawn.rot.y as i32 + 0x400) & 0xfff).wrap_i16();
     d.rot_curr_z = spawn.rot.z;
 
     d.speed = 0;
@@ -117,7 +118,7 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     d.num_wumpas = 0;
 
     d.anim_index = 0;
-    d.anim_frame = frame::start_frame(0, frame::num_anim_frames(d, 0)) as i16;
+    d.anim_frame = frame::start_frame(0, frame::num_anim_frames(d, 0)).wrap_i16();
 
     // Straight into driving (the original starts with the engine-revving
     // state of the traffic lights).
@@ -195,12 +196,12 @@ fn update(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<Effect>) {
 /// `VehPhysProc_SlamWall_PhysAngular`
 fn slam_wall_phys_angular(d: &mut Driver, gte: &mut gte::Gte, env: &Env) {
     let elapsed = env.elapsed_time_ms;
-    let angle = mips::add_lo(d.angle as u16 as i32, mips::sra(mips::mul_lo(d.amp_turn_state as i32, elapsed), 13)) & 0xfff;
-    d.angle = angle as i16;
+    let angle = mips::add_lo(d.angle.zext16(), mips::sra(mips::mul_lo(d.amp_turn_state as i32, elapsed), 13)) & 0xfff;
+    d.angle = angle.wrap_i16();
 
-    d.rot_curr_y = mips::add_lo(d.turn_wobble_angle as u16 as i32, mips::add_lo(angle, d.turn_angle_curr as u16 as i32)) as i16;
-    d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
-    d.turn_angle_curr = interp_by_speed(d.turn_angle_curr as i32, mips::sra(mips::sll(elapsed, 7), 5), 0) as i16;
+    d.rot_curr_y = mips::add_lo(d.turn_wobble_angle.zext16(), mips::add_lo(angle, d.turn_angle_curr.zext16())).wrap_i16();
+    d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0).wrap_i16();
+    d.turn_angle_curr = interp_by_speed(d.turn_angle_curr as i32, mips::sra(mips::sll(elapsed, 7), 5), 0).wrap_i16();
 
     let mut moving = d.matrix_moving_dir;
     rot_axis_angle(&mut moving, gte, d.axis_angle1_normal_vec, d.angle as i32);
@@ -210,7 +211,7 @@ fn slam_wall_phys_angular(d: &mut Driver, gte: &mut gte::Gte, env: &Env) {
 /// `VehPhysProc_SlamWall_Animate`: the crash animation plays through, then
 /// the driver drives again.
 fn slam_wall_animate(d: &mut Driver) {
-    d.anim_frame = (d.anim_frame as u16).wrapping_add(1) as i16;
+    d.anim_frame = (d.anim_frame.wrap_u16()).wrapping_add(1).wrap_i16();
     d.matrix_index = d.matrix_index.wrapping_add(1);
 
     let frames = |index: u8| d.anim_num_frames.get(index as usize).copied().unwrap_or(0) as i32;
@@ -222,7 +223,7 @@ fn slam_wall_animate(d: &mut Driver) {
     if drive_frames > 0 {
         d.anim_index = 0;
         // `VehFrameInst_GetStartFrame`: the midpoint of the driving animation.
-        d.anim_frame = (drive_frames >> 1) as i16;
+        d.anim_frame = (drive_frames >> 1).wrap_i16();
         d.matrix_array = crate::MatrixArray::None;
         d.matrix_index = 0;
     }

@@ -5,6 +5,7 @@
 //!
 //! The turtles are put on different cycles by the digit their names end in.
 
+use math::Wrap;
 use loader::lev::InstDef;
 use vehicle::{Driver, forced_jump};
 
@@ -48,7 +49,7 @@ impl Turtle {
     pub fn new(def: &InstDef, frames: i32) -> Turtle {
         let id = def.name.bytes().last().map_or(0, |c| c as i32 - b'0' as i32);
         if id & 1 != 0 {
-            Turtle { direction: Direction::Rising, timer: 0, state: State::FullyDown, anim_frame: frames as i16 }
+            Turtle { direction: Direction::Rising, timer: 0, state: State::FullyDown, anim_frame: frames.wrap_i16() }
         } else {
             Turtle { direction: Direction::Falling, timer: 0, state: State::NotFullyDown, anim_frame: 0 }
         }

@@ -13,6 +13,9 @@ use gte::{Gte, cmd, ctrl, data};
 use tables::{RATAN, RCOSSIN, SQRT, TRIG_APPROX};
 
 pub mod mips;
+pub mod wrap;
+
+pub use wrap::{Bits, Wrap};
 
 // Angles.
 pub const ANG_TWO_PI: u32 = 0x1000;

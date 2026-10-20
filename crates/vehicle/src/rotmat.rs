@@ -2,6 +2,7 @@
 //! a rotation (X, then Z, onto a rotation about Y) as a matrix, built the way
 //! the game does, by multiplying rotation matrices on the GTE.
 
+use math::{Bits, Wrap};
 use gte::{Gte, ctrl, data};
 use loader::lev::SVec3;
 
@@ -87,14 +88,14 @@ pub fn convert_rot_to_matrix(gte: &mut Gte, rot: SVec3) -> Matrix {
 }
 
 fn pack(m: &Matrix) -> [u32; 5] {
-    let w = |a: i16, b: i16| a as u16 as u32 | (b as u16 as u32) << 16;
+    let w = |a: i16, b: i16| a.zext16().bits() | (b.zext16().bits()) << 16;
     let m = &m.m;
-    [w(m[0][0], m[0][1]), w(m[0][2], m[1][0]), w(m[1][1], m[1][2]), w(m[2][0], m[2][1]), m[2][2] as u16 as u32]
+    [w(m[0][0], m[0][1]), w(m[0][2], m[1][0]), w(m[1][1], m[1][2]), w(m[2][0], m[2][1]), m[2][2].zext16().bits()]
 }
 
 fn unpack(r: &[u32; 5]) -> Matrix {
-    let lo = |w: u32| w as u16 as i16;
-    let hi = |w: u32| (w >> 16) as u16 as i16;
+    let lo = |w: u32| w.wrap_i16();
+    let hi = |w: u32| (w >> 16).wrap_i16();
     Matrix { m: [[lo(r[0]), hi(r[0]), lo(r[1])], [hi(r[1]), lo(r[2]), hi(r[2])], [lo(r[3]), hi(r[3]), lo(r[4])]] }
 }
 

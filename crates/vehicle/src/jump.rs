@@ -3,6 +3,7 @@
 //!
 //! Not ported: the Spring item's jump (the driver holds no item).
 
+use math::{Bits, Wrap};
 use gte::{Gte, data};
 use loader::lev::Level;
 use math::{Vec3, mips};
@@ -62,7 +63,7 @@ pub fn jump_and_friction(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level
         if base_speed < 0 {
             turn_decrease = mips::neg_lo(turn_decrease);
         }
-        d.base_speed = mips::sub_lo(base_speed, turn_decrease) as i16;
+        d.base_speed = mips::sub_lo(base_speed, turn_decrease).wrap_i16();
     }
 
     if d.wall_rub_timer != 0 {
@@ -70,7 +71,7 @@ pub fn jump_and_friction(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level
             d.base_speed = d.wall_rub_speed_limit;
         }
         if (d.base_speed as i32) < mips::neg_lo(d.wall_rub_speed_limit as i32) {
-            d.base_speed = mips::neg_lo(d.wall_rub_speed_limit as u16 as i32) as i16;
+            d.base_speed = mips::neg_lo(d.wall_rub_speed_limit.zext16()).wrap_i16();
         }
     }
 
@@ -112,25 +113,25 @@ pub fn jump_and_friction(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level
 
         acceleration = mips::sra(mips::mul_lo(acceleration, env.elapsed_time_ms), 5);
         gte.mtc2(0, data::VXY0);
-        gte.mtc2(acceleration as u16 as u32, data::VZ0);
+        gte.mtc2(acceleration.zext16().bits(), data::VZ0);
         gte.cop2(mvmva(1, 0, 0, 3, 0));
         let push = rotated(gte);
 
         if d.base_speed >= 0 {
-            d.forward_accel_impulse = acceleration as i16;
+            d.forward_accel_impulse = acceleration.wrap_i16();
             movement.x = mips::add_lo(movement.x, push.x);
             movement.y = mips::add_lo(movement.y, push.y);
             movement.z = mips::add_lo(movement.z, push.z);
-            d.forward_accel_vector = loader::lev::SVec3 { x: push.x as i16, y: push.y as i16, z: push.z as i16 };
+            d.forward_accel_vector = loader::lev::SVec3 { x: push.x.wrap_i16(), y: push.y.wrap_i16(), z: push.z.wrap_i16() };
         } else {
-            d.forward_accel_impulse = mips::neg_lo(acceleration) as i16;
+            d.forward_accel_impulse = mips::neg_lo(acceleration).wrap_i16();
             movement.x = mips::sub_lo(movement.x, push.x);
             movement.z = mips::sub_lo(movement.z, push.z);
             movement.y = mips::sub_lo(movement.y, push.y);
             d.forward_accel_vector = loader::lev::SVec3 {
-                x: mips::neg_lo(push.x) as i16,
-                y: mips::neg_lo(push.y) as i16,
-                z: mips::neg_lo(push.z) as i16,
+                x: mips::neg_lo(push.x).wrap_i16(),
+                y: mips::neg_lo(push.y).wrap_i16(),
+                z: mips::neg_lo(push.z).wrap_i16(),
             };
         }
 
@@ -170,16 +171,16 @@ pub fn jump_and_friction(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level
             d.jump_forced_ms = JUMP_FORCED_MS;
             if d.forced_jump_type == forced_jump::HIGH {
                 d.jump_high_jump_timer_ms = JUMP_HIGH_TIMER_MS;
-                d.jump_initial_vel_y = mips::add_lo(mips::sll(jump_force, 1), jump_force) as i16;
+                d.jump_initial_vel_y = mips::add_lo(mips::sll(jump_force, 1), jump_force).wrap_i16();
             } else {
-                d.jump_initial_vel_y = div2_toward_zero(mips::add_lo(mips::sll(jump_force, 1), jump_force)) as i16;
+                d.jump_initial_vel_y = div2_toward_zero(mips::add_lo(mips::sll(jump_force, 1), jump_force)).wrap_i16();
             }
             d.forced_jump_type = forced_jump::NONE;
             jump = true;
         } else if d.jump_coyote_timer_ms != 0 && d.jump_ten_buffer != 0 && d.jump_cooldown_ms == 0 {
             d.jump_forced_ms = JUMP_FORCED_MS;
-            d.number_of_jumps = (d.number_of_jumps as u16).wrapping_add(1) as i16;
-            d.jump_initial_vel_y = jump_force as i16;
+            d.number_of_jumps = (d.number_of_jumps.wrap_u16()).wrapping_add(1).wrap_i16();
+            d.jump_initial_vel_y = jump_force.wrap_i16();
             effects.push(Effect::Sound { id: JUMP_NORMAL_SFX, echo });
             jump = true;
         }
@@ -240,7 +241,7 @@ pub fn jump_and_friction(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level
 
     crash::convert_vec_to_speed(d, &movement);
 
-    d.speed = mips::sub_lo(d.speed as u16 as i32, speed_loss) as i16;
+    d.speed = mips::sub_lo(d.speed.zext16(), speed_loss).wrap_i16();
     if d.speed < 0 {
         d.speed = 0;
     }
@@ -250,14 +251,14 @@ pub fn jump_and_friction(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level
     let needle = d.speedometer_needle_value as i32;
     d.speedometer_needle_value = if speed_approx < 0 {
         if abs(speed_approx) < SPEEDOMETER_REVERSE_THRESHOLD {
-            mips::sub_lo(needle, mips::sra(needle, 3)) as i16
+            mips::sub_lo(needle, mips::sra(needle, 3)).wrap_i16()
         } else {
             // Shake the needle when going backwards.
             let timer = (env.timer & 7) as i32;
             let shake = mips::add_lo(mips::sll(timer, 9), mips::sll(timer, 8));
-            (mips::add_lo(mips::mul_lo(needle, 13), shake) as u32 >> 4) as i16
+            (mips::add_lo(mips::mul_lo(needle, 13), shake) as u32 >> 4).wrap_i16()
         }
     } else {
-        mips::sra(mips::add_lo(mips::mul_lo(needle, 13), mips::mul_lo(speed_approx, 3)), 4) as i16
+        mips::sra(mips::add_lo(mips::mul_lo(needle, 13), mips::mul_lo(speed_approx, 3)), 4).wrap_i16()
     };
 }

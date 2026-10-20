@@ -9,6 +9,7 @@
 //! The reference's `CollInstanceHitboxScratch` (the intermediate dots and deltas) is not kept:
 //! nothing reads it after the test.
 
+use math::Wrap;
 use gte::{ctrl, data};
 use loader::lev::{BspHitbox, BspKind, BspNode, Level, SVec3};
 use math::mips;
@@ -114,8 +115,8 @@ impl Collision {
         }
 
         if sps.quad_block_coll.search_flags & search_flags::FORCE_INSTANCE_HIT != 0 {
-            sps.hit.plane.normal = SVec3 { x: 0, y: FRACTION_ONE as i16, z: 0 };
-            sps.hit.reorder_result = clip::FACE as i8;
+            sps.hit.plane.normal = SVec3 { x: 0, y: FRACTION_ONE.wrap_i16(), z: 0 };
+            sps.hit.reorder_result = clip::FACE.wrap_i8();
             sps.hit_fraction = 0;
             sps.bsp_hitbox = Some(hit);
             sps.quad_block_coll.hit_pos = sps.quad_block_coll.pos;
@@ -221,14 +222,14 @@ impl Collision {
         let inv_length = if length != 0 { mips::div(0x100_0000, length) } else { 0 };
         let normal = [normal_x, normal_y, normal_z].map(|n| mips::sra(mips::mul_lo(n, inv_length), 12));
 
-        let at = |origin: i16, delta: i32| mips::add_lo(origin as u16 as i32, delta) as i16;
+        let at = |origin: i16, delta: i32| mips::add_lo(origin.zext16(), delta).wrap_i16();
         sps.quad_block_coll.hit_pos = SVec3 {
             x: at(sps.quad_block_coll.pos.x, hit_x),
             y: at(sps.quad_block_coll.pos.y, hit_y),
             z: at(sps.quad_block_coll.pos.z, hit_z),
         };
-        sps.hit.plane.normal = SVec3 { x: normal[0] as i16, y: normal[1] as i16, z: normal[2] as i16 };
-        sps.hit.reorder_result = clip::FACE as i8;
+        sps.hit.plane.normal = SVec3 { x: normal[0].wrap_i16(), y: normal[1].wrap_i16(), z: normal[2].wrap_i16() };
+        sps.hit.reorder_result = clip::FACE.wrap_i8();
 
         let scaled = normal.map(|n| mips::sra(mips::mul_lo(n, radius), 12));
         sps.hit.push_out =
