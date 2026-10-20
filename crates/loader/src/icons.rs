@@ -76,7 +76,18 @@ pub fn parse_icons(dram: &DramFile) -> io::Result<Vec<Icon>> {
 
 /// Parses the `LevTexLookup` a pack starts with into its icon groups.
 pub fn parse_groups(dram: &DramFile) -> io::Result<Vec<IconGroup>> {
-    let lookup = word(dram, 0)?;
+    groups_at(dram, word(dram, 0)?)
+}
+
+/// `struct Level::levTexLookup`
+const LEVEL_TEX_LOOKUP: u32 = 0x3c;
+
+/// The icon groups of a level's own `LevTexLookup` (the fire of the fireballs, for one).
+pub fn parse_level_groups(lev: &DramFile) -> io::Result<Vec<IconGroup>> {
+    groups_at(lev, word(lev, LEVEL_TEX_LOOKUP)?)
+}
+
+fn groups_at(dram: &DramFile, lookup: u32) -> io::Result<Vec<IconGroup>> {
     if lookup == 0 {
         return Ok(Vec::new());
     }

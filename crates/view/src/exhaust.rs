@@ -91,7 +91,7 @@ pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
 /// How much taller than wide a retail screen pixel is: the picture is 512 by 216 pixels (`MainMain`'s
 /// draw environments) shown at 4:3. The sprites are twice as wide in the camera's space to make up
 /// for it, while the viewer's picture has square pixels, so their height needs the same stretch.
-const SCREEN_PIXEL_ASPECT: f32 = (512.0 * 3.0 / 4.0) / 216.0;
+pub(crate) const SCREEN_PIXEL_ASPECT: f32 = (512.0 * 3.0 / 4.0) / 216.0;
 
 /// Most quads one mesh draws.
 const MAX_QUADS: usize = 64;

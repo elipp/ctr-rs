@@ -44,6 +44,9 @@ pub mod color_flags {
     pub const DRAW_MODE_MASK: u16 = 0x60;
     pub const DRAW_MODE_ADD: u16 = 0x20;
     pub const DRAW_MODE_SUBTRACT: u16 = 0x40;
+    /// The sprite is eight times the size of the icon's texels (half of it is `texels << 4`
+    /// instead of `<< 1`).
+    pub const LARGE_QUAD: u16 = 0x400;
     /// The position is relative to the driver the particle belongs to.
     pub const DRIVER_LOCAL: u16 = 0x800;
     /// Drawn as a line from where the particle was a tick ago, not as a sprite.
@@ -103,6 +106,20 @@ pub const WALL_SPARKS: [Entry; 8] = [
     Entry::Axis { flags: 3, axis: 7, base: [65280, -2048, 0], random: [0, 0, 0] },
     Entry::Axis { flags: 3, axis: 8, base: [65280, -3072, 0], random: [0, 0, 0] },
     Entry::Axis { flags: 1, axis: 9, base: [1, 0, 0], random: [0, 0, 0] },
+];
+
+/// `emSet_Fireball`: a spark of the fire a Mystery Caves fireball trails. It starts one unit from
+/// where it is placed, shrinks and fades from white through orange to red.
+pub const FIREBALL: [Entry; 9] = [
+    Entry::Func { flags: 1, color_flags: 0x04a1, lifespan: 4 },
+    Entry::Axis { flags: 1, axis: 0, base: [1, 0, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 1, axis: 2, base: [1, 0, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 3, axis: 1, base: [1, 1, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 9, axis: 4, base: [1, 0, 0], random: [0x1000, 0, 0] },
+    Entry::Axis { flags: 3, axis: 5, base: [0xa00, -0xb0, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 0xb, axis: 7, base: [0xff00, 0xc000, 0], random: [0x5f00, 0, 0] },
+    Entry::Axis { flags: 3, axis: 8, base: [0x8000, 0xe000, 0], random: [0, 0, 0] },
+    Entry::Axis { flags: 3, axis: 9, base: [0x4000, 0xf000, 0], random: [0, 0, 0] },
 ];
 
 /// `MixRNG_Particles`' source: a stand-in for retail's `RngDeadCoed`.
@@ -179,6 +196,17 @@ impl Particle {
                 }
             }
         }
+        p
+    }
+
+    /// `RB_Fireball_ThTick`'s spark: at `position` (level units) and rising at `velocity_y`
+    /// (1/256 units a tick).
+    pub fn fireball(position: [i32; 3], velocity_y: i16, rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&FIREBALL, rng);
+        for a in 0..3 {
+            p.axes[a].start += position[a] * 0x100;
+        }
+        p.axes[axis::POS_Y].velocity = velocity_y;
         p
     }
 
@@ -326,7 +354,8 @@ impl Particle {
         let (c, s) = ((cos * scale) >> 12, (sin * scale) >> 12);
         // The GTE rotation matrix: x is stretched to twice the width.
         let (r11, r12, r21, r22) = ((c << 1) as i16 as i32, (s << 1) as i16 as i32, -s as i16 as i32, c as i16 as i32);
-        let (half_width, half_height) = (width << 1, height << 1);
+        let shift = if self.color_flags & color_flags::LARGE_QUAD != 0 { 4 } else { 1 };
+        let (half_width, half_height) = (width << shift, height << shift);
         Some([(-1, -1), (1, -1), (-1, 1), (1, 1)].map(|(sx, sy)| {
             let (x, y) = (sx * half_width, sy * half_height);
             [(r11 * x + r12 * y) >> 12, (r21 * x + r22 * y) >> 12]
@@ -345,6 +374,19 @@ mod tests {
 
     fn puff(dark: bool) -> Particle {
         Particle::exhaust([3685, 11466, -11466], [0, 1024, -1024], dark, &mut Rng::new(1))
+    }
+
+    #[test]
+    fn a_fireball_spark_is_a_large_quad() {
+        let spark = Particle::fireball([0, 0, 0], 0, &mut Rng::new(1));
+        assert_eq!(spark.color_flags & color_flags::LARGE_QUAD, color_flags::LARGE_QUAD);
+        // Sixteen texels wide at scale 0xa00 (a third of the matrix's unit, and the x doubling).
+        let [[left, _], [right, _], ..] = spark.corners(16, 16).unwrap();
+        let normal = Particle::exhaust([0, 0, 0], [0, 0, 0], false, &mut Rng::new(1));
+        let [[n_left, _], [n_right, _], ..] = normal.corners(16, 16).unwrap();
+        // The exhaust starts at scale 1536 and a puff is not large; size per scale unit is 8 times.
+        let per_scale = |l: i32, r: i32, scale: i32| (r - l) as f64 / scale as f64;
+        assert!((per_scale(left, right, 0xa00) / per_scale(n_left, n_right, 1536) - 8.0).abs() < 0.5);
     }
 
     #[test]

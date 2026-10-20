@@ -98,6 +98,8 @@ fn track_lev_files_parse() {
             println!("level {id:>2}: skybox {} verts {faces} faces", sky.vertices.len());
             assert!(faces > 0, "level {id}: empty skybox");
         }
+        println!("level {id:>2}: position paths {:?}", lev.position_paths.iter().map(Vec::len).collect::<Vec<_>>());
+        println!("level {id:>2}: recorded paths {:?}", lev.paths.iter().map(Vec::len).collect::<Vec<_>>());
         let mut with_model = 0;
         for inst in lev.instances.iter().filter(|i| i.model != 0) {
             let model = loader::model::Model::parse_at(&dram, inst.model)

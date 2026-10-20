@@ -3224,6 +3224,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hazard"
+version = "0.1.0"
+dependencies = [
+ "gte",
+ "loader",
+ "math",
+ "vehicle",
+]
+
+[[package]]
 name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5712,6 +5722,7 @@ dependencies = [
  "camera",
  "coll",
  "gte",
+ "hazard",
  "loader",
  "render",
  "vehicle",
