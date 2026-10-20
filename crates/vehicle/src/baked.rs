@@ -1,10 +1,10 @@
-//! `data.bakedGteMath`, so far the wheelie (the kart rears up while a boost at
+//! `data.bakedGteMath`, so far the wheelie and the crash fall (the kart rears up while a boost at
 //! full fire speed burns, and settles back down after it) and the airborne poses. Each tick of the
 //! animation is a rotation and a squash (`Vector_BakeMatrixTable`) that
 //! `VehPhysForce_TranslateMatrix_UpdateInstanceMatrix` puts on the facing matrix,
 //! with an offset of the kart's origin that follows it.
 //!
-//! The crash fall, squish recovery and blasted tables are not ported:
+//! The squish recovery and blasted tables are not ported:
 //! with those arrays the instance matrix is the facing matrix.
 
 use gte::Gte;
@@ -52,6 +52,27 @@ pub const WHEELIE_RECOVER: [Entry; 9] = [
     Entry { offset: [0, -224, -389], rot: [-2, 0, 0], scale: [3686, 4505, 3686] },
     Entry { offset: [0, -287, -439], rot: [-2, 0, 0], scale: [3792, 4399, 3792] },
     Entry { offset: [0, -142, -220], rot: [-2, 0, 0], scale: [3989, 4202, 3989] },
+];
+
+/// `matArr04`: the crash fall. The kart is thrown up and back after slamming a wall, lands, and
+/// squashes and stretches before it drives off.
+pub const CRASH_FALL: [Entry; 16] = [
+    Entry { offset: [0, 5954, 491], rot: [341, 0, 0], scale: [5632, 3328, 4403] },
+    Entry { offset: [0, 11000, 4199], rot: [682, 0, 0], scale: [7168, 2560, 4710] },
+    Entry { offset: [0, 10893, 3886], rot: [682, 0, 0], scale: [6345, 3011, 4524] },
+    Entry { offset: [0, 10546, 3394], rot: [682, 0, 0], scale: [4816, 3849, 4179] },
+    Entry { offset: [0, 9675, 2322], rot: [633, 0, 0], scale: [3993, 4300, 3993] },
+    Entry { offset: [0, 8182, 1161], rot: [507, 0, 0], scale: [4020, 4247, 4020] },
+    Entry { offset: [0, 5619, 171], rot: [338, 0, 0], scale: [4069, 4149, 4069] },
+    Entry { offset: [0, 2727, -357], rot: [158, 0, 0], scale: [4096, 4096, 4096] },
+    Entry { offset: [0, 182, 0], rot: [0, 0, 0], scale: [4710, 3788, 4710] },
+    Entry { offset: [0, 1255, -108], rot: [69, 0, 0], scale: [5324, 3481, 5324] },
+    Entry { offset: [0, 2330, -218], rot: [139, 0, 0], scale: [5057, 3690, 5057] },
+    Entry { offset: [0, 2818, -267], rot: [170, 0, 0], scale: [4468, 4151, 4468] },
+    Entry { offset: [0, 2342, -331], rot: [158, 0, 0], scale: [3879, 4612, 3879] },
+    Entry { offset: [0, 1665, -315], rot: [126, 0, 0], scale: [3612, 4821, 3612] },
+    Entry { offset: [0, 1019, -270], rot: [84, 0, 0], scale: [3737, 4633, 3737] },
+    Entry { offset: [0, 487, -112], rot: [39, 0, 0], scale: [3970, 4284, 3970] },
 ];
 
 /// `BAKED_GTE_MATRIX_JUMP_BASE`: the airborne poses start at this array.
@@ -148,6 +169,7 @@ fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
         MatrixArray::WheelieStart => Some(&WHEELIE_START),
         MatrixArray::WheelieHold => Some(&WHEELIE_HOLD),
         MatrixArray::WheelieRecover => Some(&WHEELIE_RECOVER),
+        MatrixArray::CrashFall => Some(&CRASH_FALL),
         MatrixArray::Jump(n) => JUMP.get(n.checked_sub(JUMP_BASE)? as usize).map(|e| e.as_slice()),
         _ => None,
     }
@@ -301,7 +323,22 @@ mod tests {
         // The body's forward axis (the third column) now points up a little.
         assert!(up.m[1][2] != 0);
         // Not ported arrays leave the facing matrix alone.
+        d.matrix_array = MatrixArray::Jump(0);
+        assert_eq!(inst_matrix(&d).0, plain);
+    }
+
+    #[test]
+    fn the_crash_fall_throws_the_kart_up_and_lets_it_land() {
+        let mut d = boosting();
+        let (plain, _) = inst_matrix(&d);
         d.matrix_array = MatrixArray::CrashFall;
+        let (first, t) = inst_matrix(&d);
+        assert_ne!(first, plain);
+        assert_eq!(t[1], 5954 >> 8);
+        d.matrix_index = CRASH_FALL.len() as u8 - 1;
+        assert_ne!(inst_matrix(&d).0, plain);
+        // Past the end, the animation is over.
+        d.matrix_index = CRASH_FALL.len() as u8;
         assert_eq!(inst_matrix(&d).0, plain);
     }
 
