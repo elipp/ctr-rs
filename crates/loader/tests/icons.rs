@@ -34,3 +34,16 @@ fn packs_have_the_shadow_icons() {
         }
     }
 }
+
+#[test]
+fn packs_have_the_tiremark_icon() {
+    let Some(mut b) = common::open_bigfile() else { return };
+    for character in 0..16 {
+        let file = b.big.read(&mut b.disc, BigIndex::ARCADE_1P_PACK.nth(character).get()).unwrap();
+        let icons = loader::icons::parse_icons(&DramFile::parse(&file).unwrap()).unwrap();
+        let mark = icons.iter().find(|i| i.global_index == 0x2f).unwrap_or_else(|| panic!("character {character}: no tiremark"));
+        if character == 0 {
+            eprintln!("{:?} {:?}", mark.name, mark.layout);
+        }
+    }
+}

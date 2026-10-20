@@ -30,6 +30,7 @@ pub mod powerslide;
 pub mod scrub;
 pub mod search;
 pub mod shadow;
+pub mod skid;
 pub mod sim;
 pub mod spin;
 pub mod stats;
@@ -301,6 +302,10 @@ pub struct Driver {
     /// The exhaust fire of the boost, while there is one.
     pub turbo: Option<turbo::Turbo>,
     pub turbo_outside_timer: i16,
+    /// `skidmarks`: the last eight ticks of the four tires' marks, as a ring (see [`skid`]).
+    pub skidmarks: [[skid::Mark; 4]; 8],
+    pub skidmark_enable_flags: u32,
+    pub skidmark_frame_index: u8,
     pub turbo_meter_room_left: i16,
     pub wall_rub_timer: i16,
     pub wall_rub_speed_limit: i16,

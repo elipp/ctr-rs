@@ -172,7 +172,7 @@ impl Plugin for DrivePlugin {
             .add_systems(Startup, spawn_hud)
             .add_systems(FixedUpdate, drive_tick)
             .add_systems(Update, (show_kart, chase, hud).chain())
-            .add_systems(Update, (crate::shadow::update, crate::flame::update))
+            .add_systems(Update, (crate::shadow::update, crate::flame::update, crate::skid::update))
             .add_systems(PostUpdate, crate::exhaust::update.before(TransformSystems::Propagate));
     }
 }
@@ -200,11 +200,12 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     if down(&[KeyCode::KeyW, KeyCode::ArrowUp]) || pad_down(&[GamepadButton::South]) {
         held |= buttons::CROSS;
     }
-    // Brake and reverse is only Square (West / S / Down). Pulling the left stick or the D-pad
-    // down does nothing: many pads report the D-pad as the left stick, and on retail it does not
-    // brake (it must not end a powerslide).
-    let reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown]) || pad_down(&[GamepadButton::West]);
-    if reverse {
+    // Square brakes. Reversing is the stick (or D-pad) pulled down (`stickLY`, see
+    // `gas_and_brake`): alone, it reverses when the gas is not held, and with Square it
+    // brakes into reverse. On the D-pad it leaves Square alone, so it does not end a
+    // powerslide. The keyboard's S and Down are both, like Square plus Down on a pad.
+    let key_reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown]);
+    if key_reverse || pad_down(&[GamepadButton::West]) {
         held |= buttons::SQUARE;
     }
     if down(&[KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ShiftRight])
@@ -224,11 +225,13 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
         (false, true) => 0xff,
         _ => axis(stick.x),
     };
+    // 0 is up and 0xff down. The D-pad pushes the stick all the way (retail steps it there).
+    let stick_ly = if key_reverse || pad_down(&[GamepadButton::DPadDown]) { 0xff } else { axis(-stick.y) };
     Input {
         buttons_held: held,
         buttons_tapped: held & !previous_held,
         stick_lx,
-        stick_ly: 0x80,
+        stick_ly,
         stick_ry: 0x80,
     }
 }
@@ -267,6 +270,7 @@ fn drive_tick(
     );
     drive.tick += 1;
     particles.tick(&vehicle::exhaust::exhaust(&mut drive.driver));
+    vehicle::skid::skidmarks(&mut drive.driver);
     vehicle::turbo::tick(&mut drive.driver, env.elapsed_time_ms as i16);
 
     if result.mask_grab {

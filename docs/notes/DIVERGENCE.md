@@ -11,3 +11,11 @@
 - `DRAW_BILLBOARD` is not consumed anywhere in the reference, so the fire just follows the kart's orientation.
 - Not modelled: sound, rumble, the driver's alpha halving while the fire burns, water split/reflection flags.
 - `exhaust` still uses `reserves > 0` instead of retail's `PROC_SearchForModel` for "the flame exists".
+
+**Skid marks (2026-10-20, NOT visually verified):** `vehicle::skid` (`VehEmitter_Skidmarks` ring of 8 ticks x 4 tires, plus the segment walk of `VehGroundSkids_Main`), `view::skid` (two meshes: dark = subtractive, light = quarter-add for `FORCE_SKIDMARKS` terrain; `tread` icon, global index 0x2f). Known differences:
+- The marks' OT depth bias bytes (`depthBiasNormal/Secondary`) are not stored; the marks are lifted 1 game unit and get a material `depth_bias` of 4 instead.
+- Brightness follows retail: one value per driver from the depth of the newest mark (full inside 0x180 units, halving per doubling beyond, gone below 0x10), halved per tick of age. We take the depth along the Bevy camera's forward axis in place of the GTE view matrix's z, and skip the per-vertex "depth > 0x20" test.
+- Blend strength: the maths is retail's (dark = background - texel, light = background + texel/4), but Bevy blends in linear light and the PS1 in raw values, so the marks read lighter. `DARK_GAIN` / `LIGHT_GAIN` in `view/src/skid.rs` are tuned by eye.
+- Wheelie (`BAKED_GTE_MATRIX_WHEELIE_*`) is not ported, so it never changes which tires skid.
+- The strips are at tick resolution; the kart is interpolated between ticks, the marks are not.
+- Only the player's kart (`--drive`) leaves marks.

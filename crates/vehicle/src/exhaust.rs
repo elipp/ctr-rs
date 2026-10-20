@@ -34,7 +34,7 @@ const TURBO_ROOM_WARNING_PAD: i32 = 2;
 const TURBO_ROOM_WARNING_SCALE: i32 = 32;
 
 /// `gte_rtv0`: `m * v` with 4.12 fixed point.
-fn rotate(m: &Matrix, v: [i32; 3]) -> [i32; 3] {
+pub(crate) fn rotate(m: &Matrix, v: [i32; 3]) -> [i32; 3] {
     std::array::from_fn(|row| (0..3).map(|col| m.m[row][col] as i32 * v[col]).sum::<i32>() >> 12)
 }
 
