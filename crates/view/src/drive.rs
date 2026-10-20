@@ -172,7 +172,7 @@ impl Plugin for DrivePlugin {
             .add_systems(FixedUpdate, drive_tick)
             .add_systems(Update, (show_kart, chase, hud).chain())
             .add_systems(Update, (crate::shadow::update, crate::flame::update, crate::skid::update))
-            .add_systems(PostUpdate, crate::exhaust::update.before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (crate::exhaust::update, crate::exhaust::update_sparks).before(TransformSystems::Propagate));
     }
 }
 
@@ -268,6 +268,7 @@ fn drive_tick(
         &mut effects,
     );
     drive.tick += 1;
+    particles.sparks(&drive.driver);
     particles.tick(&vehicle::exhaust::exhaust(&mut drive.driver));
     vehicle::skid::skidmarks(&mut drive.driver);
     vehicle::turbo::tick(&mut drive.driver, env.elapsed_time_ms as i16);

@@ -27,6 +27,19 @@ impl Particles {
         Particles { list: Vec::new(), rng: Rng::new(0x2545_f491) }
     }
 
+    /// The sparks of this game tick (before [`Particles::tick`]).
+    pub fn sparks(&mut self, d: &vehicle::Driver) {
+        if let Some(l) = vehicle::sparks::landing(d) {
+            for _ in 0..LANDING_SPARKS {
+                self.list.push(Particle::landing_spark(l.back, l.side, l.push, &mut self.rng));
+            }
+        }
+        if let Some(w) = vehicle::sparks::wall(d) {
+            let m = w.matrix;
+            self.list.push(Particle::wall_spark(w.tire, |v| vehicle::exhaust::rotate(&m, v), &mut self.rng));
+        }
+    }
+
     /// One game tick: the kart puffs, then every particle moves (retail
     /// updates the particles after the threads, so a new puff starts at its pipe).
     pub fn tick(&mut self, puffs: &[vehicle::exhaust::Puff]) {
@@ -36,6 +49,12 @@ impl Particles {
         self.list.retain_mut(|p| p.update());
     }
 }
+
+/// `VEH_EMITTER_GROUND_SPARK_COUNT`
+const LANDING_SPARKS: usize = 10;
+
+/// Width of a spark's streak, in game units.
+const SPARK_WIDTH: f32 = 1.2;
 
 /// The smoke's sprite size in texels; the picture is the whole texture.
 #[derive(Component)]
@@ -72,6 +91,10 @@ pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
 /// Most quads one mesh draws.
 const MAX_QUADS: usize = 64;
 
+/// The streaks of the sparks, all in one mesh.
+#[derive(Component)]
+pub struct SparkLines;
+
 pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -104,12 +127,29 @@ pub fn spawn(
         cull_mode: None,
         double_sided: true,
         alpha_mode,
+        depth_bias: crate::wheels::EFFECTS_SORT_BIAS,
         ..default()
     };
     commands.spawn((
         Smoke { mode: DrawMode::Add, width, height },
         Mesh3d(mesh()),
         MeshMaterial3d(materials.add(base(AlphaMode::Add))),
+        Transform::default(),
+        NoFrustumCulling,
+    ));
+    // The sparks are untextured streaks that fade out towards their tails.
+    commands.spawn((
+        SparkLines,
+        Mesh3d(mesh()),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            alpha_mode: AlphaMode::Add,
+            depth_bias: crate::wheels::EFFECTS_SORT_BIAS,
+            ..default()
+        })),
         Transform::default(),
         NoFrustumCulling,
     ));
@@ -145,7 +185,7 @@ pub fn update(
         };
         let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
         let mut colors = vec![[0.0f32; 4]; 4 * MAX_QUADS];
-        let wanted = particles.list.iter().filter(|p| p.draw_mode() == smoke.mode).take(MAX_QUADS);
+        let wanted = particles.list.iter().filter(|p| !p.is_line() && p.draw_mode() == smoke.mode).take(MAX_QUADS);
         for (n, p) in wanted.enumerate() {
             let Some(corners) = p.corners(smoke.width, smoke.height) else {
                 continue;
@@ -160,6 +200,48 @@ pub fn update(
                 let corner = center + right * quarter_units_to_world(x as f32) - up * quarter_units_to_world(y as f32);
                 positions[n * 4 + k] = corner.to_array();
                 colors[n * 4 + k] = [gain, gain, gain, 1.0];
+            }
+        }
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
+}
+
+/// Lays the sparks out as streaks facing the camera, from a bright head to a dark tail.
+pub fn update_sparks(
+    lines: Query<&Mesh3d, With<SparkLines>>,
+    karts: Query<&Transform, With<Kart>>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>)>,
+    particles: Res<Particles>,
+    fixed: Res<Time<Fixed>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let (Some(kart), Some(camera)) = (karts.iter().next(), cameras.iter().next()) else {
+        return;
+    };
+    let t = fixed.overstep_fraction();
+    for mesh in &lines {
+        let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
+            continue;
+        };
+        let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
+        let mut colors = vec![[0.0f32; 4]; 4 * MAX_QUADS];
+        for (n, p) in particles.list.iter().filter(|p| p.is_line()).take(MAX_QUADS).enumerate() {
+            let world = |v: Vec3| v / 256.0 * SCALE;
+            let (position, velocity) = (p.position(), p.velocity());
+            let head = kart.translation
+                + world(Vec3::from_array(std::array::from_fn(|a| position[a] as f32 + velocity[a] as f32 * t)));
+            let tail = head + world(Vec3::from_array(p.line_tail().map(|v| v as f32)));
+            let along = tail - head;
+            let toward_camera = camera.translation - head;
+            let side = along.cross(toward_camera).normalize_or_zero() * (SPARK_WIDTH * SCALE / 2.0);
+            let gain = p.tint() as f32 / 255.0;
+            for (k, (point, shade)) in [(head + side, gain), (head - side, gain), (tail + side, 0.0), (tail - side, 0.0)]
+                .into_iter()
+                .enumerate()
+            {
+                positions[n * 4 + k] = point.to_array();
+                colors[n * 4 + k] = [shade, shade, shade, 1.0];
             }
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);

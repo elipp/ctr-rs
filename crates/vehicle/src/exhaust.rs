@@ -4,7 +4,7 @@
 //!
 //! Not ported: the stop while the boost flame burns, the multiplayer thinning (`numPlyrCurrGame`), bots, the engine
 //! revving at the start (`revEngineState`), invisibility and the underwater
-//! bubbles; and the squash and stretch of the model's scale.
+//! bubbles.
 
 use crate::{Driver, Matrix, kart_state};
 
@@ -20,10 +20,6 @@ pub struct Puff {
     pub dark: bool,
 }
 
-/// The kart's instance scale (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`); its
-/// squash is not simulated.
-const INSTANCE_SCALE: i32 = 0xccc;
-
 const VELOCITY: [i32; 3] = [0, 0x400, -0x400];
 const POSITION_Y: i32 = 7;
 const POSITION_Z: i32 = -0x38;
@@ -34,7 +30,7 @@ const TURBO_ROOM_WARNING_PAD: i32 = 2;
 const TURBO_ROOM_WARNING_SCALE: i32 = 32;
 
 /// `gte_rtv0`: `m * v` with 4.12 fixed point.
-pub(crate) fn rotate(m: &Matrix, v: [i32; 3]) -> [i32; 3] {
+pub fn rotate(m: &Matrix, v: [i32; 3]) -> [i32; 3] {
     std::array::from_fn(|row| (0..3).map(|col| m.m[row][col] as i32 * v[col]).sum::<i32>() >> 12)
 }
 
@@ -56,9 +52,10 @@ pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
     let (m, _) = crate::baked::inst_matrix(d);
     let m = &m;
     let velocity = rotate(m, VELOCITY);
-    let y = (INSTANCE_SCALE * POSITION_Y) >> 1;
-    let z = (INSTANCE_SCALE * POSITION_Z) >> 4;
-    let pipes = [(INSTANCE_SCALE * 9) >> 3, (INSTANCE_SCALE * -0x12) >> 4];
+    let [sx, sy, sz] = [d.inst_scale_x, d.inst_scale_y, d.inst_scale_z].map(i32::from);
+    let y = (sy * POSITION_Y) >> 1;
+    let z = (sz * POSITION_Z) >> 4;
+    let pipes = [(sx * 9) >> 3, (sx * -0x12) >> 4];
     // Revving at the start never runs here, so the window decides.
     let dark = d.kart_state != kart_state::ENGINE_REVVING && in_boost_window(d);
     pipes.map(|x| Puff { position: rotate(m, [x, y, z]), velocity, dark }).to_vec()
