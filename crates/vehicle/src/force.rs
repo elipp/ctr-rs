@@ -13,7 +13,8 @@ use math::{Vec3, mips};
 
 use crate::calc::interp_by_speed;
 use crate::terrain::{TERRAINS, terrain_flags, terrain_type};
-use crate::{Driver, Effect, Env, Matrix, actions, kart_state, rain_cloud};
+use crate::fire::{self, turbo_type};
+use crate::{Driver, Effect, Env, Matrix, actions, collision_flags, kart_state, rain_cloud, step_triggers};
 
 /// `gte_mvmva(sf, mx, v, cv, lm)`
 pub fn mvmva(sf: u32, mx: u32, v: u32, cv: u32, lm: u32) -> u32 {
@@ -381,6 +382,57 @@ pub fn on_apply_forces(d: &mut Driver, coll: &mut Collision, env: &Env, level: &
     velocity.z = mips::add_lo(velocity.z, d.accel.z as i32);
     velocity.y = mips::add_lo(velocity.y, d.accel.y as i32);
     d.velocity = velocity;
+}
+
+const TURBO_PAD_RESERVES: i32 = 0x3c0;
+const SUPER_TURBO_PAD_RESERVES: i32 = 0x78;
+const TURBO_PAD_FIRE_LEVEL: i32 = 0x100;
+const SUPER_TURBO_PAD_FIRE_LEVEL: i32 = 0x800;
+const SURFACE_PUSHBACK_Y_BIAS: i32 = 4;
+const SURFACE_PUSHBACK_SHIFT: u32 = 6;
+
+/// `VehPhysForce_CollideDrivers` for a kart alone on the track: takes the
+/// collision acceleration back out of the velocity, requests a mask grab on a
+/// kill plane, applies the turbo pads and pushes the kart out of a surface it
+/// is sinking into. Kart-against-kart collisions and the water split line are
+/// not ported.
+pub fn collide_drivers(d: &mut Driver, effects: &mut Vec<Effect>) {
+    let step_flags = d.step_flag_set;
+
+    d.velocity.x = mips::sub_lo(d.velocity.x, d.accel.x as i32);
+    d.velocity.y = mips::sub_lo(d.velocity.y, d.accel.y as i32);
+    d.velocity.z = mips::sub_lo(d.velocity.z, d.accel.z as i32);
+
+    if step_flags & coll::step_flags::FLAG_KILL_PLANE != 0 {
+        d.collision_flags |= collision_flags::MASK_GRAB_REQUEST;
+    }
+
+    if step_flags & step_triggers::SUPER_TURBO_PAD != 0 {
+        let flags = turbo_type::TURBO_PAD | turbo_type::FREEZE_RESERVES_ON_TURBO_PAD;
+        fire::increment(d, SUPER_TURBO_PAD_RESERVES, flags, SUPER_TURBO_PAD_FIRE_LEVEL, effects);
+    } else if step_flags & step_triggers::TURBO_PAD != 0 {
+        let flags = turbo_type::TURBO_PAD | turbo_type::FREEZE_RESERVES_ON_TURBO_PAD;
+        fire::increment(d, TURBO_PAD_RESERVES, flags, TURBO_PAD_FIRE_LEVEL, effects);
+    }
+
+    if d.collision_flags & collision_flags::SURFACE_PUSHBACK != 0 {
+        let diff_x = mips::sub_lo(mips::sra(d.pos_curr.x, 8), d.sps_hit_pos.x as i32);
+        let product_x = mips::mul_lo(d.sps_normal_vec.x as i32, diff_x);
+        let floor_diff_y =
+            mips::add_lo(mips::sub_lo(mips::sra(d.quad_block_height, 8), d.sps_hit_pos.y as i32), SURFACE_PUSHBACK_Y_BIAS);
+        let product_y = mips::mul_lo(d.sps_normal_vec.y as i32, floor_diff_y);
+        let diff_z = mips::sub_lo(mips::sra(d.pos_curr.z, 8), d.sps_hit_pos.z as i32);
+        let product_z = mips::mul_lo(d.sps_normal_vec.z as i32, diff_z);
+        let dot = mips::add_lo(mips::add_lo(product_x, product_y), product_z);
+
+        // Behind the surface: push back out, in proportion to how far.
+        if dot < 0 {
+            let diff_y = mips::sub_lo(mips::sra(d.pos_curr.y, 8), d.sps_hit_pos.y as i32);
+            d.velocity.x = mips::add_lo(d.velocity.x, mips::sll(diff_x, SURFACE_PUSHBACK_SHIFT));
+            d.velocity.y = mips::add_lo(d.velocity.y, mips::sll(diff_y, SURFACE_PUSHBACK_SHIFT));
+            d.velocity.z = mips::add_lo(d.velocity.z, mips::sll(diff_z, SURFACE_PUSHBACK_SHIFT));
+        }
+    }
 }
 
 /// `VehPhysForce_RotAxisAngle`: the matrix that turns `angle` around the

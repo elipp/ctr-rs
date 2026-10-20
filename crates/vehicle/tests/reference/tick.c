@@ -15,6 +15,7 @@
  *            turnResponseScale sound">         the terrain table
  *   A <8 x numFrames>                          the frames of the model's animations
  *   S <65 values>                              the engine class's constants
+ *   C <characterID>                            the driver's character
  *   N         prints the names of the driver fields, in order
  *   D <driver fields...>
  *             loads the driver (field order: `fields` below)
@@ -23,8 +24,9 @@
  *             runs one tick; prints the driver, the effects it requested and
  *             a few values of the scratchpad
  *
- * The drift start (`VehPhysProc_PowerSlide_Init`, called from the driving
- * update) is left out: `oracle_driving_update` is the rest of that function.
+ * Everything of the driver's states is the real code: driving, drifting,
+ * spinning out, the crash and the V-shift freeze; only the stages that are
+ * presentation are left out.
  */
 #include <stdarg.h>
 #include "../../../coll/tests/reference/level.h"
@@ -90,22 +92,24 @@ void GAMEPAD_ShockForce1(struct Driver *drv, s32 frame, s32 val)
 	effect(" G %d %d %d", drv->driverID, frame, val);
 }
 
+/* The turbo fire is a thread with instances; it is presentation, and not ported. */
+struct Instance *INSTANCE_BirthWithThread(s32 modelID, const char *name, s32 poolType, s32 bucket, void *funcThTick, s32 objSize, struct Thread *parent)
+{
+	return NULL;
+}
+
+void GhostTape_WriteBoosts(s32 addReserve, u32 type, s32 speedCap)
+{
+}
+
+b32 LOAD_IsOpen_RacingOrBattle(void)
+{
+	return 1;
+}
+
 void VehStuckProc_MaskGrab_Init(struct Thread *t, struct Driver *drv)
 {
 	maskGrab = 1;
-}
-
-/* VehPhysProc_Driving_Update without the drift start. */
-static void oracle_driving_update(struct Thread *t, struct Driver *drv)
-{
-	if ((drv->vShiftStartGuardTimer == 0) && (drv->vShiftCount >= 5))
-	{
-		VehPhysProc_FreezeVShift_Init(t, drv);
-	}
-	else if (drv->vShiftWindowTimer == 0)
-	{
-		drv->vShiftCount = 0;
-	}
 }
 
 enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT_PENDING, TERRAIN1, TERRAIN2 };
@@ -164,6 +168,10 @@ static struct Field fields[] = {
 	V3S16(d.forwardAccelVector), F(d.forwardAccelImpulse, S16), V3S16(d.accel), F(d.wheelRotation, S16),
 	F(d.boolFirstFrameSinceRevEngine, U8), F(d.quadBlockHeight, S32), F(d.distanceToFinish_checkpoint, U32),
 	F(d.timeUntilDriftSpinout, S16), F(d.previousFrameMultDrift, S16),
+	F(d.multDrift, S16), F(d.NoInputTimer, S16), F(d.failedBoostExhaustTimer, U8),
+	F(d.KartStates.Drifting.numFramesDrifting, S16), F(d.KartStates.Drifting.driftBoostTimeMS, S16),
+	F(d.KartStates.Drifting.driftTotalTimeMS, S16), F(d.KartStates.Drifting.numBoostsAttempted, S8),
+	F(d.KartStates.Drifting.numBoostsSuccess, S8),
 };
 
 #define NUM_FIELDS ((int)(sizeof(fields) / sizeof(fields[0])))
@@ -183,34 +191,71 @@ static void oracle_translate_matrix(struct Thread *t, struct Driver *drv)
 static void set_state(int state, int initPending)
 {
 	memset(d.funcPtrs, 0, sizeof(d.funcPtrs));
-	if (state == 0)
-	{
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = oracle_driving_update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_Driving_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysGeneral_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysGeneral_JumpAndFriction;
-	}
-	else if (state == 1)
-	{
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SlamWall_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SlamWall_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SlamWall_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysGeneral_JumpAndFriction;
-		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SlamWall_Animate;
-	}
-	else
-	{
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_FreezeVShift_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_Driving_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysGeneral_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysProc_FreezeVShift_ReverseOneFrame;
-	}
 	d.funcPtrs[DRIVER_FUNC_APPLY_FORCES] = VehPhysForce_OnApplyForces;
 	d.funcPtrs[DRIVER_FUNC_COLL_MOVED] = COLL_MOVED_PlayerSearch;
 	d.funcPtrs[DRIVER_FUNC_COLL_FIXED] = COLL_FIXED_PlayerSearch;
 	d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = oracle_translate_matrix;
+	d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysGeneral_JumpAndFriction;
+	d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_Driving_PhysLinear;
+	d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysGeneral_PhysAngular;
+	d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_Driving;
+	d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_Driving_Update;
+	switch (state)
+	{
+	case 1:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SlamWall_Update;
+		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SlamWall_PhysLinear;
+		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SlamWall_PhysAngular;
+		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SlamWall_Animate;
+		break;
+	case 2:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_FreezeVShift_Update;
+		d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysProc_FreezeVShift_ReverseOneFrame;
+		break;
+	case 3:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_PowerSlide_Update;
+		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_PowerSlide_PhysLinear;
+		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_PowerSlide_PhysAngular;
+		break;
+	case 4:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinFirst_Update;
+		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinFirst_PhysLinear;
+		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinFirst_PhysAngular;
+		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_Spinning;
+		break;
+	case 5:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinLast_Update;
+		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinLast_PhysLinear;
+		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinLast_PhysAngular;
+		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_LastSpin;
+		break;
+	case 6:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinStop_Update;
+		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinStop_PhysLinear;
+		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinStop_PhysAngular;
+		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SpinStop_Animate;
+		break;
+	}
 	if (initPending)
-		d.funcPtrs[DRIVER_FUNC_INIT] = VehPhysProc_Driving_Init;
+		d.funcPtrs[DRIVER_FUNC_INIT] = state == 3 ? VehPhysProc_PowerSlide_InitSetUpdate
+		                              : state == 4 ? VehPhysProc_SpinFirst_InitSetUpdate
+		                                           : VehPhysProc_Driving_Init;
+}
+
+static int current_state(void)
+{
+	DriverFunc linear = d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR];
+	if (linear == (DriverFunc)VehPhysProc_SlamWall_PhysLinear)
+		return 1;
+	if (linear == (DriverFunc)VehPhysProc_PowerSlide_PhysLinear)
+		return 3;
+	if (linear == (DriverFunc)VehPhysProc_SpinFirst_PhysLinear)
+		return 4;
+	if (linear == (DriverFunc)VehPhysProc_SpinLast_PhysLinear)
+		return 5;
+	if (linear == (DriverFunc)VehPhysProc_SpinStop_PhysLinear)
+		return 6;
+	return d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] == (DriverFunc)VehPhysProc_FreezeVShift_ReverseOneFrame ? 2 : 0;
 }
 
 static void load_driver(void)
@@ -256,9 +301,7 @@ static void print_driver(void)
 		case U32: printf(" %u", *(u32 *)p); break;
 		case QUAD: printf(" %d", quadIndex(*(struct QuadBlock **)p)); break;
 		case PHYS_STATE:
-			printf(" %d", d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] == (DriverFunc)VehPhysProc_SlamWall_PhysLinear
-			                  ? 1
-			                  : d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] == (DriverFunc)VehPhysProc_FreezeVShift_ReverseOneFrame ? 2 : 0);
+			printf(" %d", current_state());
 			break;
 		case INIT_PENDING: printf(" %d", d.funcPtrs[DRIVER_FUNC_INIT] != NULL); break;
 		case TERRAIN1: printf(" %d", terrainIndex(d.terrainMeta1)); break;
@@ -372,6 +415,13 @@ int main(void)
 					*(s32 *)p = v;
 			}
 			break;
+		case 'C':
+		{
+			int character = rd();
+			for (int i = 0; i < 8; i++)
+				data.characterIDs[i] = character;
+			break;
+		}
 		case 'N':
 			for (int i = 0; i < NUM_FIELDS; i++)
 				printf("%s%s", i ? " " : "", fields[i].name);
@@ -396,20 +446,16 @@ int main(void)
 			maskGrab = 0;
 			for (int i = 0; i < DRIVER_FUNC_COUNT; i++)
 			{
-				/* Audio, kart-against-kart, particles and the driving animation are not ported. */
+				/* Audio, kart-against-kart and particles are not ported. */
 				if (i == DRIVER_FUNC_AUDIO || i == DRIVER_FUNC_COLLIDE_DRIVERS || i == DRIVER_FUNC_PARTICLES)
 					continue;
 				DriverFunc fn = d.funcPtrs[i];
 				if (fn == NULL)
 					continue;
-				if (i == DRIVER_FUNC_ANIMATE && fn != (DriverFunc)VehPhysProc_SlamWall_Animate)
-					continue;
 				/* Driving_Init installs the real one again. */
 				if (i == DRIVER_FUNC_TRANSLATE_MATRIX)
 					fn = oracle_translate_matrix;
 				fn(&thread, &d);
-				if (i == DRIVER_FUNC_INIT && d.funcPtrs[DRIVER_FUNC_UPDATE] == (DriverFunc)VehPhysProc_Driving_Update)
-					d.funcPtrs[DRIVER_FUNC_UPDATE] = oracle_driving_update;
 			}
 
 			struct ScratchpadStruct *pad = (struct ScratchpadStruct *)(scratchpad + 0x108);

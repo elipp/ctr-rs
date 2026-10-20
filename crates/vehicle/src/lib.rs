@@ -18,13 +18,18 @@ pub mod angular;
 pub mod calc;
 pub mod crash;
 pub mod fixed;
+pub mod fire;
 pub mod force;
+pub mod frame;
 pub mod jump;
+pub mod jump_meter;
 pub mod joystick;
 pub mod linear;
+pub mod powerslide;
 pub mod scrub;
 pub mod search;
 pub mod sim;
+pub mod spin;
 pub mod stats;
 pub mod terrain;
 
@@ -182,6 +187,8 @@ pub enum MatrixArray {
     #[default]
     None,
     CrashFall,
+    /// `BAKED_GTE_MATRIX_JUMP_BASE + n`: the airborne pose of a character.
+    Jump(u8),
 }
 
 /// The set of procedures a driver is currently running (the reference's
@@ -194,6 +201,14 @@ pub enum PhysState {
     /// `VehPhysProc_FreezeVShift_*`: the kart jittered between quad blocks and
     /// is held still until the player presses the gas or the brake again.
     FreezeVShift,
+    /// `VehPhysProc_PowerSlide_*`: drifting.
+    PowerSlide,
+    /// `VehPhysProc_SpinFirst_*`: spinning out after a drift that lasted too long.
+    SpinFirst,
+    /// `VehPhysProc_SpinLast_*`: the spin winds down.
+    SpinLast,
+    /// `VehPhysProc_SpinStop_*`: the model straightens up, then driving resumes.
+    SpinStop,
 }
 
 /// Something the original does that is not simulation: for the presentation
@@ -210,6 +225,28 @@ pub enum Effect {
     ShockFreq { driver_id: u8, a: u8, b: u8 },
     /// `GAMEPAD_ShockForce1`
     ShockForce { driver_id: u8, a: u8, b: u8 },
+    /// `cameraDC[driver_id].flags |= CAMERA_FLAG_FIRE_SPEED_ZOOM`: a boost pulls the camera back.
+    CameraFireSpeedZoom { driver_id: u8 },
+}
+
+impl Driver {
+    /// `KartStates.Spinning.driftSpinRate`
+    pub fn spin_rate(&self) -> i16 {
+        self.num_frames_drifting
+    }
+
+    pub fn set_spin_rate(&mut self, value: i16) {
+        self.num_frames_drifting = value;
+    }
+
+    /// `KartStates.Spinning.spinDir`
+    pub fn spin_dir(&self) -> i16 {
+        self.drift_boost_time_ms
+    }
+
+    pub fn set_spin_dir(&mut self, value: i16) {
+        self.drift_boost_time_ms = value;
+    }
 }
 
 /// The part of `struct Driver` the ported code uses. Positions are 24.8
@@ -218,6 +255,9 @@ pub enum Effect {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Driver {
     pub driver_id: u8,
+    /// `GAME_CHARACTER_IDS[driver_id]`: the character (in `GAME_CHARACTER_IDS`
+    /// order) the driver plays.
+    pub character: u8,
     pub phys_state: PhysState,
     pub kart_state: u8,
     pub simp_turn_state: i8,
@@ -316,6 +356,9 @@ pub struct Driver {
     pub jump_initial_vel_y: i16,
     pub jump_high_jump_timer_ms: i16,
     pub jump_landing_boost: i16,
+    /// `jumpMeter`: the hang time of the jump in the air or just landed, for the hang-time turbo and the HUD.
+    pub jump_meter: i16,
+    pub jump_meter_timer: i16,
     pub number_of_jumps: i16,
     pub forced_jump_type: u8,
     pub button_used_to_start_drift: i16,
@@ -355,6 +398,20 @@ pub struct Driver {
 
     pub time_until_drift_spinout: i16,
     pub previous_frame_mult_drift: i16,
+
+    /// `multDrift`: the drift's turn, negative when drifting right.
+    pub mult_drift: i16,
+    /// `NoInputTimer`: how long the spin-out keeps the kart from recovering.
+    pub no_input_timer: i16,
+    pub failed_boost_exhaust_timer: u8,
+    /// `KartStates`, a union in the reference; this is the `Drifting` view,
+    /// and [`Driver::spin_rate`] / [`Driver::spin_dir`] are the `Spinning`
+    /// view of the same words.
+    pub num_frames_drifting: i16,
+    pub drift_boost_time_ms: i16,
+    pub drift_total_time_ms: i16,
+    pub num_boosts_attempted: i8,
+    pub num_boosts_success: i8,
 
     /// Set when the original sets `funcPtrs[DRIVER_FUNC_INIT]` to
     /// `VehPhysProc_Driving_Init`: the next tick starts by driving again.

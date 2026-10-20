@@ -71,6 +71,7 @@ fn fields(d: &Driver) -> Vec<i64> {
     o.push(match d.matrix_array {
         MatrixArray::None => 0,
         MatrixArray::CrashFall => 4,
+        MatrixArray::Jump(n) => n as i64,
     });
     o.push(d.matrix_index as i64);
     o.push((d.phys_state == PhysState::SlamWall) as i64);
@@ -84,6 +85,8 @@ fn effect_line(e: &Effect) -> String {
         Effect::JogCon { driver_id, pattern, strength } => format!(" J {driver_id} {pattern} {strength}"),
         Effect::ShockFreq { driver_id, a, b } => format!(" F {driver_id} {a} {b}"),
         Effect::ShockForce { driver_id, a, b } => format!(" G {driver_id} {a} {b}"),
+        // Camera state is not part of the comparison.
+        Effect::CameraFireSpeedZoom { .. } => String::new(),
     }
 }
 

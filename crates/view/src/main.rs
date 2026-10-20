@@ -339,6 +339,12 @@ fn setup(
     if driving.is_some() {
         commands.spawn((
             Camera3d::default(),
+            // The game projects with a screen distance of 256 for a 512 pixel wide
+            // screen: 90 degrees across, 73.7 degrees up at 4:3.
+            Projection::Perspective(PerspectiveProjection {
+                fov: 2.0 * (0.75f32).atan(),
+                ..default()
+            }),
             Transform::default(),
             drive::ChaseCamera::new(),
         ));

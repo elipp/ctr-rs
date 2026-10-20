@@ -2,10 +2,9 @@
 //! for the procedures a driver running normally (or crashing into a wall, or
 //! frozen by the V-shift guard) uses. Plus the birth and spawn of a driver.
 //!
-//! Left out of the tick: kart-against-kart (`CollideDrivers`), the audio,
-//! animation and particle stages (all presentation), drifting
-//! (`VehPhysProc_PowerSlide_*`), and the other states a driver can be in
-//! (spinning out, the rev-engine start, the mask grab, being blasted).
+//! Left out of the tick: kart-against-kart (the rest of `CollideDrivers`), the audio and particle stages (presentation), and
+//! the other states a driver can be in (the rev-engine start, the mask grab,
+//! being blasted).
 
 use coll::Collision;
 use loader::lev::{Level, SVec3};
@@ -14,9 +13,11 @@ use math::mips;
 use crate::angular::phys_angular;
 use crate::calc::interp_by_speed;
 use crate::fixed::fixed_player_search;
-use crate::force::{on_apply_forces, rot_axis_angle, translate_matrix};
+use crate::force::{collide_drivers, on_apply_forces, rot_axis_angle, translate_matrix};
+use crate::frame;
 use crate::jump::jump_and_friction;
 use crate::linear::phys_linear;
+use crate::{powerslide, spin};
 use crate::scrub::IDENTITY_LIGHT_MATRIX;
 use crate::search::moved_player_search;
 use crate::stats::{CHARACTER_ENGINES, Stats};
@@ -39,6 +40,7 @@ impl Driver {
     pub fn new(driver_id: u8, character: usize) -> Driver {
         Driver {
             driver_id,
+            character: character as u8,
             stats: Stats::for_class(CHARACTER_ENGINES[character]),
             axis_angle1_normal_vec: SVec3 { x: 0, y: 0x1000, z: 0 },
             axis_angle2_normal_vec: SVec3 { x: 0, y: 0x1000, z: 0 },
@@ -111,13 +113,16 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     d.actions_flag_set &= !(actions::AIRBORNE | actions::HIGH_JUMP);
     d.num_wumpas = 0;
 
+    d.anim_index = 0;
+    d.anim_frame = frame::start_frame(0, frame::num_anim_frames(d, 0)) as i16;
+
     // Straight into driving (the original starts with the engine-revving
     // state of the traffic lights).
     d.init_pending = true;
 }
 
 /// `VehPhysProc_Driving_Init`
-fn driving_init(d: &mut Driver) {
+pub(crate) fn driving_init(d: &mut Driver) {
     d.v_shift_start_guard_timer = V_SHIFT_START_GUARD_TIMER;
     d.v_shift_window_timer = V_SHIFT_WINDOW_TIMER;
     d.phys_state = PhysState::Driving;
@@ -136,11 +141,27 @@ fn freeze_vshift_init(d: &mut Driver) {
     d.actions_flag_set &= !actions::HUMAN_HUMAN_COLLISION;
 }
 
-/// The update stage: `VehPhysProc_Driving_Update` (without starting a drift)
-/// and `VehPhysProc_FreezeVShift_Update`.
-fn update(d: &mut Driver) {
+/// The init stage (`DRIVER_FUNC_INIT`): what a procedure that was started
+/// last tick sets up. The drift and the spin-out only arm their update; the
+/// rest start driving.
+fn init_stage(d: &mut Driver) {
+    match d.phys_state {
+        PhysState::PowerSlide | PhysState::SpinFirst => d.init_pending = false,
+        _ => driving_init(d),
+    }
+}
+
+/// The update stage: `VehPhysProc_Driving_Update`,
+/// `VehPhysProc_FreezeVShift_Update`, `VehPhysProc_PowerSlide_Update` and the
+/// spin-out's.
+fn update(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<Effect>) {
     match d.phys_state {
         PhysState::Driving => {
+            // A drift starts on landing, if steering hard with the hop button held.
+            if powerslide::start_if_drifting(d, input) {
+                return;
+            }
+
             // At this point, assume driver is not touching ground. Wait until
             // the V-shift startup guard has elapsed; if V_Shift happened too
             // many times, meaning you jitter between two quadblocks in a "V"
@@ -161,7 +182,10 @@ fn update(d: &mut Driver) {
                 d.speed_approx = 0;
             }
         }
-        PhysState::SlamWall => {}
+        PhysState::SlamWall | PhysState::SpinStop => {}
+        PhysState::PowerSlide => powerslide::update(d, input, env, effects),
+        PhysState::SpinFirst => spin::first_update(d),
+        PhysState::SpinLast => spin::last_update(d),
     }
 }
 
@@ -215,24 +239,37 @@ pub struct TickResult {
 pub fn tick(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, input: &Input, effects: &mut Vec<Effect>) -> TickResult {
     // DRIVER_FUNC_INIT
     if d.init_pending {
-        driving_init(d);
+        init_stage(d);
     }
 
     // DRIVER_FUNC_UPDATE
-    update(d);
+    update(d, env, input, effects);
 
     // DRIVER_FUNC_PHYS_LINEAR
+    if d.phys_state == PhysState::SpinFirst {
+        spin::first_before_phys_linear(d, env);
+    }
     phys_linear(d, env, input, effects);
-    if d.phys_state == PhysState::SlamWall {
-        d.base_speed = 0;
-        d.fire_speed = 0;
+    match d.phys_state {
+        PhysState::SlamWall => {
+            d.base_speed = 0;
+            d.fire_speed = 0;
+        }
+        PhysState::PowerSlide => powerslide::after_phys_linear(d),
+        PhysState::SpinFirst => spin::first_after_phys_linear(d),
+        PhysState::SpinLast => spin::last_after_phys_linear(d),
+        PhysState::SpinStop => spin::stop_after_phys_linear(d),
+        PhysState::Driving | PhysState::FreezeVShift => {}
     }
 
     // DRIVER_FUNC_PHYS_ANGULAR
-    if d.phys_state == PhysState::SlamWall {
-        slam_wall_phys_angular(d, &mut coll.gte, env);
-    } else {
-        phys_angular(d, &mut coll.gte, env);
+    match d.phys_state {
+        PhysState::SlamWall => slam_wall_phys_angular(d, &mut coll.gte, env),
+        PhysState::PowerSlide => powerslide::phys_angular(d, &mut coll.gte, env),
+        PhysState::SpinFirst => spin::first_phys_angular(d, &mut coll.gte, env),
+        PhysState::SpinLast => spin::last_phys_angular(d, &mut coll.gte, env),
+        PhysState::SpinStop => spin::stop_phys_angular(d, &mut coll.gte, env),
+        PhysState::Driving | PhysState::FreezeVShift => phys_angular(d, &mut coll.gte, env),
     }
 
     // DRIVER_FUNC_APPLY_FORCES
@@ -241,7 +278,8 @@ pub fn tick(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, inpu
     // DRIVER_FUNC_COLL_MOVED
     moved_player_search(d, coll, level, &IDENTITY_LIGHT_MATRIX, env.elapsed_time_ms, effects);
 
-    // DRIVER_FUNC_COLLIDE_DRIVERS: nothing to collide with.
+    // DRIVER_FUNC_COLLIDE_DRIVERS: nothing to collide with, but the turbo pads are here.
+    collide_drivers(d, effects);
 
     // DRIVER_FUNC_COLL_FIXED
     let mask_grab = fixed_player_search(d, coll, level, env, effects);
@@ -266,9 +304,16 @@ pub fn tick(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, inpu
     translate_matrix(d, &mut coll.gte);
 
     // DRIVER_FUNC_ANIMATE
-    if d.phys_state == PhysState::SlamWall {
-        slam_wall_animate(d);
+    match d.phys_state {
+        PhysState::SlamWall => slam_wall_animate(d),
+        PhysState::Driving | PhysState::FreezeVShift | PhysState::PowerSlide => frame::driving(d),
+        PhysState::SpinFirst => frame::spinning(d),
+        PhysState::SpinLast => frame::last_spin(d),
+        PhysState::SpinStop => spin::stop_animate(d),
     }
+
+    // The HUD's jump meter, which gives the hang-time turbo, runs after the drivers' tick.
+    crate::jump_meter::update(d, env, effects);
 
     TickResult { mask_grab }
 }
