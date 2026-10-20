@@ -11,9 +11,9 @@
 //! of each hit, the scrub-depth tracking and the step-flag triggers.
 //!
 //! Left out for now:
-//! * the low-LOD triangle path (`COLL_FIXED_QUADBLK_GetNormVecs_LoLOD` and the
-//!   two-triangle test): every racer, bot and camera search sets
-//!   [`search_flags::HIGH_LOD`], so it is unused by the simulation;
+//! * the low-LOD path for moved searches (the fixed one, used by the camera's
+//!   ground search, is ported but not yet tested against the reference; every
+//!   racer and bot search sets [`search_flags::HIGH_LOD`]);
 //! * instance hitboxes (`COLL_FIXED_BSPLEAF_TestInstance`, `INSTANC_TestPoint`),
 //!   which need the instance and thread model;
 //! * the `ThBuckColl` view of the scratchpad union, which overlays
@@ -103,6 +103,8 @@ mod dividend {
     pub const HI_5: usize = 5;
     pub const HI_6: usize = 6;
     pub const HI_7: usize = 7;
+    pub const LO_0: usize = 8;
+    pub const LO_1: usize = 9;
 }
 
 /// Room for pending BSP children: the reference keeps them in the scratchpad
@@ -527,7 +529,16 @@ impl Collision {
             return;
         }
 
-        assert!(flags & search_flags::HIGH_LOD != 0, "low-LOD collision is not ported");
+        if flags & search_flags::HIGH_LOD == 0 {
+            // Low LOD (the camera): the quad block as two big triangles.
+            assert!(!moved, "low-LOD moved collision is not ported");
+            self.quadblock_normals_lo_lod(level, quad);
+            self.triangle_test_point(level, 0, 1, 2);
+            if has_second_triangle {
+                self.triangle_test_point(level, 1, 3, 2);
+            }
+            return;
+        }
         if flags & search_flags::REUSE_NORMALS == 0 {
             self.quadblock_normals_hi_lod(level, quad);
         }
@@ -565,6 +576,21 @@ impl Collision {
             bsv.pos = vertex.pos;
             bsv.normal_axis = vertex.flags as i16;
         }
+    }
+
+    /// `COLL_FIXED_QUADBLK_GetNormVecs_LoLOD`: planes for the two big triangles.
+    fn quadblock_normals_lo_lod(&mut self, level: &Level, quad: &QuadBlock) {
+        self.load_scratchpad_verts(level, quad);
+
+        // Always 2 for low poly (big block).
+        self.sps.collision.tri_normal_lod_shift = 2;
+        self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift as u8;
+
+        let has_second_triangle = self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
+        if has_second_triangle {
+            self.triangle_norm_vec(quad.tri_normal_vec_dividend[dividend::LO_1], 1, 3, 2);
+        }
+        self.triangle_norm_vec(quad.tri_normal_vec_dividend[dividend::LO_0], 0, 1, 2);
     }
 
     /// `COLL_FIXED_QUADBLK_GetNormVecs_HiLOD`: planes for the eight small

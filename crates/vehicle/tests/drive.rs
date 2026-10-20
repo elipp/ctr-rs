@@ -81,3 +81,34 @@ fn steering_turns_the_kart() {
     eprintln!("turn left {left}, turn right {right}");
     assert!(left != 0 && right != 0 && (left > 0) != (right > 0), "left {left}, right {right}");
 }
+
+/// Drops the kart from `height` (world units) above the start line and returns
+/// the longest hang time and the reserves it gets on landing.
+fn drop_from(level: &Level, height: i32) -> (i32, i32, u8) {
+    let mut drive = Drive::new(level, 0);
+    drive.driver.pos_curr.y += height << 8;
+    drive.driver.pos_prev = drive.driver.pos_curr;
+    // Only a jump (a hop or a ramp) counts as hang time: the airborne flag needs the jump cooldown.
+    drive.driver.jump_cooldown_ms = 0x180;
+    let mut hang = 0;
+    let mut reserves = 0;
+    let mut kart_state = 0;
+    for _ in 0..200 {
+        drive.step(level, 0, 0x80);
+        let d = &drive.driver;
+        hang = hang.max(d.jump_meter as i32);
+        reserves = reserves.max(d.reserves as i32);
+        kart_state = d.kart_state;
+    }
+    (hang, reserves, kart_state)
+}
+
+#[test]
+fn long_hang_time_gives_a_boost() {
+    let Some(level) = level(LevelId::DINGO_CANYON) else { return };
+    let (short_hang, short_reserves, _) = drop_from(&level, 0x20);
+    let (long_hang, long_reserves, _) = drop_from(&level, 0x900);
+    eprintln!("short drop: hang {short_hang} ms, reserves {short_reserves}; long drop: hang {long_hang} ms, reserves {long_reserves}");
+    assert!(short_hang < 640 && short_reserves == 0, "a short drop gives no boost");
+    assert!(long_hang >= 640 && long_reserves > 0, "a long drop gives a boost: hang {long_hang}, reserves {long_reserves}");
+}

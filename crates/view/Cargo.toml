@@ -8,3 +8,4 @@ bevy = { version = "0.20.0", features = ["dynamic_linking", "gamepad"] }
 coll = { path = "../coll" }
 loader = { path = "../loader" }
 vehicle = { path = "../vehicle" }
+camera = { path = "../camera" }

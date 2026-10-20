@@ -44,6 +44,8 @@ pub fn slam_wall_init(d: &mut Driver) {
     d.inst_scale_x = CRASH_SCALE_XY;
 
     d.phys_state = PhysState::SlamWall;
+    // Nothing pending: a drift that started this tick is over before it armed.
+    d.init_pending = false;
 }
 
 /// `VEH_PHYS_CRASH_FAST_SQRT_ITERATIONS`

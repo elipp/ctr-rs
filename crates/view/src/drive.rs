@@ -4,17 +4,19 @@
 //!
 //! * W / Up: gas (Cross), S / Down: brake and reverse (Square, stick back)
 //! * A / D, Left / Right: steer
-//! * Space / Shift: hop (R1)
+//! * Space / Shift: hop (R1), Q / Ctrl: hop (L1). Land while steering hard
+//!   with one still held to drift; tap the other when the meter is nearly
+//!   empty for the boost
 //! * R: back to the starting grid
 //!
-//! Not in the sim yet: drifting (the hop does nothing but jump), items, the
+//! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the
 //! start-of-race countdown, other karts. Falling off the track puts the kart
 //! back on the grid (the original's mask grab is not ported).
 
 use bevy::prelude::*;
 use coll::Collision;
 use vehicle::sim::{spawn, tick};
-use vehicle::{Driver, Env, Input, buttons};
+use vehicle::{Driver, Effect, Env, Input, buttons};
 
 use crate::Track;
 use crate::mesh::SCALE;
@@ -23,15 +25,32 @@ use crate::mesh::SCALE;
 #[derive(Component)]
 pub struct Kart;
 
+/// Marks the camera that shows the sim's `camera::CameraDc`.
 #[derive(Component)]
-pub struct ChaseCamera {
-    /// Horizontal direction the camera looks along, smoothed.
-    heading: Vec3,
-}
+pub struct ChaseCamera;
 
 impl ChaseCamera {
     pub fn new() -> ChaseCamera {
-        ChaseCamera { heading: Vec3::Z }
+        ChaseCamera
+    }
+}
+
+/// Where the camera is, what it looks at, and how it rolls.
+#[derive(Clone, Copy)]
+struct View {
+    eye: Vec3,
+    target: Vec3,
+    /// Turns, around the view direction.
+    roll: f32,
+}
+
+fn view_of(camera: &camera::CameraDc) -> View {
+    let at = |x: i32, y: i32, z: i32| Vec3::new(x as f32, y as f32, z as f32) * SCALE;
+    let (p, t) = (camera.pb_pos, camera.look_at_pos);
+    View {
+        eye: at(p.x as i32, p.y as i32, p.z as i32),
+        target: at(t.x, t.y, t.z),
+        roll: camera.pb_rot.z as f32 / 4096.0,
     }
 }
 
@@ -55,13 +74,22 @@ pub struct Drive {
     held: u32,
     previous: Pose,
     current: Pose,
+    camera: camera::CameraDc,
+    previous_view: View,
+    current_view: View,
 }
 
 impl Drive {
     pub fn new(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> Drive {
         let (driver, coll) = Drive::birth(track, character, anim_num_frames);
         let pose = pose_of(&driver);
+        let mut camera = camera::CameraDc::default();
+        camera.follow_driver(&driver, &track.0, &camera::Input { elapsed_time_ms: 32, ..Default::default() });
+        let view = view_of(&camera);
         Drive {
+            camera,
+            previous_view: view,
+            current_view: view,
             driver,
             coll,
             character,
@@ -152,6 +180,9 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     {
         held |= buttons::R1;
     }
+    if down(&[KeyCode::KeyQ, KeyCode::ControlLeft]) || pad_down(&[GamepadButton::LeftTrigger, GamepadButton::LeftTrigger2]) {
+        held |= buttons::L1;
+    }
     let left = down(&[KeyCode::KeyA, KeyCode::ArrowLeft]) || pad_down(&[GamepadButton::DPadLeft]);
     let right = down(&[KeyCode::KeyD, KeyCode::ArrowRight]) || pad_down(&[GamepadButton::DPadRight]);
     // Sticks: 0 is left, 0x80 the middle, 0xff right (and back for LY).
@@ -181,6 +212,7 @@ fn drive_tick(
     if keys.pressed(KeyCode::KeyR) {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
         (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
+        drive.camera = camera::CameraDc::default();
     }
 
     let input = read_input(&keys, &pads, drive.held);
@@ -190,23 +222,40 @@ fn drive_tick(
         timer: drive.tick,
         ..Env::default()
     };
+    let mut effects = Vec::new();
     let result = tick(
         &mut drive.driver,
         &mut drive.coll,
         &track.0,
         &env,
         &input,
-        &mut Vec::new(),
+        &mut effects,
     );
     drive.tick += 1;
 
     if result.mask_grab {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
         (drive.driver, drive.coll) = (driver, coll);
+        drive.camera = camera::CameraDc::default();
     }
+
+    // A boost pulls the camera back.
+    if effects
+        .iter()
+        .any(|e| matches!(e, Effect::CameraFireSpeedZoom { .. }))
+    {
+        drive.camera.flags |= camera::flags::FIRE_SPEED_ZOOM;
+    }
+    let camera_input = camera::Input {
+        elapsed_time_ms: env.elapsed_time_ms,
+        ..Default::default()
+    };
+    drive.camera.follow_driver(&drive.driver, &track.0, &camera_input);
 
     drive.previous = drive.current;
     drive.current = pose_of(&drive.driver);
+    drive.previous_view = drive.current_view;
+    drive.current_view = view_of(&drive.camera);
 }
 
 /// The kart between the last two ticks.
@@ -233,28 +282,22 @@ fn show_kart(
     }
 }
 
-/// Behind and above the kart, looking along where it goes.
+/// The camera of the sim, between the last two ticks.
 fn chase(
     drive: Res<Drive>,
     fixed: Res<Time<Fixed>>,
-    time: Res<Time>,
-    mut cameras: Query<(&mut Transform, &mut ChaseCamera)>,
+    mut cameras: Query<&mut Transform, With<ChaseCamera>>,
 ) {
-    const DISTANCE: f32 = 6.0;
-    const HEIGHT: f32 = 2.5;
-    let pose = interpolated(&drive, &fixed);
-    let forward = pose.rotation * Vec3::Z;
-    let flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-    for (mut transform, mut camera) in &mut cameras {
-        if flat != Vec3::ZERO {
-            let follow = 1.0 - (-6.0 * time.delta_secs()).exp();
-            camera.heading = camera.heading.lerp(flat, follow).normalize_or_zero();
-            if camera.heading == Vec3::ZERO {
-                camera.heading = flat;
-            }
-        }
-        transform.translation = pose.translation - camera.heading * DISTANCE + Vec3::Y * HEIGHT;
-        transform.look_at(pose.translation + Vec3::Y * 0.8, Vec3::Y);
+    let t = fixed.overstep_fraction();
+    let (a, b) = (drive.previous_view, drive.current_view);
+    let eye = a.eye.lerp(b.eye, t);
+    let target = a.target.lerp(b.target, t);
+    // The roll's sign (which way the horizon tilts) is a guess.
+    let roll = (a.roll + (b.roll - a.roll) * t) * std::f32::consts::TAU;
+    for mut transform in &mut cameras {
+        transform.translation = eye;
+        transform.look_at(target, Vec3::Y);
+        transform.rotate_local_z(roll);
     }
 }
 
@@ -263,11 +306,18 @@ fn hud(drive: Res<Drive>, mut text: Query<&mut Text, With<Hud>>) {
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     for mut text in &mut text {
         text.0 = format!(
-            "speed {:5}  {:?}{}{}\nW/S gas/brake, A/D steer, Space hop, R restart",
+            "speed {:5}  {:?}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, R restart",
             d.speed_approx,
             d.phys_state,
             if grounded { "" } else { "  airborne" },
             if d.wall_rub_timer != 0 { "  wall" } else { "" },
+            if d.phys_state == vehicle::PhysState::PowerSlide {
+                format!("  meter {} boosts {}", d.turbo_meter_room_left, d.num_boosts_success)
+            } else if d.reserves != 0 {
+                format!("  reserves {}", d.reserves)
+            } else {
+                String::new()
+            },
         );
     }
 }
