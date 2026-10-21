@@ -1,5 +1,5 @@
 //! The break-up of a crate as Bevy entities: when the sim breaks a crate, the explosion model
-//! (`render::explosion`) plays its animation at the crate, tinted as `hazard::crates` says.
+//! (`render::explosion`) plays its animation at the crate, tinted as `instance::pickup::crates` says.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -53,7 +53,7 @@ pub fn spawn(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let breaks: Vec<u32> = sim.hazards.crates.iter().map(|c| c.sim.breaks).collect();
+    let breaks: Vec<u32> = sim.objects.crates.iter().map(|c| c.sim.breaks).collect();
     // A new level: whatever was broken before does not count.
     if seen.len() != breaks.len() {
         *seen = breaks.clone();
@@ -69,7 +69,7 @@ pub fn spawn(
             continue;
         }
         seen[i] = breaks[i];
-        let crate_box = &sim.hazards.crates[i].sim;
+        let crate_box = &sim.objects.crates[i].sim;
 
         // The model's faces and texture are made once.
         if explosion.built.is_none() {

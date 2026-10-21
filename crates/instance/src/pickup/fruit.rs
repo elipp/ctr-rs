@@ -5,6 +5,8 @@
 use coll::model_id;
 use vehicle::{Driver, wumpa};
 
+use crate::{Instance, Touch};
+
 /// A wumpa fruit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Fruit {
@@ -25,6 +27,12 @@ impl Fruit {
         }
         self.collected = true;
         1
+    }
+}
+
+impl Instance for Fruit {
+    fn touch(&mut self, hit: &mut Touch) -> i32 {
+        self.linc(hit.driver, hit.model)
     }
 }
 

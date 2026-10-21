@@ -8,6 +8,8 @@
 use coll::model_id;
 use vehicle::{Driver, wumpa};
 
+use crate::{Context, Instance, Tick, Touch};
+
 /// `crateInst->scale`, 0x1000 being full size.
 pub const FULL_SCALE: i16 = 0x1000;
 /// `crateObj->cooldown` after a hit: ticks to wait, which the game says is about a second.
@@ -131,6 +133,16 @@ impl CrateBox {
             self.scale = FULL_SCALE;
             self.thread = false;
         }
+    }
+}
+
+impl Instance for CrateBox {
+    fn th_tick(&mut self, _cx: &Context, _out: &mut Tick) {
+        self.tick();
+    }
+
+    fn touch(&mut self, hit: &mut Touch) -> i32 {
+        self.linc(hit.driver, hit.model, hit.random_number)
     }
 }
 

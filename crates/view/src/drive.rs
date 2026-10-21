@@ -7,11 +7,12 @@
 //! * Space / Shift: hop (R1), Q / Ctrl: hop (L1). Land while steering hard
 //!   with one still held to drift; tap the other when the meter is nearly
 //!   empty for the boost
+//! * M: use the mask item (longer with 10 wumpa fruit)
 //! * R: back to the starting grid
 //!
 //! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the
-//! start-of-race countdown, other karts. Falling off the track puts the kart
-//! back on the grid (the original's mask grab is not ported).
+//! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
+//! or Uka Uka (`mask.rs`) carries the kart back to the track.
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -81,10 +82,10 @@ struct FpsHud;
 
 /// Where the kart is drawn.
 #[derive(Clone, Copy)]
-struct Pose {
-    translation: Vec3,
-    rotation: Quat,
-    scale: Vec3,
+pub(crate) struct Pose {
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
 }
 
 #[derive(Resource)]
@@ -93,7 +94,7 @@ pub struct Drive {
     coll: Collision,
     character: usize,
     anim_num_frames: [u16; 8],
-    tick: u32,
+    pub(crate) tick: u32,
     held: u32,
     previous: Pose,
     current: Pose,
@@ -173,6 +174,21 @@ impl Drive {
     }
 }
 
+/// The rotation a game matrix stands for: its second column is up and its third forward. A matrix
+/// that is flat (a squished kart) has none.
+pub(crate) fn rotation_of(matrix: &vehicle::Matrix) -> Quat {
+    let column = |c: usize| {
+        Vec3::new(matrix.m[0][c] as f32, matrix.m[1][c] as f32, matrix.m[2][c] as f32) / 4096.0
+    };
+    let (up, forward) = (column(1), column(2));
+    if up.length_squared() == 0.0 || forward.length_squared() == 0.0 {
+        return Quat::IDENTITY;
+    }
+    let right = up.cross(forward).normalize_or_zero();
+    let forward = right.cross(up.normalize_or_zero());
+    Quat::from_mat3(&Mat3::from_cols(right, up.normalize_or_zero(), forward.normalize_or_zero()))
+}
+
 /// The pose of the model, from the matrix the sim gives the kart's instance (the
 /// surface and heading, and the wheelie on top): its third column is forward and its
 /// second up. The squash of the wheelie and the instance's own squash and stretch go in the scale.
@@ -186,17 +202,7 @@ fn pose_of(d: &Driver) -> Pose {
         ) / 4096.0
     };
     let (side, up, forward) = (column(0), column(1), column(2));
-    let rotation = if up.length_squared() == 0.0 || forward.length_squared() == 0.0 {
-        Quat::IDENTITY
-    } else {
-        let right = up.cross(forward).normalize_or_zero();
-        let forward = right.cross(up.normalize_or_zero());
-        Quat::from_mat3(&Mat3::from_cols(
-            right,
-            up.normalize_or_zero(),
-            forward.normalize_or_zero(),
-        ))
-    };
+    let rotation = rotation_of(&matrix);
     // The squash and stretch of the instance, on top of the wheelie's.
     let inst = Vec3::new(
         d.inst_scale_x as f32,
@@ -292,7 +298,7 @@ pub struct DrivePlugin;
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(crate::exhaust::Particles::new())
-            .add_systems(Startup, spawn_hud)
+            .add_systems(Startup, (spawn_hud, crate::mask::spawn))
             .add_systems(FixedUpdate, drive_tick)
             .add_systems(
                 Update,
@@ -316,6 +322,7 @@ impl Plugin for DrivePlugin {
                     crate::shadow::update,
                     crate::flame::update,
                     crate::skid::update,
+                    crate::mask::update.after(show_kart),
                 ),
             )
             .add_systems(
@@ -458,6 +465,7 @@ fn drive_tick(
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
+    mut mask_held: Local<bool>,
 ) {
     let drive = &mut *drive;
     if keys.pressed(KeyCode::KeyR) {
@@ -475,6 +483,19 @@ fn drive_tick(
         ..Env::default()
     };
     let mut effects = Vec::new();
+    // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
+    // kart: it has the mask already.)
+    let mask_down = keys.pressed(KeyCode::KeyM) || pads.iter().any(|p| p.pressed(GamepadButton::East));
+    if mask_down
+        && !*mask_held
+        && !matches!(
+            drive.driver.kart_state,
+            vehicle::kart_state::MASK_GRABBED | vehicle::kart_state::ENGINE_REVVING
+        )
+    {
+        vehicle::stuck::shoot_mask(&mut drive.driver, &mut effects);
+    }
+    *mask_held = mask_down;
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
     let (_, at) = vehicle::baked::inst_matrix(&drive.driver);
@@ -497,7 +518,7 @@ fn drive_tick(
         &track.0,
         &env,
         &input,
-        &mut sim.hazards,
+        &mut sim.objects,
         &mut effects,
     );
     drive.tick += 1;
@@ -538,7 +559,7 @@ fn drive_tick(
 }
 
 /// The kart between the last two ticks.
-fn interpolated(drive: &Drive, fixed: &Time<Fixed>) -> Pose {
+pub(crate) fn interpolated(drive: &Drive, fixed: &Time<Fixed>) -> Pose {
     let t = fixed.overstep_fraction();
     Pose {
         translation: drive
@@ -642,7 +663,7 @@ fn hud(drive: Res<Drive>, mut text: Query<&mut Text, With<Hud>>) {
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     for mut text in &mut text {
         text.0 = format!(
-            "pos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, R restart",
+            "pos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, M mask, R restart",
             d.pos_curr.x >> 8,
             d.pos_curr.y >> 8,
             d.pos_curr.z >> 8,

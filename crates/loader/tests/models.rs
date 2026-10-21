@@ -89,3 +89,30 @@ fn every_racer_pack_has_the_crate_explosion() {
         }
     }
 }
+
+/// Every racer's pack has the Aku Aku and Uka Uka masks: a head that poses (the first frame of its
+/// animation) and a beam that turns through 24 frames, textured from the shared VRAM.
+#[test]
+fn every_racer_pack_has_the_masks() {
+    let Some(mut b) = common::open_bigfile() else { return };
+    let mut vram = Vram::default();
+    let shared = b.big.read(&mut b.disc, BigIndex::SHARED_MPK_VRM.get()).unwrap();
+    for img in parse_vram_file(&shared).unwrap() {
+        vram.upload(&img).unwrap();
+    }
+    for character in 0..16 {
+        let file = b.big.read(&mut b.disc, BigIndex::ARCADE_1P_PACK.nth(character).get()).unwrap();
+        let models = loader::model::parse_pack_models(&DramFile::parse(&file).unwrap()).unwrap();
+        for (id, name, frames) in [(0x39, "akumouth", 13), (0x3a, "ukamouth", 13), (0x3e, "akubeam", 24), (0x40, "ukabeam", 24)] {
+            let model = models.iter().find(|m| m.id == id).unwrap_or_else(|| panic!("racer {character}: no model {id:#x}"));
+            assert_eq!(model.name, name);
+            let header = &model.headers[0];
+            assert_eq!(header.animations[0].num_frames, frames, "{name}");
+            assert!(!header.triangles(&header.animations[0].frames[0]).is_empty(), "{name}");
+            let visible = header.textures.iter().any(|t| {
+                (0..=255u8).step_by(5).any(|u| (0..=255u8).step_by(5).any(|v| matches!(vram.texel(t, u, v), Ok(Some(c)) if c[3] != 0)))
+            });
+            assert!(visible, "racer {character}: {name} has no visible texel in the shared VRAM");
+        }
+    }
+}

@@ -1,32 +1,29 @@
-//! The track's moving objects, ticked at 30 Hz like the game's threads (`game/231`). Plain state
-//! and a pure `tick`, so they can go in the rollback state next to the drivers: [`Hazards`] is
-//! all of a level's, built from its definition and cloneable.
+//! The objects a level places as instances, ticked at 30 Hz like the game's threads (`game/231`).
+//! Plain state and a pure `tick`, so they can go in the rollback state next to the drivers:
+//! [`Objects`] is all of a level's, built from its definition and cloneable.
 //!
-//! The armadillos of Dingo Canyon, the fireballs and the turtles of Mystery Caves, the minecarts of Dragon Mines,
-//! and the snowball and the barrels that roll along recorded paths. Each tick says where a hazard
-//! looks for a driver ([`Contact`]); what hurting one does (`VehPickState_NewState`) is not ported.
+//! There are two kinds. The [`hazard`]s hurt a driver in reach, or throw it: each tick says where
+//! one looks for a driver ([`Contact`]); what hurting one does (`VehPickState_NewState`) is not
+//! ported. The [`pickup`]s are collected or broken by a touch of their hitbox. What they have in
+//! common is [`Instance`]: a thread that ticks, and what the kart's collision search does at the
+//! hitbox (`LInC`).
 
-pub mod armadillo;
-pub mod crates;
-pub mod fireball;
-pub mod fruit;
-pub mod minecart;
-pub mod roller;
-pub mod turtle;
+pub mod hazard;
+pub mod pickup;
 
 use loader::dram::DramFile;
 use loader::lev::{InstDef, Level, PosRot, SVec3};
+use loader::model::Model;
 use vehicle::Driver;
 use vehicle::search::Instances;
-use loader::model::Model;
 
-use armadillo::Armadillo;
-use crates::{CrateBox, Kind};
-use fireball::{Fireball, Spark};
-use fruit::Fruit;
-use minecart::Minecart;
-use roller::Roller;
-use turtle::Turtle;
+use hazard::armadillo::Armadillo;
+use hazard::fireball::{Fireball, Spark};
+use hazard::minecart::Minecart;
+use hazard::roller::{self, Roller};
+use hazard::turtle::Turtle;
+use pickup::crates::{CrateBox, Kind};
+use pickup::fruit::Fruit;
 
 /// `VEH_PICK_DAMAGE_*`: what a hit does to the driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +93,43 @@ pub(crate) fn interpolate(current: i16, desired: i16, speed: i32) -> i16 {
     (result & 0xfff) as i16
 }
 
-/// A hazard and the instance of the level that it moves (an index into `Level::instances`).
+/// What an object of a level does: its thread, which ticks, and what the kart's collision search
+/// does when it reaches its hitbox. Both have a default of nothing, as an instance without a
+/// `ThTick` or an `LInC` has.
+pub trait Instance {
+    /// `RB_*_ThTick`: one game tick. What the object did goes in `out`.
+    fn th_tick(&mut self, _cx: &Context, _out: &mut Tick) {}
+
+    /// `RB_*_LInC` (`MetaDataMODEL::LInC`): the kart's collision search reached the object's
+    /// hitbox. The result is what the search takes it as: 1 stops nothing (the default, as for the
+    /// models without an `LInC`), 0 means the object is not there to be touched.
+    fn touch(&mut self, _hit: &mut Touch) -> i32 {
+        1
+    }
+}
+
+/// What a thread of an object can see besides itself.
+#[derive(Debug, Clone, Copy)]
+pub struct Context<'a> {
+    /// The frames of the first two animations of the object's model (`INSTANCE_GetNumAnimFrames`).
+    pub frames: [i32; 2],
+    /// The ticks run: `gGT->timer`.
+    pub ticks: u32,
+    /// `ptrSpawnType2`'s first path, which the minecarts follow.
+    pub position_path: &'a [SVec3],
+    /// `ptrSpawnType2_PosRot`, which the rollers follow.
+    pub roll_paths: &'a [Vec<PosRot>],
+}
+
+/// A touch of a hitbox: the driver, and the `Input1.modelID` of the search that reached it.
+pub struct Touch<'a> {
+    pub driver: &'a mut Driver,
+    pub model: i16,
+    /// `sdata->randomNumber`, which breaking a fruit crate advances.
+    pub random_number: &'a mut i32,
+}
+
+/// An object and the instance of the level that it moves (an index into `Level::instances`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed<T> {
     pub instance: usize,
@@ -105,7 +138,7 @@ pub struct Placed<T> {
     pub frames: [i32; 2],
 }
 
-/// What one tick of the hazards of a level did.
+/// What one tick of the objects of a level did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tick {
     /// Where hazards looked for drivers.
@@ -114,9 +147,9 @@ pub struct Tick {
     pub sparks: Vec<Spark>,
 }
 
-/// All the hazards of a level.
+/// All the objects of a level.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Hazards {
+pub struct Objects {
     pub armadillos: Vec<Placed<Armadillo>>,
     pub fireballs: Vec<Placed<Fireball>>,
     pub minecarts: Vec<Placed<Minecart>>,
@@ -139,11 +172,23 @@ fn digit(def: &InstDef) -> Option<usize> {
     Some(def.name.chars().last()?.to_digit(10)? as usize)
 }
 
-impl Hazards {
-    /// The hazards the level places (`RB_*_LInB` of each instance), at tick 0. `dram` is the
+/// The thread of each object of a kind, one tick.
+fn th_tick_all<T: Instance>(list: &mut [Placed<T>], cx: &Context, out: &mut Tick) {
+    for placed in list {
+        placed.sim.th_tick(&Context { frames: placed.frames, ..*cx }, out);
+    }
+}
+
+/// The touch of the object of a kind that is `instance`, if there is one.
+fn touch_in<T: Instance>(list: &mut [Placed<T>], instance: usize, hit: &mut Touch) -> Option<i32> {
+    list.iter_mut().find(|p| p.instance == instance).map(|p| p.sim.touch(hit))
+}
+
+impl Objects {
+    /// The objects the level places (`RB_*_LInB` of each instance), at tick 0. `dram` is the
     /// level's file, which the instances' models are in.
-    pub fn new(level: &Level, dram: &DramFile) -> Hazards {
-        let mut hazards = Hazards {
+    pub fn new(level: &Level, dram: &DramFile) -> Objects {
+        let mut objects = Objects {
             armadillos: Vec::new(),
             fireballs: Vec::new(),
             minecarts: Vec::new(),
@@ -165,34 +210,34 @@ impl Hazards {
                 [animation(0), animation(1)]
             };
             if let Some(kind) = Kind::of_model(def.model_id) {
-                hazards.crates.push(Placed { instance, sim: CrateBox::new(kind), frames: [0; 2] });
+                objects.crates.push(Placed { instance, sim: CrateBox::new(kind), frames: [0; 2] });
                 continue;
             }
             match def.model_name.as_str() {
                 "armadillo" => {
                     let delay = digit(def).and_then(|d| level.spawn_delays.get(d)).copied().unwrap_or(0);
-                    hazards.armadillos.push(Placed { instance, sim: Armadillo::new(def, delay), frames: frames() });
+                    objects.armadillos.push(Placed { instance, sim: Armadillo::new(def, delay), frames: frames() });
                 }
                 "turtle" => {
                     let frames = frames();
-                    hazards.turtles.push(Placed { instance, sim: Turtle::new(def, frames[0]), frames });
+                    objects.turtles.push(Placed { instance, sim: Turtle::new(def, frames[0]), frames });
                 }
-                "fruit" => hazards.fruit.push(Placed { instance, sim: Fruit::default(), frames: [0; 2] }),
-                "fireball" => hazards.fireballs.push(Placed { instance, sim: Fireball::new(def), frames: [0; 2] }),
+                "fruit" => objects.fruit.push(Placed { instance, sim: Fruit::default(), frames: [0; 2] }),
+                "fireball" => objects.fireballs.push(Placed { instance, sim: Fireball::new(def), frames: [0; 2] }),
                 "minecart" => {
-                    if let Some(sim) = Minecart::new(def, &hazards.position_path) {
-                        hazards.minecarts.push(Placed { instance, sim, frames: frames() });
+                    if let Some(sim) = Minecart::new(def, &objects.position_path) {
+                        objects.minecarts.push(Placed { instance, sim, frames: frames() });
                     }
                 }
                 "snowball" | "barrel" => {
                     if let Some(path) = digit(def).filter(|&p| level.paths.get(p).is_some_and(|path| path.len() > 1)) {
-                        hazards.rollers.push(Placed { instance, sim: Roller { path }, frames: [0; 2] });
+                        objects.rollers.push(Placed { instance, sim: Roller { path }, frames: [0; 2] });
                     }
                 }
                 _ => {}
             }
         }
-        hazards
+        objects
     }
 
     /// The ticks run so far.
@@ -200,32 +245,17 @@ impl Hazards {
         self.ticks
     }
 
-    /// One game tick of every hazard.
+    /// One game tick of every object.
     pub fn tick(&mut self) -> Tick {
         let mut tick = Tick::default();
-        for a in &mut self.armadillos {
-            tick.contacts.extend(a.sim.tick(a.frames));
-        }
-        for f in &mut self.fireballs {
-            if let Some(step) = f.sim.tick() {
-                tick.sparks.push(step.spark);
-                tick.contacts.push(step.contact);
-            }
-        }
-        for m in &mut self.minecarts {
-            tick.contacts.push(m.sim.tick(&self.position_path, m.frames[0]));
-        }
-        for t in &mut self.turtles {
-            t.sim.tick(t.frames[0]);
-        }
-        for c in &mut self.crates {
-            c.sim.tick();
-        }
-        for r in &self.rollers {
-            let path = &self.roll_paths[r.sim.path];
-            let frame = roller::frame_index(path.len(), self.ticks).expect("a path of two points or more");
-            tick.contacts.push(roller::contact(&path[frame]));
-        }
+        let cx = Context { frames: [0; 2], ticks: self.ticks, position_path: &self.position_path, roll_paths: &self.roll_paths };
+        th_tick_all(&mut self.armadillos, &cx, &mut tick);
+        th_tick_all(&mut self.fireballs, &cx, &mut tick);
+        th_tick_all(&mut self.minecarts, &cx, &mut tick);
+        th_tick_all(&mut self.turtles, &cx, &mut tick);
+        th_tick_all(&mut self.fruit, &cx, &mut tick);
+        th_tick_all(&mut self.crates, &cx, &mut tick);
+        th_tick_all(&mut self.rollers, &cx, &mut tick);
         self.ticks += 1;
         tick
     }
@@ -239,20 +269,19 @@ impl Hazards {
 }
 
 /// What the kart's collision search does when it reaches the hitbox of one of these instances
-/// (`MetaDataMODEL::LInC`). The turtles, the wumpa fruit and the crates have one so far; the other models give 1,
-/// as those without an `LInC` do.
-impl Instances for Hazards {
+/// (`MetaDataMODEL::LInC`): [`Instance::touch`] of the object. The turtles, the wumpa fruit and the
+/// crates have one so far; the other models give 1, as those without an `LInC` do.
+impl Instances for Objects {
     fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &coll::Scratchpad) -> i32 {
-        if let Some(turtle) = self.turtles.iter().find(|t| t.instance == instance) {
-            return turtle.sim.linc(driver);
-        }
-        if let Some(fruit) = self.fruit.iter_mut().find(|f| f.instance == instance) {
-            return fruit.sim.linc(driver, sps.input1.model_id);
-        }
-        if let Some(crate_box) = self.crates.iter_mut().find(|c| c.instance == instance) {
-            return crate_box.sim.linc(driver, sps.input1.model_id, &mut self.random_number);
-        }
-        1
+        let mut hit = Touch { driver, model: sps.input1.model_id, random_number: &mut self.random_number };
+        touch_in(&mut self.turtles, instance, &mut hit)
+            .or_else(|| touch_in(&mut self.fruit, instance, &mut hit))
+            .or_else(|| touch_in(&mut self.crates, instance, &mut hit))
+            .or_else(|| touch_in(&mut self.armadillos, instance, &mut hit))
+            .or_else(|| touch_in(&mut self.fireballs, instance, &mut hit))
+            .or_else(|| touch_in(&mut self.minecarts, instance, &mut hit))
+            .or_else(|| touch_in(&mut self.rollers, instance, &mut hit))
+            .unwrap_or(1)
     }
 }
 

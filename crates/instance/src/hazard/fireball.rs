@@ -3,7 +3,7 @@
 
 use loader::lev::InstDef;
 
-use crate::{Contact, Damage, Shape};
+use crate::{Context, Contact, Damage, Instance, Shape, Tick};
 
 /// Milliseconds a tick lasts (`elapsedTimeMS`).
 const TICK_MS: i16 = 32;
@@ -92,6 +92,15 @@ impl Fireball {
             self.cycle_timer = CYCLE_MS;
         }
         step
+    }
+}
+
+impl Instance for Fireball {
+    fn th_tick(&mut self, _cx: &Context, out: &mut Tick) {
+        if let Some(step) = self.tick() {
+            out.sparks.push(step.spark);
+            out.contacts.push(step.contact);
+        }
     }
 }
 
