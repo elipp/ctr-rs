@@ -104,6 +104,9 @@ pub struct MinecartBody(usize);
 #[derive(Component)]
 pub struct FruitBody(usize);
 
+/// Constant depth bias (see `DEPTH_BIAS_PER_ORDER`) that keeps a crate in front of the ground it sinks into.
+const CRATE_DEPTH_BIAS: f32 = 4_000_000.0;
+
 /// A placed crate (its index among `Hazards::crates`).
 #[derive(Component)]
 pub struct CrateBody(pub usize);
@@ -285,7 +288,16 @@ pub fn spawn(
             }
             _ => (transform, None),
         };
-        let parts = spawn_parts(data.parts, &base, transform, parent, commands, meshes, materials, subtract_materials, 0);
+        // The level places crates at whatever height, so they sink into the ground; pull them
+        // toward the camera so the ground does not cut them.
+        let crate_base;
+        let base = if matches!(by_instance.get(&n), Some(Hazard::Crate(_))) {
+            crate_base = StandardMaterial { depth_bias: CRATE_DEPTH_BIAS, ..base.clone() };
+            &crate_base
+        } else {
+            &base
+        };
+        let parts = spawn_parts(data.parts, base, transform, parent, commands, meshes, materials, subtract_materials, 0);
         if header.animations.first().is_some_and(|a| a.frames.len() > 1) {
             props.0.push(Animated { header: header.clone(), inst_scale, parts, shown: Some(0) });
         }
