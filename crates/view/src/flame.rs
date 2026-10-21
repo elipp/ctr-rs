@@ -89,6 +89,7 @@ pub fn spawn(
 /// fades out.
 pub fn update(
     drive: Res<Drive>,
+    fixed: Res<Time<Fixed>>,
     mut flames: Query<(&Flame, &mut Transform, &mut Visibility, &Children)>,
     parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<SubtractMaterial>>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -96,6 +97,9 @@ pub fn update(
 ) {
     let turbo = drive.driver.turbo.filter(|t| !t.hidden);
     let offsets = turbo::pipe_offsets([drive.driver.inst_scale_x, drive.driver.inst_scale_y, drive.driver.inst_scale_z].map(i32::from));
+    // The fire is a child of the kart, whose squash and stretch it must not inherit (the
+    // offsets already have the instance scale in them): undo the kart's scale.
+    let inherited = crate::drive::interpolated(&drive, &fixed).scale.recip();
     for (flame, mut transform, mut visibility, children) in &mut flames {
         let shown = turbo.filter(|t| t.frames()[flame.pipe] == flame.frame);
         *visibility = if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden };
@@ -103,8 +107,9 @@ pub fn update(
         let size = turbo.scale();
         // The second pipe's fire is the first one's mirror image.
         let mirror = if flame.pipe == 0 { 1.0 } else { -1.0 };
-        transform.translation = Vec3::from_array(offsets[flame.pipe].map(|v| v as f32)) * SCALE;
-        transform.scale = Vec3::new(size * mirror, size, size);
+        transform.translation =
+            Vec3::from_array(offsets[flame.pipe].map(|v| v as f32)) * SCALE * inherited;
+        transform.scale = Vec3::new(size * mirror, size, size) * inherited;
 
         // Fading in the colour, and in the alpha of the blended parts.
         let fade = (1.0 - turbo.alpha_scale as f32 / ALPHA_GONE).clamp(0.0, 1.0);

@@ -80,6 +80,10 @@ struct ReservesHud;
 #[derive(Component)]
 struct FpsHud;
 
+/// The "[paused]" label.
+#[derive(Component)]
+struct PausedHud;
+
 /// Where the kart is drawn.
 #[derive(Clone, Copy)]
 pub(crate) struct Pose {
@@ -178,7 +182,11 @@ impl Drive {
 /// that is flat (a squished kart) has none.
 pub(crate) fn rotation_of(matrix: &vehicle::Matrix) -> Quat {
     let column = |c: usize| {
-        Vec3::new(matrix.m[0][c] as f32, matrix.m[1][c] as f32, matrix.m[2][c] as f32) / 4096.0
+        Vec3::new(
+            matrix.m[0][c] as f32,
+            matrix.m[1][c] as f32,
+            matrix.m[2][c] as f32,
+        ) / 4096.0
     };
     let (up, forward) = (column(1), column(2));
     if up.length_squared() == 0.0 || forward.length_squared() == 0.0 {
@@ -186,7 +194,11 @@ pub(crate) fn rotation_of(matrix: &vehicle::Matrix) -> Quat {
     }
     let right = up.cross(forward).normalize_or_zero();
     let forward = right.cross(up.normalize_or_zero());
-    Quat::from_mat3(&Mat3::from_cols(right, up.normalize_or_zero(), forward.normalize_or_zero()))
+    Quat::from_mat3(&Mat3::from_cols(
+        right,
+        up.normalize_or_zero(),
+        forward.normalize_or_zero(),
+    ))
 }
 
 /// The pose of the model, from the matrix the sim gives the kart's instance (the
@@ -397,6 +409,18 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
     ));
+    // Above the three lines of `Hud`.
+    commands.spawn((
+        PausedHud,
+        Text::new("[paused]"),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(80.0),
+            left: Val::Px(8.0),
+            ..default()
+        },
+    ));
 }
 
 fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held: u32) -> Input {
@@ -466,8 +490,35 @@ fn drive_tick(
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
     mut mask_held: Local<bool>,
+    mut enter_held: Local<bool>,
+    mut paused: Local<bool>,
+    mut label: Query<&mut Visibility, With<PausedHud>>,
 ) {
     let drive = &mut *drive;
+
+    // Enter toggles the pause, once per press.
+    let enter_down = keys.pressed(KeyCode::Enter);
+    if enter_down && !*enter_held {
+        *paused = !*paused;
+        for mut visibility in &mut label {
+            *visibility = if *paused {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+        if *paused {
+            // Nothing moves between ticks now, so the interpolation must not either.
+            drive.previous = drive.current;
+            drive.previous_view = drive.current_view;
+            drive.shadow_previous = drive.shadow_current;
+        }
+    }
+    *enter_held = enter_down;
+    if *paused {
+        return;
+    }
+
     if keys.pressed(KeyCode::KeyR) {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
         (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
@@ -485,7 +536,8 @@ fn drive_tick(
     let mut effects = Vec::new();
     // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
     // kart: it has the mask already.)
-    let mask_down = keys.pressed(KeyCode::KeyM) || pads.iter().any(|p| p.pressed(GamepadButton::East));
+    let mask_down =
+        keys.pressed(KeyCode::KeyM) || pads.iter().any(|p| p.pressed(GamepadButton::East));
     if mask_down
         && !*mask_held
         && !matches!(
