@@ -467,7 +467,7 @@ fn spawn_layers(
         handles[slot] = Some(handle.clone());
         let with = |alpha_mode| StandardMaterial {
             alpha_mode,
-            depth_bias: -(order as f32) * DEPTH_BIAS_PER_ORDER,
+            depth_bias: base.depth_bias - (order as f32) * DEPTH_BIAS_PER_ORDER,
             ..base.clone()
         };
         let mut entity = commands.spawn((Mesh3d(handle), transform));
