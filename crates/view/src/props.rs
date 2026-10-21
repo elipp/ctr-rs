@@ -3,13 +3,13 @@
 //! Each is posed from its definition's position, angles (`ConvertRotToMatrix`) and scale. A
 //! model with an animation plays its first one over and over at the game tick. The ones that
 //! move by the game's code (the armadillos, the minecarts, the snowball and the barrels) are
-//! `hazard::Hazards`: that is ticked here, and these only show it. What the game moves by other
+//! `instance::Objects`: that is ticked here, and these only show it. What the game moves by other
 //! code (spinning fruit, bobbing crates, anything that reacts) stands still.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use hazard::Hazards;
+use instance::Objects;
 use loader::dram::DramFile;
 use loader::lev::Level;
 use loader::model::{Model, ModelHeader};
@@ -20,22 +20,22 @@ use crate::drive::animation_pose;
 use crate::subtract::SubtractMaterial;
 use crate::{GameTick, spawn_parts};
 
-/// The state of the level's hazards, and what the last tick of them did.
+/// The state of the level's objects, and what the last tick of them did.
 #[derive(Resource)]
 pub struct Sim {
-    pub hazards: Hazards,
-    pub last: hazard::Tick,
+    pub objects: Objects,
+    pub last: instance::Tick,
 }
 
 impl Sim {
-    pub fn new(hazards: Hazards) -> Sim {
-        Sim { hazards, last: hazard::Tick::default() }
+    pub fn new(objects: Objects) -> Sim {
+        Sim { objects, last: instance::Tick::default() }
     }
 }
 
-/// One game tick of the hazards.
-pub fn tick_hazards(mut sim: ResMut<Sim>) {
-    sim.last = sim.hazards.tick();
+/// One game tick of the objects.
+pub fn tick_objects(mut sim: ResMut<Sim>) {
+    sim.last = sim.objects.tick();
 }
 
 /// A placed model whose pose changes with the tick.
@@ -100,27 +100,27 @@ pub struct ArmadilloBody(usize);
 #[derive(Component)]
 pub struct MinecartBody(usize);
 
-/// A placed wumpa fruit (its index among `Hazards::fruit`).
+/// A placed wumpa fruit (its index among `Objects::fruit`).
 #[derive(Component)]
 pub struct FruitBody(usize);
 
 /// Constant depth bias (see `DEPTH_BIAS_PER_ORDER`) that keeps a crate in front of the ground it sinks into.
 const CRATE_DEPTH_BIAS: f32 = 4_000_000.0;
 
-/// A placed crate (its index among `Hazards::crates`).
+/// A placed crate (its index among `Objects::crates`).
 #[derive(Component)]
 pub struct CrateBody(pub usize);
 
 /// Sizes the crates as the sim says: gone when hit, growing back after a while.
 pub fn pose_crates(sim: Res<Sim>, mut crates: Query<(&CrateBody, &mut Transform, &mut Visibility)>) {
     for (body, mut transform, mut visibility) in &mut crates {
-        let scale = sim.hazards.crates[body.0].sim.scale;
+        let scale = sim.objects.crates[body.0].sim.scale;
         let want = if scale == 0 { Visibility::Hidden } else { Visibility::Inherited };
         if *visibility != want {
             *visibility = want;
         }
         if scale != 0 {
-            transform.scale = Vec3::splat(scale as f32 / hazard::crates::FULL_SCALE as f32);
+            transform.scale = Vec3::splat(scale as f32 / instance::pickup::crates::FULL_SCALE as f32);
         }
     }
 }
@@ -128,7 +128,7 @@ pub fn pose_crates(sim: Res<Sim>, mut crates: Query<(&CrateBody, &mut Transform,
 /// Hides the fruit that were picked up.
 pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>) {
     for (body, mut visibility) in &mut fruit {
-        let collected = sim.hazards.fruit[body.0].sim.collected;
+        let collected = sim.objects.fruit[body.0].sim.collected;
         let want = if collected { Visibility::Hidden } else { Visibility::Inherited };
         if *visibility != want {
             *visibility = want;
@@ -136,7 +136,7 @@ pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>
     }
 }
 
-/// A placed snowball or barrel (its index among `Hazards::rollers`).
+/// A placed snowball or barrel (its index among `Objects::rollers`).
 #[derive(Component)]
 pub struct Rolling(usize);
 
@@ -187,7 +187,7 @@ enum Hazard {
 
 pub fn spawn(
     level: &Level,
-    hazards: &Hazards,
+    objects: &Objects,
     dram: &DramFile,
     vram: &Vram,
     commands: &mut Commands,
@@ -197,13 +197,13 @@ pub fn spawn(
     subtract_materials: &mut Assets<SubtractMaterial>,
 ) {
     let mut by_instance: HashMap<usize, Hazard> = HashMap::new();
-    by_instance.extend(hazards.armadillos.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Armadillo(i))));
-    by_instance.extend(hazards.minecarts.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Minecart(i))));
-    by_instance.extend(hazards.rollers.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Roller(i))));
-    by_instance.extend(hazards.crates.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Crate(i))));
-    by_instance.extend(hazards.fruit.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Fruit(i))));
-    by_instance.extend(hazards.turtles.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Turtle(i))));
-    by_instance.extend(hazards.fireballs.iter().map(|h| (h.instance, Hazard::Fireball)));
+    by_instance.extend(objects.armadillos.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Armadillo(i))));
+    by_instance.extend(objects.minecarts.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Minecart(i))));
+    by_instance.extend(objects.rollers.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Roller(i))));
+    by_instance.extend(objects.crates.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Crate(i))));
+    by_instance.extend(objects.fruit.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Fruit(i))));
+    by_instance.extend(objects.turtles.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Turtle(i))));
+    by_instance.extend(objects.fireballs.iter().map(|h| (h.instance, Hazard::Fireball)));
 
     let mut props = Props::default();
     let mut armadillos = Armadillos::default();
@@ -308,7 +308,7 @@ pub fn spawn(
         props.0.len(),
         armadillos.0.len(),
         minecarts.0.len(),
-        hazards.rollers.len(),
+        objects.rollers.len(),
         turtles.0.len()
     );
     commands.insert_resource(props);
@@ -327,15 +327,15 @@ pub fn pose_hazards(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for t in &mut turtles.0 {
-        t.pose((0, sim.hazards.turtles[t.index].sim.anim_frame), &mut meshes);
+        t.pose((0, sim.objects.turtles[t.index].sim.anim_frame), &mut meshes);
     }
     for a in &mut armadillos.0 {
-        let h = &sim.hazards.armadillos[a.index].sim;
+        let h = &sim.objects.armadillos[a.index].sim;
         a.moved(h.pos, &h.matrix());
         a.pose((h.anim_index, h.anim_frame), &mut meshes);
     }
     for c in &mut minecarts.0 {
-        let h = &sim.hazards.minecarts[c.index].sim;
+        let h = &sim.objects.minecarts[c.index].sim;
         c.moved(h.pos, &h.matrix());
         c.pose((0, h.anim_frame), &mut meshes);
     }
@@ -369,7 +369,7 @@ pub fn roll(mut rolling: Query<(&Rolling, &mut Transform)>, sim: Res<Sim>, fixed
     let mut gte = gte::Gte::default();
     let fraction = fixed.overstep_fraction();
     for (rolling, mut transform) in &mut rolling {
-        let (from, to) = sim.hazards.roller_frames(rolling.0);
+        let (from, to) = sim.objects.roller_frames(rolling.0);
         let mut place = |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(&mut gte, p.rot));
         let ((from_pos, from_rot), (to_pos, to_rot)) = (place(from), place(to));
         transform.translation = from_pos.lerp(to_pos, fraction);

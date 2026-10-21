@@ -4,7 +4,7 @@
 use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
 
-use crate::{Contact, Damage, Shape, interpolate};
+use crate::{Context, Contact, Damage, Instance, Shape, Tick, interpolate};
 use vehicle::rotmat::convert_rot_to_matrix;
 
 /// Ticks of rolling are counted in milliseconds of `elapsedTimeMS`: 32 a tick, up to `ROLL_TIME`.
@@ -133,6 +133,12 @@ impl Armadillo {
             }
             return Some(self.contact());
         }
+    }
+}
+
+impl Instance for Armadillo {
+    fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
+        out.contacts.extend(self.tick(cx.frames));
     }
 }
 

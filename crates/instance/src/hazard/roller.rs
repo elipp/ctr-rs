@@ -3,7 +3,7 @@
 
 use loader::lev::PosRot;
 
-use crate::{Contact, Damage, Shape};
+use crate::{Context, Contact, Damage, Instance, Shape, Tick};
 
 /// `RB_FindDriverCollision`'s radius: a squared distance, 256 units.
 const HIT_RADIUS: u32 = 0x10000;
@@ -31,6 +31,14 @@ pub fn contact(frame: &PosRot) -> Contact {
         hit_radius: HIT_RADIUS,
         sound: 0,
         shape: Shape::Sphere,
+    }
+}
+
+impl Instance for Roller {
+    fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
+        let path = &cx.roll_paths[self.path];
+        let frame = frame_index(path.len(), cx.ticks).expect("a path of two points or more");
+        out.contacts.push(contact(&path[frame]));
     }
 }
 

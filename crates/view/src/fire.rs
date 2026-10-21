@@ -1,6 +1,6 @@
 //! The fire of the fireballs of Mystery Caves (`RB_Fireball_ThTick`). The ball's model is hidden
 //! by the game; what shows is the trail of sparks it leaves, in the level's `fireball` icon.
-//! Where the balls go and what sparks they leave is `hazard::Hazards`, how a spark moves and
+//! Where the balls go and what sparks they leave is `instance::Objects`, how a spark moves and
 //! looks is `render::particles`; this only shows them.
 
 use bevy::asset::RenderAssetUsages;

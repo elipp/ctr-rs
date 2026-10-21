@@ -8,6 +8,8 @@
 use loader::lev::InstDef;
 use vehicle::{Driver, forced_jump};
 
+use crate::{Context, Instance, Tick, Touch};
+
 /// `elapsedTimeMS` of a tick.
 const TICK_MS: i32 = 32;
 /// How long a turtle waits (`timer`) before its animation moves.
@@ -99,6 +101,16 @@ impl Turtle {
             State::FullyDown => forced_jump::LOW,
             State::NotFullyDown => forced_jump::HIGH,
         })
+    }
+}
+
+impl Instance for Turtle {
+    fn th_tick(&mut self, cx: &Context, _out: &mut Tick) {
+        self.tick(cx.frames[0]);
+    }
+
+    fn touch(&mut self, hit: &mut Touch) -> i32 {
+        self.linc(hit.driver)
     }
 }
 

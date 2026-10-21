@@ -2,7 +2,7 @@
 //! it is tinted and turned, and how long it plays. When a crate breaks, the model of the racer
 //! pack plays its animation at the crate once, a frame a tick, and is gone.
 //!
-//! Which crate it is, and so its colour, is `hazard::crates`; the entities are `view`'s.
+//! Which crate it is, and so its colour, is `instance::pickup::crates`; the entities are `view`'s.
 
 use std::io;
 

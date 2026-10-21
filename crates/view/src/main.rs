@@ -24,6 +24,7 @@ mod exhaust;
 mod explosion;
 mod fire;
 mod flame;
+mod mask;
 mod probe;
 mod props;
 mod shadow;
@@ -73,6 +74,8 @@ struct Loaded {
     flame_models: Vec<Model>,
     /// `crate_explosion` of the racer pack: the break-up of a crate.
     crate_explosion: Option<Model>,
+    /// The Aku Aku and Uka Uka masks of the racer pack.
+    masks: render::mask::Masks,
 }
 
 /// The sprite and texture page file shared by every track (`shared.vrm`):
@@ -143,6 +146,12 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
             .expect("read racer pack");
         render::explosion::model(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the crate explosion")
     };
+    let masks = {
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(racer_character.unwrap_or(0)).get())
+            .expect("read racer pack");
+        render::mask::models(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the masks")
+    };
     let wheel_icons = match racer_character {
         Some(character) if character != NITROS_OXIDE => {
             let pack = big
@@ -168,6 +177,7 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         tiremark_icon,
         flame_models,
         crate_explosion,
+        masks,
     }
 }
 
@@ -293,6 +303,7 @@ fn main() {
         tiremark_icon,
         flame_models,
         crate_explosion,
+        masks,
     } = load_level(id, racer);
     let loaded = Track(level, LevelId(id));
     let textures = Textures { dram, vram };
@@ -319,6 +330,7 @@ fn main() {
     .insert_resource(TiremarkIcon(tiremark_icon))
     .insert_resource(FlameModels(flame_models))
     .insert_resource(explosion::CrateExplosion::new(crate_explosion))
+    .insert_resource(mask::MaskModels(Some(masks)))
     .insert_resource(options)
     .insert_resource(LevelNumber(id))
     .insert_resource(LowColors(low))
@@ -330,12 +342,13 @@ fn main() {
     .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::tick_hazards, props::pose_hazards, props::hide_fruit, props::pose_crates, explosion::spawn, explosion::animate, fire::tick, advance_tick).chain())
+    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::tick_objects, props::pose_hazards, props::hide_fruit, props::pose_crates, explosion::spawn, explosion::animate, fire::tick, advance_tick).chain())
     .add_systems(Update, (switch_level, props::roll, props::place_hazards, fire::update).chain());
     let world = app.world_mut();
     let mut scene_systems = vec![world.register_system(setup)];
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
+        scene_systems.push(app.world_mut().register_system(mask::spawn));
         app.insert_resource(drive).add_plugins(drive::DrivePlugin);
     } else {
         scene_systems.push(app.world_mut().register_system(probe::spawn_text));
@@ -363,7 +376,7 @@ fn switch_level(world: &mut World) {
         + LevelId::DINGO_CANYON.0;
     options.racer = options.racer.map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
     world.insert_resource(options);
-    let Loaded { level, dram, vram, racer, wheel_icons, shadow_icons, smoke_icon, tiremark_icon, flame_models, crate_explosion } =
+    let Loaded { level, dram, vram, racer, wheel_icons, shadow_icons, smoke_icon, tiremark_icon, flame_models, crate_explosion, masks } =
         load_level(id, options.racer);
 
     // Everything in the scene has a transform (the 3D parts) or a node (the text); the window
@@ -390,6 +403,7 @@ fn switch_level(world: &mut World) {
     world.insert_resource(TiremarkIcon(tiremark_icon));
     world.insert_resource(FlameModels(flame_models));
     world.insert_resource(explosion::CrateExplosion::new(crate_explosion));
+    world.insert_resource(mask::MaskModels(Some(masks)));
     world.insert_resource(LevelNumber(id));
 
     for system in world.resource::<SceneSystems>().0.clone() {
@@ -596,10 +610,10 @@ fn setup(
         handles,
     });
 
-    let hazards = hazard::Hazards::new(level, &textures.dram);
+    let objects = instance::Objects::new(level, &textures.dram);
     props::spawn(
         level,
-        &hazards,
+        &objects,
         &textures.dram,
         &textures.vram,
         &mut commands,
@@ -610,8 +624,8 @@ fn setup(
     );
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();
-    fire::spawn(hazards.fireballs.len(), &textures.dram, &textures.vram, &mut commands, &mut images, &mut meshes, &mut materials);
-    commands.insert_resource(props::Sim::new(hazards));
+    fire::spawn(objects.fireballs.len(), &textures.dram, &textures.vram, &mut commands, &mut images, &mut meshes, &mut materials);
+    commands.insert_resource(props::Sim::new(objects));
 
 
     if let Some(model) = &racer.0 {

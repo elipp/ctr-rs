@@ -6,7 +6,7 @@ use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
 use vehicle::rotmat::convert_rot_to_matrix;
 
-use crate::{Contact, Damage, Shape, interpolate};
+use crate::{Context, Contact, Damage, Instance, Shape, Tick, interpolate};
 
 /// `betweenPoints_numFrames` and `rotSpeed` of a cart.
 const FRAMES_BETWEEN_POINTS: i16 = 8;
@@ -118,6 +118,12 @@ impl Minecart {
         self.matrix = convert_rot_to_matrix(&mut gte::Gte::default(), self.rot_curr);
 
         Contact { pos: self.pos, damage: Damage::Squish, hit_radius: HIT_RADIUS, sound: 0, shape: Shape::Cylinder }
+    }
+}
+
+impl Instance for Minecart {
+    fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
+        out.contacts.push(self.tick(cx.position_path, cx.frames[0]));
     }
 }
 

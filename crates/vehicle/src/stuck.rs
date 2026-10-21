@@ -7,8 +7,9 @@
 //! gives the start boost.
 //!
 //! Not ported: the animation of the kart (the crash fall, the wheelie of the
-//! rev: `matrix_array` stays as it was), the mask's model, its sounds, the
-//! whistle and the particles. What the animation stage does to the simulation
+//! rev: `matrix_array` stays as it was), the mask's sounds, the
+//! whistle and the particles. The mask's own motion is ([`MaskHead`], [`mask_tick`]),
+//! but not its model: the presentation draws it from [`MaskHead::shown`]. What the animation stage does to the simulation
 //! (the kart frozen at its last position, lifted by the mask) is ported.
 //!
 //! Not modelled either:
@@ -62,9 +63,33 @@ const CONFIG_VOID_FALL: u32 = 2;
 const MASK_DURATION_NORMAL: i16 = 0x1e00;
 const MASK_DURATION_JUICED: i16 = 0x2d00;
 const WUMPA_JUICED_COUNT: i8 = 10;
+/// `STATIC_AKUAKU` and `STATIC_UKAUKA` plus `MASK_SOUND_ID_OFFSET_FROM_MODEL`: what the mask says.
+const AKU_SFX: u8 = 0x53;
+const UKA_SFX: u8 = 0x54;
 /// How much the mask's duration grows each tick of its fade (`RB_MaskWeapon_FadeAway`), and
 /// where the fade ends.
 const MASK_FADE_END: i16 = 0x200;
+/// `MASK_HEAD_SCALE_NORMAL`
+pub const MASK_SCALE_NORMAL: i16 = 0x1000;
+/// The mask turns by this much around its own vertical a tick.
+const MASK_TURN_STEP: i16 = 0x100;
+/// The orbit's radius is this many units (`sin << 6 >> 12`), and the head floats this much above the kart.
+const MASK_ORBIT_SHIFT: u32 = 6;
+const MASK_HEIGHT: i16 = 0x40;
+/// `maskPosArr` (`R231`): how high the mask floats above the kart, by the frame of the beam's animation.
+const MASK_BOB: [i16; 24] = [0, 0, -2, -4, -8, -12, -16, -19, -23, -27, -29, -31, -32, -31, -29, -27, -23, -19, -16, -12, -8, -4, -2, 0];
+/// The frames of the beam's animation (`turn`).
+pub const MASK_BEAM_FRAMES: u16 = 24;
+/// How much the fade shrinks the mask and the beam and makes the beam see-through a tick.
+const MASK_FADE_SHRINK: i16 = 0x100;
+const MASK_FADE_ALPHA_STEP: u16 = 0x200;
+const MASK_ALPHA_GONE: u16 = 0x1000;
+/// The mask comes down over this much of the grab's last stretch (`..._SCALE_RAMP_TIME`).
+const MASK_GRAB_SCALE_RAMP_TIME: i32 = 0xf0;
+const MASK_GRAB_SCALE_FULL_TIME: i16 = 721;
+/// Characters that Aku Aku looks after (`VehPickupItem_MaskBoolGoodGuy`): Crash, Coco, Polar, Pura
+/// and Penta. The rest get Uka Uka.
+const GOOD_GUYS: [u8; 5] = [0, 3, 6, 7, 13];
 
 const REV_MASK_GRAB_HEIGHT_TRIGGER: i32 = 0x1000;
 const REV_MASK_RELEASE_HEIGHT: i32 = 0x4000;
@@ -100,17 +125,60 @@ mod lockout {
     pub const ALL: u8 = PEDAL_HELD | REV_DECAY;
 }
 
-/// The mask of a mask grab (`struct MaskHeadWeapon` and its thread), as far as
-/// the simulation sees it: the kart is lifted by it, and while it exists the
-/// driver has the `MASK_WEAPON` action.
+/// The mask of a mask grab (`struct MaskHeadWeapon` and its thread): the kart is lifted by it,
+/// and while it exists the driver has the `MASK_WEAPON` action. It floats around the kart
+/// turning, with a beam of light in it, and is drawn as [`MaskHead::shown`] says.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MaskHead {
     /// How long the mask lasts, in milliseconds.
     pub duration: i16,
-    /// `pos.y` (the mask comes down to the kart's height, in whole units).
-    pub pos_y: i16,
+    /// `pos`: where the mask is while it is not following the kart (`world_space`); `pos[1]`
+    /// is also how high the mask has come down to the kart, in whole units.
+    pub pos: [i16; 3],
     /// The mask has been told to go (`RB_MaskWeapon_FadeAway`), and goes after a few ticks.
     pub fading: bool,
+    /// `rot.y`: how far the mask has turned.
+    pub rot_y: i16,
+    /// `rot.z & MASK_HEAD_ROT_WORLD_SPACE`: placed in the world at `pos`, not on the kart.
+    pub world_space: bool,
+    /// `scale`: 0x1000 is the mask's size.
+    pub scale: i16,
+    /// Aku Aku, not Uka Uka.
+    pub good_guy: bool,
+    /// The frame of the beam's animation (`maskBeamInst->animFrame`).
+    pub beam_frame: u16,
+    /// The mask's instances as its thread's last tick left them; none before the first.
+    pub shown: Option<MaskShown>,
+}
+
+/// Where an instance of the mask is, and how big: the offset from the kart (or from `pos`),
+/// and the turn on top of the kart's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Placed {
+    pub offset: [i16; 3],
+    /// `ConvertRotToMatrix`'s rotation about the vertical, if it is turned.
+    pub rot_y: Option<i16>,
+    pub scale: i16,
+}
+
+/// The mask's head and its beam of light (`maskInst`, `maskBeamInst`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaskShown {
+    pub head: Placed,
+    pub beam: Placed,
+    /// The offsets are from `MaskHead::pos`, not from the kart.
+    pub world_space: bool,
+    /// The beam's `alphaScale`: 0 is opaque, 0x1000 is gone.
+    pub beam_alpha: u16,
+    /// The beam's animation frame.
+    pub beam_frame: u16,
+}
+
+impl MaskHead {
+    /// The rotation matrix of a turn of `rot_y` about the vertical (`ConvertRotToMatrix`).
+    pub fn rotation(rot_y: i16) -> crate::Matrix {
+        crate::rotmat::convert_rot_to_matrix(&mut gte::Gte::default(), SVec3 { x: 0, y: rot_y, z: 0 })
+    }
 }
 
 /// `KartStates.MaskGrab`, without the particles and the whistle.
@@ -147,30 +215,96 @@ fn use_mask(d: &mut Driver) {
             mask.duration = duration;
             mask.fading = false;
         }
-        None => d.mask = Some(MaskHead { duration, pos_y: 0, fading: false }),
+        None => {
+            let good_guy = GOOD_GUYS.contains(&d.character);
+            d.mask = Some(MaskHead { duration, scale: MASK_SCALE_NORMAL, good_guy, ..MaskHead::default() });
+        }
     }
 }
 
-/// `RB_MaskWeapon_ThTick` and `RB_MaskWeapon_FadeAway`: the mask runs out, fades away and is gone.
+/// `VehPickupItem_ShootNow` for the mask item: the driver has a mask, which lasts 7680 ms, or
+/// 11520 ms with 10 wumpa fruit (juiced). While it lasts the kart is faster (`mask_speed`), is not
+/// slowed by mud or by leaving the track, and shrugs off hits.
+pub fn shoot_mask(d: &mut Driver, effects: &mut Vec<Effect>) {
+    use_mask(d);
+    let good_guy = d.mask.is_some_and(|m| m.good_guy);
+    effects.push(Effect::Sound {
+        id: if good_guy { AKU_SFX } else { UKA_SFX },
+        echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+    });
+}
+
+/// `RB_MaskWeapon_ThTick` and `RB_MaskWeapon_FadeAway`: the mask turns round the kart, runs
+/// out, fades away and is gone.
 pub fn mask_tick(d: &mut Driver, env: &Env) {
     let Some(mask) = &mut d.mask else { return };
+    let mut shown = mask.shown.unwrap_or_default();
+
     if !mask.fading {
+        // The head goes round the kart with the beam in it, bobbing with the beam's animation.
+        let radius = |trig: i32| mips::sra(mips::mul_lo(mips::sra(mips::sll(trig, MASK_ORBIT_SHIFT), 12), mask.scale as i32), 12) as i16;
+        let (sin, cos) = math::sin_cos(mask.rot_y as i32 as u32);
+        shown.head = Placed {
+            offset: [radius(sin), MASK_BOB[mask.beam_frame as usize % MASK_BOB.len()] + MASK_HEIGHT, radius(cos)],
+            rot_y: Some(mask.rot_y),
+            scale: shown.head.scale,
+        };
+        shown.beam = Placed { offset: [0, MASK_HEIGHT, 0], rot_y: Some(mask.rot_y), scale: shown.beam.scale };
+        shown.world_space = mask.world_space;
+
+        mask.beam_frame = if mask.beam_frame + 1 < MASK_BEAM_FRAMES { mask.beam_frame + 1 } else { 0 };
+        mask.rot_y = mask.rot_y.wrapping_sub(MASK_TURN_STEP);
+
         if mask.duration != 0 {
             mask.duration = (mask.duration as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
             if mask.duration < 0 {
                 mask.duration = 0;
             }
-            return;
+        } else {
+            mask.fading = true;
+            if fade_step(mask, &mut shown, env) {
+                d.mask = None;
+                return;
+            }
         }
-        mask.fading = true;
+
+        shown.beam_alpha = 0;
+        shown.head.scale = mask.scale;
+        shown.beam.scale = mask.scale;
+        shown.beam_frame = mask.beam_frame;
+        mask.shown = Some(shown);
+        return;
     }
+
+    if fade_step(mask, &mut shown, env) {
+        d.mask = None;
+    } else {
+        mask.shown = Some(shown);
+    }
+}
+
+/// `RB_MaskWeapon_FadeAway`: the head shrinks as it spirals in to the kart, the beam shrinks
+/// and fades. True once it is gone.
+fn fade_step(mask: &mut MaskHead, shown: &mut MaskShown, env: &Env) -> bool {
+    let (sin, cos) = math::sin_cos(mask.rot_y as i32 as u32);
+    let radius = |trig: i32| mips::sra(mips::mul_lo(MASK_HEIGHT as i32 - (mask.duration as i32 >> 5) * 4, trig), 12) as i16;
+    shown.world_space = false;
+    shown.head = Placed { offset: [radius(sin), MASK_HEIGHT, radius(cos)], rot_y: None, scale: shown.head.scale - MASK_FADE_SHRINK };
+
+    mask.rot_y = mask.rot_y.wrapping_sub(MASK_TURN_STEP);
+    shown.beam = Placed { offset: [0, MASK_HEIGHT, 0], rot_y: Some(mask.rot_y), scale: shown.beam.scale - MASK_FADE_SHRINK };
+    if shown.beam_alpha < MASK_ALPHA_GONE {
+        shown.beam_alpha += MASK_FADE_ALPHA_STEP;
+    }
+
     if mask.duration < MASK_FADE_END {
         mask.duration = (mask.duration as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
         if mask.duration > MASK_FADE_END {
             mask.duration = MASK_FADE_END;
         }
+        false
     } else {
-        d.mask = None;
+        true
     }
 }
 
@@ -213,7 +347,13 @@ pub fn mask_grab_init(d: &mut Driver, level: &Level) {
     d.pos_prev = d.pos_curr;
 
     if let Some(mask) = &mut d.mask {
-        mask.pos_y = mips::add_lo(mips::sra(d.pos_curr.y, 8), MASK_HEAD_Y_OFFSET) as i16;
+        // The mask comes down from above the kart, in the world.
+        mask.world_space = true;
+        mask.pos = [
+            mips::sra(d.pos_curr.x, 8) as i16,
+            mips::add_lo(mips::sra(d.pos_curr.y, 8), MASK_HEAD_Y_OFFSET) as i16,
+            mips::sra(d.pos_curr.z, 8) as i16,
+        ];
     }
 }
 
@@ -229,6 +369,10 @@ pub fn mask_grab_update(d: &mut Driver, coll: &mut Collision, level: &Level, env
     }
 
     // The mask lets go, and the kart comes down on the track.
+    if let Some(mask) = &mut d.mask {
+        mask.world_space = false;
+        mask.scale = MASK_SCALE_NORMAL;
+    }
     find_dest_pos(d, coll, level, d.last_valid, others);
     teleport_self(d, coll, level, RESPAWN_Y_OFFSET);
     rev_engine_init(d);
@@ -273,6 +417,7 @@ pub fn mask_grab_animate(d: &mut Driver, env: &Env) {
     let Some(mask) = &mut d.mask else { return };
     mask.duration = MASK_DURATION_NORMAL;
     if d.no_input_timer > MASK_DESCENT_TIME {
+        mask.scale = 0;
         return;
     }
 
@@ -281,12 +426,21 @@ pub fn mask_grab_animate(d: &mut Driver, env: &Env) {
         d.pos_curr.y = mips::add_lo(d.pos_curr.y, mips::sll(env.elapsed_time_ms, LIFT_SHIFT));
         d.pos_prev.y = d.pos_curr.y;
     } else {
-        mask.pos_y = (mask.pos_y as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
+        mask.pos[1] = (mask.pos[1] as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
     }
-    if (mask.pos_y as i32) < mips::sra(d.pos_curr.y, 8) {
-        mask.pos_y = mips::sra(d.pos_curr.y, 8) as i16;
+    mask.pos[2] = mips::sra(d.pos_curr.z, 8) as i16;
+    if (mask.pos[1] as i32) < mips::sra(d.pos_curr.y, 8) {
+        mask.pos[1] = mips::sra(d.pos_curr.y, 8) as i16;
         d.grab.lifting_player = true;
     }
+    mask.pos[0] = mips::sra(d.pos_curr.x, 8) as i16;
+
+    // It grows as it comes down.
+    mask.scale = if d.no_input_timer >= MASK_GRAB_SCALE_FULL_TIME {
+        (mips::sll(mips::sub_lo(MASK_DESCENT_TIME as i32, d.no_input_timer as i32), 12) / MASK_GRAB_SCALE_RAMP_TIME) as i16
+    } else {
+        MASK_SCALE_NORMAL
+    };
 }
 
 /// `COLL_SearchBSP_CallbackPARAM` with `COLL_FIXED_BSPLEAF_TestQuadblocks` over the segment from
@@ -636,5 +790,89 @@ mod tests {
         }
         assert_eq!(d.rev.lockout_flags, lockout::ALL);
         assert!(effects.contains(&Effect::Sound { id: REV_OVERREV_SFX, echo: false }));
+    }
+
+    #[test]
+    fn aku_aku_looks_after_the_good_guys() {
+        let good: Vec<usize> = (0..16)
+            .filter(|&c| {
+                let mut d = Driver::new(0, c);
+                use_mask(&mut d);
+                d.mask.unwrap().good_guy
+            })
+            .collect();
+        // Crash, Coco, Polar, Pura, Penta.
+        assert_eq!(good, [0, 3, 6, 7, 13]);
+    }
+
+    #[test]
+    fn the_mask_turns_round_the_kart_and_the_beam_cycles() {
+        let mut d = kart();
+        let env = Env::default();
+        use_mask(&mut d);
+        mask_tick(&mut d, &env);
+        let first = d.mask.unwrap().shown.unwrap();
+        // The first tick shows the mask at its start: in front of the kart, `sin(0) = 0`.
+        assert_eq!(first.head.offset, [0, MASK_HEIGHT, 0x40]);
+        assert_eq!(first.head.rot_y, Some(0));
+        assert_eq!(first.head.scale, MASK_SCALE_NORMAL);
+
+        for _ in 0..MASK_BEAM_FRAMES - 1 {
+            mask_tick(&mut d, &env);
+        }
+        let mask = d.mask.unwrap();
+        assert_eq!(mask.beam_frame, 0, "the beam's animation has come round");
+        assert_eq!(mask.rot_y, (MASK_BEAM_FRAMES as i16).wrapping_mul(-MASK_TURN_STEP));
+        // Bobbing: lower in the middle of the beam's animation.
+        let mut low = i16::MAX;
+        for _ in 0..MASK_BEAM_FRAMES {
+            mask_tick(&mut d, &env);
+            low = low.min(d.mask.unwrap().shown.unwrap().head.offset[1]);
+        }
+        assert_eq!(low, MASK_HEIGHT - 32);
+    }
+
+    #[test]
+    fn the_fading_mask_shrinks_and_the_beam_clears() {
+        let mut d = kart();
+        let env = Env::default();
+        use_mask(&mut d);
+        d.mask.as_mut().unwrap().duration = 0;
+        mask_tick(&mut d, &env);
+        // The tick that starts the fade ends with the mask at its own size.
+        assert_eq!(d.mask.unwrap().shown.unwrap().head.scale, MASK_SCALE_NORMAL);
+        for tick in 1..16 {
+            mask_tick(&mut d, &env);
+            let shown = d.mask.unwrap().shown.unwrap();
+            assert_eq!(shown.head.scale, MASK_SCALE_NORMAL - tick * MASK_FADE_SHRINK, "tick {tick}");
+            assert_eq!(shown.head.rot_y, None);
+            assert!(!shown.world_space);
+        }
+        assert_eq!(d.mask.unwrap().shown.unwrap().beam_alpha, MASK_ALPHA_GONE);
+        mask_tick(&mut d, &env);
+        assert_eq!(d.mask, None);
+    }
+
+    #[test]
+    fn the_mask_item_lasts_longer_with_ten_wumpa() {
+        let lasts = |wumpas: i8| {
+            let mut d = kart();
+            d.num_wumpas = wumpas;
+            shoot_mask(&mut d, &mut Vec::new());
+            d.mask.unwrap().duration
+        };
+        assert_eq!(lasts(0), 0x1e00);
+        assert_eq!(lasts(9), 0x1e00);
+        assert_eq!(lasts(10), 0x2d00);
+    }
+
+    #[test]
+    fn the_mask_item_makes_the_kart_faster() {
+        let mut d = kart();
+        let before = crate::linear::base_speed(&d);
+        shoot_mask(&mut d, &mut Vec::new());
+        // The action comes with the mask's thread at the next tick's `phys_linear`.
+        d.actions_flag_set |= actions::MASK_WEAPON;
+        assert_eq!(crate::linear::base_speed(&d) - before, d.stats.mask_speed as i32);
     }
 }

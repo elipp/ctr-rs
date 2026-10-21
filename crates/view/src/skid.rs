@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use loader::icons::Icon;
 use loader::vram::Vram;
 use render::mesh::SCALE;
-use vehicle::skid::{intensity, segments, fade_anchor};
+use vehicle::skid::{fade_anchor, intensity, segments};
 
 use crate::drive::Drive;
 use crate::exhaust::icon_image;
@@ -55,16 +55,23 @@ pub fn spawn(
     let (image, _, _) = icon_image(icon, vram);
     let image = images.add(image);
     let mut mesh = || {
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * MAX_QUADS]);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * MAX_QUADS]);
         // Across the mark first, then along it, as the layout's corners go.
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_UV_0,
-            (0..MAX_QUADS).flat_map(|_| [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]).collect::<Vec<_>>(),
+            (0..MAX_QUADS)
+                .flat_map(|_| [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+                .collect::<Vec<_>>(),
         );
         mesh.insert_indices(Indices::U32(
-            (0..MAX_QUADS as u32).flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i)).collect(),
+            (0..MAX_QUADS as u32)
+                .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
+                .collect(),
         ));
         meshes.add(mesh)
     };
@@ -76,7 +83,7 @@ pub fn spawn(
         double_sided: true,
         alpha_mode,
         // Retail sorts the marks among the track's polygons by an ordering table bias.
-        depth_bias: 4.0,
+        depth_bias: 400.0,
         ..default()
     };
     commands.spawn((
@@ -101,7 +108,15 @@ pub fn spawn(
 /// Lays the driver's mark segments out on the ground, as bright as their age and distance say.
 pub fn update(
     marks: Query<(&Marks, &Mesh3d)>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Marks>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
+    cameras: Query<
+        &Transform,
+        (
+            With<Camera3d>,
+            Without<Marks>,
+            Without<crate::OverlayCamera>,
+            Without<crate::sky::SkyCamera>,
+        ),
+    >,
     drive: Res<Drive>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -130,12 +145,22 @@ pub fn update(
         };
         let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
         let mut colors = vec![[0.0f32; 4]; 4 * MAX_QUADS];
-        let wanted = segments.iter().filter(|s| s.light == kind.light).take(MAX_QUADS);
+        let wanted = segments
+            .iter()
+            .filter(|s| s.light == kind.light)
+            .take(MAX_QUADS);
         for (n, s) in wanted.enumerate() {
             let value = bright.unwrap_or(0);
             // A segment is as bright as its newer end, fading to its older one; where
             // that is gone, so is the segment.
-            let (near, far) = (value >> s.age, if s.age == 0 { value } else { value >> (s.age - 1) });
+            let (near, far) = (
+                value >> s.age,
+                if s.age == 0 {
+                    value
+                } else {
+                    value >> (s.age - 1)
+                },
+            );
             if far == 0 {
                 continue;
             }

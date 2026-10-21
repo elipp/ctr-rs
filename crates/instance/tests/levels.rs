@@ -1,21 +1,21 @@
-//! The hazards of the real tracks: what each level places, and that they run.
+//! The objects of the real tracks: what each level places, and that they run.
 //! Skipped without the disc image.
 
 #[path = "../../loader/tests/common/mod.rs"]
 mod common;
 
-use hazard::Hazards;
+use instance::Objects;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::dram::DramFile;
 use loader::lev::Level;
 use loader::level::LevelId;
 
-fn hazards_of(id: u32) -> Option<(Hazards, Level)> {
+fn objects_of(id: u32) -> Option<(Objects, Level)> {
     let mut b = common::open_bigfile()?;
     let idx = BigIndex::level(LevelId(id), Lod::OnePlayer, LevFile::Lev);
     let dram = DramFile::parse(&b.big.read(&mut b.disc, idx.get()).unwrap()).unwrap();
     let level = Level::parse(&dram).unwrap();
-    Some((Hazards::new(&level, &dram), level))
+    Some((Objects::new(&level, &dram), level))
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn each_level_places_its_hazards() {
         (LevelId::MYSTERY_CAVES.0, [0, 6, 0, 0]),
         (LevelId::ROO_TUBES.0, [0, 0, 0, 0]),
     ] {
-        let Some((h, level)) = hazards_of(id) else { return };
+        let Some((h, level)) = objects_of(id) else { return };
         let found = [h.armadillos.len(), h.fireballs.len(), h.minecarts.len(), h.rollers.len()];
         assert_eq!(found, counts, "level {id}");
         for a in &h.armadillos {
@@ -42,7 +42,7 @@ fn each_level_places_its_hazards() {
 
 #[test]
 fn the_hazards_run_and_reach_for_drivers() {
-    let Some((mut h, _)) = hazards_of(LevelId::MYSTERY_CAVES.0) else { return };
+    let Some((mut h, _)) = objects_of(LevelId::MYSTERY_CAVES.0) else { return };
     let (mut contacts, mut sparks) = (0, 0);
     for _ in 0..300 {
         let tick = h.tick();
@@ -58,7 +58,7 @@ fn the_hazards_run_and_reach_for_drivers() {
 #[test]
 fn the_state_can_be_copied_and_run_on() {
     // What the rollback needs: a copy ticks exactly like the original.
-    let Some((mut a, _)) = hazards_of(LevelId::DINGO_CANYON.0) else { return };
+    let Some((mut a, _)) = objects_of(LevelId::DINGO_CANYON.0) else { return };
     for _ in 0..100 {
         a.tick();
     }
@@ -71,7 +71,7 @@ fn the_state_can_be_copied_and_run_on() {
 
 #[test]
 fn a_roller_is_drawn_between_its_frame_and_the_next() {
-    let Some((mut h, level)) = hazards_of(LevelId::BLIZZARD_BLUFF.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::BLIZZARD_BLUFF.0) else { return };
     let path = &level.paths[h.rollers[0].sim.path];
     assert_eq!(h.roller_frames(0), (path[0], path[1]));
     h.tick();
@@ -86,7 +86,7 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
     use vehicle::search::moved_player_search;
     use vehicle::{Driver, forced_jump};
 
-    let Some((mut h, level)) = hazards_of(LevelId::MYSTERY_CAVES.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::MYSTERY_CAVES.0) else { return };
     assert_eq!(h.turtles.len(), 10);
     assert!(h.turtles.iter().all(|t| t.frames[0] == 11));
     let hitbox_of = |instance: usize| {
@@ -106,7 +106,7 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
     // A kart driving through the first turtle's hitbox, from 200 units before its centre to 200
     // after, at the given `speed_approx`: the jump it is given, if any.
     let center = hitbox_of(h.turtles[0].instance).unwrap();
-    let drive_through = |h: &Hazards, speed_approx: i16| {
+    let drive_through = |h: &Objects, speed_approx: i16| {
         let mut driver = Driver::new(0, 0);
         driver.pos_curr = math::Vec3 {
             x: (center.x as i32 - 200 - driver.origin_to_center.x) << 8,
@@ -132,7 +132,7 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
     let mut seen = std::collections::BTreeSet::new();
     for _ in 0..200 {
         let jump = drive_through(&h, 0x2000);
-        assert_eq!(jump == forced_jump::LOW, h.turtles[0].sim.state == hazard::turtle::State::FullyDown);
+        assert_eq!(jump == forced_jump::LOW, h.turtles[0].sim.state == instance::hazard::turtle::State::FullyDown);
         seen.insert(jump);
         assert_eq!(drive_through(&h, 0x1400), forced_jump::NONE);
         h.tick();
@@ -148,7 +148,7 @@ fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
     use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
     use vehicle::search::moved_player_search;
 
-    let Some((mut h, level)) = hazards_of(LevelId::DINGO_CANYON.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::DINGO_CANYON.0) else { return };
     assert_eq!(h.fruit.len(), 16);
     let center = level
         .bsp
@@ -162,7 +162,7 @@ fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
         .expect("a fruit has a hitbox")
         .center;
 
-    let drive_through = |h: &mut Hazards, driver: &mut Driver| {
+    let drive_through = |h: &mut Objects, driver: &mut Driver| {
         driver.pos_curr = math::Vec3 {
             x: (center.x as i32 - 150 - driver.origin_to_center.x) << 8,
             y: (center.y as i32 + 40 - driver.origin_to_center.y) << 8,
@@ -191,7 +191,7 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
     use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
     use vehicle::search::moved_player_search;
 
-    let Some((mut h, level)) = hazards_of(LevelId::DINGO_CANYON.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::DINGO_CANYON.0) else { return };
     // 16 weapon crates and 2 fruit crates.
     assert_eq!(h.crates.len(), 18);
     let center = level
@@ -206,7 +206,7 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
         .expect("a crate has a hitbox")
         .center;
 
-    let drive_through = |h: &mut Hazards, driver: &mut Driver| {
+    let drive_through = |h: &mut Objects, driver: &mut Driver| {
         driver.pos_curr = math::Vec3 {
             x: (center.x as i32 - 150 - driver.origin_to_center.x) << 8,
             y: (center.y as i32 + 20 - driver.origin_to_center.y) << 8,
@@ -225,5 +225,5 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
     for _ in 0..100 {
         h.tick();
     }
-    assert_eq!(h.crates[0].sim.scale, hazard::crates::FULL_SCALE);
+    assert_eq!(h.crates[0].sim.scale, instance::pickup::crates::FULL_SCALE);
 }
