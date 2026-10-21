@@ -346,8 +346,29 @@ fn main() {
     let textures = Textures { dram, vram };
     let drive = driving.then(|| new_drive(&loaded, &racer, character));
 
+    // Many workers on tiny tasks cost more in wake-ups than they save, and make the frame
+    // sensitive to other load on the machine: `CTR_THREADS` overrides the cap.
+    let threads = std::env::var("CTR_THREADS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3usize)
+        .max(1);
+    // See the executor below: without a render thread, `CTR_EXECUTOR=multi` keeps the defaults.
+    let single_threaded = std::env::var("CTR_EXECUTOR").as_deref() != Ok("multi");
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+    let mut plugins = DefaultPlugins.set(TaskPoolPlugin {
+        task_pool_options: TaskPoolOptions {
+            compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                min_threads: 1,
+                max_threads: threads,
+                percent: 1.0,
+                on_thread_spawn: None,
+                on_thread_destroy: None,
+            },
+            ..default()
+        },
+    })
+    .set(WindowPlugin {
         primary_window: Some(Window {
             title: match options.racer {
                 Some(racer) => format!(
@@ -356,10 +377,20 @@ fn main() {
                 ),
                 None => format!("ctr-rs view: level {track_id}"),
             },
+            // The frame rate is `limit_frame_rate`'s.
+            present_mode: bevy::window::PresentMode::AutoNoVsync,
             ..default()
         }),
         ..default()
-    }))
+    });
+    // Nothing plays sound yet, and an open output device keeps CoreAudio's thread waking up.
+    plugins = plugins.disable::<bevy::audio::AudioPlugin>();
+    if single_threaded {
+        // The render thread would run the single-threaded schedules off the main thread, which
+        // Metal's window surface does not allow.
+        plugins = plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
+    }
+    app.add_plugins(plugins)
     .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
     .insert_resource(loaded)
     .insert_resource(textures)
@@ -376,6 +407,8 @@ fn main() {
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden { show_hidden, cull })
     .add_systems(Startup, setup)
+    .add_systems(Update, log_draws)
+    .add_systems(Last, limit_frame_rate)
     // After the cameras and karts have moved this frame, before their transforms propagate.
     .add_systems(
         PostUpdate,
@@ -424,6 +457,20 @@ fn main() {
         app.add_plugins(probe::ProbePlugin).add_systems(Update, fly);
     }
     app.insert_resource(SceneSystems(scene_systems));
+    // The multi-threaded executor spawns and wakes a task per system; for a frame this light
+    // those hand-offs cost more than the systems. `CTR_EXECUTOR=multi` brings it back.
+    if single_threaded {
+        use bevy::ecs::schedule::SingleThreadedExecutor;
+        let single = |schedules: &mut Schedules| {
+            for (_, schedule) in schedules.iter_mut() {
+                schedule.set_executor(SingleThreadedExecutor::new());
+            }
+        };
+        single(&mut app.world_mut().resource_mut::<Schedules>());
+        if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            single(&mut render.world_mut().resource_mut::<Schedules>());
+        }
+    }
     app.run();
 }
 
@@ -1036,6 +1083,65 @@ struct SceneryState {
     handles: Vec<Option<Handle<Mesh>>>,
 }
 
+/// The frame rate the viewer is held to, in Hz; `CTR_FPS` overrides it, 0 for no limit.
+const FRAME_RATE: f64 = 120.0;
+
+/// Holds the loop to [`FRAME_RATE`] now that the display does not (no vsync): sleeps most of
+/// what is left of the frame, then spins the last stretch, as a sleep wakes up late.
+fn limit_frame_rate(
+    mut previous: Local<Option<std::time::Instant>>,
+    mut configured: Local<Option<f64>>,
+) {
+    use std::time::{Duration, Instant};
+    const SPIN: Duration = Duration::from_micros(1500);
+    let rate = *configured.get_or_insert_with(|| {
+        std::env::var("CTR_FPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(FRAME_RATE)
+    });
+    let start = previous.unwrap_or_else(Instant::now);
+    if rate > 0.0 {
+        let target = start + Duration::from_secs_f64(1.0 / rate);
+        if let Some(rest) = target.checked_duration_since(Instant::now()) {
+            std::thread::sleep(rest.saturating_sub(SPIN));
+        }
+        while Instant::now() < target {
+            std::hint::spin_loop();
+        }
+    }
+    // From the target, not from now, so that one late frame does not slow the ones after it;
+    // but never fall behind by more than a frame, or a stall would be followed by a burst.
+    let now = Instant::now();
+    *previous = Some(if rate > 0.0 {
+        let step = Duration::from_secs_f64(1.0 / rate);
+        (start + step).max(now.checked_sub(step).unwrap_or(now))
+    } else {
+        now
+    });
+}
+
+/// Logs how many meshes the scene draws, a few frames in (once everything is spawned).
+fn log_draws(
+    mut frame: Local<u32>,
+    meshes: Query<(&Mesh3d, Option<&Visibility>, Option<&InheritedVisibility>)>,
+    assets: Res<Assets<Mesh>>,
+) {
+    *frame += 1;
+    if *frame != 30 {
+        return;
+    }
+    let (mut entities, mut visible, mut vertices) = (0, 0, 0);
+    for (mesh, _, inherited) in &meshes {
+        entities += 1;
+        if inherited.is_none_or(|v| v.get()) {
+            visible += 1;
+            vertices += assets.get(&mesh.0).map_or(0, |m| m.count_vertices());
+        }
+    }
+    info!("{entities} mesh entities, {visible} visible, {vertices} vertices");
+}
+
 /// `AnimateQuad`, once per game tick.
 fn animate_scenery(
     mut state: ResMut<SceneryState>,
@@ -1046,24 +1152,37 @@ fn animate_scenery(
     if state.scenery.vertices.is_empty() {
         return;
     }
+    // Only the meshes whose arrays changed are uploaded again.
+    let mut moved = vec![false; state.handles.len()];
+    let mut recolored = vec![false; state.handles.len()];
     for update in state.scenery.animate(tick.0, |_| true) {
         let Some(corners) = state.corners.get(&update.vertex) else {
             continue;
         };
         for corner in corners {
             if let Some(pos) = update.pos {
-                state.positions[corner.part][corner.slot] = to_world(pos);
+                let at = &mut state.positions[corner.part][corner.slot];
+                let pos = to_world(pos);
+                moved[corner.part] |= std::mem::replace(at, pos) != pos;
             }
             if let Some([r, g, b, _]) = update.color {
-                let [r, g, b] = [r, g, b].map(|c| c as f32 * corner.gain);
-                state.colors[corner.part][corner.slot] = [r, g, b, 1.0];
+                let [r, g, b] = [r, g, b].map(|c| mesh::vertex_channel(c as f32 * corner.gain));
+                let at = &mut state.colors[corner.part][corner.slot];
+                recolored[corner.part] |= std::mem::replace(at, [r, g, b, 1.0]) != [r, g, b, 1.0];
             }
         }
     }
     for part in 0..state.handles.len() {
+        if !(moved[part] || recolored[part]) {
+            continue;
+        }
         if let Some(mut mesh) = state.handles[part].as_ref().and_then(|h| meshes.get_mut(h)) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, state.positions[part].clone());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
+            if moved[part] {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, state.positions[part].clone());
+            }
+            if recolored[part] {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
+            }
         }
     }
 }
@@ -1099,21 +1218,35 @@ fn animate_water(
 ) {
     let state = &mut *state;
     let [width, height] = state.atlas_size;
+    // Only the meshes whose arrays changed are uploaded again.
+    let mut recolored = [false; PARTS];
+    let mut moved = [false; PARTS];
     for c in state.water.animate(tick.0, |_| true) {
         // Textured primitives get their colour doubled, as everywhere else.
-        let gray = c.gray as f32 * 2.0 / 255.0;
+        let gray = mesh::vertex_channel(c.gray as f32 * 2.0 / 255.0);
         for corner in state.corners.get(&c.vertex).into_iter().flatten() {
-            state.colors[corner.part][corner.slot] = [gray, gray, gray, 1.0];
-            state.uvs[corner.part][corner.slot] = [
+            let color = [gray, gray, gray, 1.0];
+            let uv = [
                 (corner.origin[0] + c.uv[0] as f32) / width,
                 (corner.origin[1] + c.uv[1] as f32) / height,
             ];
+            recolored[corner.part] |=
+                std::mem::replace(&mut state.colors[corner.part][corner.slot], color) != color;
+            moved[corner.part] |=
+                std::mem::replace(&mut state.uvs[corner.part][corner.slot], uv) != uv;
         }
     }
     for part in 0..PARTS {
+        if !(recolored[part] || moved[part]) {
+            continue;
+        }
         if let Some(mut mesh) = state.handles[part].as_ref().and_then(|h| meshes.get_mut(h)) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, state.uvs[part].clone());
+            if recolored[part] {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, state.colors[part].clone());
+            }
+            if moved[part] {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, state.uvs[part].clone());
+            }
         }
     }
 }
