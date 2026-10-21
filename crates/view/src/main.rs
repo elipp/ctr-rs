@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -115,7 +115,8 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         let pack = big
             .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
             .expect("read racer pack");
-        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
+        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("parse racer pack icons");
         let find = |index| icons.iter().find(|i| i.global_index == index).cloned();
         Some([find(0)?, find(1)?])
     });
@@ -123,34 +124,56 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
         let pack = big
             .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
             .expect("read racer pack");
-        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
-        icons.into_iter().find(|i| i.global_index == skid::TIREMARK_ICON)
+        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("parse racer pack icons");
+        icons
+            .into_iter()
+            .find(|i| i.global_index == skid::TIREMARK_ICON)
     });
     let smoke_icon = racer_character.and_then(|character| {
         let pack = big
             .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
             .expect("read racer pack");
-        let groups = parse_groups(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons");
-        groups.into_iter().find(|g| g.group_id == 1)?.icons.into_iter().next()
+        let groups = parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("parse racer pack icons");
+        groups
+            .into_iter()
+            .find(|g| g.group_id == 1)?
+            .icons
+            .into_iter()
+            .next()
     });
     let flame_models = racer_character.map_or_else(Vec::new, |character| {
         let pack = big
             .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
             .expect("read racer pack");
-        flame::models(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the turbo models")
+        flame::models(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("racer pack has the turbo models")
     });
     let crate_explosion = {
         // Every racer's pack has the same shared models; character 0's will do without a racer.
         let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(racer_character.unwrap_or(0)).get())
+            .read(
+                &mut disc,
+                BigIndex::ARCADE_1P_PACK
+                    .nth(racer_character.unwrap_or(0))
+                    .get(),
+            )
             .expect("read racer pack");
-        render::explosion::model(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the crate explosion")
+        render::explosion::model(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("racer pack has the crate explosion")
     };
     let masks = {
         let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(racer_character.unwrap_or(0)).get())
+            .read(
+                &mut disc,
+                BigIndex::ARCADE_1P_PACK
+                    .nth(racer_character.unwrap_or(0))
+                    .get(),
+            )
             .expect("read racer pack");
-        render::mask::models(&DramFile::parse(&pack).expect("parse racer pack")).expect("racer pack has the masks")
+        render::mask::models(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("racer pack has the masks")
     };
     let wheel_icons = match racer_character {
         Some(character) if character != NITROS_OXIDE => {
@@ -222,8 +245,22 @@ struct ShowHidden {
 
 /// The racers in `GAME_CHARACTER_IDS` order.
 const CHARACTERS: [&str; 16] = [
-    "Crash", "Cortex", "Tiny", "Coco", "N. Gin", "Dingo", "Polar", "Pura", "Pinstripe", "Papu", "Roo", "Joe",
-    "N. Tropy", "Penta", "Fake Crash", "Oxide",
+    "Crash",
+    "Cortex",
+    "Tiny",
+    "Coco",
+    "N. Gin",
+    "Dingo",
+    "Polar",
+    "Pura",
+    "Pinstripe",
+    "Papu",
+    "Roo",
+    "Joe",
+    "N. Tropy",
+    "Penta",
+    "Fake Crash",
+    "Oxide",
 ];
 
 /// What the command line asked for, to load the next level the same way.
@@ -337,13 +374,42 @@ fn main() {
     .insert_resource(ShowHidden { show_hidden, cull })
     .add_systems(Startup, setup)
     // After the cameras and karts have moved this frame, before their transforms propagate.
-    .add_systems(PostUpdate, wheels::update.before(TransformSystems::Propagate))
+    .add_systems(
+        PostUpdate,
+        wheels::update.before(TransformSystems::Propagate),
+    )
     .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
     .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-    .add_systems(FixedUpdate, (animate, animate_water, animate_scenery, props::animate, props::tick_objects, props::pose_hazards, props::hide_fruit, props::pose_crates, explosion::spawn, explosion::animate, fire::tick, advance_tick).chain())
-    .add_systems(Update, (switch_level, props::roll, props::place_hazards, fire::update).chain());
+    .add_systems(
+        FixedUpdate,
+        (
+            animate,
+            animate_water,
+            animate_scenery,
+            props::animate,
+            props::tick_objects,
+            props::pose_hazards,
+            props::hide_fruit,
+            props::pose_crates,
+            explosion::spawn,
+            explosion::animate,
+            fire::tick,
+            advance_tick,
+        )
+            .chain(),
+    )
+    .add_systems(
+        Update,
+        (
+            switch_level,
+            props::roll,
+            props::place_hazards,
+            fire::update,
+        )
+            .chain(),
+    );
     let world = app.world_mut();
     let mut scene_systems = vec![world.register_system(setup)];
     if let Some(drive) = drive {
@@ -364,24 +430,46 @@ fn main() {
 fn switch_level(world: &mut World) {
     let keys = world.resource::<ButtonInput<KeyCode>>();
     let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
-    let step = |next: &[KeyCode], previous: &[KeyCode]| pressed(next) as i32 - pressed(previous) as i32;
-    let level_step = step(&[KeyCode::BracketRight, KeyCode::PageUp], &[KeyCode::BracketLeft, KeyCode::PageDown]);
+    let step =
+        |next: &[KeyCode], previous: &[KeyCode]| pressed(next) as i32 - pressed(previous) as i32;
+    let level_step = step(
+        &[KeyCode::BracketRight, KeyCode::PageUp],
+        &[KeyCode::BracketLeft, KeyCode::PageDown],
+    );
     let racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
     let mut options = *world.resource::<Options>();
     if level_step == 0 && (racer_step == 0 || options.racer.is_none()) {
         return;
     }
     let levels = (LevelId::TURBO_TRACK.0 - LevelId::DINGO_CANYON.0 + 1) as i32;
-    let id = (world.resource::<LevelNumber>().0 as i32 - LevelId::DINGO_CANYON.0 as i32 + level_step).rem_euclid(levels) as u32
+    let id = (world.resource::<LevelNumber>().0 as i32 - LevelId::DINGO_CANYON.0 as i32
+        + level_step)
+        .rem_euclid(levels) as u32
         + LevelId::DINGO_CANYON.0;
-    options.racer = options.racer.map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
+    options.racer = options
+        .racer
+        .map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
     world.insert_resource(options);
-    let Loaded { level, dram, vram, racer, wheel_icons, shadow_icons, smoke_icon, tiremark_icon, flame_models, crate_explosion, masks } =
-        load_level(id, options.racer);
+    let Loaded {
+        level,
+        dram,
+        vram,
+        racer,
+        wheel_icons,
+        shadow_icons,
+        smoke_icon,
+        tiremark_icon,
+        flame_models,
+        crate_explosion,
+        masks,
+    } = load_level(id, options.racer);
 
     // Everything in the scene has a transform (the 3D parts) or a node (the text); the window
     // and the gamepads have neither.
-    let scene: Vec<Entity> = world.query_filtered::<Entity, Or<(With<Transform>, With<Node>)>>().iter(world).collect();
+    let scene: Vec<Entity> = world
+        .query_filtered::<Entity, Or<(With<Transform>, With<Node>)>>()
+        .iter(world)
+        .collect();
     for entity in scene {
         if let Ok(entity) = world.get_entity_mut(entity) {
             entity.despawn();
@@ -392,7 +480,11 @@ fn switch_level(world: &mut World) {
     world.insert_resource(Track(level, LevelId(id)));
     world.insert_resource(Textures { dram, vram });
     if options.driving {
-        let drive = new_drive(world.resource::<Track>(), &racer, options.racer.unwrap_or(0) as usize);
+        let drive = new_drive(
+            world.resource::<Track>(),
+            &racer,
+            options.racer.unwrap_or(0) as usize,
+        );
         world.insert_resource(drive);
         world.insert_resource(exhaust::Particles::new());
     }
@@ -445,9 +537,20 @@ fn spawn_parts(
     subtract_materials: &mut Assets<SubtractMaterial>,
     layer: usize,
 ) -> [Option<Handle<Mesh>>; PARTS] {
-    spawn_layers(Vec::from(parts), &[], base, transform, parent, commands, meshes, materials, subtract_materials, layer)
-        .try_into()
-        .unwrap()
+    spawn_layers(
+        Vec::from(parts),
+        &[],
+        base,
+        transform,
+        parent,
+        commands,
+        meshes,
+        materials,
+        subtract_materials,
+        layer,
+    )
+    .try_into()
+    .unwrap()
 }
 
 /// Spawns `parts` (slot `i` is blended as `i % PARTS`). `biases` holds the draw order bias of each
@@ -529,11 +632,26 @@ fn setup(
     driving: Option<Res<drive::Drive>>,
 ) {
     let level = &track.0;
-    let data = mesh::level_mesh(level, &textures.dram, &textures.vram, low.0, !show_hidden.show_hidden, show_hidden.cull, mesh::world_lifts(track.1));
+    let data = mesh::level_mesh(
+        level,
+        &textures.dram,
+        &textures.vram,
+        low.0,
+        !show_hidden.show_hidden,
+        show_hidden.cull,
+    );
+    info!(
+        "{} turbo pad collision blocks, {} blocks that show them (those get the extra depth bias)",
+        level.quad_blocks.iter().filter(|q| mesh::is_turbo_pad(q)).count(),
+        mesh::turbo_pad_visuals(level).len()
+    );
     info!(
         "{} quad blocks, vertices per part {:?}, {} animated faces",
         level.quad_blocks.len(),
-        data.parts.iter().map(|p| p.positions.len()).collect::<Vec<_>>(),
+        data.parts
+            .iter()
+            .map(|p| p.positions.len())
+            .collect::<Vec<_>>(),
         data.animated_faces.len()
     );
 
@@ -556,7 +674,9 @@ fn setup(
         base_color_texture: Some(atlas),
         unlit: true,
         // The level winds its faces as the game's `NCLIP` test draws them (see `level_mesh`).
-        cull_mode: show_hidden.cull.then_some(bevy::render::render_resource::Face::Back),
+        cull_mode: show_hidden
+            .cull
+            .then_some(bevy::render::render_resource::Face::Back),
         double_sided: !show_hidden.cull,
         ..default()
     };
@@ -624,9 +744,16 @@ fn setup(
     );
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();
-    fire::spawn(objects.fireballs.len(), &textures.dram, &textures.vram, &mut commands, &mut images, &mut meshes, &mut materials);
+    fire::spawn(
+        objects.fireballs.len(),
+        &textures.dram,
+        &textures.vram,
+        &mut commands,
+        &mut images,
+        &mut meshes,
+        &mut materials,
+    );
     commands.insert_resource(props::Sim::new(objects));
-
 
     if let Some(model) = &racer.0 {
         let kart = spawn_racer(
@@ -691,7 +818,11 @@ fn setup(
     }
 
     // The sky camera clears the picture; the main camera draws over it.
-    let sky_clear = if level.skybox.is_some() { ClearColorConfig::None } else { ClearColorConfig::Default };
+    let sky_clear = if level.skybox.is_some() {
+        ClearColorConfig::None
+    } else {
+        ClearColorConfig::Default
+    };
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
     if driving.is_some() {
@@ -702,13 +833,22 @@ fn setup(
             ..default()
         };
         if let Some(skybox) = &level.skybox {
-            sky::spawn(&mut commands, &mut meshes, &mut materials, skybox, perspective.clone());
+            sky::spawn(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                skybox,
+                perspective.clone(),
+            );
         }
         let projection = Projection::Perspective(perspective);
         commands
             .spawn((
                 Camera3d::default(),
-                Camera { clear_color: sky_clear, ..default() },
+                Camera {
+                    clear_color: sky_clear,
+                    ..default()
+                },
                 projection.clone(),
                 Transform::default(),
                 drive::ChaseCamera::new(),
@@ -717,18 +857,31 @@ fn setup(
                 OverlayCamera,
                 Camera3d::default(),
                 // After the main camera, on top of its picture, with only the depth buffer cleared.
-                Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+                Camera {
+                    order: 1,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
                 projection,
                 Transform::default(),
                 RenderLayers::layer(KART_LAYER),
             ));
     } else {
         if let Some(skybox) = &level.skybox {
-            sky::spawn(&mut commands, &mut meshes, &mut materials, skybox, default());
+            sky::spawn(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                skybox,
+                default(),
+            );
         }
         commands.spawn((
             Camera3d::default(),
-            Camera { clear_color: sky_clear, ..default() },
+            Camera {
+                clear_color: sky_clear,
+                ..default()
+            },
             Transform::from_xyz(x, y + 3.0, z + 6.0),
             FlyCamera {
                 yaw: 0.0,
@@ -805,7 +958,15 @@ fn spawn_racer(
         (placement, None, wheels::Anchor::Fixed(placement))
     };
     if !wheel_icons.is_empty() {
-        wheels::spawn(commands, images, meshes, materials, wheel_icons, vram, anchor);
+        wheels::spawn(
+            commands,
+            images,
+            meshes,
+            materials,
+            wheel_icons,
+            vram,
+            anchor,
+        );
     }
     let parts = spawn_parts(
         data.parts,
@@ -819,7 +980,10 @@ fn spawn_racer(
         KART_LAYER,
     );
     if driving {
-        commands.insert_resource(drive::KartModel { header: header.clone(), parts });
+        commands.insert_resource(drive::KartModel {
+            header: header.clone(),
+            parts,
+        });
     }
     parent
 }
@@ -866,13 +1030,19 @@ struct SceneryState {
 }
 
 /// `AnimateQuad`, once per game tick.
-fn animate_scenery(mut state: ResMut<SceneryState>, tick: Res<GameTick>, mut meshes: ResMut<Assets<Mesh>>) {
+fn animate_scenery(
+    mut state: ResMut<SceneryState>,
+    tick: Res<GameTick>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
     let state = &mut *state;
     if state.scenery.vertices.is_empty() {
         return;
     }
     for update in state.scenery.animate(tick.0, |_| true) {
-        let Some(corners) = state.corners.get(&update.vertex) else { continue };
+        let Some(corners) = state.corners.get(&update.vertex) else {
+            continue;
+        };
         for corner in corners {
             if let Some(pos) = update.pos {
                 state.positions[corner.part][corner.slot] = to_world(pos);
@@ -950,7 +1120,6 @@ fn fly(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
-    scroll: Res<AccumulatedMouseScroll>,
     mut cameras: Query<(&mut Transform, &mut FlyCamera)>,
 ) {
     for (mut transform, mut cam) in &mut cameras {
@@ -958,7 +1127,6 @@ fn fly(
             cam.yaw -= motion.delta.x * 0.003;
             cam.pitch = (cam.pitch - motion.delta.y * 0.003).clamp(-1.55, 1.55);
         }
-        cam.speed = (cam.speed * (1.0 + scroll.delta.y * 0.1)).clamp(0.5, 500.0);
         transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
 
         let axis = |pos: KeyCode, neg: KeyCode| {
