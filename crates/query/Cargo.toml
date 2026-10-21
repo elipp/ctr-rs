@@ -1,0 +1,13 @@
+[package]
+name = "query"
+version = "0.1.0"
+edition = "2024"
+
+# A command line tool to look things up in the disc's data: `cargo run -p query -- help`.
+[[bin]]
+name = "ctr-query"
+path = "src/main.rs"
+
+[dependencies]
+loader = { path = "../loader" }
+render = { path = "../render" }
