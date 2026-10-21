@@ -297,7 +297,7 @@ struct FlyCamera {
 }
 
 fn main() {
-    let mut id = 0;
+    let track_id = 0;
     let mut racer = Some(0);
     let mut low = false;
     let mut show_hidden = false;
@@ -320,9 +320,9 @@ fn main() {
                 )
             }
             n => {
-                id = n.parse().unwrap_or_else(|_| {
-                    panic!("usage: view [LEVEL_ID] [--lo] [--show-hidden] [--no-cull] [--drive] [--racer N | --no-racer], got `{n}`")
-                })
+                panic!(
+                    "usage: view [--lo] [--show-hidden] [--no-cull] [--drive] [--racer N | --no-racer], got '{n}'"
+                )
             }
         }
     }
@@ -341,8 +341,8 @@ fn main() {
         flame_models,
         crate_explosion,
         masks,
-    } = load_level(id, racer);
-    let loaded = Track(level, LevelId(id));
+    } = load_level(track_id, racer);
+    let loaded = Track(level, LevelId(track_id));
     let textures = Textures { dram, vram };
     let drive = driving.then(|| new_drive(&loaded, &racer, character));
 
@@ -350,8 +350,11 @@ fn main() {
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: match options.racer {
-                Some(racer) => format!("ctr-rs view: level {id}, {}", CHARACTERS[racer as usize]),
-                None => format!("ctr-rs view: level {id}"),
+                Some(racer) => format!(
+                    "ctr-rs view: level {track_id}, {}",
+                    CHARACTERS[racer as usize]
+                ),
+                None => format!("ctr-rs view: level {track_id}"),
             },
             ..default()
         }),
@@ -369,7 +372,7 @@ fn main() {
     .insert_resource(explosion::CrateExplosion::new(crate_explosion))
     .insert_resource(mask::MaskModels(Some(masks)))
     .insert_resource(options)
-    .insert_resource(LevelNumber(id))
+    .insert_resource(LevelNumber(track_id))
     .insert_resource(LowColors(low))
     .insert_resource(ShowHidden { show_hidden, cull })
     .add_systems(Startup, setup)
@@ -642,7 +645,11 @@ fn setup(
     );
     info!(
         "{} turbo pad collision blocks, {} blocks that show them (those get the extra depth bias)",
-        level.quad_blocks.iter().filter(|q| mesh::is_turbo_pad(q)).count(),
+        level
+            .quad_blocks
+            .iter()
+            .filter(|q| mesh::is_turbo_pad(q))
+            .count(),
         mesh::turbo_pad_visuals(level).len()
     );
     info!(
