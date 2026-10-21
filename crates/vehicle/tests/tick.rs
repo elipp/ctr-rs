@@ -150,6 +150,7 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
             MatrixArray::WheelieHold => 2,
             MatrixArray::WheelieRecover => 3,
             MatrixArray::CrashFall => 4,
+            MatrixArray::SquishRecover => 5,
             MatrixArray::Jump(n) => n,
         }
     );

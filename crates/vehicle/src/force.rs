@@ -14,7 +14,7 @@ use math::{Vec3, mips};
 use crate::calc::interp_by_speed;
 use crate::terrain::{TERRAINS, terrain_flags, terrain_type};
 use crate::fire::{self, turbo_type};
-use crate::{Driver, Effect, Env, Matrix, actions, collision_flags, kart_state, rain_cloud, step_triggers};
+use crate::{Driver, Effect, Env, Matrix, MatrixArray, actions, collision_flags, kart_state, rain_cloud, step_triggers};
 
 /// `gte_mvmva(sf, mx, v, cv, lm)`
 pub fn mvmva(sf: u32, mx: u32, v: u32, cv: u32, lm: u32) -> u32 {
@@ -553,6 +553,7 @@ const FALL_STRETCH_MAX: i32 = 0x320;
 const SQUISH_INTERP_SPEED: i32 = 300;
 const SQUISH_SCALE_INTERP_SPEED: i32 = 0xa0;
 const SQUISH_SCALE_XZ_FACTOR: i32 = 0xa0;
+const SQUISH_RESTORE_SFX: u8 = 0x5b;
 
 /// `VehPhysForce_TranslateMatrix_Div256TowardZero`
 fn div256_toward_zero(value: i32) -> i32 {
@@ -562,8 +563,10 @@ fn div256_toward_zero(value: i32) -> i32 {
 /// The squash and stretch of the kart model (the first part of `VehPhysForce_TranslateMatrix`):
 /// it stretches in the air, and squashes on landing and when it takes off.
 ///
-/// Not ported: the squish by a crushing hazard (`squishTimer`) and the TNT box's wobble.
-fn squash_stretch(d: &mut Driver) {
+/// A squished kart (`squishTimer`) is flat, and springs back when it ends.
+///
+/// Not ported: the TNT box's wobble.
+fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
     if d.kart_state == kart_state::WARP_PAD {
         return;
     }
@@ -612,8 +615,17 @@ fn squash_stretch(d: &mut Driver) {
     d.jump_squish_stretch2 = mips::sra(mips::add_lo(d.jump_squish_stretch2 as i32 * 9, jump_height * 7), 4) as i16;
 
     let squish = d.jump_squish_stretch as i32;
-    d.inst_scale_y =
-        interp_by_speed(d.inst_scale_y as i32, SQUISH_SCALE_INTERP_SPEED, mips::add_lo(squish, KART_SCALE_BASE)) as i16;
+    if d.squish_timer != 0 {
+        d.inst_scale_y = 0;
+    } else if d.inst_scale_y == 0 {
+        effects.push(Effect::Sound { id: SQUISH_RESTORE_SFX, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+        d.inst_scale_y = mips::add_lo(squish, KART_SCALE_BASE) as i16;
+        d.matrix_array = MatrixArray::SquishRecover;
+        d.matrix_index = 0;
+    } else {
+        d.inst_scale_y =
+            interp_by_speed(d.inst_scale_y as i32, SQUISH_SCALE_INTERP_SPEED, mips::add_lo(squish, KART_SCALE_BASE)) as i16;
+    }
     let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * SQUISH_SCALE_XZ_FACTOR));
     d.inst_scale_x = interp_by_speed(d.inst_scale_x as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
     d.inst_scale_z = interp_by_speed(d.inst_scale_z as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
@@ -621,8 +633,8 @@ fn squash_stretch(d: &mut Driver) {
 
 /// `VehPhysForce_TranslateMatrix`: squashes and stretches the model, builds the
 /// matrix that faces it along the surface normal, then steps the wheelie.
-pub fn translate_matrix(d: &mut Driver, gte: &mut Gte) {
-    squash_stretch(d);
+pub fn translate_matrix(d: &mut Driver, gte: &mut Gte, effects: &mut Vec<Effect>) {
+    squash_stretch(d, effects);
     let mut facing = d.matrix_facing_dir;
     rot_axis_angle(&mut facing, gte, d.axis_angle2_normal_vec, d.rot_curr_y as i32);
     d.matrix_facing_dir = facing;
@@ -643,9 +655,31 @@ mod squash_tests {
     fn a_kart_on_the_ground_keeps_its_size() {
         let mut d = kart();
         for _ in 0..10 {
-            squash_stretch(&mut d);
+            squash_stretch(&mut d, &mut Vec::new());
         }
         assert_eq!([d.inst_scale_x, d.inst_scale_y, d.inst_scale_z], [0xccc; 3]);
+    }
+
+    #[test]
+    fn a_squished_kart_is_flat_and_springs_back() {
+        let mut d = kart();
+        let mut effects = Vec::new();
+        d.squish_timer = 0xf00;
+        squash_stretch(&mut d, &mut effects);
+        assert_eq!(d.inst_scale_y, 0);
+        assert!(effects.is_empty());
+
+        d.squish_timer = 0;
+        squash_stretch(&mut d, &mut effects);
+        assert_eq!(d.inst_scale_y, 0xccc);
+        assert_eq!((d.matrix_array, d.matrix_index), (MatrixArray::SquishRecover, 0));
+        assert!(effects.contains(&Effect::Sound { id: SQUISH_RESTORE_SFX, echo: false }));
+
+        // The recovery runs its 15 entries and ends.
+        for _ in 0..15 {
+            crate::baked::update_matrix_animation(&mut d);
+        }
+        assert_eq!(d.matrix_array, MatrixArray::None);
     }
 
     #[test]
@@ -653,14 +687,14 @@ mod squash_tests {
         let mut d = kart();
         d.actions_flag_set = 0;
         d.jump_height_curr = -0x800;
-        squash_stretch(&mut d);
+        squash_stretch(&mut d, &mut Vec::new());
         assert!(d.inst_scale_y > 0xccc && d.inst_scale_x < 0xccc && d.inst_scale_z < 0xccc);
         assert_eq!(d.inst_scale_x, d.inst_scale_z);
 
         d.actions_flag_set = actions::TOUCH_GROUND;
         d.jump_height_curr = 0;
         for _ in 0..200 {
-            squash_stretch(&mut d);
+            squash_stretch(&mut d, &mut Vec::new());
         }
         assert_eq!([d.inst_scale_x, d.inst_scale_y, d.inst_scale_z], [0xccc; 3]);
     }
