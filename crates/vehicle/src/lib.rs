@@ -38,6 +38,7 @@ pub mod sparks;
 pub mod sim;
 pub mod spin;
 pub mod stats;
+pub mod stuck;
 pub mod terrain;
 pub mod turbo;
 pub mod wumpa;
@@ -168,11 +169,16 @@ pub struct Env {
     pub timer: u32,
     /// `gameMode1 & END_OF_RACE`: the driver ignores the gamepad.
     pub end_of_race: bool,
+    /// Whether a mask grab takes the kart (`VehStuckProc_MaskGrab_Init` and what follows it:
+    /// the respawn and the engine rev). When false the grab is only reported in
+    /// [`sim::TickResult`] and the driver carries on driving, as the reference's C oracle
+    /// driver does with its stub of `MaskGrab_Init`.
+    pub respawns: bool,
 }
 
 impl Default for Env {
     fn default() -> Self {
-        Env { elapsed_time_ms: 32, elapsed_event_time: 0, timer: 0, end_of_race: false }
+        Env { elapsed_time_ms: 32, elapsed_event_time: 0, timer: 0, end_of_race: false, respawns: true }
     }
 }
 
@@ -223,6 +229,11 @@ pub enum PhysState {
     SpinLast,
     /// `VehPhysProc_SpinStop_*`: the model straightens up, then driving resumes.
     SpinStop,
+    /// `VehStuckProc_MaskGrab_*`: the mask carries the kart off to the track.
+    MaskGrab,
+    /// `VehStuckProc_RevEngine_*`: held still (or lowered by the mask) while the
+    /// engine revs, until the kart may drive.
+    RevEngine,
 }
 
 /// Something the original does that is not simulation: for the presentation
@@ -446,6 +457,12 @@ pub struct Driver {
     /// Set when the original sets `funcPtrs[DRIVER_FUNC_INIT]` to `VehPhysProc_SpinFirst_Init`
     /// (`VehPickState_NewState`): the next tick starts by spinning out.
     pub pending_spin: bool,
+    /// The Aku Aku / Uka Uka mask thread that is a child of the driver's thread, if any.
+    pub mask: Option<stuck::MaskHead>,
+    /// `KartStates.MaskGrab` (a view of the same union as the drifting and spinning ones).
+    pub grab: stuck::MaskGrab,
+    /// `KartStates.RevEngine`
+    pub rev: stuck::RevEngine,
     /// The number of frames of the kart model's animations (`anim_index`),
     /// which time the crash animation.
     pub anim_num_frames: [u16; 8],

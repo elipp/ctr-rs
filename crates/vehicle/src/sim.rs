@@ -3,8 +3,8 @@
 //! frozen by the V-shift guard) uses. Plus the birth and spawn of a driver.
 //!
 //! Left out of the tick: kart-against-kart (the rest of `CollideDrivers`), the audio and particle stages (presentation), and
-//! the other states a driver can be in (the rev-engine start, the mask grab,
-//! being blasted).
+//! the other states a driver can be in (the race start's engine rev, being blasted).
+//! A fall off the track is the mask grab and the rev that follows it ([`crate::stuck`]).
 
 use coll::Collision;
 use loader::lev::{Level, SVec3};
@@ -19,6 +19,7 @@ use crate::jump::jump_and_friction;
 use crate::linear::phys_linear;
 use crate::{powerslide, spin};
 use crate::scrub::IDENTITY_LIGHT_MATRIX;
+use crate::stuck;
 use crate::search::{Instances, NoInstances, moved_player_search};
 use crate::stats::{CHARACTER_ENGINES, Stats};
 use crate::terrain::terrain_type;
@@ -60,9 +61,43 @@ impl Driver {
 /// `VehBirth_TeleportSelf` for the start of a race: puts the driver on the
 /// track at spawn point `spawn_index`, facing along the track, standing still.
 pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: usize) {
+    let spawn = &level.driver_spawns[spawn_index];
+
+    d.actions_flag_set |= actions::BEHIND_START_LINE;
+    d.distance_to_finish_checkpoint = level.restart_points.first().map_or(0, |p| (p.dist_to_finish as u32) << 3);
+
+    let bottom = SVec3 { x: spawn.pos.x, y: (spawn.pos.y as i32 + SPAWN_BOTTOM_Y_OFFSET) as i16, z: spawn.pos.z };
+    probe_track(d, coll, level, bottom, 0);
+
+    d.rot_curr_x = spawn.rot.x;
+    d.rot_curr_y = ((spawn.rot.y as i32 + 0x400) & 0xfff) as i16;
+    d.rot_curr_z = spawn.rot.z;
+    reset_after_teleport(d);
+
+    d.num_wumpas = 0;
+
+    // Straight into driving (the original starts with the engine-revving
+    // state of the traffic lights).
+    d.init_pending = true;
+}
+
+/// `VehBirth_TeleportSelf` without the level's spawn points: puts the driver on the track under
+/// where it is (`pos_curr`, `rot_curr`), `spawn_y` above it. The respawn of a mask grab.
+pub(crate) fn teleport_self(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_y: i32) {
+    let bottom = SVec3 {
+        x: mips::sra(d.pos_curr.x, 8) as i16,
+        y: mips::add_lo(mips::sra(d.pos_curr.y, 8), SPAWN_BOTTOM_Y_OFFSET) as i16,
+        z: mips::sra(d.pos_curr.z, 8) as i16,
+    };
+    probe_track(d, coll, level, bottom, spawn_y);
+    reset_after_teleport(d);
+}
+
+/// The first half of `VehBirth_TeleportSelf`: finds the track straight below `bottom`, and
+/// puts the driver `spawn_y` above it with the surface's normal.
+fn probe_track(d: &mut Driver, coll: &mut Collision, level: &Level, bottom: SVec3, spawn_y: i32) {
     use loader::lev::quad_flags;
 
-    let spawn = &level.driver_spawns[spawn_index];
     {
         let q = &mut coll.sps.quad_block_coll;
         q.quad_flags_wanted = (quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32;
@@ -70,10 +105,6 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
         q.search_flags = coll::search_flags::HIGH_LOD;
     }
 
-    d.actions_flag_set |= actions::BEHIND_START_LINE;
-    d.distance_to_finish_checkpoint = level.restart_points.first().map_or(0, |p| (p.dist_to_finish as u32) << 3);
-
-    let bottom = SVec3 { x: spawn.pos.x, y: (spawn.pos.y as i32 + SPAWN_BOTTOM_Y_OFFSET) as i16, z: spawn.pos.z };
     let top = SVec3 { x: bottom.x, y: (bottom.y as i32 - SPAWN_PROBE_TOP_Y_OFFSET) as i16, z: bottom.z };
     coll.search_quadblocks(level, top, bottom, 0);
 
@@ -89,15 +120,15 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
 
     let hit_pos = coll.sps.quad_block_coll.hit_pos;
     d.pos_curr.x = mips::sll(hit_pos.x as i32, 8);
-    d.pos_curr.y = mips::sll(hit_pos.y as i32, 8);
+    d.pos_curr.y = mips::sll(mips::add_lo(hit_pos.y as i32, spawn_y), 8);
     d.pos_curr.z = mips::sll(hit_pos.z as i32, 8);
     d.pos_prev = d.pos_curr;
     d.quad_block_height = mips::sll(hit_pos.y as i32, 8);
+}
 
-    d.rot_curr_x = spawn.rot.x;
-    d.rot_curr_y = ((spawn.rot.y as i32 + 0x400) & 0xfff) as i16;
-    d.rot_curr_z = spawn.rot.z;
-
+/// The second half of `VehBirth_TeleportSelf` (for a teleport that is not a race start): the
+/// driver stands still, facing `rot_curr`.
+fn reset_after_teleport(d: &mut Driver) {
     d.speed = 0;
     d.speed_approx = 0;
     d.jump_height_curr = 0;
@@ -105,7 +136,18 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     d.forward_accel_impulse = 0;
     d.angle = d.rot_curr_y;
     d.rot_prev = [d.rot_curr_x, d.rot_curr_y, d.rot_curr_z, 0];
+
+    d.anim_index = 0;
+    d.anim_frame = frame::start_frame(0, frame::num_anim_frames(d, 0)) as i16;
+    d.inst_scale_x = KART_SCALE_BASE as i16;
+    d.inst_scale_y = KART_SCALE_BASE as i16;
+    d.inst_scale_z = KART_SCALE_BASE as i16;
+    d.matrix_array = crate::MatrixArray::None;
+    d.matrix_index = 0;
+
     d.jump_landing_boost = 0;
+    d.jump_meter = 0;
+    d.jump_meter_timer = 0;
     d.turn_angle_curr = 0;
     d.turn_angle_lerp_vel = 0;
     d.turn_angle_prev = 0;
@@ -114,14 +156,6 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     d.under_driver = None;
     d.clock_receive = 0;
     d.actions_flag_set &= !(actions::AIRBORNE | actions::HIGH_JUMP);
-    d.num_wumpas = 0;
-
-    d.anim_index = 0;
-    d.anim_frame = frame::start_frame(0, frame::num_anim_frames(d, 0)) as i16;
-
-    // Straight into driving (the original starts with the engine-revving
-    // state of the traffic lights).
-    d.init_pending = true;
 }
 
 /// `VehPhysProc_Driving_Init`
@@ -149,7 +183,7 @@ fn freeze_vshift_init(d: &mut Driver) {
 /// rest start driving.
 fn init_stage(d: &mut Driver) {
     match d.phys_state {
-        PhysState::PowerSlide | PhysState::SpinFirst => d.init_pending = false,
+        PhysState::PowerSlide | PhysState::SpinFirst | PhysState::MaskGrab | PhysState::RevEngine => d.init_pending = false,
         _ => driving_init(d),
     }
 }
@@ -186,6 +220,8 @@ fn update(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<Effect>) {
             }
         }
         PhysState::SlamWall | PhysState::SpinStop => {}
+        // These start with their own updates, which have more to work with: see `tick_with`.
+        PhysState::MaskGrab | PhysState::RevEngine => {}
         PhysState::PowerSlide => powerslide::update(d, input, env, effects),
         PhysState::SpinFirst => spin::first_update(d),
         PhysState::SpinLast => spin::last_update(d),
@@ -232,9 +268,12 @@ fn slam_wall_animate(d: &mut Driver) {
 /// What a tick asks of the game beyond the driver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TickResult {
-    /// The driver fell off the track or touched a kill plane: the original
-    /// starts `VehStuckProc_MaskGrab_Init`, which puts it back on the track.
+    /// The driver fell off the track or touched a kill plane, and the original
+    /// starts `VehStuckProc_MaskGrab_Init` (see [`Env::respawns`]).
     pub mask_grab: bool,
+    /// The mask grab let go of the driver and put it back on the track: the
+    /// camera's direction changed.
+    pub respawned: bool,
 }
 
 /// One 30 Hz tick of a driver: every stage of `MainFrame`'s loop over the
@@ -253,6 +292,8 @@ pub fn tick_with(
     instances: &mut dyn Instances,
     effects: &mut Vec<Effect>,
 ) -> TickResult {
+    let mut respawned = false;
+
     // DRIVER_FUNC_INIT
     if d.pending_spin {
         // `SpinFirst_Init` also clears the update procedure, so there is none this tick.
@@ -264,12 +305,19 @@ pub fn tick_with(
         }
 
         // DRIVER_FUNC_UPDATE
-        update(d, env, input, effects);
+        match d.phys_state {
+            // (There are no other drivers to keep the respawn off of.)
+            PhysState::MaskGrab => respawned = stuck::mask_grab_update(d, coll, level, env, &[]),
+            PhysState::RevEngine => stuck::rev_engine_update(d, effects),
+            _ => update(d, env, input, effects),
+        }
     }
 
     // DRIVER_FUNC_PHYS_LINEAR
-    if d.phys_state == PhysState::SpinFirst {
-        spin::first_before_phys_linear(d, env);
+    match d.phys_state {
+        PhysState::SpinFirst => spin::first_before_phys_linear(d, env),
+        PhysState::RevEngine => stuck::rev_engine_before_phys_linear(d, env),
+        _ => {}
     }
     phys_linear(d, env, input, effects);
     match d.phys_state {
@@ -281,6 +329,8 @@ pub fn tick_with(
         PhysState::SpinFirst => spin::first_after_phys_linear(d),
         PhysState::SpinLast => spin::last_after_phys_linear(d),
         PhysState::SpinStop => spin::stop_after_phys_linear(d),
+        PhysState::MaskGrab => stuck::mask_grab_after_phys_linear(d),
+        PhysState::RevEngine => stuck::rev_engine_after_phys_linear(d),
         PhysState::Driving | PhysState::FreezeVShift => {}
     }
 
@@ -291,23 +341,32 @@ pub fn tick_with(
         PhysState::SpinFirst => spin::first_phys_angular(d, &mut coll.gte, env),
         PhysState::SpinLast => spin::last_phys_angular(d, &mut coll.gte, env),
         PhysState::SpinStop => spin::stop_phys_angular(d, &mut coll.gte, env),
-        PhysState::Driving | PhysState::FreezeVShift => phys_angular(d, &mut coll.gte, env),
+        PhysState::Driving | PhysState::FreezeVShift | PhysState::MaskGrab => phys_angular(d, &mut coll.gte, env),
+        PhysState::RevEngine => {}
     }
 
-    // DRIVER_FUNC_APPLY_FORCES
-    on_apply_forces(d, coll, env, level, effects);
+    // The rev has no forces and no collisions: the mask lowers the kart, or it stands still.
+    let mut mask_grab = false;
+    if d.phys_state != PhysState::RevEngine {
+        // DRIVER_FUNC_APPLY_FORCES
+        on_apply_forces(d, coll, env, level, effects);
 
-    // DRIVER_FUNC_COLL_MOVED
-    moved_player_search(d, coll, level, &IDENTITY_LIGHT_MATRIX, env.elapsed_time_ms, instances, effects);
+        // DRIVER_FUNC_COLL_MOVED
+        moved_player_search(d, coll, level, &IDENTITY_LIGHT_MATRIX, env.elapsed_time_ms, instances, effects);
 
-    // DRIVER_FUNC_COLLIDE_DRIVERS: nothing to collide with, but the turbo pads are here.
-    collide_drivers(d, effects);
+        // DRIVER_FUNC_COLLIDE_DRIVERS: nothing to collide with, but the turbo pads are here.
+        collide_drivers(d, effects);
 
-    // DRIVER_FUNC_COLL_FIXED
-    let mask_grab = fixed_player_search(d, coll, level, env, effects);
+        // DRIVER_FUNC_COLL_FIXED
+        mask_grab = fixed_player_search(d, coll, level, env, effects);
+        if mask_grab && env.respawns {
+            // Starts in the middle of the tick: the stages after this one are the mask grab's.
+            stuck::mask_grab_init(d, level);
+        }
 
-    // DRIVER_FUNC_JUMP_FRICTION
-    jump_and_friction(d, &mut coll.gte, env, level, effects);
+        // DRIVER_FUNC_JUMP_FRICTION
+        jump_and_friction(d, &mut coll.gte, env, level, effects);
+    }
     if d.phys_state == PhysState::FreezeVShift {
         // `VehPhysProc_FreezeVShift_ReverseOneFrame`: after the usual,
         if d.actions_flag_set & actions::JUMP_STARTED != 0 {
@@ -332,10 +391,15 @@ pub fn tick_with(
         PhysState::SpinFirst => frame::spinning(d),
         PhysState::SpinLast => frame::last_spin(d),
         PhysState::SpinStop => spin::stop_animate(d),
+        PhysState::MaskGrab => stuck::mask_grab_animate(d, env),
+        PhysState::RevEngine => stuck::rev_engine_animate(d, env, effects),
     }
 
     // The HUD's jump meter, which gives the hang-time turbo, runs after the drivers' tick.
     crate::jump_meter::update(d, env, effects);
 
-    TickResult { mask_grab }
+    // The mask's own thread.
+    stuck::mask_tick(d, env);
+
+    TickResult { mask_grab, respawned }
 }

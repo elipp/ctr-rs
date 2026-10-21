@@ -18,6 +18,7 @@
 //! `]` / Page Up and `[` / Page Down switch to the next and the previous level; `.` and `,` to the
 //! next and the previous racer.
 
+mod bar;
 mod drive;
 mod exhaust;
 mod explosion;
@@ -325,6 +326,7 @@ fn main() {
     .add_systems(Startup, setup)
     // After the cameras and karts have moved this frame, before their transforms propagate.
     .add_systems(PostUpdate, wheels::update.before(TransformSystems::Propagate))
+    .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
     .add_plugins(sky::SkyPlugin)
     .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
     .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
