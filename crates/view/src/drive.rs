@@ -159,11 +159,13 @@ fn pose_of(d: &Driver) -> Pose {
     };
     // The squash and stretch of the instance, on top of the wheelie's.
     let inst = Vec3::new(d.inst_scale_x as f32, d.inst_scale_y as f32, d.inst_scale_z as f32) / vehicle::force::KART_SCALE_BASE as f32;
-    let scale = Vec3::new(side.length(), up.length(), forward.length()) * inst;
+    let basis = Vec3::new(side.length(), up.length(), forward.length());
+    // A squished kart is flat: its height is 0, which a transform would not invert.
+    let scale = basis * inst;
     Pose {
         translation: Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) * SCALE,
         rotation,
-        scale: if scale.min_element() > 0.0 { scale } else { Vec3::ONE },
+        scale: if basis.min_element() > 0.0 && inst.x > 0.0 && inst.z > 0.0 { scale.max(Vec3::splat(0.001)) } else { Vec3::ONE },
     }
 }
 
@@ -329,6 +331,16 @@ fn drive_tick(
         ..Env::default()
     };
     let mut effects = Vec::new();
+    // The hazards that reached the kart's instance in their last tick hurt it
+    // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
+    let (_, at) = vehicle::baked::inst_matrix(&drive.driver);
+    for contact in sim.last.contacts.iter().filter(|c| c.hits(at)) {
+        let was_spinning = drive.driver.kart_state == vehicle::kart_state::SPINNING;
+        if vehicle::pick::new_state(&mut drive.driver, contact.damage as u8, &mut effects) && !was_spinning && contact.sound != 0 {
+            let echo = drive.driver.actions_flag_set & vehicle::actions::ENGINE_ECHO != 0;
+            effects.push(Effect::Sound { id: contact.sound as u8, echo });
+        }
+    }
     let result = tick_with(
         &mut drive.driver,
         &mut drive.coll,

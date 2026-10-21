@@ -27,6 +27,7 @@ pub mod jump;
 pub mod jump_meter;
 pub mod joystick;
 pub mod linear;
+pub mod pick;
 pub mod powerslide;
 pub mod rotmat;
 pub mod scrub;
@@ -198,6 +199,8 @@ pub enum MatrixArray {
     WheelieHold,
     WheelieRecover,
     CrashFall,
+    /// `BAKED_GTE_MATRIX_SQUISH_RECOVER`: the kart bounces back up after a squish.
+    SquishRecover,
     /// `BAKED_GTE_MATRIX_JUMP_BASE + n`: the airborne pose of a character.
     Jump(u8),
 }
@@ -440,6 +443,9 @@ pub struct Driver {
     /// Set when the original sets `funcPtrs[DRIVER_FUNC_INIT]` to
     /// `VehPhysProc_Driving_Init`: the next tick starts by driving again.
     pub init_pending: bool,
+    /// Set when the original sets `funcPtrs[DRIVER_FUNC_INIT]` to `VehPhysProc_SpinFirst_Init`
+    /// (`VehPickState_NewState`): the next tick starts by spinning out.
+    pub pending_spin: bool,
     /// The number of frames of the kart model's animations (`anim_index`),
     /// which time the crash animation.
     pub anim_num_frames: [u16; 8],

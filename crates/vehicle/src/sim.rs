@@ -254,12 +254,18 @@ pub fn tick_with(
     effects: &mut Vec<Effect>,
 ) -> TickResult {
     // DRIVER_FUNC_INIT
-    if d.init_pending {
-        init_stage(d);
-    }
+    if d.pending_spin {
+        // `SpinFirst_Init` also clears the update procedure, so there is none this tick.
+        d.pending_spin = false;
+        spin::first_init(d, effects);
+    } else {
+        if d.init_pending {
+            init_stage(d);
+        }
 
-    // DRIVER_FUNC_UPDATE
-    update(d, env, input, effects);
+        // DRIVER_FUNC_UPDATE
+        update(d, env, input, effects);
+    }
 
     // DRIVER_FUNC_PHYS_LINEAR
     if d.phys_state == PhysState::SpinFirst {
@@ -317,7 +323,7 @@ pub fn tick_with(
     }
 
     // DRIVER_FUNC_TRANSLATE_MATRIX
-    translate_matrix(d, &mut coll.gte);
+    translate_matrix(d, &mut coll.gte, effects);
 
     // DRIVER_FUNC_ANIMATE
     match d.phys_state {

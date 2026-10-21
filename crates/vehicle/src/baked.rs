@@ -4,10 +4,10 @@
 //! `VehPhysForce_TranslateMatrix_UpdateInstanceMatrix` puts on the facing matrix,
 //! with an offset of the kart's origin that follows it.
 //!
-//! The squish recovery and blasted tables are not ported:
-//! with those arrays the instance matrix is the facing matrix.
+//! The blasted tables are not ported: with those arrays the instance matrix is the facing matrix.
 
 use gte::Gte;
+use math::mips;
 use loader::lev::SVec3;
 
 use crate::exhaust::rotate;
@@ -52,6 +52,25 @@ pub const WHEELIE_RECOVER: [Entry; 9] = [
     Entry { offset: [0, -224, -389], rot: [-2, 0, 0], scale: [3686, 4505, 3686] },
     Entry { offset: [0, -287, -439], rot: [-2, 0, 0], scale: [3792, 4399, 3792] },
     Entry { offset: [0, -142, -220], rot: [-2, 0, 0], scale: [3989, 4202, 3989] },
+];
+
+/// `matArr05`: the kart springs back from a squish.
+pub const SQUISH_RECOVER: [Entry; 15] = [
+    Entry { offset: [0, 3091, 0], rot: [0, 0, 0], scale: [4096, 2227, 4096] },
+    Entry { offset: [0, 3896, 0], rot: [0, 0, 0], scale: [3704, 4456, 3704] },
+    Entry { offset: [0, 4418, 0], rot: [0, 0, 0], scale: [3200, 5869, 3200] },
+    Entry { offset: [0, 4636, 0], rot: [0, 0, 0], scale: [3086, 6116, 3086] },
+    Entry { offset: [0, 4418, 0], rot: [0, 0, 0], scale: [3200, 5869, 3200] },
+    Entry { offset: [0, 3338, 0], rot: [0, 0, 0], scale: [3758, 5251, 3758] },
+    Entry { offset: [0, 1669, 0], rot: [0, 0, 0], scale: [4550, 4217, 4550] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [4952, 3246, 4952] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [4670, 2816, 4670] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [4049, 3073, 4049] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [3427, 3639, 3427] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [3145, 4205, 3145] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [3294, 4463, 3294] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [3620, 4367, 3620] },
+    Entry { offset: [0, 0, 0], rot: [0, 0, 0], scale: [3947, 4191, 3947] },
 ];
 
 /// `matArr04`: the crash fall. The kart is thrown up and back after slamming a wall, lands, and
@@ -162,6 +181,8 @@ pub const JUMP: [[Entry; 4]; 13] = [
 ];
 
 const BLEND_FULL: i32 = 0x100;
+/// `VEH_PHYS_FORCE_SQUISH_OFFSET_NORMAL_SCALE`
+const SQUISH_OFFSET_NORMAL_SCALE: i32 = 0x13;
 
 /// The entries of an animation, if it is ported.
 fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
@@ -170,6 +191,7 @@ fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
         MatrixArray::WheelieHold => Some(&WHEELIE_HOLD),
         MatrixArray::WheelieRecover => Some(&WHEELIE_RECOVER),
         MatrixArray::CrashFall => Some(&CRASH_FALL),
+        MatrixArray::SquishRecover => Some(&SQUISH_RECOVER),
         MatrixArray::Jump(n) => JUMP.get(n.checked_sub(JUMP_BASE)? as usize).map(|e| e.as_slice()),
         _ => None,
     }
@@ -240,6 +262,15 @@ pub fn update_matrix_animation(d: &mut Driver) {
             _ => {}
         }
     }
+
+    // `UPDATE_SQUISH_RECOVER`
+    if d.matrix_array == MatrixArray::SquishRecover {
+        d.matrix_index += 1;
+        if d.matrix_index as usize >= SQUISH_RECOVER.len() {
+            d.matrix_array = MatrixArray::None;
+            d.matrix_index = 0;
+        }
+    }
 }
 
 /// The kart model's matrix and position (`inst->matrix`) in game units: the facing matrix
@@ -249,7 +280,7 @@ pub fn inst_matrix(d: &Driver) -> (Matrix, [i32; 3]) {
     let bounce = (d.screen_offset_y as i32 * 3) >> 3;
     let pos = [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z];
     let baked = entries(d.matrix_array).and_then(|table| table.get(d.matrix_index as usize));
-    match baked {
+    let (matrix, mut t) = match baked {
         Some(entry) => {
             let mut gte = Gte::default();
             let baked = bake(&mut gte, entry);
@@ -258,7 +289,15 @@ pub fn inst_matrix(d: &Driver) -> (Matrix, [i32; 3]) {
             (matrix, [(pos[0] + moved[0]) >> 8, ((pos[1] + moved[1]) >> 8) + bounce, (pos[2] + moved[2]) >> 8])
         }
         None => (facing, [pos[0] >> 8, (pos[1] >> 8) + bounce, pos[2] >> 8]),
+    };
+    // A flattened kart sits a little off the ground.
+    if d.squish_timer != 0 {
+        let n = d.axis_angle2_normal_vec;
+        for (t, n) in t.iter_mut().zip([n.x, n.y, n.z]) {
+            *t = mips::add_lo(*t, mips::sra(n as i32 * SQUISH_OFFSET_NORMAL_SCALE, 12));
+        }
     }
+    (matrix, t)
 }
 
 #[cfg(test)]
