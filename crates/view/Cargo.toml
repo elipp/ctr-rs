@@ -3,8 +3,16 @@ name = "view"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Records every system and render span for the Tracy profiler. It costs a lot of CPU and grows
+# memory while a profiler is attached, so it is off unless asked for: `--features tracy`.
+tracy = ["bevy/trace_tracy"]
+
 [dependencies]
-bevy = { version = "0.20.0", features = ["dynamic_linking", "gamepad"] }
+bevy = { version = "0.20.0", features = [
+    "dynamic_linking",
+    "gamepad",
+] }
 coll = { path = "../coll" }
 loader = { path = "../loader" }
 vehicle = { path = "../vehicle" }

@@ -18,6 +18,13 @@ const BSP_LEAF_FLAG_WATER: u16 = 0x2;
 /// World units per game unit.
 pub const SCALE: f32 = 0.01;
 
+/// A vertex colour channel (1.0 = the texture as is) for the mesh. The console multiplies the
+/// texture by it on the gamma-encoded values, while the renderer multiplies in linear light, so
+/// the channel goes through the display gamma to give the same result.
+pub fn vertex_channel(c: f32) -> f32 {
+    c.powf(2.2)
+}
+
 /// Game space is Y up like Bevy's. Flipping any single axis would mirror the
 /// tracks (left turns become right turns), so this only scales.
 pub fn to_world(p: SVec3) -> [f32; 3] {
@@ -457,7 +464,7 @@ pub fn level_mesh(
                     let [r, g, b] = if is_water {
                         [0.3; 3]
                     } else {
-                        [c[0], c[1], c[2]].map(|c| c as f32 * gain)
+                        [c[0], c[1], c[2]].map(|c| vertex_channel(c as f32 * gain))
                     };
                     out.colors.push([r, g, b, 1.0]);
                     if !is_water && scenery.contains(&(quad.vertex_index[slot] as usize)) {
@@ -615,7 +622,8 @@ pub fn model_mesh(
                 out.positions
                     .push([p[0] as f32 * k[0], p[1] as f32 * k[1], p[2] as f32 * k[2]]);
                 let c = tri.colors[corner];
-                let [r, g, b] = [c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff].map(|c| c as f32 * gain);
+                let [r, g, b] = [c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff]
+                    .map(|c| vertex_channel(c as f32 * gain));
                 out.colors.push([r, g, b, 1.0]);
                 out.uvs.push(match (&texture, tile) {
                     (Some(t), Some(tile)) => atlas.uv(tile, t.uv[corner].0, t.uv[corner].1),
