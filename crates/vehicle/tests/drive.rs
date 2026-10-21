@@ -112,3 +112,51 @@ fn long_hang_time_gives_a_boost() {
     assert!(short_hang < 640 && short_reserves == 0, "a short drop gives no boost");
     assert!(long_hang >= 640 && long_reserves > 0, "a long drop gives a boost: hang {long_hang}, reserves {long_reserves}");
 }
+
+/// Falls off the track at speed: the mask grabs the kart, puts it back on the track at the
+/// respawn point of the last quad block it was on, lowers it, and the player drives again.
+#[test]
+fn a_fall_off_the_track_ends_with_a_respawn_on_the_track() {
+    use vehicle::{PhysState, kart_state};
+
+    let Some(level) = level(LevelId::DINGO_CANYON) else { return };
+    let mut drive = Drive::new(&level, 0);
+    for _ in 0..120 {
+        drive.step(&level, buttons::CROSS, 0x80);
+    }
+    let last_valid = drive.driver.last_valid.expect("the kart has been on the track");
+    let node = level.restart_points[level.quad_blocks[last_valid as usize].checkpoint_index as usize];
+
+    // Dropped into the void.
+    drive.driver.pos_curr.y -= 0x400 << 8;
+    drive.driver.pos_prev = drive.driver.pos_curr;
+    drive.driver.velocity.y = 0;
+    let mut grabbed_ticks = 0;
+    let mut revved_ticks = 0;
+    let mut respawned_at = None;
+    for _ in 0..200 {
+        let before = drive.driver.phys_state;
+        drive.step(&level, buttons::CROSS, 0x80);
+        let d = &drive.driver;
+        grabbed_ticks += (d.phys_state == PhysState::MaskGrab) as u32;
+        revved_ticks += (d.phys_state == PhysState::RevEngine) as u32;
+        if before == PhysState::MaskGrab && d.phys_state == PhysState::RevEngine {
+            respawned_at = Some(d.pos_curr);
+            assert_eq!(d.speed, 0);
+            assert_eq!(d.kart_state, kart_state::ENGINE_REVVING);
+            assert!(d.pos_curr.y > d.quad_block_height, "the mask holds the kart above the track");
+        }
+        assert!(d.kart_state != kart_state::MASK_GRABBED || d.phys_state == PhysState::MaskGrab);
+    }
+    let d = &drive.driver;
+    eprintln!("grabbed {grabbed_ticks} ticks, revved {revved_ticks}, respawned at {respawned_at:?}, node {:?}, now {:?} {:?}", node.pos, d.pos_curr, d.phys_state);
+
+    // The mask grab holds for 1440 ms (45 ticks), the rev lowers the kart from 0x8000 to 0x4000 in 32.
+    assert!((44..=46).contains(&grabbed_ticks), "the grab lasts 1440 ms, was {grabbed_ticks} ticks");
+    assert!((30..=34).contains(&revved_ticks), "the mask lowers the kart in about 32 ticks, was {revved_ticks}");
+    let at = respawned_at.expect("the kart was put back on the track");
+    assert_eq!((at.x >> 8, at.z >> 8), (node.pos.x as i32, node.pos.z as i32), "at the checkpoint of the last quad block");
+    assert_eq!(d.phys_state, PhysState::Driving);
+    assert!(d.mask.is_none(), "the mask has gone");
+    assert!(d.actions_flag_set & actions::TOUCH_GROUND != 0, "on the track again");
+}

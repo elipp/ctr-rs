@@ -81,6 +81,8 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
             PhysState::SpinFirst => 4,
             PhysState::SpinLast => 5,
             PhysState::SpinStop => 6,
+            // The C driver stubs the mask grab out (`Env::respawns` is off).
+            PhysState::MaskGrab | PhysState::RevEngine => unreachable!("the oracle's drivers do not respawn"),
         }
     );
     push!("init_pending", d.init_pending);
@@ -347,7 +349,7 @@ fn frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
             held = (held & !(buttons::L1 | buttons::R1)) | hop_button;
             hop_ticks = rng.range(2, 140);
         }
-        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: rng.below(500) == 0 };
+        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: rng.below(500) == 0, respawns: false };
         out.push(Frame { env, input: Input { buttons_held: held, buttons_tapped: held & !prev, stick_lx: lx, stick_ly: ly, stick_ry: ry } });
     }
     out
@@ -381,7 +383,7 @@ fn drifter_frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
         if rng.below(45) == 0 {
             lx = [0, 0xff, 0x20, 0xe0, 0x80][rng.below(5) as usize];
         }
-        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: false };
+        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: false, respawns: false };
         out.push(Frame { env, input: Input { buttons_held: held, buttons_tapped: held & !prev, stick_lx: lx, ..Input::default() } });
     }
     out

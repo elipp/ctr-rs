@@ -4,10 +4,11 @@
 //! (`simp_turn_state`).
 //!
 //! Not ported yet, because nothing else of them exists: weapons (the item
-//! roulette, firing, bombs and bubbles), the mask weapons, the Super Engine,
+//! roulette, firing, bombs and bubbles), the mask weapons (but for having
+//! one, which the mask grab gives the driver), the Super Engine,
 //! the TNT crate on the head, and the time-spent statistics and tire colour,
-//! which do not feed back into the simulation. The driver has no item and no
-//! mask, so none of that code is reached.
+//! which do not feed back into the simulation. The driver has no item, so
+//! none of that code is reached.
 //!
 //! In `ctr-native`, the paths that go through `gasClearSteerFlags` drop the
 //! reverse-steer bits they clear (the retail registers `actionsFlagSetCopy`
@@ -344,6 +345,12 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     // The retail ring of four normals has shrunk to one: the slot is always 0.
     d.axis_angle4_normal_vec = if a & actions::TOUCH_GROUND != 0 { d.axis_angle1_normal_vec } else { d.axis_angle2_normal_vec };
     d.normal_vec_id = 0;
+
+    // === Mask weapon ===
+    // Having a mask (an Aku Aku or Uka Uka thread under the driver's) is an action.
+    if d.mask.is_some() {
+        a |= actions::MASK_WEAPON;
+    }
 
     // === Buttons ===
     let held = if env.end_of_race { 0 } else { input.buttons_held };

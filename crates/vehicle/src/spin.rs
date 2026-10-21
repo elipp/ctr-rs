@@ -35,7 +35,7 @@ fn abs(value: i32) -> i32 {
 }
 
 /// `RB_Player_ModifyWumpa` for a loss of wumpa fruit: the Aku Aku mask protects them.
-fn lose_wumpa(d: &mut Driver, amount: i32) {
+pub(crate) fn lose_wumpa(d: &mut Driver, amount: i32) {
     if d.actions_flag_set & actions::MASK_WEAPON != 0 {
         return;
     }
