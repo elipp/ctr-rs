@@ -9,6 +9,8 @@
 //!   empty for the boost
 //! * M: use the mask item (longer with 10 wumpa fruit)
 //! * R: back to the starting grid
+//! * F5 / 1: start recording a demo from the grid, again to save it to `demo.ctr`
+//! * F6 / 2: play `demo.ctr` back from the grid (any F5 or R ends it, the kart stays where it is)
 //!
 //! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the
 //! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
@@ -19,6 +21,7 @@ use bevy::prelude::*;
 use coll::Collision;
 use vehicle::shadow::{GroundShadow, ground_shadow};
 use vehicle::sim::{spawn, tick_with};
+use vehicle::demo::Demo;
 use vehicle::{Driver, Effect, Env, Input, buttons};
 
 use crate::Track;
@@ -84,6 +87,10 @@ struct FpsHud;
 #[derive(Component)]
 struct PausedHud;
 
+/// "REC" or "DEMO" while a demo is being recorded or played.
+#[derive(Component)]
+struct DemoHud;
+
 /// Where the kart is drawn.
 #[derive(Clone, Copy)]
 pub(crate) struct Pose {
@@ -100,6 +107,7 @@ pub struct Drive {
     anim_num_frames: [u16; 8],
     pub(crate) tick: u32,
     held: u32,
+    demo: DemoMode,
     previous: Pose,
     current: Pose,
     shadow_previous: Option<GroundShadow>,
@@ -133,6 +141,7 @@ impl Drive {
             anim_num_frames,
             tick: 0,
             held: 0,
+            demo: DemoMode::Off,
             previous: pose,
             current: pose,
             shadow_previous: None,
@@ -305,6 +314,15 @@ fn animate_kart(
     }
 }
 
+/// Where the sim gets its input from.
+enum DemoMode {
+    Off,
+    Recording(Demo),
+    Playing(Demo),
+}
+
+const DEMO_FILE: &str = "demo.ctr";
+
 pub struct DrivePlugin;
 
 impl Plugin for DrivePlugin {
@@ -421,6 +439,16 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
     ));
+    commands.spawn((
+        DemoHud,
+        Text::new(""),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            right: Val::Px(8.0),
+            ..default()
+        },
+    ));
 }
 
 fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held: u32) -> Input {
@@ -456,6 +484,10 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     {
         held |= buttons::L1;
     }
+    // The mask item is Circle, so a demo has it.
+    if down(&[KeyCode::KeyM]) || pad_down(&[GamepadButton::East]) {
+        held |= buttons::CIRCLE;
+    }
     let left = down(&[KeyCode::KeyA, KeyCode::ArrowLeft]) || pad_down(&[GamepadButton::DPadLeft]);
     let right =
         down(&[KeyCode::KeyD, KeyCode::ArrowRight]) || pad_down(&[GamepadButton::DPadRight]);
@@ -489,16 +521,20 @@ fn drive_tick(
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
-    mut mask_held: Local<bool>,
     mut enter_held: Local<bool>,
     mut paused: Local<bool>,
+    mut demo_keys_held: Local<[bool; 2]>,
     mut label: Query<&mut Visibility, With<PausedHud>>,
+    mut demo_label: Query<&mut Text, With<DemoHud>>,
+    mut lobby: ResMut<crate::lobby::Lobby>,
 ) {
     let drive = &mut *drive;
+    // In an online race the sim is everyone's: no pause, no restarts, no demos.
+    let online = lobby.online.is_some();
 
     // Enter toggles the pause, once per press.
     let enter_down = keys.pressed(KeyCode::Enter);
-    if enter_down && !*enter_held {
+    if enter_down && !*enter_held && !online {
         *paused = !*paused;
         for mut visibility in &mut label {
             *visibility = if *paused {
@@ -515,19 +551,111 @@ fn drive_tick(
         }
     }
     *enter_held = enter_down;
-    if *paused {
+    if *paused && !online {
         return;
     }
 
-    if keys.pressed(KeyCode::KeyR) {
+    // F5 records a demo from the grid (and saves it when pressed again), F6 plays the saved
+    // one. R is the grid without either. A demo is the inputs alone, so every start puts
+    // everything, the objects too, back as it was at tick 0.
+    let mut restart = keys.pressed(KeyCode::KeyR) && !online;
+    // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
+    // a frame can pass without a tick.
+    let demo_down = [
+        !online && keys.any_pressed([KeyCode::F5, KeyCode::Digit1]),
+        !online && keys.any_pressed([KeyCode::F6, KeyCode::Digit2]),
+    ];
+    let [record_pressed, play_pressed] =
+        std::array::from_fn(|i| demo_down[i] && !demo_keys_held[i]);
+    *demo_keys_held = demo_down;
+    if record_pressed {
+        if let DemoMode::Recording(demo) = &drive.demo {
+            match std::fs::write(DEMO_FILE, demo.to_text()) {
+                Ok(()) => info!("saved {} ticks to {DEMO_FILE}", demo.length),
+                Err(e) => error!("could not save {DEMO_FILE}: {e}"),
+            }
+            drive.demo = DemoMode::Off;
+        } else {
+            drive.demo = DemoMode::Recording(Demo::new(drive.character));
+            restart = true;
+        }
+    } else if play_pressed {
+        match std::fs::read_to_string(DEMO_FILE)
+            .map_err(|e| e.to_string())
+            .and_then(|text| Demo::from_text(&text))
+        {
+            Ok(demo) => {
+                // The demo was driven by this character.
+                drive.character = demo.character;
+                drive.demo = DemoMode::Playing(demo);
+                restart = true;
+            }
+            Err(e) => error!("could not play {DEMO_FILE}: {e}"),
+        }
+    } else if restart {
+        drive.demo = DemoMode::Off;
+    }
+    // The race starts: tick 0 for everyone.
+    if let Some(net) = lobby.online.as_mut().filter(|net| net.fresh) {
+        net.fresh = false;
+        drive.demo = DemoMode::Off;
+        restart = true;
+    }
+    if restart {
         let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
         (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
+        drive.held = 0;
+        sim.restart();
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
     }
 
-    let input = read_input(&keys, &pads, drive.held);
+    let mut input = match &drive.demo {
+        DemoMode::Playing(demo) => demo.input(drive.tick, drive.held),
+        _ => None,
+    };
+    if let Some(net) = &lobby.online {
+        // Everyone's pad for this tick, or the sim waits for it.
+        let Some(frame) = net.frames.get(drive.tick as usize) else {
+            return;
+        };
+        let pad = frame[net.slot];
+        input = Some(Input {
+            buttons_held: pad.held,
+            buttons_tapped: pad.held & !drive.held,
+            stick_lx: pad.lx,
+            stick_ly: pad.ly,
+            stick_ry: pad.ry,
+        });
+        // Ours for the tick INPUT_DELAY on.
+        let ours = read_input(&keys, &pads, 0);
+        lobby.send(net::Pad {
+            held: ours.buttons_held,
+            lx: ours.stick_lx,
+            ly: ours.stick_ly,
+            ry: ours.stick_ry,
+        });
+    }
+    if input.is_none() {
+        if matches!(drive.demo, DemoMode::Playing(_)) {
+            info!("demo over after {} ticks", drive.tick);
+            drive.demo = DemoMode::Off;
+        }
+        input = Some(read_input(&keys, &pads, drive.held));
+    }
+    let input = input.unwrap();
+    if let DemoMode::Recording(demo) = &mut drive.demo {
+        demo.record(drive.tick, &input);
+    }
     drive.held = input.buttons_held;
+    for mut text in &mut demo_label {
+        text.0 = match &drive.demo {
+            _ if online => lobby.online.as_ref().map_or_else(String::new, |net| net.summary(drive.tick)),
+            DemoMode::Off => String::new(),
+            DemoMode::Recording(_) => format!("REC {}", drive.tick),
+            DemoMode::Playing(demo) => format!("DEMO {}/{}", drive.tick, demo.length),
+        };
+    }
     let env = Env {
         elapsed_event_time: drive.tick as i32 * 32,
         timer: drive.tick,
@@ -536,10 +664,7 @@ fn drive_tick(
     let mut effects = Vec::new();
     // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
     // kart: it has the mask already.)
-    let mask_down =
-        keys.pressed(KeyCode::KeyM) || pads.iter().any(|p| p.pressed(GamepadButton::East));
-    if mask_down
-        && !*mask_held
+    if input.buttons_tapped & buttons::CIRCLE != 0
         && !matches!(
             drive.driver.kart_state,
             vehicle::kart_state::MASK_GRABBED | vehicle::kart_state::ENGINE_REVVING
@@ -547,7 +672,6 @@ fn drive_tick(
     {
         vehicle::stuck::shoot_mask(&mut drive.driver, &mut effects);
     }
-    *mask_held = mask_down;
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
     let (_, at) = vehicle::baked::inst_matrix(&drive.driver);
