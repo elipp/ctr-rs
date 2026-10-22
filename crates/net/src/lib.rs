@@ -25,7 +25,7 @@ use crate::lockstep::FrameReceiver;
 use crate::wire::{InputSender, Message};
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/0";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/1";
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -89,8 +89,10 @@ pub enum Event {
     Joined(EndpointId),
     /// A peer is gone.
     PeerLeft(EndpointId),
-    /// The race starts, and this is tick 0. `slot` is ours among the `players`.
-    Started { slot: usize, players: usize },
+    /// The race starts, and this is tick 0. `slot` is ours among the players, and `characters`
+    /// is the character each slot drives (so its length is the number of players). The race is
+    /// on the level `track` (a `LevelId`), which the game has to be showing.
+    Started { slot: usize, characters: Vec<u8>, track: u32 },
     /// Everyone's pad for a tick, which the game plays. They come in order from tick 0.
     Frame { tick: Tick, pads: Frame },
     /// The session could not go on.
@@ -98,7 +100,8 @@ pub enum Event {
 }
 
 enum Command {
-    Start,
+    Start { track: u32 },
+    Character(u8),
     Input(Pad),
 }
 
@@ -116,9 +119,16 @@ impl Session {
         self.events.lock().unwrap().try_iter().collect()
     }
 
-    /// Starts the race, if we host the lobby. Everyone then gets [`Event::Started`].
-    pub fn start(&self) {
-        let _ = self.commands.send(Command::Start);
+    /// Starts the race on level `track`, if we host the lobby. Everyone then gets
+    /// [`Event::Started`].
+    pub fn start(&self, track: u32) {
+        let _ = self.commands.send(Command::Start { track });
+    }
+
+    /// Changes the character we drive, for the race that has not started yet. (Pass the one
+    /// given to [`host`] or [`join`] again and nothing changes.)
+    pub fn set_character(&self, character: u8) {
+        let _ = self.commands.send(Command::Character(character));
     }
 
     /// Our pad for the tick [`lockstep::INPUT_DELAY`] after the one just played. One per tick played, from
@@ -150,14 +160,14 @@ impl Io {
     }
 }
 
-/// Opens a lobby. [`Event::Open`] comes once it can be reached.
-pub fn host() -> Session {
-    spawn(|endpoint, io| Box::pin(run_host(endpoint, io)))
+/// Opens a lobby, driving `character`. [`Event::Open`] comes once it can be reached.
+pub fn host(character: u8) -> Session {
+    spawn(move |endpoint, io| Box::pin(run_host(endpoint, io, character)))
 }
 
-/// Joins the lobby of `ticket`.
-pub fn join(ticket: Ticket) -> Session {
-    spawn(|endpoint, io| Box::pin(run_join(endpoint, io, ticket)))
+/// Joins the lobby of `ticket`, driving `character`.
+pub fn join(ticket: Ticket, character: u8) -> Session {
+    spawn(move |endpoint, io| Box::pin(run_join(endpoint, io, ticket, character)))
 }
 
 type Task = std::pin::Pin<Box<dyn Future<Output = Result<(), Error>>>>;
@@ -249,7 +259,7 @@ fn listen(connection: Connection, heard: UnboundedSender<Heard>) {
     });
 }
 
-async fn run_host(endpoint: Endpoint, mut io: Io) -> Result<(), Error> {
+async fn run_host(endpoint: Endpoint, mut io: Io, mut character: u8) -> Result<(), Error> {
     tokio::select! {
         _ = &mut io.stop => return Ok(()),
         _ = endpoint.online() => {}
@@ -258,6 +268,10 @@ async fn run_host(endpoint: Endpoint, mut io: Io) -> Result<(), Error> {
 
     // Slot 0 is us; the peers are 1.. in the order they came.
     let mut peers: Vec<Connection> = Vec::new();
+    // What each peer said it drives; none until its Hello comes.
+    let mut characters: Vec<Option<(u32, u8)>> = Vec::new();
+    // The track of a start that waits for the Hellos.
+    let mut start_wanted: Option<u32> = None;
     let (heard_tx, mut heard) = unbounded_channel::<(usize, Heard)>();
     let mut race: Option<lockstep::Host> = None;
     let mut timer = send_interval();
@@ -282,26 +296,26 @@ async fn run_host(endpoint: Endpoint, mut io: Io) -> Result<(), Error> {
                     }
                 });
                 peers.push(connection);
+                characters.push(None);
             }
             Some(command) = io.commands.recv() => match command {
-                Command::Start if race.is_none() => {
-                    let players = peers.len() + 1;
-                    race = Some(lockstep::Host::new(players));
-                    for (i, peer) in peers.iter().enumerate() {
-                        let start = Message::Start { slot: i as u8 + 1, players: players as u8 };
-                        let _ = send_reliably(peer, &start).await;
-                    }
-                    io.event(Event::Started { slot: 0, players });
-                }
+                // Goes ahead below, once every peer has said what it drives.
+                Command::Start { track } => start_wanted = Some(track),
+                Command::Character(c) => character = c,
                 Command::Input(pad) => if let Some(race) = &mut race {
                     race.push_local(pad);
                 },
-                Command::Start => {}
             },
             Some((slot, heard)) = heard.recv() => match heard {
                 Heard::Message(Message::Inputs(inputs)) => if let Some(race) = &mut race {
                     let _ = race.accept(slot, &inputs);
                 },
+                Heard::Message(Message::Hello { character, seq }) => {
+                    let known = &mut characters[slot - 1];
+                    if known.is_none_or(|(have, _)| seq > have) {
+                        *known = Some((seq, character));
+                    }
+                }
                 Heard::Message(_) => {}
                 Heard::Closed => io.event(Event::PeerLeft(peers[slot - 1].remote_id())),
             },
@@ -311,6 +325,16 @@ async fn run_host(endpoint: Endpoint, mut io: Io) -> Result<(), Error> {
                 }
             },
         }
+        if let Some(track) = start_wanted.filter(|_| race.is_none() && characters.iter().all(Option::is_some)) {
+            start_wanted = None;
+            let all: Vec<u8> = std::iter::once(character).chain(characters.iter().flatten().map(|&(_, c)| c)).collect();
+            race = Some(lockstep::Host::new(all.len()));
+            for (i, peer) in peers.iter().enumerate() {
+                let start = Message::Start { slot: i as u8 + 1, characters: all.clone(), track };
+                let _ = send_reliably(peer, &start).await;
+            }
+            io.event(Event::Started { slot: 0, characters: all, track });
+        }
         if let Some(race) = &mut race {
             for (tick, pads) in race.advance() {
                 io.event(Event::Frame { tick, pads });
@@ -319,12 +343,14 @@ async fn run_host(endpoint: Endpoint, mut io: Io) -> Result<(), Error> {
     }
 }
 
-async fn run_join(endpoint: Endpoint, mut io: Io, ticket: Ticket) -> Result<(), Error> {
+async fn run_join(endpoint: Endpoint, mut io: Io, ticket: Ticket, character: u8) -> Result<(), Error> {
     let connection: Connection = tokio::select! {
         _ = &mut io.stop => return Ok(()),
         connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
     };
     io.event(Event::Joined(ticket.id));
+    send_reliably(&connection, &Message::Hello { character, seq: 0 }).await?;
+    let mut hellos = 1;
 
     let (heard_tx, mut heard) = unbounded_channel();
     listen(connection.clone(), heard_tx);
@@ -337,15 +363,21 @@ async fn run_join(endpoint: Endpoint, mut io: Io, ticket: Ticket) -> Result<(), 
                 connection.close(0u32.into(), b"bye");
                 return Ok(());
             }
-            Some(command) = io.commands.recv() => {
-                if let (Command::Input(pad), Some((sender, ..))) = (command, &mut race) {
+            Some(command) = io.commands.recv() => match command {
+                Command::Input(pad) => if let Some((sender, ..)) = &mut race {
                     sender.push(pad);
+                },
+                // The host takes the latest Hello it has, so one that is sent again overrides.
+                Command::Character(character) if race.is_none() => {
+                    send_reliably(&connection, &Message::Hello { character, seq: hellos }).await?;
+                    hellos += 1;
                 }
-            }
+                Command::Character(_) | Command::Start { .. } => {}
+            },
             Some(heard) = heard.recv() => match heard {
-                Heard::Message(Message::Start { slot, players }) if race.is_none() => {
+                Heard::Message(Message::Start { slot, characters, track }) if race.is_none() => {
                     race = Some((lockstep::local_sender(), FrameReceiver::default(), 0));
-                    io.event(Event::Started { slot: slot as usize, players: players as usize });
+                    io.event(Event::Started { slot: slot as usize, characters, track });
                 }
                 Heard::Message(Message::Frames(frames)) => if let Some((_, receiver, host_has)) = &mut race {
                     *host_has = (*host_has).max(frames.ack);

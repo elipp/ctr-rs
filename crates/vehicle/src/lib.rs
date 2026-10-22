@@ -24,6 +24,7 @@ pub mod fixed;
 pub mod fire;
 pub mod force;
 pub mod frame;
+pub mod grid;
 pub mod jump;
 pub mod jump_meter;
 pub mod joystick;

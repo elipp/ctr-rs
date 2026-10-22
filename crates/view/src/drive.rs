@@ -103,7 +103,7 @@ pub(crate) struct Pose {
 pub struct Drive {
     pub(crate) driver: Driver,
     coll: Collision,
-    character: usize,
+    pub(crate) character: usize,
     anim_num_frames: [u16; 8],
     pub(crate) tick: u32,
     held: u32,
@@ -119,7 +119,7 @@ pub struct Drive {
 
 impl Drive {
     pub fn new(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> Drive {
-        let (driver, coll) = Drive::birth(track, character, anim_num_frames);
+        let (driver, coll) = Drive::birth(track, character, anim_num_frames, 0);
         let pose = pose_of(&driver);
         let mut camera = camera::CameraDc::default();
         camera.follow_driver(
@@ -173,16 +173,14 @@ impl Drive {
         ))
     }
 
-    /// `Driver::wheelRotation`: the front wheels' steering.
-    pub fn wheel_rotation(&self) -> i16 {
-        self.driver.wheel_rotation
-    }
-
-    fn birth(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> (Driver, Collision) {
+    /// `driver_id` is the player's slot in an online race (0 offline), which picks its place on
+    /// the grid.
+    pub(crate) fn birth(track: &Track, character: usize, anim_num_frames: [u16; 8], driver_id: usize) -> (Driver, Collision) {
         let mut coll = Collision::default();
-        let mut driver = Driver::new(0, character);
+        let mut driver = Driver::new(driver_id as u8, character);
         driver.anim_num_frames = anim_num_frames;
-        spawn(&mut driver, &mut coll, &track.0, 0);
+        let order = vehicle::grid::spawn_order(vehicle::grid::GridMode::Arcade, 1, [0, 1, 2, 3, 4, 5, 6, 7]);
+        spawn(&mut driver, &mut coll, &track.0, order[driver_id] as usize);
         (driver, coll)
     }
 }
@@ -213,7 +211,7 @@ pub(crate) fn rotation_of(matrix: &vehicle::Matrix) -> Quat {
 /// The pose of the model, from the matrix the sim gives the kart's instance (the
 /// surface and heading, and the wheelie on top): its third column is forward and its
 /// second up. The squash of the wheelie and the instance's own squash and stretch go in the scale.
-fn pose_of(d: &Driver) -> Pose {
+pub(crate) fn pose_of(d: &Driver) -> Pose {
     let (matrix, t) = vehicle::baked::inst_matrix(d);
     let column = |c: usize| {
         Vec3::new(
@@ -242,14 +240,6 @@ fn pose_of(d: &Driver) -> Pose {
             Vec3::ONE
         },
     }
-}
-
-/// The kart model's faces, to pose it as the sim's animation says (`anim_index`, `anim_frame`):
-/// steering plays a frame that matches the wheel, a jump or a spin-out others.
-#[derive(Resource)]
-pub struct KartModel {
-    pub header: loader::model::ModelHeader,
-    pub parts: [Option<Handle<Mesh>>; render::mesh::PARTS],
 }
 
 /// The pose of the animation at `frame` (`Instance::animFrame`). An animation that is
@@ -281,39 +271,6 @@ pub(crate) fn animation_pose(
     })
 }
 
-/// Poses the kart's model as the sim's animation says, when that changes.
-fn animate_kart(
-    drive: Res<Drive>,
-    model: Option<Res<KartModel>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut shown: Local<Option<(u8, i16)>>,
-) {
-    let Some(model) = model else { return };
-    // A new model (another level or racer) comes in its neutral pose, whatever was shown before.
-    if model.is_changed() {
-        *shown = None;
-    }
-    let now = (drive.driver.anim_index, drive.driver.anim_frame);
-    if *shown == Some(now) {
-        return;
-    }
-    let Some(frame) = animation_pose(&model.header, now.0, now.1) else {
-        return;
-    };
-    *shown = Some(now);
-    let positions = render::mesh::model_positions(
-        &model.header,
-        &frame,
-        [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
-    );
-    for (handle, positions) in model.parts.iter().zip(positions) {
-        let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
-            continue;
-        };
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    }
-}
-
 /// Where the sim gets its input from.
 enum DemoMode {
     Off,
@@ -333,8 +290,8 @@ impl Plugin for DrivePlugin {
             .add_systems(
                 Update,
                 (
-                    animate_kart,
-                    show_kart,
+                    crate::kart::animate,
+                    crate::kart::show,
                     chase,
                     hud,
                     wumpa_hud,
@@ -352,7 +309,7 @@ impl Plugin for DrivePlugin {
                     crate::shadow::update,
                     crate::flame::update,
                     crate::skid::update,
-                    crate::mask::update.after(show_kart),
+                    crate::mask::update.after(crate::kart::show),
                 ),
             )
             .add_systems(
@@ -513,6 +470,73 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     }
 }
 
+/// A pad as the input the sim takes; the taps follow from the buttons held a tick before.
+pub(crate) fn input_of_pad(pad: &net::Pad, previous_held: u32) -> Input {
+    Input {
+        buttons_held: pad.held,
+        buttons_tapped: pad.held & !previous_held,
+        stick_lx: pad.lx,
+        stick_ly: pad.ly,
+        stick_ry: pad.ry,
+    }
+}
+
+/// One game tick of a kart: the same for ours and for every other player's, so that all clients
+/// play every kart the same way. Ours also gives its sparks and exhaust to `particles`.
+pub(crate) fn play_kart(
+    driver: &mut Driver,
+    coll: &mut Collision,
+    track: &Track,
+    tick: u32,
+    input: &Input,
+    sim: &mut crate::props::Sim,
+    particles: Option<&mut crate::exhaust::Particles>,
+    effects: &mut Vec<Effect>,
+) -> vehicle::sim::TickResult {
+    let env = Env {
+        elapsed_event_time: tick as i32 * 32,
+        timer: tick,
+        ..Env::default()
+    };
+    // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
+    // kart: it has the mask already.)
+    if input.buttons_tapped & buttons::CIRCLE != 0
+        && !matches!(
+            driver.kart_state,
+            vehicle::kart_state::MASK_GRABBED | vehicle::kart_state::ENGINE_REVVING
+        )
+    {
+        vehicle::stuck::shoot_mask(driver, effects);
+    }
+    // The hazards that reached the kart's instance in their last tick hurt it
+    // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
+    let (_, at) = vehicle::baked::inst_matrix(driver);
+    for contact in sim.last.contacts.iter().filter(|c| c.hits(at)) {
+        let was_spinning = driver.kart_state == vehicle::kart_state::SPINNING;
+        if vehicle::pick::new_state(driver, contact.damage as u8, effects) && !was_spinning && contact.sound != 0 {
+            let echo = driver.actions_flag_set & vehicle::actions::ENGINE_ECHO != 0;
+            effects.push(Effect::Sound { id: contact.sound as u8, echo });
+        }
+    }
+    let result = tick_with(driver, coll, &track.0, &env, input, &mut sim.objects, effects);
+    // The pickup HUD gives the fruit that were picked up to the driver.
+    vehicle::wumpa::hud_tick(driver, true, effects);
+
+    // The exhaust and the skid marks keep their state in the driver, so they run for every kart
+    // even when nobody sees the particles.
+    let mut particles = particles;
+    if let Some(particles) = particles.as_deref_mut() {
+        particles.sparks(driver);
+    }
+    let puffs = vehicle::exhaust::exhaust(driver);
+    if let Some(particles) = particles {
+        particles.tick(&puffs);
+    }
+    vehicle::skid::skidmarks(driver);
+    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16);
+    result
+}
+
 /// One game tick of the sim.
 fn drive_tick(
     mut particles: ResMut<crate::exhaust::Particles>,
@@ -527,10 +551,16 @@ fn drive_tick(
     mut label: Query<&mut Visibility, With<PausedHud>>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
+    mut remotes: ResMut<crate::remote::Remotes>,
+    mut motions: Query<(&mut crate::kart::KartMotion, Has<Kart>)>,
 ) {
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
     let online = lobby.online.is_some();
+    // The level of the race is not up yet.
+    if lobby.online.as_ref().is_some_and(|net| net.track != track.1.0) {
+        return;
+    }
 
     // Enter toggles the pause, once per press.
     let enter_down = keys.pressed(KeyCode::Enter);
@@ -602,12 +632,22 @@ fn drive_tick(
         restart = true;
     }
     if restart {
-        let (driver, coll) = Drive::birth(&track, drive.character, drive.anim_num_frames);
+        let (driver, coll) = Drive::birth(
+            &track,
+            drive.character,
+            drive.anim_num_frames,
+            lobby.online.as_ref().map_or(0, |net| net.slot),
+        );
         (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
         drive.held = 0;
         sim.restart();
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
+        for (mut motion, ours) in &mut motions {
+            if ours {
+                motion.reset(&drive.driver);
+            }
+        }
     }
 
     let mut input = match &drive.demo {
@@ -619,14 +659,7 @@ fn drive_tick(
         let Some(frame) = net.frames.get(drive.tick as usize) else {
             return;
         };
-        let pad = frame[net.slot];
-        input = Some(Input {
-            buttons_held: pad.held,
-            buttons_tapped: pad.held & !drive.held,
-            stick_lx: pad.lx,
-            stick_ly: pad.ly,
-            stick_ry: pad.ry,
-        });
+        input = Some(input_of_pad(&frame[net.slot], drive.held));
         // Ours for the tick INPUT_DELAY on.
         let ours = read_input(&keys, &pads, 0);
         lobby.send(net::Pad {
@@ -662,49 +695,28 @@ fn drive_tick(
         ..Env::default()
     };
     let mut effects = Vec::new();
-    // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
-    // kart: it has the mask already.)
-    if input.buttons_tapped & buttons::CIRCLE != 0
-        && !matches!(
-            drive.driver.kart_state,
-            vehicle::kart_state::MASK_GRABBED | vehicle::kart_state::ENGINE_REVVING
-        )
-    {
-        vehicle::stuck::shoot_mask(&mut drive.driver, &mut effects);
+    // Online, the karts are played by slot, ours among them.
+    let slots = lobby.online.as_ref().map_or(0..0, |net| 0..net.characters.len());
+    let own = lobby.online.as_ref().map_or(0, |net| net.slot);
+    if let Some(net) = &lobby.online {
+        let frame = &net.frames[drive.tick as usize];
+        remotes.play(slots.start..own, frame, drive.tick, &track, &mut sim, &mut motions);
     }
-    // The hazards that reached the kart's instance in their last tick hurt it
-    // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
-    let (_, at) = vehicle::baked::inst_matrix(&drive.driver);
-    for contact in sim.last.contacts.iter().filter(|c| c.hits(at)) {
-        let was_spinning = drive.driver.kart_state == vehicle::kart_state::SPINNING;
-        if vehicle::pick::new_state(&mut drive.driver, contact.damage as u8, &mut effects)
-            && !was_spinning
-            && contact.sound != 0
-        {
-            let echo = drive.driver.actions_flag_set & vehicle::actions::ENGINE_ECHO != 0;
-            effects.push(Effect::Sound {
-                id: contact.sound as u8,
-                echo,
-            });
-        }
-    }
-    let result = tick_with(
+    let result = play_kart(
         &mut drive.driver,
         &mut drive.coll,
-        &track.0,
-        &env,
+        &track,
+        drive.tick,
         &input,
-        &mut sim.objects,
+        &mut sim,
+        Some(&mut particles),
         &mut effects,
     );
+    if let Some(net) = &lobby.online {
+        let frame = &net.frames[drive.tick as usize];
+        remotes.play(own + 1..slots.end, frame, drive.tick, &track, &mut sim, &mut motions);
+    }
     drive.tick += 1;
-    // The pickup HUD gives the fruit that were picked up to the driver.
-    vehicle::wumpa::hud_tick(&mut drive.driver, true, &mut effects);
-
-    particles.sparks(&drive.driver);
-    particles.tick(&vehicle::exhaust::exhaust(&mut drive.driver));
-    vehicle::skid::skidmarks(&mut drive.driver);
-    vehicle::turbo::tick(&mut drive.driver, env.elapsed_time_ms as i16);
 
     // The mask grab put the kart back on the track: the camera swings round behind it.
     if result.respawned {
@@ -730,6 +742,11 @@ fn drive_tick(
     drive.shadow_current = ground_shadow(&drive.driver, &mut drive.coll.gte.clone());
     drive.previous = drive.current;
     drive.current = pose_of(&drive.driver);
+    for (mut motion, ours) in &mut motions {
+        if ours {
+            motion.push(&drive.driver);
+        }
+    }
     drive.previous_view = drive.current_view;
     drive.current_view = view_of(&drive.camera);
 }
@@ -744,19 +761,6 @@ pub(crate) fn interpolated(drive: &Drive, fixed: &Time<Fixed>) -> Pose {
             .lerp(drive.current.translation, t),
         rotation: drive.previous.rotation.slerp(drive.current.rotation, t),
         scale: drive.previous.scale.lerp(drive.current.scale, t),
-    }
-}
-
-fn show_kart(
-    drive: Res<Drive>,
-    fixed: Res<Time<Fixed>>,
-    mut karts: Query<&mut Transform, With<Kart>>,
-) {
-    let pose = interpolated(&drive, &fixed);
-    for mut transform in &mut karts {
-        transform.translation = pose.translation;
-        transform.rotation = pose.rotation;
-        transform.scale = pose.scale;
     }
 }
 
