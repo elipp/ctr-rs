@@ -22,7 +22,9 @@ mod bar;
 mod drive;
 mod exhaust;
 mod explosion;
+mod kart;
 mod lobby;
+mod remote;
 mod fire;
 mod flame;
 mod mask;
@@ -79,14 +81,41 @@ struct Loaded {
     masks: render::mask::Masks,
 }
 
+fn bigfile_path() -> PathBuf {
+    std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"))
+}
+
+/// The model and the wheel sprites of a racer (none for Oxide, who has no wheels), for the
+/// karts of the other players.
+pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
+    let path = bigfile_path();
+    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let file = big
+        .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character as u32).get())
+        .expect("read racer model");
+    let model = Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model");
+    let wheel_icons = if character as u32 == NITROS_OXIDE {
+        Vec::new()
+    } else {
+        let pack = big
+            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character as u32).get())
+            .expect("read racer pack");
+        parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
+            .expect("parse racer pack icons")
+            .into_iter()
+            .find(|g| g.group_id == 0)
+            .expect("racer pack has the tire icon group")
+            .icons
+    };
+    (model, wheel_icons)
+}
+
 /// The sprite and texture page file shared by every track (`shared.vrm`):
 /// the racers' textures are in it.
 fn load_level(id: u32, racer: Option<u32>) -> Loaded {
-    let path = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+    let path = bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut read = |f| {
         let index = BigIndex::level(LevelId(id), Lod::OnePlayer, f);
@@ -209,9 +238,9 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
 pub struct Track(pub Level, pub LevelId);
 
 #[derive(Resource)]
-struct Textures {
+pub(crate) struct Textures {
     dram: DramFile,
-    vram: Vram,
+    pub(crate) vram: Vram,
 }
 
 /// The racer model shown on the grid.
@@ -460,9 +489,10 @@ fn main() {
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(mask::spawn));
+        let character = drive.character as u8;
         app.insert_resource(drive).add_plugins((drive::DrivePlugin, lobby::LobbyPlugin));
         if let Some(ticket) = join {
-            app.insert_resource(lobby::Lobby::joining(ticket));
+            app.insert_resource(lobby::Lobby::joining(ticket, character));
         }
     } else {
         scene_systems.push(app.world_mut().register_system(probe::spawn_text));
@@ -494,24 +524,37 @@ fn switch_level(world: &mut World) {
     let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let step =
         |next: &[KeyCode], previous: &[KeyCode]| pressed(next) as i32 - pressed(previous) as i32;
-    let level_step = step(
+    let mut level_step = step(
         &[KeyCode::BracketRight, KeyCode::PageUp],
         &[KeyCode::BracketLeft, KeyCode::PageDown],
     );
-    let racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
+    let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
+    // An online race is on its level and with its racers: the lobby's start sets the level, and
+    // the keys do nothing.
+    let race_track = world.get_resource::<lobby::Lobby>().and_then(|l| l.online.as_ref()).map(|o| o.track);
+    if race_track.is_some() {
+        (level_step, racer_step) = (0, 0);
+    }
     let mut options = *world.resource::<Options>();
-    if level_step == 0 && (racer_step == 0 || options.racer.is_none()) {
+    let current = world.resource::<LevelNumber>().0;
+    let wanted = race_track.filter(|&track| track != current);
+    if wanted.is_none() && level_step == 0 && (racer_step == 0 || options.racer.is_none()) {
         return;
     }
     let levels = (LevelId::TURBO_TRACK.0 - LevelId::DINGO_CANYON.0 + 1) as i32;
-    let id = (world.resource::<LevelNumber>().0 as i32 - LevelId::DINGO_CANYON.0 as i32
-        + level_step)
-        .rem_euclid(levels) as u32
-        + LevelId::DINGO_CANYON.0;
+    let id = wanted.unwrap_or_else(|| {
+        ((current as i32 - LevelId::DINGO_CANYON.0 as i32 + level_step).rem_euclid(levels) as u32)
+            + LevelId::DINGO_CANYON.0
+    });
     options.racer = options
         .racer
         .map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
     world.insert_resource(options);
+    if racer_step != 0
+        && let (Some(lobby), Some(racer)) = (world.get_resource::<lobby::Lobby>(), options.racer)
+    {
+        lobby.set_character(racer as u8);
+    }
     let Loaded {
         level,
         dram,
@@ -537,7 +580,6 @@ fn switch_level(world: &mut World) {
             entity.despawn();
         }
     }
-    world.remove_resource::<drive::KartModel>();
 
     world.insert_resource(Track(level, LevelId(id)));
     world.insert_resource(Textures { dram, vram });
@@ -588,7 +630,7 @@ struct OverlayCamera;
 const DEPTH_BIAS_PER_ORDER: f32 = 8.0;
 
 /// Spawns the four parts of a model that is not layered by draw order.
-fn spawn_parts(
+pub(crate) fn spawn_parts(
     parts: [mesh::MeshPart; PARTS],
     base: &StandardMaterial,
     transform: Transform,
@@ -825,7 +867,7 @@ fn setup(
         let kart = spawn_racer(
             model,
             level.driver_spawns[0],
-            driving.is_some(),
+            driving.as_ref().map(|d| kart::KartMotion::new(&d.driver)),
             &textures.vram,
             &wheel_icons.0,
             &mut commands,
@@ -958,19 +1000,41 @@ fn setup(
     }
 }
 
-/// The instance scale `VehBirth` gives drivers (`VEH_BIRTH_DRIVER_INSTANCE_SCALE`).
-const DRIVER_INSTANCE_SCALE: i16 = render::wheels::DRIVER_INSTANCE_SCALE as i16;
+/// The material of a kart model's parts: its texture atlas, unlit.
+pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> StandardMaterial {
+    let mut atlas = Image::new(
+        Extent3d {
+            width: atlas.width as u32,
+            height: atlas.height as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        atlas.rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    atlas.sampler = ImageSampler::nearest();
+    StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(images.add(atlas)),
+        unlit: true,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    }
+}
 
 /// Racer models face along +X, while a driver's heading (`spawn.rot.y`) points along
 /// +Z: a quarter turn clockwise seen from above (Bevy's +Y is up, so negative).
 const MODEL_FORWARD_YAW: f32 = std::f32::consts::FRAC_PI_2;
 
 /// Puts the model's neutral pose (the middle frame of its first animation,
-/// which is the steering one) at a spawn point.
+/// which is the steering one) at a spawn point. With a `motion` the sim moves the kart from
+/// there (the kart that is returned), and it is drawn over everything in the overlay layer.
 fn spawn_racer(
     model: &Model,
     spawn: loader::lev::SpawnPoint,
-    driving: bool,
+    motion: Option<kart::KartMotion>,
     vram: &Vram,
     wheel_icons: &[Icon],
     commands: &mut Commands,
@@ -979,79 +1043,30 @@ fn spawn_racer(
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
 ) -> Option<Entity> {
-    let header = &model.headers[0];
-    let frame = header
-        .animations
-        .first()
-        .map(|a| &a.frames[a.frames.len() / 2])
-        .or(header.static_frame.as_ref())
-        .expect("racer model has a pose");
-    let data = mesh::model_mesh(header, frame, vram, [DRIVER_INSTANCE_SCALE; 3]);
-
-    let mut atlas = Image::new(
-        Extent3d {
-            width: data.atlas.width as u32,
-            height: data.atlas.height as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data.atlas.rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    atlas.sampler = ImageSampler::nearest();
-    let base = StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(images.add(atlas)),
-        unlit: true,
-        cull_mode: None,
-        double_sided: true,
-        ..default()
-    };
-
     let [x, y, z] = mesh::to_world(spawn.pos);
     let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;
+    // The model faces along +X; a driver's heading is along +Z. A driven kart is posed by its
+    // sim instead.
     let placement = Transform::from_xyz(x, y, z)
         .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
-    // Driving: the parts hang off an entity the sim moves, and the model is
-    // posed by that (the model itself faces along +Z, like the heading).
-    let (placement, parent, anchor) = if driving {
-        let kart = commands
-            .spawn((drive::Kart, placement, Visibility::default()))
-            .id();
-        (Transform::default(), Some(kart), wheels::Anchor::Kart(kart))
-    } else {
-        (placement, None, wheels::Anchor::Fixed(placement))
-    };
-    if !wheel_icons.is_empty() {
-        wheels::spawn(
-            commands,
-            images,
-            meshes,
-            materials,
-            wheel_icons,
-            vram,
-            anchor,
-        );
-    }
-    let parts = spawn_parts(
-        data.parts,
-        &base,
+    let driven = motion.is_some();
+    let kart = kart::spawn(
+        model,
+        wheel_icons,
+        vram,
         placement,
-        parent,
+        KART_LAYER,
+        motion,
         commands,
+        images,
         meshes,
         materials,
         subtract_materials,
-        KART_LAYER,
     );
-    if driving {
-        commands.insert_resource(drive::KartModel {
-            header: header.clone(),
-            parts,
-        });
-    }
-    parent
+    driven.then(|| {
+        commands.entity(kart).insert(drive::Kart);
+        kart
+    })
 }
 
 /// The game logic and its texture animation run at this rate; rendering may

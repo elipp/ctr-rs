@@ -66,9 +66,16 @@ pub struct Frames {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum Message {
+    /// Reliable, client to host, right after joining: the character (`GAME_CHARACTER_IDS`
+    /// order) this client drives. Characters have different stats, so every sim needs to know
+    /// whose kart is whose.
+    /// `seq` counts the client's Hellos from 0: they go on streams of their own, which can
+    /// arrive in any order, and the host keeps the one with the highest.
+    Hello { character: u8, seq: u32 },
     /// Reliable, host to each client: the race starts, and this is tick 0. `slot` is the
-    /// client's player among the `players`.
-    Start { slot: u8, players: u8 },
+    /// client's player among the `players`; `characters` is the character of each slot, and
+    /// `track` the `LevelId` the race is on.
+    Start { slot: u8, characters: Vec<u8>, track: u32 },
     /// Unreliable, client to host.
     Inputs(Inputs),
     /// Unreliable, host to client.
@@ -207,7 +214,8 @@ mod tests {
     #[test]
     fn messages_round_trip() {
         for message in [
-            Message::Start { slot: 2, players: 3 },
+            Message::Hello { character: 9, seq: 3 },
+            Message::Start { slot: 2, characters: vec![0, 5, 15], track: 4 },
             Message::Inputs(Inputs { first: 7, pads: vec![pad(1), Pad::default()], ack: 5 }),
             Message::Frames(Frames {
                 first: 4,
