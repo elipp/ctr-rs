@@ -18,6 +18,7 @@ pub mod angular;
 pub mod baked;
 pub mod calc;
 pub mod crash;
+pub mod demo;
 pub mod exhaust;
 pub mod fixed;
 pub mod fire;

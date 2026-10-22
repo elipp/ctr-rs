@@ -25,11 +25,19 @@ use crate::{GameTick, spawn_parts};
 pub struct Sim {
     pub objects: Objects,
     pub last: instance::Tick,
+    /// The objects at tick 0, to start a race over.
+    start: Objects,
 }
 
 impl Sim {
     pub fn new(objects: Objects) -> Sim {
-        Sim { objects, last: instance::Tick::default() }
+        Sim { start: objects.clone(), objects, last: instance::Tick::default() }
+    }
+
+    /// Puts every object back as it was at tick 0.
+    pub fn restart(&mut self) {
+        self.objects = self.start.clone();
+        self.last = instance::Tick::default();
     }
 }
 

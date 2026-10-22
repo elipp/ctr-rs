@@ -22,6 +22,7 @@ mod bar;
 mod drive;
 mod exhaust;
 mod explosion;
+mod lobby;
 mod fire;
 mod flame;
 mod mask;
@@ -303,11 +304,19 @@ fn main() {
     let mut show_hidden = false;
     let mut cull = true;
     let mut driving = false;
+    let mut join = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--lo" => low = true,
             "--drive" => driving = true,
+            "--join" => {
+                join = Some(
+                    args.next()
+                        .and_then(|t| t.parse::<net::Ticket>().map_err(|e| eprintln!("{e}")).ok())
+                        .expect("--join takes the ticket a lobby printed"),
+                )
+            }
             "--show-hidden" => show_hidden = true,
             "--no-cull" => cull = false,
             "--no-racer" => racer = None,
@@ -321,7 +330,7 @@ fn main() {
             }
             n => {
                 panic!(
-                    "usage: view [--lo] [--show-hidden] [--no-cull] [--drive] [--racer N | --no-racer], got '{n}'"
+                    "usage: view [--lo] [--show-hidden] [--no-cull] [--drive [--join TICKET]] [--racer N | --no-racer], got '{n}'"
                 )
             }
         }
@@ -451,7 +460,10 @@ fn main() {
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(mask::spawn));
-        app.insert_resource(drive).add_plugins(drive::DrivePlugin);
+        app.insert_resource(drive).add_plugins((drive::DrivePlugin, lobby::LobbyPlugin));
+        if let Some(ticket) = join {
+            app.insert_resource(lobby::Lobby::joining(ticket));
+        }
     } else {
         scene_systems.push(app.world_mut().register_system(probe::spawn_text));
         app.add_plugins(probe::ProbePlugin).add_systems(Update, fly);
