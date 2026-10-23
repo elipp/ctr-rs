@@ -12,6 +12,8 @@
 use bevy::prelude::*;
 use net::{Event, Frame, Pad, Session, Ticket};
 
+use crate::toast::Toast;
+
 /// A race that has started.
 pub struct Online {
     /// Our player.
@@ -103,16 +105,25 @@ fn toggle(
     keys: Res<ButtonInput<KeyCode>>,
     mut lobby: ResMut<Lobby>,
     drive: Res<crate::drive::Drive>,
+    mut toasts: MessageWriter<Toast>,
 ) {
     if !keys.just_pressed(KeyCode::KeyL) {
         return;
     }
     if lobby.session.take().is_some() {
         lobby.online = None;
-        println!("lobby closed");
+        toasts.write(Toast::new(
+            "Lobby closed!",
+            2000,
+            Color::srgb(1.0, 1.0, 1.0),
+        ));
     } else {
-        println!("opening a lobby...");
         lobby.session = Some(net::host(drive.character as u8));
+        toasts.write(Toast::new(
+            "Opening lobby...",
+            3000,
+            Color::srgb(1.0, 1.0, 1.0),
+        ));
     }
 }
 
@@ -125,7 +136,7 @@ fn start(keys: Res<ButtonInput<KeyCode>>, lobby: Res<Lobby>, track: Res<crate::T
     }
 }
 
-fn report(mut lobby: ResMut<Lobby>) {
+fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     let Some(session) = &lobby.session else {
         return;
     };
@@ -139,7 +150,14 @@ fn report(mut lobby: ResMut<Lobby>) {
                     "lobby open. To join it, run:\n  cargo run -p view -- --drive --join {ticket}\nPress G to start the race once the others have joined."
                 )
             }
-            Event::PeerJoined(id) => println!("{} joined", id.fmt_short()),
+            Event::PeerJoined(id) => {
+                println!("{} joined", id.fmt_short());
+                toasts.write(Toast::new(
+                    format!("{} joined", id.fmt_short()),
+                    3000,
+                    Color::srgb(0.4, 1.0, 0.4),
+                ));
+            }
             Event::Joined(id) => println!("joined the lobby of {}", id.fmt_short()),
             Event::PeerLeft(id) => println!(
                 "{} left{}",
