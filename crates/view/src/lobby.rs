@@ -127,6 +127,20 @@ impl Lobby {
         }
     }
 
+    /// Tells everyone in the lobby (the host only).
+    pub fn announce(&self, text: impl Into<String>) {
+        if let Some(session) = &self.session {
+            session.announce(text);
+        }
+    }
+
+    /// Starts the race over on `track` (the host only).
+    pub fn restart(&self, track: u32) {
+        if let Some(session) = &self.session {
+            session.restart(track);
+        }
+    }
+
     /// The race is built and can start, once the others are as well.
     pub fn ready(&self) {
         if let Some(session) = &self.session {
@@ -162,7 +176,16 @@ impl Plugin for LobbyPlugin {
             .init_resource::<crate::remote::Remotes>()
             .add_systems(
                 Update,
-                (toggle, start, report, crate::remote::build, pace, waiting).chain(),
+                (
+                    toggle,
+                    start,
+                    restart_race,
+                    report,
+                    crate::remote::build,
+                    pace,
+                    waiting,
+                )
+                    .chain(),
             );
     }
 }
@@ -178,19 +201,11 @@ fn toggle(
     }
     if lobby.session.take().is_some() {
         lobby.online = None;
-        toasts.write(Toast::new(
-            "Lobby closed!",
-            2000,
-            Color::srgb(1.0, 1.0, 1.0),
-        ));
+        toasts.write(Toast::new("Lobby closed!", 2000));
     } else {
         lobby.session = Some(net::host(drive.character as u8));
         lobby.joined = false;
-        toasts.write(Toast::new(
-            "Opening lobby...",
-            3000,
-            Color::srgb(1.0, 1.0, 1.0),
-        ));
+        toasts.write(Toast::new("Opening lobby...", 3000));
     }
 }
 
@@ -218,15 +233,31 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             Event::Open(ticket) => {
                 println!(
                     "lobby open. To join it, run:\n  cargo run -p view -- --drive --join {ticket}\nPress G to start the race once the others have joined."
-                )
+                );
+                toasts.write(
+                    Toast::new(format!("Lobby opened!"), 2000)
+                        .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+                );
             }
-            Event::PeerJoined(id) => {
-                println!("{} joined", id.fmt_short());
-                toasts.write(Toast::new(
-                    format!("{} joined", id.fmt_short()),
-                    3000,
-                    Color::srgb(0.4, 1.0, 0.4),
-                ));
+            Event::PeerJoined(id) => println!("{} joined", id.fmt_short()),
+            Event::Character {
+                id,
+                character,
+                first,
+            } => {
+                let name = crate::CHARACTERS
+                    .get(character as usize)
+                    .copied()
+                    .unwrap_or("?");
+                let text = if first {
+                    format!("{} joined as {name}", id.fmt_short())
+                } else {
+                    format!("{} is now {name}", id.fmt_short())
+                };
+                toasts.write(Toast::new(text, 3000).color(Color::srgb(0.4, 1.0, 0.4)));
+            }
+            Event::Announce(text) => {
+                toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
             Event::Joined(id) => println!("joined the lobby of {}", id.fmt_short()),
             Event::PeerLeft(id) => println!(
@@ -247,6 +278,10 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     "race started: you are player {slot} of {}, characters {characters:?}, track {track}",
                     characters.len()
                 );
+                // Whatever came before belongs to the race before this one.
+                pads.clear();
+                sums.clear();
+                leads.clear();
                 let characters_len = characters.len();
                 started = Some(Online {
                     slot,
@@ -299,11 +334,13 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 "DESYNC: the sim of player {} differs from ours at tick {}",
                 d.slot, d.tick
             );
-            toasts.write(Toast::new(
-                format!("Out of sync with player {} (tick {})", d.slot, d.tick),
-                8000,
-                Color::srgb(1.0, 0.3, 0.3),
-            ));
+            toasts.write(
+                Toast::new(
+                    format!("Out of sync with player {} (tick {})", d.slot, d.tick),
+                    8000,
+                )
+                .color(Color::srgb(1.0, 0.3, 0.3)),
+            );
         }
     }
     if failed {
@@ -334,6 +371,55 @@ fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
     let speed = (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST);
     if time.relative_speed() != speed {
         time.set_relative_speed(speed);
+    }
+}
+
+/// What the host says to everyone is yellow.
+const ANNOUNCE_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);
+
+/// The seconds of the countdown before the host's race starts over.
+const RESTART_SECONDS: u32 = 5;
+
+/// The countdown of a restart: the seconds left, and when the last one was announced.
+struct Countdown {
+    left: u32,
+    at: f32,
+}
+
+/// F9: the host starts the race over, after a countdown that everyone sees.
+fn restart_race(
+    keys: Res<ButtonInput<KeyCode>>,
+    lobby: Res<Lobby>,
+    time: Res<Time<Real>>,
+    mut countdown: Local<Option<Countdown>>,
+) {
+    let Some(track) = lobby
+        .online
+        .as_ref()
+        .map(|net| net.track)
+        .filter(|_| !lobby.joined)
+    else {
+        *countdown = None;
+        return;
+    };
+    let now = time.elapsed_secs();
+    if countdown.is_none() && keys.just_pressed(KeyCode::F9) {
+        lobby.announce(format!("Race restarts in {RESTART_SECONDS}"));
+        *countdown = Some(Countdown {
+            left: RESTART_SECONDS,
+            at: now,
+        });
+    }
+    let Some(c) = countdown.as_mut().filter(|c| now - c.at >= 1.0) else {
+        return;
+    };
+    c.left -= 1;
+    c.at += 1.0;
+    if c.left == 0 {
+        lobby.restart(track);
+        *countdown = None;
+    } else {
+        lobby.announce(format!("{}...", c.left));
     }
 }
 

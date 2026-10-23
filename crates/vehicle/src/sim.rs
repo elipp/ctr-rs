@@ -457,7 +457,7 @@ fn tick_to_coll_moved(
         match d.phys_state {
             // (There are no other drivers to keep the respawn off of.)
             PhysState::MaskGrab => respawned = stuck::mask_grab_update(d, coll, level, env, &[]),
-            PhysState::RevEngine => stuck::rev_engine_update(d, effects),
+            PhysState::RevEngine => stuck::rev_engine_update(d, env, effects),
             _ => update(d, env, input, effects),
         }
     }

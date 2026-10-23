@@ -16,6 +16,7 @@
 //! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
 //! or Uka Uka (`mask.rs`) carries the kart back to the track.
 
+use crate::toast::Toast;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use race::rollback::Step;
@@ -80,6 +81,10 @@ struct Hud;
 #[derive(Component)]
 struct WumpaHud;
 
+/// The lap, the place and the lap times.
+#[derive(Component)]
+struct LapHud;
+
 /// How many ticks we may play past the last pad of another player before we wait for it: the
 /// prediction is that long at most. The clock is kept with the others' without this (see
 /// `lobby::pace`), so it only matters when one of them stalls for good: 2 seconds.
@@ -90,6 +95,43 @@ const TICKS_PER_BEEP: u32 = 60;
 
 /// The pitch of the first player's beep; each next player is a major third higher.
 const BEEP_HZ: f32 = 440.0;
+
+/// What a tick can ask of the player's ears and eyes outside the sim.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Cues<'w, 's> {
+    commands: Commands<'w, 's>,
+    pitches: ResMut<'w, Assets<bevy::audio::Pitch>>,
+    toasts: MessageWriter<'w, Toast>,
+}
+
+/// The dot of a traffic light. (The default font has ASCII only, so no `⬤` yet.)
+const DOT: &str = "O";
+
+impl Cues<'_, '_> {
+    fn beep(&mut self, hertz: f32, millis: u64) {
+        let pitch = self.pitches.add(bevy::audio::Pitch::new(
+            hertz,
+            std::time::Duration::from_millis(millis),
+        ));
+        self.commands
+            .spawn((AudioPlayer(pitch), PlaybackSettings::DESPAWN));
+    }
+
+    /// A light of the start: a toast with as many dots as there are lights on, the last one
+    /// green. Retail plays a sound with each (`OtherFX` 0x45 for a red light, 0x46 for green)
+    /// and draws the lights sliding in from the top.
+    fn light(&mut self, light: race::Light) {
+        let (on, color) = match light {
+            race::Light::Red1 => (1, Color::srgb(1.0, 0.2, 0.2)),
+            race::Light::Red2 => (2, Color::srgb(1.0, 0.2, 0.2)),
+            race::Light::Red3 => (3, Color::srgb(1.0, 0.2, 0.2)),
+            race::Light::Green => (4, Color::srgb(0.2, 1.0, 0.3)),
+        };
+        let text = vec![DOT; on].join(" ");
+        self.toasts
+            .write(Toast::new(text, 900).color(color).size(64.0).lowered(120.0));
+    }
+}
 
 /// How long F7 and F8 freeze an online client for.
 const STALLS_MS: [u64; 2] = [500, 2000];
@@ -318,6 +360,7 @@ impl Plugin for DrivePlugin {
                     chase,
                     hud,
                     wumpa_hud,
+                    lap_hud,
                     wumpa_bar,
                     turbo_bar,
                     reserves_hud,
@@ -344,6 +387,21 @@ impl Plugin for DrivePlugin {
 }
 
 pub(crate) fn spawn_hud(mut commands: Commands) {
+    commands.spawn((
+        LapHud,
+        Text::new(""),
+        TextLayout::justify(Justify::Right),
+        TextFont {
+            font_size: 24.0.into(),
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(54.0),
+            right: Val::Px(20.0),
+            ..default()
+        },
+    ));
     commands.spawn((
         WumpaHud,
         Text::new(""),
@@ -519,8 +577,7 @@ fn drive_tick(
     mut lobby: ResMut<crate::lobby::Lobby>,
     remotes: Res<crate::remote::Remotes>,
     mut motions: Query<(&mut crate::kart::KartMotion, Has<Kart>)>,
-    mut commands: Commands,
-    mut pitches: ResMut<Assets<bevy::audio::Pitch>>,
+    mut cues: Cues,
 ) {
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
@@ -611,7 +668,7 @@ fn drive_tick(
             Some(net) => (net.specs.clone(), net.slot),
             None => (vec![drive.spec()], 0),
         };
-        sim.restart(&track.0, &specs, own);
+        sim.restart(&track.0, &specs, own, lobby.online.is_some());
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         each_motion(&sim, &remotes, &mut motions, |motion, driver| {
@@ -624,7 +681,7 @@ fn drive_tick(
     let stall_down = [KeyCode::F7, KeyCode::F8].map(|key| online && keys.pressed(key));
     for (i, millis) in STALLS_MS.into_iter().enumerate() {
         if stall_down[i] && !keys_held[2 + i] {
-            info!("stalling for {millis} ms");
+            info!("(debug) stalling for {millis} ms");
             std::thread::sleep(std::time::Duration::from_millis(millis));
         }
     }
@@ -737,11 +794,11 @@ fn drive_tick(
     // their ticks do.
     if online && tick % TICKS_PER_BEEP == 0 {
         let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
-        let pitch = pitches.add(bevy::audio::Pitch::new(
-            frequency,
-            std::time::Duration::from_millis(100),
-        ));
-        commands.spawn((AudioPlayer(pitch), PlaybackSettings::DESPAWN));
+        cues.beep(frequency, 100);
+    }
+    // The traffic lights come on, one by one.
+    if let Some(light) = sim.race.light {
+        cues.light(light);
     }
     let mine = &ticks[sim.own];
     particles.sparks(mine.landing, mine.wall);
@@ -768,6 +825,11 @@ fn drive_tick(
     drive
         .camera
         .follow_driver(&kart.driver, &track.0, &camera_input);
+    // The start-line fly-in, over the chase camera, for as long as the race says.
+    let fly_in_frame = camera::TRANSITION_FRAMES - tick as i32;
+    if sim.race.intro_ticks > 0 && fly_in_frame >= 0 {
+        drive.camera.fly_in(&track.0, fly_in_frame);
+    }
 
     drive.shadow_previous = drive.shadow_current;
     drive.shadow_current = ground_shadow(&kart.driver, &mut kart.coll.gte.clone());
@@ -838,6 +900,50 @@ fn chase(
 fn wumpa_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<WumpaHud>>) {
     for mut text in &mut text {
         text.0 = format!("{}/10", sim.driver().num_wumpas);
+    }
+}
+
+/// `m:ss.mmm`
+fn lap_time(ms: i32) -> String {
+    let ms = ms.max(0);
+    format!("{}:{:02}.{:03}", ms / 60000, ms / 1000 % 60, ms % 1000)
+}
+
+/// The place as the HUD says it: 1st, 2nd, 3rd, 4th ...
+fn place(rank: i16) -> String {
+    let n = rank.max(0) as u32 + 1;
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+/// Our lap out of the race's, the place when there are others, and the time of the lap being
+/// driven and of the ones before it.
+fn lap_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<LapHud>>) {
+    let race = &*sim.race;
+    let driver = sim.driver();
+    let laps = race.laps;
+    // A kart that finished stays on its last lap.
+    let lap = (driver.lap_index + 1).min(laps);
+    let mut lines = vec![format!("LAP {lap}/{laps}")];
+    if race.karts.len() > 1 {
+        lines[0] += &format!("  {}", place(driver.driver_rank));
+    }
+    let finished = driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+    if !finished {
+        // The first lap counts from the green light.
+        lines.push(lap_time(race.event_ms - driver.lap_time));
+    }
+    for (i, ms) in race.lap_times[sim.own].iter().enumerate() {
+        lines.push(format!("{}  {}", i + 1, lap_time(*ms)));
+    }
+    for mut text in &mut text {
+        text.0 = lines.join("\n");
     }
 }
 

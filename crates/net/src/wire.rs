@@ -46,6 +46,9 @@ impl Default for Pad {
 /// A player's own inputs, as the unreliable datagram to another player carries them.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Inputs {
+    /// The race these belong to: a race that starts again is a new epoch, and the packets of
+    /// the one before, still on their way, are dropped.
+    pub epoch: u32,
     /// The tick of `pads[0]`.
     pub first: Tick,
     pub pads: Vec<Pad>,
@@ -82,8 +85,13 @@ pub enum Message {
     Go,
     /// Unreliable, between any two players.
     Inputs(Inputs),
+    /// Reliable, host to each client: the race starts again, on `track`. The same players, on
+    /// the same connections; `epoch` counts the races and tells their packets apart.
+    Restart { epoch: u32, track: u32 },
+    /// Reliable, host to each client: a message for the players to read.
+    Announce { text: String },
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
-    Checksum { tick: Tick, hash: u64 },
+    Checksum { epoch: u32, tick: Tick, hash: u64 },
     /// Reliable. The sim as it is at the start of `tick`. The bytes are the game's to make and
     /// read: this crate does not know what the sim holds.
     Snapshot { tick: Tick, state: Vec<u8> },
@@ -131,6 +139,7 @@ impl InputSender {
         self.pads.drain(..excess);
         self.base += excess as Tick;
         Inputs {
+            epoch: 0,
             first: self.base,
             pads: self.pads.iter().copied().collect(),
             ack: ours_to_ack,
@@ -241,13 +250,19 @@ mod tests {
             },
             Message::Ready,
             Message::Go,
+            Message::Restart { epoch: 2, track: 7 },
+            Message::Announce {
+                text: "Restarting in 5".into(),
+            },
             Message::Inputs(Inputs {
+                epoch: 1,
                 first: 7,
                 pads: vec![pad(1), Pad::default()],
                 ack: 5,
                 lead: -3,
             }),
             Message::Checksum {
+                epoch: 3,
                 tick: 90,
                 hash: u64::MAX,
             },
@@ -295,6 +310,7 @@ mod tests {
     fn a_packet_that_comes_twice_or_late_changes_nothing() {
         let mut receiver = InputReceiver::default();
         let packet = |first, n| Inputs {
+            epoch: 0,
             first,
             pads: (first..first + n).map(pad).collect(),
             ack: 0,
