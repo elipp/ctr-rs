@@ -5,6 +5,7 @@
 use loader::icons::Icon;
 use loader::vram::Vram;
 
+use crate::hud_icons;
 use crate::mesh::Atlas;
 
 /// A portrait is 44x26 texels.
@@ -18,33 +19,10 @@ pub const ICON_IDS: [i32; 16] = [
     32, 33, 34, 35, 36, 37, 38, 39, 43, 41, 40, 42, 44, 53, 54, 55,
 ];
 
-/// All the portraits one above the other, character `n`'s at rows `n * HEIGHT` on: `icons` is the
-/// flat icon array of a racer's pack (`loader::icons::parse_icons`). A portrait the pack lacks
-/// stays clear.
+/// All the portraits one above the other, character `n`'s at rows `n * HEIGHT` on (see
+/// [`hud_icons::strip`]).
 pub fn portrait_atlas(icons: &[Icon], vram: &Vram) -> Atlas {
-    let height = ICON_IDS.len() * HEIGHT;
-    let mut rgba = vec![0u8; WIDTH * height * 4];
-    for (n, id) in ICON_IDS.iter().enumerate() {
-        let Some(icon) = icons.iter().find(|i| i.global_index == *id) else {
-            continue;
-        };
-        let layout = &icon.layout;
-        let (u0, v0) = layout.uv[0];
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let (u, v) = (u0.wrapping_add(x as u8), v0.wrapping_add(y as u8));
-                let Ok(Some((c, _))) = vram.texel_stp(layout, u, v) else {
-                    continue;
-                };
-                rgba[((n * HEIGHT + y) * WIDTH + x) * 4..][..4].copy_from_slice(&c);
-            }
-        }
-    }
-    Atlas {
-        width: WIDTH,
-        height,
-        rgba,
-    }
+    hud_icons::strip(icons, vram, &ICON_IDS, WIDTH, HEIGHT)
 }
 
 #[cfg(test)]

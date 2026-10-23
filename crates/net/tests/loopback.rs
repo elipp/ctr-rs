@@ -65,9 +65,11 @@ fn a_host_and_two_peers_race_over_a_mesh() {
             Event::Started {
                 slot,
                 characters,
+                players,
                 track,
             } => {
                 assert_eq!(characters, [4, 9, 11]);
+                assert_eq!(players.len(), 3);
                 assert_eq!(track, 5);
                 slots[i] = slot;
                 true

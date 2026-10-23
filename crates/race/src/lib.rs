@@ -335,6 +335,10 @@ impl Race {
                 &mut self.feedback,
             )
         };
+        // The weapon roulettes that crates started run on, and pick.
+        for kart in &mut self.karts {
+            vehicle::item::tick(&mut kart.driver, &mut self.objects.random_number);
+        }
         let mut ticks: Vec<KartTick> = self
             .karts
             .iter_mut()

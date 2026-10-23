@@ -68,16 +68,19 @@ impl Plugin for LeaderboardPlugin {
     }
 }
 
-fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Handle<Image> {
+/// The icons of a racer's pack, which have the HUD's pictures. Every racer's pack has the same
+/// ones; character 0's will do.
+pub(crate) fn pack_icons() -> Vec<loader::icons::Icon> {
     let path = crate::bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    // Every racer's pack has them; character 0's will do.
     let pack = big
         .read(&mut disc, BigIndex::ARCADE_1P_PACK.get())
         .expect("read racer pack");
-    let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack"))
-        .expect("parse racer pack icons");
-    let atlas = portrait_atlas(&icons, vram);
+    parse_icons(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons")
+}
+
+/// A picture of the HUD as a texture, for the UI to cut from.
+pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>) -> Handle<Image> {
     let mut image = Image::new(
         Extent3d {
             width: atlas.width as u32,
@@ -91,6 +94,10 @@ fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Hand
     );
     image.sampler = ImageSampler::nearest();
     images.add(image)
+}
+
+fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Handle<Image> {
+    atlas_image(portrait_atlas(&pack_icons(), vram), images)
 }
 
 /// Puts the column up when a race has been built, and takes it down when there is none. (A level

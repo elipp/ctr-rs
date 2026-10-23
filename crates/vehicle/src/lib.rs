@@ -26,6 +26,7 @@ pub mod fixed;
 pub mod force;
 pub mod frame;
 pub mod grid;
+pub mod item;
 pub mod joystick;
 pub mod jump;
 pub mod jump_meter;
@@ -409,6 +410,16 @@ pub struct Driver {
     pub turbo_const: i8,
 
     pub clock_receive: i16,
+    /// `heldItemID`: `item::held::*`. A new driver holds nothing ([`item::held::NONE`]).
+    pub held_item_id: u8,
+    /// `numHeldItems`: how many shots the weapon has (3 for triple bombs and missiles).
+    pub num_held_items: u8,
+    /// `itemRollTimer`: ticks of the roulette left.
+    pub item_roll_timer: i16,
+    /// `noItemTimer`: ticks until a weapon that was just fired may be followed by another.
+    pub no_item_timer: i16,
+    /// `numTimesHitWeaponBox`
+    pub num_times_hit_weapon_box: u8,
     pub hazard_timer: i16,
     /// `RainCloudEffect`; `rain_cloud::NONE` when there is no cloud.
     pub rain_cloud_effect: u8,

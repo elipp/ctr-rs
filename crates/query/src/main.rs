@@ -40,8 +40,8 @@ commands:
   icons [FIRST [LAST]]                which BIGFILE entries carry icons with global indices
                                       FIRST..=LAST (default 32..=55, the driver portraits),
                                       with each icon's name and texture layout
-  portraits [CHARACTER]               decodes the portraits the way the viewer's leaderboard
-                                      does: texel counts, and CHARACTER (0..15) as ASCII art
+  portraits | weapons                 decodes the HUD pictures the way the viewer does and
+                                      counts the texels of each
 
 environment: CTR_BIN is the disc image.
 ";
@@ -466,8 +466,9 @@ fn icon_scan(range: std::ops::RangeInclusive<i32>) -> Result<(), String> {
     Ok(())
 }
 
-fn portraits(show: Option<usize>) -> Result<(), String> {
-    use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
+/// Decodes the HUD pictures the way the viewer does, to see that every cell has something in it.
+fn hud_pictures(which: &str) -> Result<(), String> {
+    use render::{portraits, weapons};
     let path = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -486,32 +487,33 @@ fn portraits(show: Option<usize>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let icons = loader::icons::parse_icons(&DramFile::parse(&pack).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    let atlas = portrait_atlas(&icons, &vram);
-    for n in 0..ICON_IDS.len() {
-        let picture = &atlas.rgba[n * WIDTH * HEIGHT * 4..][..WIDTH * HEIGHT * 4];
-        let visible = picture.chunks(4).filter(|p| p[3] != 0).count();
+    let (atlas, ids, width, height) = match which {
+        "portraits" => (
+            portraits::portrait_atlas(&icons, &vram),
+            &portraits::ICON_IDS[..],
+            portraits::WIDTH,
+            portraits::HEIGHT,
+        ),
+        _ => (
+            weapons::weapon_atlas(&icons, &vram),
+            &weapons::ICON_IDS[..],
+            weapons::WIDTH,
+            weapons::HEIGHT,
+        ),
+    };
+    if which == "weapons" {
+        let shine = weapons::shine_image(&icons, &vram);
+        let visible = shine.rgba.chunks(4).filter(|p| p[3] != 0).count();
         println!(
-            "character {n} (icon {}): {visible}/{} texels",
-            ICON_IDS[n],
-            WIDTH * HEIGHT
+            "shine: {visible}/{} texels, brightest alpha {}",
+            shine.width * shine.height,
+            shine.rgba.chunks(4).map(|p| p[3]).max().unwrap_or(0)
         );
-        if show == Some(n) {
-            for row in picture.chunks(WIDTH * 4) {
-                let line: String = row
-                    .chunks(4)
-                    .map(
-                        |p| match (p[3], (p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) {
-                            (0, _) => ' ',
-                            (_, 0..=63) => '#',
-                            (_, 64..=127) => '*',
-                            (_, 128..=191) => '+',
-                            _ => '.',
-                        },
-                    )
-                    .collect();
-                println!("{line}");
-            }
-        }
+    }
+    for (n, id) in ids.iter().enumerate() {
+        let cell = &atlas.rgba[n * width * height * 4..][..width * height * 4];
+        let visible = cell.chunks(4).filter(|p| p[3] != 0).count();
+        println!("cell {n} (icon {id}): {visible}/{} texels", width * height);
     }
     Ok(())
 }
@@ -531,13 +533,8 @@ fn run() -> Result<(), String> {
         };
         return icon_scan(first..=last);
     }
-    if command == "portraits" {
-        return portraits(
-            args.first()
-                .map(|a| a.parse::<usize>())
-                .transpose()
-                .map_err(|e| e.to_string())?,
-        );
+    if matches!(command.as_str(), "portraits" | "weapons") {
+        return hud_pictures(&command);
     }
     let mut args = Args(args);
     let level = level_id(&args.positional("LEVEL")?)?;
