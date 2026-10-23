@@ -56,11 +56,17 @@ const VECTOR_SPEED_SHIFT: u32 = 8;
 const MATRIX_FRAC_SHIFT: u32 = 12;
 
 fn length_sq3(x: i32, y: i32, z: i32) -> u32 {
-    mips::add_lo(mips::add_lo(mips::mul_lo(x, x), mips::mul_lo(y, y)), mips::mul_lo(z, z)) as u32
+    mips::add_lo(
+        mips::add_lo(mips::mul_lo(x, x), mips::mul_lo(y, y)),
+        mips::mul_lo(z, z),
+    ) as u32
 }
 
 fn dot3(a: [i32; 3], b: [i32; 3]) -> i32 {
-    mips::add_lo(mips::add_lo(mips::mul_lo(a[0], b[0]), mips::mul_lo(a[1], b[1])), mips::mul_lo(a[2], b[2]))
+    mips::add_lo(
+        mips::add_lo(mips::mul_lo(a[0], b[0]), mips::mul_lo(a[1], b[1])),
+        mips::mul_lo(a[2], b[2]),
+    )
 }
 
 /// `VehPhysCrash_ConvertVecToSpeed`: a velocity as the driver's speed (its
@@ -69,7 +75,8 @@ fn dot3(a: [i32; 3], b: [i32; 3]) -> i32 {
 /// speed along the ground (`speed_approx`, negative when reversing).
 pub fn convert_vec_to_speed(d: &mut Driver, vel: &Vec3) {
     let speed_2d = calc::fast_sqrt(length_sq3(vel.x, 0, vel.z), FAST_SQRT_ITERATIONS) as i32;
-    let speed = calc::fast_sqrt(length_sq3(vel.x, vel.y, vel.z), FAST_SQRT_ITERATIONS) >> VECTOR_SPEED_SHIFT;
+    let speed = calc::fast_sqrt(length_sq3(vel.x, vel.y, vel.z), FAST_SQRT_ITERATIONS)
+        >> VECTOR_SPEED_SHIFT;
     d.speed = speed as i16;
     d.axis_rotation_y = math::ratan2(mips::sll(vel.y, VECTOR_SPEED_SHIFT), speed_2d) as i16;
     d.axis_rotation_x = math::ratan2(vel.x, vel.z) as i16;
@@ -83,14 +90,22 @@ pub fn convert_vec_to_speed(d: &mut Driver, vel: &Vec3) {
     let along_normal = mips::sra(dot, MATRIX_FRAC_SHIFT);
     let proj = normal.map(|n| mips::sra(mips::mul_lo(n, along_normal), MATRIX_FRAC_SHIFT));
 
-    let jump_speed = calc::fast_sqrt(length_sq3(proj[0], proj[1], proj[2]), FAST_SQRT_ITERATIONS) >> VECTOR_SPEED_SHIFT;
+    let jump_speed = calc::fast_sqrt(length_sq3(proj[0], proj[1], proj[2]), FAST_SQRT_ITERATIONS)
+        >> VECTOR_SPEED_SHIFT;
     d.jump_height_curr = jump_speed as i16;
     if along_normal < 0 {
         d.jump_height_curr = mips::neg_lo(jump_speed as i32) as i16;
     }
 
-    let ground = [mips::sub_lo(vel.x, proj[0]), mips::sub_lo(vel.y, proj[1]), mips::sub_lo(vel.z, proj[2])];
-    let approx = calc::fast_sqrt(length_sq3(ground[0], ground[1], ground[2]), FAST_SQRT_ITERATIONS) >> VECTOR_SPEED_SHIFT;
+    let ground = [
+        mips::sub_lo(vel.x, proj[0]),
+        mips::sub_lo(vel.y, proj[1]),
+        mips::sub_lo(vel.z, proj[2]),
+    ];
+    let approx = calc::fast_sqrt(
+        length_sq3(ground[0], ground[1], ground[2]),
+        FAST_SQRT_ITERATIONS,
+    ) >> VECTOR_SPEED_SHIFT;
     d.speed_approx = approx as i16;
     if dot3(ground, forward) < 0 {
         d.speed_approx = mips::neg_lo(approx as i32) as i16;

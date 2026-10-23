@@ -103,7 +103,11 @@ fn closest(d: &Driver, others: &[&mut Driver]) -> Option<Search> {
             continue;
         }
         best_dist_sq = sum;
-        best = Some(Search { other: n, best_dist_sq: sum, dist: dist.map(|v| v as i16) });
+        best = Some(Search {
+            other: n,
+            best_dist_sq: sum,
+            dist: dist.map(|v| v as i16),
+        });
     }
     best
 }
@@ -113,7 +117,9 @@ pub fn collide(d: &mut Driver, others: &mut Others, env: &Env, effects: &mut Vec
     if !env.kart_collisions || d.collision_disabled {
         return;
     }
-    let Some(search) = closest(d, others.drivers) else { return };
+    let Some(search) = closest(d, others.drivers) else {
+        return;
+    };
     let radius_sum = mips::add_lo(HIT_RADIUS, HIT_RADIUS);
     if search.best_dist_sq < mips::mul_lo(radius_sum, radius_sum) {
         let other = &mut *others.drivers[search.other];
@@ -123,11 +129,20 @@ pub fn collide(d: &mut Driver, others: &mut Others, env: &Env, effects: &mut Vec
 
 /// `VehPhysCrash_BounceSelf`: takes the part of `vel` (relative to `origin`) that goes into the
 /// other kart (along `normal`) away. The result is the game's: always 0.
-fn bounce_self(normal: [i16; 3], origin: [i32; 3], vel: &mut [i32; 3], other_driver: bool, impact: &mut i32) -> i32 {
+fn bounce_self(
+    normal: [i16; 3],
+    origin: [i32; 3],
+    vel: &mut [i32; 3],
+    other_driver: bool,
+    impact: &mut i32,
+) -> i32 {
     let diff = [0, 1, 2].map(|i| mips::sub_lo(vel[i], origin[i]));
     let dot = mips::sra(
         mips::add_lo(
-            mips::add_lo(mips::mul_lo(diff[0], normal[0] as i32), mips::mul_lo(diff[1], normal[1] as i32)),
+            mips::add_lo(
+                mips::mul_lo(diff[0], normal[0] as i32),
+                mips::mul_lo(diff[1], normal[1] as i32),
+            ),
             mips::mul_lo(diff[2], normal[2] as i32),
         ),
         MATRIX_FRAC_SHIFT,
@@ -161,13 +176,24 @@ fn bounce_self(normal: [i16; 3], origin: [i32; 3], vel: &mut [i32; 3], other_dri
 }
 
 /// `VehPhysCrash_AnyTwoCars`, for two human drivers: `d` is the one whose procedure runs.
-fn any_two_cars(d: &mut Driver, other: &mut Driver, search: &Search, env: &Env, feedback: &mut Feedback, effects: &mut Vec<Effect>) {
+fn any_two_cars(
+    d: &mut Driver,
+    other: &mut Driver,
+    search: &Search,
+    env: &Env,
+    feedback: &mut Feedback,
+    effects: &mut Vec<Effect>,
+) {
     let distance = math::fast_sqrt(search.best_dist_sq as u32, 0);
 
     let mut hit_dir = [0i16, 0, UNIT_VECTOR_SCALE as i16];
     if distance != 0 {
         let toward = |v: i16| mips::div(mips::sll(v as i32, MATRIX_FRAC_SHIFT), distance) as i16;
-        hit_dir = [toward(search.dist[0]), toward(search.dist[1]), toward(search.dist[2])];
+        hit_dir = [
+            toward(search.dist[0]),
+            toward(search.dist[1]),
+            toward(search.dist[2]),
+        ];
     }
 
     let hit_strength = mips::sub_lo(mips::add_lo(HIT_RADIUS, HIT_RADIUS), distance);
@@ -178,12 +204,18 @@ fn any_two_cars(d: &mut Driver, other: &mut Driver, search: &Search, env: &Env, 
     let mut impact = 0;
 
     // Both go away at the speed of the pair, weighted by how heavy they are.
-    let (weight, other_weight) = (d.stats.collision_weight as i32, other.stats.collision_weight as i32);
+    let (weight, other_weight) = (
+        d.stats.collision_weight as i32,
+        other.stats.collision_weight as i32,
+    );
     let mut self_vel = [d.velocity.x, d.velocity.y, d.velocity.z];
     let mut other_vel = [other.velocity.x, other.velocity.y, other.velocity.z];
     let weighted = [0, 1, 2].map(|i| {
         mips::div(
-            mips::add_lo(mips::mul_lo(self_vel[i], weight), mips::mul_lo(other_vel[i], other_weight)),
+            mips::add_lo(
+                mips::mul_lo(self_vel[i], weight),
+                mips::mul_lo(other_vel[i], other_weight),
+            ),
             mips::add_lo(weight, other_weight),
         )
     });
@@ -200,11 +232,13 @@ fn any_two_cars(d: &mut Driver, other: &mut Driver, search: &Search, env: &Env, 
         other_vel[i] = mips::sub_lo(other_vel[i], push(hit_dir[i]));
     }
     (d.velocity.x, d.velocity.y, d.velocity.z) = (self_vel[0], self_vel[1], self_vel[2]);
-    (other.velocity.x, other.velocity.y, other.velocity.z) = (other_vel[0], other_vel[1], other_vel[2]);
+    (other.velocity.x, other.velocity.y, other.velocity.z) =
+        (other_vel[0], other_vel[1], other_vel[2]);
 
     // The bump is heard and felt, no more often than every few frames.
     let current_frame = env.timer as i32;
-    let cooling_down = (mips::sub_lo(current_frame, feedback.last_frame) as u32) < FEEDBACK_COOLDOWN_FRAMES;
+    let cooling_down =
+        (mips::sub_lo(current_frame, feedback.last_frame) as u32) < FEEDBACK_COOLDOWN_FRAMES;
     let can_play_feedback = !cooling_down;
 
     if impact > FEEDBACK_MIN_IMPACT {
@@ -212,19 +246,42 @@ fn any_two_cars(d: &mut Driver, other: &mut Driver, search: &Search, env: &Env, 
         let hurt = |k: &Driver| k.kart_state == kart_state::BLASTED || k.invincible_timer != 0;
         if can_play_feedback && !hurt(d) && !hurt(other) {
             let echo = d.actions_flag_set & actions::ENGINE_ECHO != 0;
-            effects.push(Effect::DriverCrashing { echo, volume: volume as u8 });
+            effects.push(Effect::DriverCrashing {
+                echo,
+                volume: volume as u8,
+            });
             feedback.last_frame = current_frame;
 
             if volume as u32 > HARD_CRASH_VOLUME as u32 {
-                effects.push(Effect::Voiceline { id: VOICELINE_HARD_CRASH, driver_id: d.driver_id, priority: VOICELINE_PRIORITY });
+                effects.push(Effect::Voiceline {
+                    id: VOICELINE_HARD_CRASH,
+                    driver_id: d.driver_id,
+                    priority: VOICELINE_PRIORITY,
+                });
             }
         }
 
         for k in [&*other, &*d] {
-            effects.push(Effect::ShockFreq { driver_id: k.driver_id, a: RUMBLE_CHANNEL, b: 0 });
-            effects.push(Effect::ShockForce { driver_id: k.driver_id, a: RUMBLE_CHANNEL, b: RUMBLE_FORCE });
-            let pattern = if k.simp_turn_state > 0 { JOG_TURNING } else { JOG_STRAIGHT };
-            effects.push(Effect::JogCon { driver_id: k.driver_id, pattern, strength: JOG_DURATION });
+            effects.push(Effect::ShockFreq {
+                driver_id: k.driver_id,
+                a: RUMBLE_CHANNEL,
+                b: 0,
+            });
+            effects.push(Effect::ShockForce {
+                driver_id: k.driver_id,
+                a: RUMBLE_CHANNEL,
+                b: RUMBLE_FORCE,
+            });
+            let pattern = if k.simp_turn_state > 0 {
+                JOG_TURNING
+            } else {
+                JOG_STRAIGHT
+            };
+            effects.push(Effect::JogCon {
+                driver_id: k.driver_id,
+                pattern,
+                strength: JOG_DURATION,
+            });
         }
 
         d.actions_flag_set |= actions::HUMAN_HUMAN_COLLISION;
@@ -237,7 +294,13 @@ fn any_two_cars(d: &mut Driver, other: &mut Driver, search: &Search, env: &Env, 
 
 /// `VehPhysCrash_Attack`: `driver2` may hurt `driver1` by touching it: with the Aku Aku mask, or
 /// with a boost (if `driver1` is not boosting). The result is `can_play_feedback`.
-fn attack(driver1: &mut Driver, driver2: &mut Driver, can_play_feedback: bool, impact: i32, effects: &mut Vec<Effect>) -> bool {
+fn attack(
+    driver1: &mut Driver,
+    driver2: &mut Driver,
+    can_play_feedback: bool,
+    impact: i32,
+    effects: &mut Vec<Effect>,
+) -> bool {
     if driver1.actions_flag_set & actions::MASK_WEAPON != 0 {
         return can_play_feedback;
     }
@@ -247,10 +310,20 @@ fn attack(driver1: &mut Driver, driver2: &mut Driver, can_play_feedback: bool, i
         driver1.pending_damage_reason = DAMAGE_REASON_MASK;
         driver1.pending_damage_attacker = Some(driver2.driver_id);
 
-        if can_play_feedback && driver1.kart_state != kart_state::BLASTED && driver1.invincible_timer == 0 {
+        if can_play_feedback
+            && driver1.kart_state != kart_state::BLASTED
+            && driver1.invincible_timer == 0
+        {
             let echo = driver1.actions_flag_set & actions::ENGINE_ECHO != 0;
-            effects.push(Effect::DriverCrashing { echo, volume: VOLUME_MAX as u8 });
-            effects.push(Effect::Voiceline { id: VOICELINE_CRASH, driver_id: driver1.driver_id, priority: VOICELINE_PRIORITY });
+            effects.push(Effect::DriverCrashing {
+                echo,
+                volume: VOLUME_MAX as u8,
+            });
+            effects.push(Effect::Voiceline {
+                id: VOICELINE_CRASH,
+                driver_id: driver1.driver_id,
+                priority: VOICELINE_PRIORITY,
+            });
         }
     }
 

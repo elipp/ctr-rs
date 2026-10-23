@@ -11,7 +11,9 @@
 
 use std::collections::VecDeque;
 
-use crate::wire::{FRAMES_WINDOW, Frame, Frames, Gap, InputReceiver, InputSender, Inputs, Pad, Tick};
+use crate::wire::{
+    FRAMES_WINDOW, Frame, Frames, Gap, InputReceiver, InputSender, Inputs, Pad, Tick,
+};
 
 /// Ticks between making a pad and playing it. 3 ticks are 100 ms.
 pub const INPUT_DELAY: Tick = 3;
@@ -53,7 +55,11 @@ impl Host {
     /// The host's own pad for the next tick it has none for.
     pub fn push_local(&mut self, pad: Pad) {
         let first = self.inputs[0].next();
-        let _ = self.inputs[0].accept(&Inputs { first, pads: vec![pad], ack: 0 });
+        let _ = self.inputs[0].accept(&Inputs {
+            first,
+            pads: vec![pad],
+            ack: 0,
+        });
     }
 
     /// Takes in a client's packet, in whatever order and however often it arrives.
@@ -67,7 +73,11 @@ impl Host {
         let mut done = Vec::new();
         loop {
             let tick = self.base + self.frames.len() as Tick;
-            let Some(frame) = self.inputs.iter().map(|inputs| inputs.get(tick)).collect::<Option<Frame>>()
+            let Some(frame) = self
+                .inputs
+                .iter()
+                .map(|inputs| inputs.get(tick))
+                .collect::<Option<Frame>>()
             else {
                 break;
             };
@@ -92,7 +102,13 @@ impl Host {
         let skip = (first - self.base) as usize;
         Frames {
             first,
-            frames: self.frames.iter().skip(skip).take(FRAMES_WINDOW).cloned().collect(),
+            frames: self
+                .frames
+                .iter()
+                .skip(skip)
+                .take(FRAMES_WINDOW)
+                .cloned()
+                .collect(),
             ack: self.inputs[slot].next(),
         }
     }
@@ -113,7 +129,10 @@ impl FrameReceiver {
     /// Takes in a packet, and gives the frames that were new.
     pub fn accept(&mut self, packet: &Frames) -> Result<Vec<(Tick, Frame)>, Gap> {
         if packet.first > self.next {
-            return Err(Gap { have_until: self.next, packet_starts: packet.first });
+            return Err(Gap {
+                have_until: self.next,
+                packet_starts: packet.first,
+            });
         }
         let skip = (self.next - packet.first) as usize;
         let new: Vec<_> = packet
@@ -134,7 +153,10 @@ mod tests {
     use crate::wire::Message;
 
     fn pad(player: u32, tick: Tick) -> Pad {
-        Pad { held: player << 16 | tick, ..Pad::default() }
+        Pad {
+            held: player << 16 | tick,
+            ..Pad::default()
+        }
     }
 
     /// Through the wire format, and lost if `lose` says so.
@@ -171,7 +193,9 @@ mod tests {
             // The clients send, every round, as the real ones do on a timer.
             for slot in 1..players {
                 let packet = senders[slot].packet(host_has[slot], receivers[slot].next());
-                if let Some(Message::Inputs(packet)) = send(Message::Inputs(packet), lose(round, slot)) {
+                if let Some(Message::Inputs(packet)) =
+                    send(Message::Inputs(packet), lose(round, slot))
+                {
                     let _ = host.accept(slot, &packet);
                 }
             }
@@ -203,7 +227,9 @@ mod tests {
         // Each player's pad is the one made INPUT_DELAY ticks before, blank at first.
         for (tick, frame) in seen[0].iter().enumerate() {
             for (slot, got) in frame.iter().enumerate() {
-                let want = tick.checked_sub(INPUT_DELAY as usize).map(|t| pad(slot as u32, t as Tick + INPUT_DELAY));
+                let want = tick
+                    .checked_sub(INPUT_DELAY as usize)
+                    .map(|t| pad(slot as u32, t as Tick + INPUT_DELAY));
                 assert_eq!(*got, want.unwrap_or_default(), "tick {tick}, slot {slot}");
             }
         }

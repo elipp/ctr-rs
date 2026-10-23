@@ -77,7 +77,10 @@ const MASK_TURN_STEP: i16 = 0x100;
 const MASK_ORBIT_SHIFT: u32 = 6;
 const MASK_HEIGHT: i16 = 0x40;
 /// `maskPosArr` (`R231`): how high the mask floats above the kart, by the frame of the beam's animation.
-const MASK_BOB: [i16; 24] = [0, 0, -2, -4, -8, -12, -16, -19, -23, -27, -29, -31, -32, -31, -29, -27, -23, -19, -16, -12, -8, -4, -2, 0];
+const MASK_BOB: [i16; 24] = [
+    0, 0, -2, -4, -8, -12, -16, -19, -23, -27, -29, -31, -32, -31, -29, -27, -23, -19, -16, -12,
+    -8, -4, -2, 0,
+];
 /// The frames of the beam's animation (`turn`).
 pub const MASK_BEAM_FRAMES: u16 = 24;
 /// How much the fade shrinks the mask and the beam and makes the beam see-through a tick.
@@ -177,7 +180,14 @@ pub struct MaskShown {
 impl MaskHead {
     /// The rotation matrix of a turn of `rot_y` about the vertical (`ConvertRotToMatrix`).
     pub fn rotation(rot_y: i16) -> crate::Matrix {
-        crate::rotmat::convert_rot_to_matrix(&mut gte::Gte::default(), SVec3 { x: 0, y: rot_y, z: 0 })
+        crate::rotmat::convert_rot_to_matrix(
+            &mut gte::Gte::default(),
+            SVec3 {
+                x: 0,
+                y: rot_y,
+                z: 0,
+            },
+        )
     }
 }
 
@@ -209,7 +219,11 @@ pub struct RevEngine {
 
 /// `VehPickupItem_MaskUseWeapon`: the driver has a mask, a new one or the one it had.
 fn use_mask(d: &mut Driver) {
-    let duration = if d.num_wumpas < WUMPA_JUICED_COUNT { MASK_DURATION_NORMAL } else { MASK_DURATION_JUICED };
+    let duration = if d.num_wumpas < WUMPA_JUICED_COUNT {
+        MASK_DURATION_NORMAL
+    } else {
+        MASK_DURATION_JUICED
+    };
     match &mut d.mask {
         Some(mask) => {
             mask.duration = duration;
@@ -217,7 +231,12 @@ fn use_mask(d: &mut Driver) {
         }
         None => {
             let good_guy = GOOD_GUYS.contains(&d.character);
-            d.mask = Some(MaskHead { duration, scale: MASK_SCALE_NORMAL, good_guy, ..MaskHead::default() });
+            d.mask = Some(MaskHead {
+                duration,
+                scale: MASK_SCALE_NORMAL,
+                good_guy,
+                ..MaskHead::default()
+            });
         }
     }
 }
@@ -242,17 +261,37 @@ pub fn mask_tick(d: &mut Driver, env: &Env) {
 
     if !mask.fading {
         // The head goes round the kart with the beam in it, bobbing with the beam's animation.
-        let radius = |trig: i32| mips::sra(mips::mul_lo(mips::sra(mips::sll(trig, MASK_ORBIT_SHIFT), 12), mask.scale as i32), 12) as i16;
+        let radius = |trig: i32| {
+            mips::sra(
+                mips::mul_lo(
+                    mips::sra(mips::sll(trig, MASK_ORBIT_SHIFT), 12),
+                    mask.scale as i32,
+                ),
+                12,
+            ) as i16
+        };
         let (sin, cos) = math::sin_cos(mask.rot_y as i32 as u32);
         shown.head = Placed {
-            offset: [radius(sin), MASK_BOB[mask.beam_frame as usize % MASK_BOB.len()] + MASK_HEIGHT, radius(cos)],
+            offset: [
+                radius(sin),
+                MASK_BOB[mask.beam_frame as usize % MASK_BOB.len()] + MASK_HEIGHT,
+                radius(cos),
+            ],
             rot_y: Some(mask.rot_y),
             scale: shown.head.scale,
         };
-        shown.beam = Placed { offset: [0, MASK_HEIGHT, 0], rot_y: Some(mask.rot_y), scale: shown.beam.scale };
+        shown.beam = Placed {
+            offset: [0, MASK_HEIGHT, 0],
+            rot_y: Some(mask.rot_y),
+            scale: shown.beam.scale,
+        };
         shown.world_space = mask.world_space;
 
-        mask.beam_frame = if mask.beam_frame + 1 < MASK_BEAM_FRAMES { mask.beam_frame + 1 } else { 0 };
+        mask.beam_frame = if mask.beam_frame + 1 < MASK_BEAM_FRAMES {
+            mask.beam_frame + 1
+        } else {
+            0
+        };
         mask.rot_y = mask.rot_y.wrapping_sub(MASK_TURN_STEP);
 
         if mask.duration != 0 {
@@ -287,12 +326,25 @@ pub fn mask_tick(d: &mut Driver, env: &Env) {
 /// and fades. True once it is gone.
 fn fade_step(mask: &mut MaskHead, shown: &mut MaskShown, env: &Env) -> bool {
     let (sin, cos) = math::sin_cos(mask.rot_y as i32 as u32);
-    let radius = |trig: i32| mips::sra(mips::mul_lo(MASK_HEIGHT as i32 - (mask.duration as i32 >> 5) * 4, trig), 12) as i16;
+    let radius = |trig: i32| {
+        mips::sra(
+            mips::mul_lo(MASK_HEIGHT as i32 - (mask.duration as i32 >> 5) * 4, trig),
+            12,
+        ) as i16
+    };
     shown.world_space = false;
-    shown.head = Placed { offset: [radius(sin), MASK_HEIGHT, radius(cos)], rot_y: None, scale: shown.head.scale - MASK_FADE_SHRINK };
+    shown.head = Placed {
+        offset: [radius(sin), MASK_HEIGHT, radius(cos)],
+        rot_y: None,
+        scale: shown.head.scale - MASK_FADE_SHRINK,
+    };
 
     mask.rot_y = mask.rot_y.wrapping_sub(MASK_TURN_STEP);
-    shown.beam = Placed { offset: [0, MASK_HEIGHT, 0], rot_y: Some(mask.rot_y), scale: shown.beam.scale - MASK_FADE_SHRINK };
+    shown.beam = Placed {
+        offset: [0, MASK_HEIGHT, 0],
+        rot_y: Some(mask.rot_y),
+        scale: shown.beam.scale - MASK_FADE_SHRINK,
+    };
     if shown.beam_alpha < MASK_ALPHA_GONE {
         shown.beam_alpha += MASK_FADE_ALPHA_STEP;
     }
@@ -359,7 +411,13 @@ pub fn mask_grab_init(d: &mut Driver, level: &Level) {
 
 /// `VehStuckProc_MaskGrab_Update`: counts the grab down, then puts the kart back on the track
 /// and starts the rev. Returns whether it did.
-pub fn mask_grab_update(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, others: &[Vec3]) -> bool {
+pub fn mask_grab_update(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    env: &Env,
+    others: &[Vec3],
+) -> bool {
     d.no_input_timer = (d.no_input_timer as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
     if d.no_input_timer < 0 {
         d.no_input_timer = 0;
@@ -385,7 +443,8 @@ pub fn mask_grab_after_phys_linear(d: &mut Driver) {
     d.jump_ten_buffer = 0;
     d.base_speed = 0;
     d.simp_turn_state = 0;
-    d.actions_flag_set = (d.actions_flag_set & !(actions::REVERSING_ENGINE | actions::BRAKE_WITH_ACCEL | actions::JUMP_BUTTON_HELD))
+    d.actions_flag_set = (d.actions_flag_set
+        & !(actions::REVERSING_ENGINE | actions::BRAKE_WITH_ACCEL | actions::JUMP_BUTTON_HELD))
         | actions::ACCEL_PREVENTION;
 }
 
@@ -398,12 +457,14 @@ pub fn mask_grab_animate(d: &mut Driver, env: &Env) {
             d.speed_approx = 0;
             d.pos_curr = d.pos_prev;
         } else if d.no_input_timer >= SQUISH_DECREASE_LIMIT {
-            d.jump_squish_stretch = (d.jump_squish_stretch as u16).wrapping_add(SQUISH_INCREASE_STEP as u16) as i16;
+            d.jump_squish_stretch =
+                (d.jump_squish_stretch as u16).wrapping_add(SQUISH_INCREASE_STEP as u16) as i16;
             if d.jump_squish_stretch > SQUISH_MAX {
                 d.jump_squish_stretch = SQUISH_MAX;
             }
         } else {
-            d.jump_squish_stretch = (d.jump_squish_stretch as u16).wrapping_sub(SQUISH_DECREASE_STEP as u16) as i16;
+            d.jump_squish_stretch =
+                (d.jump_squish_stretch as u16).wrapping_sub(SQUISH_DECREASE_STEP as u16) as i16;
             if d.jump_squish_stretch < 0 {
                 d.jump_squish_stretch = 0;
             }
@@ -437,7 +498,10 @@ pub fn mask_grab_animate(d: &mut Driver, env: &Env) {
 
     // It grows as it comes down.
     mask.scale = if d.no_input_timer >= MASK_GRAB_SCALE_FULL_TIME {
-        (mips::sll(mips::sub_lo(MASK_DESCENT_TIME as i32, d.no_input_timer as i32), 12) / MASK_GRAB_SCALE_RAMP_TIME) as i16
+        (mips::sll(
+            mips::sub_lo(MASK_DESCENT_TIME as i32, d.no_input_timer as i32),
+            12,
+        ) / MASK_GRAB_SCALE_RAMP_TIME) as i16
     } else {
         MASK_SCALE_NORMAL
     };
@@ -446,9 +510,21 @@ pub fn mask_grab_animate(d: &mut Driver, env: &Env) {
 /// `COLL_SearchBSP_CallbackPARAM` with `COLL_FIXED_BSPLEAF_TestQuadblocks` over the segment from
 /// the kart's position down (`VehStuckProc_MaskGrab_SearchBsp`).
 fn search_bsp(d: &Driver, coll: &mut Collision, level: &Level) {
-    let pos = [mips::sra(d.pos_curr.x, 8), mips::sra(d.pos_curr.y, 8), mips::sra(d.pos_curr.z, 8)];
-    let top = SVec3 { x: pos[0] as i16, y: pos[1] as i16, z: pos[2] as i16 };
-    let bottom = SVec3 { x: pos[0] as i16, y: mips::sub_lo(pos[1], MASK_BSP_PROBE_HEIGHT) as i16, z: pos[2] as i16 };
+    let pos = [
+        mips::sra(d.pos_curr.x, 8),
+        mips::sra(d.pos_curr.y, 8),
+        mips::sra(d.pos_curr.z, 8),
+    ];
+    let top = SVec3 {
+        x: pos[0] as i16,
+        y: pos[1] as i16,
+        z: pos[2] as i16,
+    };
+    let bottom = SVec3 {
+        x: pos[0] as i16,
+        y: mips::sub_lo(pos[1], MASK_BSP_PROBE_HEIGHT) as i16,
+        z: pos[2] as i16,
+    };
 
     let sps = &mut coll.sps;
     sps.quad_block_coll.pos = top;
@@ -460,8 +536,16 @@ fn search_bsp(d: &Driver, coll: &mut Collision, level: &Level) {
     sps.hit_fraction = coll::FRACTION_ONE;
     sps.collision.step_flags = 0;
 
-    sps.bbox.min = SVec3 { x: top.x.min(bottom.x), y: top.y.min(bottom.y), z: top.z.min(bottom.z) };
-    sps.bbox.max = SVec3 { x: top.x.max(bottom.x), y: top.y.max(bottom.y), z: top.z.max(bottom.z) };
+    sps.bbox.min = SVec3 {
+        x: top.x.min(bottom.x),
+        y: top.y.min(bottom.y),
+        z: top.z.min(bottom.z),
+    };
+    sps.bbox.max = SVec3 {
+        x: top.x.max(bottom.x),
+        y: top.y.max(bottom.y),
+        z: top.z.max(bottom.z),
+    };
     sps.quad_block_coll.hit_pos = bottom;
 
     coll.search_fixed(level);
@@ -476,7 +560,13 @@ fn search_bsp(d: &Driver, coll: &mut Collision, level: &Level) {
 /// is in the way, the next node forward along the track. A quad block without a checkpoint
 /// makes it the quad block's own middle. (The original walks the nodes for as long as it takes:
 /// here the walk ends after one round of the track.)
-pub fn find_dest_pos(d: &mut Driver, coll: &mut Collision, level: &Level, quad: Option<u32>, others: &[Vec3]) {
+pub fn find_dest_pos(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    quad: Option<u32>,
+    others: &[Vec3],
+) {
     let Some(quad) = quad else { return };
     let q = &level.quad_blocks[quad as usize];
     let points = &level.restart_points;
@@ -486,7 +576,10 @@ pub fn find_dest_pos(d: &mut Driver, coll: &mut Collision, level: &Level, quad: 
         let vertex = |corner: usize| level.vertices[q.vertex_index[corner] as usize].pos;
         let (a, b) = (vertex(0), vertex(3));
         d.pos_curr.x = mips::sll(mips::add_lo(a.x as i32, b.x as i32), 7);
-        d.pos_curr.y = mips::sll(mips::add_lo(mips::add_lo(a.y as i32, b.y as i32), RESPAWN_Y_OFFSET), 7);
+        d.pos_curr.y = mips::sll(
+            mips::add_lo(mips::add_lo(a.y as i32, b.y as i32), RESPAWN_Y_OFFSET),
+            7,
+        );
         d.pos_curr.z = mips::sll(mips::add_lo(a.z as i32, b.z as i32), 7);
         return;
     }
@@ -497,7 +590,8 @@ pub fn find_dest_pos(d: &mut Driver, coll: &mut Collision, level: &Level, quad: 
     sps.input1.hit_radius_squared = radius as i32 * radius as i32;
     sps.quad_block_coll.hit_radius = radius;
     sps.quad_block_coll.hit_radius_squared = radius as i32 * radius as i32;
-    sps.quad_block_coll.quad_flags_ignored = (quad_flags::NO_CAMERA_RESPAWN_PROBE | quad_flags::NO_COLLISION_RESPONSE) as u32;
+    sps.quad_block_coll.quad_flags_ignored =
+        (quad_flags::NO_CAMERA_RESPAWN_PROBE | quad_flags::NO_COLLISION_RESPONSE) as u32;
     sps.quad_block_coll.quad_flags_wanted = quad_flags::GROUND as u32;
 
     let node = |index: usize| points.get(index).unwrap_or(&points[0]);
@@ -516,7 +610,9 @@ pub fn find_dest_pos(d: &mut Driver, coll: &mut Collision, level: &Level, quad: 
         d.rot_curr_z = 0;
 
         search_bsp(d, coll, level);
-        if coll.sps.did_touch_quadblock == 0 || coll.sps.collision.step_flags & step_flags::FLAG_KILL_PLANE != 0 {
+        if coll.sps.did_touch_quadblock == 0
+            || coll.sps.collision.step_flags & step_flags::FLAG_KILL_PLANE != 0
+        {
             respawn = next;
             continue;
         }
@@ -549,14 +645,17 @@ pub fn rev_engine_init(d: &mut Driver) {
     }
 
     d.bool_first_frame_since_rev_engine = 1;
-    d.rev.boost_meter = d.stats.accel_speed_class_stat as i32 + d.stats.sacred_fire_speed as i32 / 3;
+    d.rev.boost_meter =
+        d.stats.accel_speed_class_stat as i32 + d.stats.sacred_fire_speed as i32 / 3;
 }
 
 /// `VehStuckProc_RevEngine_Update`: once the mask has lowered the kart close enough to the
 /// track, the rev ends, and gives a boost if it was high enough.
 pub fn rev_engine_update(d: &mut Driver, effects: &mut Vec<Effect>) {
     // (The race start's rev would wait for the traffic lights here.)
-    if d.rev.bool_mask_grab && mips::add_lo(d.quad_block_height, REV_MASK_RELEASE_HEIGHT) <= d.pos_curr.y {
+    if d.rev.bool_mask_grab
+        && mips::add_lo(d.quad_block_height, REV_MASK_RELEASE_HEIGHT) <= d.pos_curr.y
+    {
         return;
     }
 
@@ -570,9 +669,21 @@ pub fn rev_engine_update(d: &mut Driver, effects: &mut Vec<Effect>) {
     if accel < d.rev.fire_level && d.rev.lockout_flags & lockout::ALL == 0 {
         // Revved a lot: the big boost, else the small one.
         if mips::add_lo(accel, d.stats.sacred_fire_speed as i32) <= d.rev.boost_meter {
-            fire::increment(d, REV_START_BOOST_RESERVES, 0, REV_BIG_BOOST_FIRE_LEVEL, effects);
+            fire::increment(
+                d,
+                REV_START_BOOST_RESERVES,
+                0,
+                REV_BIG_BOOST_FIRE_LEVEL,
+                effects,
+            );
         } else {
-            fire::increment(d, REV_START_BOOST_RESERVES, 0, REV_SMALL_BOOST_FIRE_LEVEL, effects);
+            fire::increment(
+                d,
+                REV_START_BOOST_RESERVES,
+                0,
+                REV_SMALL_BOOST_FIRE_LEVEL,
+                effects,
+            );
         }
     }
 
@@ -629,12 +740,16 @@ pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) 
         r.charge_state = charge::ACTIVE;
 
         if r.boost_meter <= r.fire_level {
-            r.over_rev_timer_ms = (r.over_rev_timer_ms as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
+            r.over_rev_timer_ms =
+                (r.over_rev_timer_ms as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
             if REV_OVERREV_TIMEOUT < r.over_rev_timer_ms {
                 // Revved too long at the top: the engine gives out.
                 r.charge_state = charge::IDLE;
                 r.lockout_flags |= lockout::ALL;
-                effects.push(Effect::Sound { id: REV_OVERREV_SFX, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+                effects.push(Effect::Sound {
+                    id: REV_OVERREV_SFX,
+                    echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+                });
             }
         } else {
             r.over_rev_timer_ms = 0;
@@ -659,7 +774,11 @@ pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) 
 
         if 0 < r.fire_level {
             let mut decay_step = mips::sra(r.fire_level, 1);
-            let max = if r.lockout_flags & lockout::REV_DECAY != 0 { REV_DECAY_STEP_MAX_LOCKED } else { REV_DECAY_STEP_MAX_NORMAL };
+            let max = if r.lockout_flags & lockout::REV_DECAY != 0 {
+                REV_DECAY_STEP_MAX_LOCKED
+            } else {
+                REV_DECAY_STEP_MAX_NORMAL
+            };
             if max < decay_step {
                 decay_step = max;
             }
@@ -686,7 +805,13 @@ pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) 
 
     let turbo_room = if r.fire_level < accel {
         let low_end = mips::sll(d.stats.turbo_low_room_warning as i32, REV_TURBO_ROOM_SHIFT) + 1;
-        map_to_range(r.fire_level, 0, accel, mips::sll(d.stats.turbo_max_room as i32, REV_TURBO_ROOM_SHIFT), low_end)
+        map_to_range(
+            r.fire_level,
+            0,
+            accel,
+            mips::sll(d.stats.turbo_max_room as i32, REV_TURBO_ROOM_SHIFT),
+            low_end,
+        )
     } else {
         map_to_range(
             r.fire_level,
@@ -759,7 +884,8 @@ mod tests {
     fn the_rev_fills_while_the_gas_is_held_and_falls_when_let_go() {
         let mut d = kart();
         let env = Env::default();
-        d.rev.boost_meter = d.stats.accel_speed_class_stat as i32 + d.stats.sacred_fire_speed as i32 / 3;
+        d.rev.boost_meter =
+            d.stats.accel_speed_class_stat as i32 + d.stats.sacred_fire_speed as i32 / 3;
         d.fire_speed = 1;
         for _ in 0..5 {
             rev_engine_animate(&mut d, &env, &mut Vec::new());
@@ -789,7 +915,10 @@ mod tests {
             assert!(ticks < 40, "the engine never gave out");
         }
         assert_eq!(d.rev.lockout_flags, lockout::ALL);
-        assert!(effects.contains(&Effect::Sound { id: REV_OVERREV_SFX, echo: false }));
+        assert!(effects.contains(&Effect::Sound {
+            id: REV_OVERREV_SFX,
+            echo: false
+        }));
     }
 
     #[test]
@@ -822,7 +951,10 @@ mod tests {
         }
         let mask = d.mask.unwrap();
         assert_eq!(mask.beam_frame, 0, "the beam's animation has come round");
-        assert_eq!(mask.rot_y, (MASK_BEAM_FRAMES as i16).wrapping_mul(-MASK_TURN_STEP));
+        assert_eq!(
+            mask.rot_y,
+            (MASK_BEAM_FRAMES as i16).wrapping_mul(-MASK_TURN_STEP)
+        );
         // Bobbing: lower in the middle of the beam's animation.
         let mut low = i16::MAX;
         for _ in 0..MASK_BEAM_FRAMES {
@@ -844,7 +976,11 @@ mod tests {
         for tick in 1..16 {
             mask_tick(&mut d, &env);
             let shown = d.mask.unwrap().shown.unwrap();
-            assert_eq!(shown.head.scale, MASK_SCALE_NORMAL - tick * MASK_FADE_SHRINK, "tick {tick}");
+            assert_eq!(
+                shown.head.scale,
+                MASK_SCALE_NORMAL - tick * MASK_FADE_SHRINK,
+                "tick {tick}"
+            );
             assert_eq!(shown.head.rot_y, None);
             assert!(!shown.world_space);
         }
@@ -873,6 +1009,9 @@ mod tests {
         shoot_mask(&mut d, &mut Vec::new());
         // The action comes with the mask's thread at the next tick's `phys_linear`.
         d.actions_flag_set |= actions::MASK_WEAPON;
-        assert_eq!(crate::linear::base_speed(&d) - before, d.stats.mask_speed as i32);
+        assert_eq!(
+            crate::linear::base_speed(&d) - before,
+            d.stats.mask_speed as i32
+        );
     }
 }

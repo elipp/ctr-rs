@@ -75,7 +75,14 @@ pub struct CrateBox {
 
 impl CrateBox {
     pub fn new(kind: Kind) -> CrateBox {
-        CrateBox { kind, scale: FULL_SCALE, thread: false, cooldown: 0, pause_cooldown: false, breaks: 0 }
+        CrateBox {
+            kind,
+            scale: FULL_SCALE,
+            thread: false,
+            cooldown: 0,
+            pause_cooldown: false,
+            breaks: 0,
+        }
     }
 
     /// `RB_Crate*_LInC` (with `RB_Crate*_ThCollide`): a driver touched it, with `model`
@@ -241,7 +248,10 @@ mod tests {
         let mut rng = math::RANDOM_NUMBER_INIT;
         CrateBox::new(Kind::Weapon).linc(&mut driver, PLAYER, &mut rng);
         CrateBox::new(Kind::Time).linc(&mut driver, PLAYER, &mut rng);
-        assert_eq!((driver.pickup_wumpa_collected, rng), (0, math::RANDOM_NUMBER_INIT));
+        assert_eq!(
+            (driver.pickup_wumpa_collected, rng),
+            (0, math::RANDOM_NUMBER_INIT)
+        );
         // A bot's hit breaks the crate and moves the RNG, and pays nothing.
         CrateBox::new(Kind::Fruit).linc(&mut driver, model_id::ROBOT_CAR, &mut rng);
         assert_eq!(driver.pickup_wumpa_collected, 0);

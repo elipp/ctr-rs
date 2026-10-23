@@ -38,14 +38,22 @@ impl Masks {
 pub fn models(pack: &DramFile) -> io::Result<Masks> {
     let mut models = parse_pack_models(pack)?;
     let mut take = |id: i16| {
-        let at = models
-            .iter()
-            .position(|m| m.id == id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("the pack has no model {id:#x}")))?;
+        let at = models.iter().position(|m| m.id == id).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the pack has no model {id:#x}"),
+            )
+        })?;
         Ok::<_, io::Error>(models.swap_remove(at))
     };
     Ok(Masks {
-        aku: Mask { head: take(AKU_HEAD)?, beam: take(AKU_BEAM)? },
-        uka: Mask { head: take(UKA_HEAD)?, beam: take(UKA_BEAM)? },
+        aku: Mask {
+            head: take(AKU_HEAD)?,
+            beam: take(AKU_BEAM)?,
+        },
+        uka: Mask {
+            head: take(UKA_HEAD)?,
+            beam: take(UKA_BEAM)?,
+        },
     })
 }

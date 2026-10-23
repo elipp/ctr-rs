@@ -31,7 +31,12 @@ pub fn ground_shadow(d: &Driver, gte: &mut Gte) -> Option<GroundShadow> {
         return None;
     }
     let mut axes = Matrix::default();
-    rot_axis_angle(&mut axes, gte, d.axis_angle3_normal_vec, d.rot_curr_y as i32);
+    rot_axis_angle(
+        &mut axes,
+        gte,
+        d.axis_angle3_normal_vec,
+        d.rot_curr_y as i32,
+    );
     Some(GroundShadow {
         x: d.pos_curr.x >> 8,
         y: (d.quad_block_height >> 8) + 3,
@@ -49,7 +54,11 @@ mod tests {
         let mut d = Driver::new(0, 0);
         d.quad_block_height = 100 << 8;
         d.pos_curr.y = (100 + above_ground) << 8;
-        d.axis_angle3_normal_vec = loader::lev::SVec3 { x: 0, y: 0x1000, z: 0 };
+        d.axis_angle3_normal_vec = loader::lev::SVec3 {
+            x: 0,
+            y: 0x1000,
+            z: 0,
+        };
         d
     }
 
@@ -58,9 +67,15 @@ mod tests {
         let mut gte = Gte::default();
         let on_ground = ground_shadow(&driver_at(0), &mut gte).unwrap();
         assert_eq!((on_ground.height, on_ground.y), (0x100, 103));
-        assert_eq!(ground_shadow(&driver_at(100), &mut gte).unwrap().height, 156);
+        assert_eq!(
+            ground_shadow(&driver_at(100), &mut gte).unwrap().height,
+            156
+        );
         // Slightly below the ground still counts as on it; far above is no shadow.
-        assert_eq!(ground_shadow(&driver_at(-5), &mut gte).unwrap().height, 0x100);
+        assert_eq!(
+            ground_shadow(&driver_at(-5), &mut gte).unwrap().height,
+            0x100
+        );
         assert_eq!(ground_shadow(&driver_at(255), &mut gte).unwrap().height, 1);
         assert!(ground_shadow(&driver_at(256), &mut gte).is_none());
         assert!(ground_shadow(&driver_at(300), &mut gte).is_none());

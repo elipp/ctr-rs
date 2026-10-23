@@ -45,7 +45,11 @@ fn mul_rot_words(gte: &mut Gte, r: &mut [u32; 5]) {
 
     let column = |gte: &mut Gte, v: u32| {
         gte.cop2(mvmva(1, 0, v, 3, 0));
-        [gte.mfc2(data::IR1), gte.mfc2(data::IR2), gte.mfc2(data::IR3)]
+        [
+            gte.mfc2(data::IR1),
+            gte.mfc2(data::IR2),
+            gte.mfc2(data::IR3),
+        ]
     };
     let c0 = column(gte, 0);
     let c1 = column(gte, 1);
@@ -89,13 +93,25 @@ pub fn convert_rot_to_matrix(gte: &mut Gte, rot: SVec3) -> Matrix {
 fn pack(m: &Matrix) -> [u32; 5] {
     let w = |a: i16, b: i16| a as u16 as u32 | (b as u16 as u32) << 16;
     let m = &m.m;
-    [w(m[0][0], m[0][1]), w(m[0][2], m[1][0]), w(m[1][1], m[1][2]), w(m[2][0], m[2][1]), m[2][2] as u16 as u32]
+    [
+        w(m[0][0], m[0][1]),
+        w(m[0][2], m[1][0]),
+        w(m[1][1], m[1][2]),
+        w(m[2][0], m[2][1]),
+        m[2][2] as u16 as u32,
+    ]
 }
 
 fn unpack(r: &[u32; 5]) -> Matrix {
     let lo = |w: u32| w as u16 as i16;
     let hi = |w: u32| (w >> 16) as u16 as i16;
-    Matrix { m: [[lo(r[0]), hi(r[0]), lo(r[1])], [hi(r[1]), lo(r[2]), hi(r[2])], [lo(r[3]), hi(r[3]), lo(r[4])]] }
+    Matrix {
+        m: [
+            [lo(r[0]), hi(r[0]), lo(r[1])],
+            [hi(r[1]), lo(r[2]), hi(r[2])],
+            [lo(r[3]), hi(r[3]), lo(r[4])],
+        ],
+    }
 }
 
 /// `MatrixRotate(dst, src, rot)`: the product `src * rot`, built on the GTE.

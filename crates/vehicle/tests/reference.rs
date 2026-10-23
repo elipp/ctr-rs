@@ -34,40 +34,84 @@ fn quad(q: Option<u32>) -> i64 {
 fn fields(d: &Driver) -> Vec<i64> {
     let v3 = |v: Vec3| [v.x as i64, v.y as i64, v.z as i64];
     let s3 = |v: SVec3| [v.x as i64, v.y as i64, v.z as i64];
-    let mut o: Vec<i64> = vec![d.driver_id as i64, d.kart_state as i64, d.simp_turn_state as i64];
+    let mut o: Vec<i64> = vec![
+        d.driver_id as i64,
+        d.kart_state as i64,
+        d.simp_turn_state as i64,
+    ];
     o.extend(v3(d.pos_curr));
     o.extend(v3(d.velocity));
     o.extend(v3(d.origin_to_center));
-    o.extend([d.collision_flags as i64, d.step_flag_set as i32 as i64, d.actions_flag_set as i32 as i64, d.actions_flag_set_prev_frame as i32 as i64]);
-    o.extend([quad(d.curr_block_touching), quad(d.under_driver), quad(d.last_valid)]);
-    for v in [d.normal_vec_up, d.axis_angle1_normal_vec, d.sps_hit_pos, d.sps_normal_vec, d.pos_wall_coll] {
+    o.extend([
+        d.collision_flags as i64,
+        d.step_flag_set as i32 as i64,
+        d.actions_flag_set as i32 as i64,
+        d.actions_flag_set_prev_frame as i32 as i64,
+    ]);
+    o.extend([
+        quad(d.curr_block_touching),
+        quad(d.under_driver),
+        quad(d.last_valid),
+    ]);
+    for v in [
+        d.normal_vec_up,
+        d.axis_angle1_normal_vec,
+        d.sps_hit_pos,
+        d.sps_normal_vec,
+        d.pos_wall_coll,
+    ] {
         o.extend(s3(v));
     }
-    o.extend([d.v_shift_count, d.speed, d.speed_approx, d.base_speed, d.fire_speed, d.jump_height_curr].map(i64::from));
+    o.extend(
+        [
+            d.v_shift_count,
+            d.speed,
+            d.speed_approx,
+            d.base_speed,
+            d.fire_speed,
+            d.jump_height_curr,
+        ]
+        .map(i64::from),
+    );
     o.extend([d.x_speed, d.y_speed, d.z_speed].map(i64::from));
-    o.extend([
-        d.speedometer_needle_value,
-        d.reserves,
-        d.turbo_outside_timer,
-        d.turbo_meter_room_left,
-        d.wall_rub_timer,
-        d.wall_rub_speed_limit,
-        d.angle,
-        d.rot_curr_w,
-        d.turn_angle_curr,
-        d.turn_angle_lerp_vel,
-        d.turn_wobble_angle,
-        d.turn_wobble_velocity,
-        d.turn_wobble_timer,
-        d.amp_turn_state,
-        d.num_frames_spent_steering,
-        d.rotation_spin_rate,
-        d.veh_fire_audio_cooldown,
-    ]
-    .map(i64::from));
+    o.extend(
+        [
+            d.speedometer_needle_value,
+            d.reserves,
+            d.turbo_outside_timer,
+            d.turbo_meter_room_left,
+            d.wall_rub_timer,
+            d.wall_rub_speed_limit,
+            d.angle,
+            d.rot_curr_w,
+            d.turn_angle_curr,
+            d.turn_angle_lerp_vel,
+            d.turn_wobble_angle,
+            d.turn_wobble_velocity,
+            d.turn_wobble_timer,
+            d.amp_turn_state,
+            d.num_frames_spent_steering,
+            d.rotation_spin_rate,
+            d.veh_fire_audio_cooldown,
+        ]
+        .map(i64::from),
+    );
     o.push(d.screen_offset_y as i64);
-    o.extend([d.distance_from_ground, d.reserved_0x40e, d.jump_squish_stretch, d.jump_squish_stretch2].map(i64::from));
-    o.extend([d.anim_index as i64, d.anim_frame as i64, d.inst_scale_x as i64, d.inst_scale_y as i64]);
+    o.extend(
+        [
+            d.distance_from_ground,
+            d.reserved_0x40e,
+            d.jump_squish_stretch,
+            d.jump_squish_stretch2,
+        ]
+        .map(i64::from),
+    );
+    o.extend([
+        d.anim_index as i64,
+        d.anim_frame as i64,
+        d.inst_scale_x as i64,
+        d.inst_scale_y as i64,
+    ]);
     o.push(match d.matrix_array {
         MatrixArray::None => 0,
         MatrixArray::WheelieStart => 1,
@@ -85,8 +129,16 @@ fn fields(d: &Driver) -> Vec<i64> {
 fn effect_line(e: &Effect) -> String {
     match *e {
         Effect::Sound { id, echo } => format!(" S {id} {}", echo as u8),
-        Effect::Voiceline { id, driver_id, priority } => format!(" V {id} {driver_id} {priority}"),
-        Effect::JogCon { driver_id, pattern, strength } => format!(" J {driver_id} {pattern} {strength}"),
+        Effect::Voiceline {
+            id,
+            driver_id,
+            priority,
+        } => format!(" V {id} {driver_id} {priority}"),
+        Effect::JogCon {
+            driver_id,
+            pattern,
+            strength,
+        } => format!(" J {driver_id} {pattern} {strength}"),
         Effect::ShockFreq { driver_id, a, b } => format!(" F {driver_id} {a} {b}"),
         Effect::ShockForce { driver_id, a, b } => format!(" G {driver_id} {a} {b}"),
         Effect::DriverCrashing { echo, volume } => format!(" C {} {volume}", echo as u8),
@@ -110,7 +162,12 @@ struct Case {
 impl Case {
     fn script(&self) -> String {
         let m = self.light_matrix.map(|v| v.to_string()).join(" ");
-        format!("P {} {m} {} {}", self.elapsed_ms, self.door_flags as i32, join(&fields(&self.driver)))
+        format!(
+            "P {} {m} {} {}",
+            self.elapsed_ms,
+            self.door_flags as i32,
+            join(&fields(&self.driver))
+        )
     }
 
     /// The same line the C driver prints.
@@ -119,7 +176,15 @@ impl Case {
         c.door_access_flags = self.door_flags;
 
         let mut effects = Vec::new();
-        moved_player_search(&mut d, c, level, &self.light_matrix, self.elapsed_ms, &mut vehicle::search::NoInstances, &mut effects);
+        moved_player_search(
+            &mut d,
+            c,
+            level,
+            &self.light_matrix,
+            self.elapsed_ms,
+            &mut vehicle::search::NoInstances,
+            &mut effects,
+        );
 
         let mut o = join(&fields(&d));
         o.push_str(" |");
@@ -134,7 +199,12 @@ impl Case {
 fn scrub_script() -> String {
     let mut s = String::from("K");
     for scrub in &SCRUBS {
-        write!(s, " {} {} {}", scrub.flags, scrub.speed_limit, scrub.impact_angle).unwrap();
+        write!(
+            s,
+            " {} {} {}",
+            scrub.flags, scrub.speed_limit, scrub.impact_angle
+        )
+        .unwrap();
     }
     s
 }
@@ -170,16 +240,29 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
         let pick = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32);
         // Sphere centre in the scratchpad's units, a little above the quad; or one time in
         // four around a hitbox, where it can reach it.
-        let mut centre = [pick(rng, a.x, b.x), pick(rng, a.y, b.y) + rng.range(0, 0x30), pick(rng, a.z, b.z)];
+        let mut centre = [
+            pick(rng, a.x, b.x),
+            pick(rng, a.y, b.y) + rng.range(0, 0x30),
+            pick(rng, a.z, b.z),
+        ];
         if !hitboxes.is_empty() && rng.below(4) == 0 {
             let h = hitboxes[rng.below(hitboxes.len() as u64) as usize];
             let reach = 2 * h.radius as i32 + 0x40;
-            centre = [h.center.x, h.center.y, h.center.z].map(|c| c as i32 + rng.range(-reach, reach));
+            centre =
+                [h.center.x, h.center.y, h.center.z].map(|c| c as i32 + rng.range(-reach, reach));
         }
-        let origin_to_center = Vec3 { x: 0, y: rng.range(0, 0x30), z: 0 };
+        let origin_to_center = Vec3 {
+            x: 0,
+            y: rng.range(0, 0x30),
+            z: 0,
+        };
         let shift = [0, 1, 3, 5][rng.below(4) as usize];
         let speed = |rng: &mut Rng| rng.range(-0x1000, 0x1000) << shift;
-        let flags = |rng: &mut Rng, bits: &[u32]| bits.iter().filter(|_| rng.below(2) == 0).fold(0, |a, b| a | b);
+        let flags = |rng: &mut Rng, bits: &[u32]| {
+            bits.iter()
+                .filter(|_| rng.below(2) == 0)
+                .fold(0, |a, b| a | b)
+        };
 
         let mut d = Driver {
             driver_id: rng.below(8) as u8,
@@ -191,10 +274,18 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
                 y: (centre[1] - origin_to_center.y) << 8 | rng.range(0, 255),
                 z: (centre[2] - origin_to_center.z) << 8 | rng.range(0, 255),
             },
-            velocity: Vec3 { x: speed(rng), y: speed(rng), z: speed(rng) },
+            velocity: Vec3 {
+                x: speed(rng),
+                y: speed(rng),
+                z: speed(rng),
+            },
             actions_flag_set: flags(rng, &[0x1, 0x80, 0x2000, 0x10000]),
             actions_flag_set_prev_frame: flags(rng, &[0x1]),
-            under_driver: [None, None, Some(rng.below(level.quad_blocks.len() as u64) as u32)][rng.below(3) as usize],
+            under_driver: [
+                None,
+                None,
+                Some(rng.below(level.quad_blocks.len() as u64) as u32),
+            ][rng.below(3) as usize],
             v_shift_count: [0, 0, 1, 7][rng.below(4) as usize],
             speed_approx: rng.range(-0x500, 0x1200) as i16,
             jump_height_curr: rng.range(-0x400, 0x400) as i16,
@@ -213,7 +304,8 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
         (d.x_speed, d.y_speed, d.z_speed) = (junk(), junk(), junk());
         d.anim_index = rng.below(5) as u8;
         d.anim_frame = rng.range(0, 9) as i16;
-        (d.inst_scale_x, d.inst_scale_y) = (rng.range(0, 0x1000) as i16, rng.range(0, 0x1000) as i16);
+        (d.inst_scale_x, d.inst_scale_y) =
+            (rng.range(0, 0x1000) as i16, rng.range(0, 0x1000) as i16);
         d.matrix_index = rng.below(4) as u8;
         for field in [
             &mut d.speed,
@@ -255,7 +347,10 @@ fn cases(level: &Level, rng: &mut Rng, trials: u64) -> Vec<Case> {
 }
 
 fn trials() -> u64 {
-    std::env::var("VEHICLE_REFERENCE_TRIALS").ok().and_then(|s| s.parse().ok()).unwrap_or(2000)
+    std::env::var("VEHICLE_REFERENCE_TRIALS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2000)
 }
 
 #[test]
@@ -264,11 +359,18 @@ fn matches_reference_on_tracks() {
     let Some(exe) = build_driver(
         &driver_c,
         "vehicle_reference",
-        &["game/COLL.c", "game/Vehicle/VehCalc.c", "game/Vehicle/VehAfterColl.c", "game/Vehicle/VehPhysProc.c"],
+        &[
+            "game/COLL.c",
+            "game/Vehicle/VehCalc.c",
+            "game/Vehicle/VehAfterColl.c",
+            "game/Vehicle/VehPhysProc.c",
+        ],
     ) else {
         return;
     };
-    let Some(mut b) = common::open_bigfile() else { return };
+    let Some(mut b) = common::open_bigfile() else {
+        return;
+    };
     let mut rng = Rng(0x51f1_5a4d_0f3c_77b1);
     // (searches that hit, slammed, swept more than once, projected along a wall, touched a hitbox)
     let mut totals = [0u32; 5];
@@ -289,7 +391,13 @@ fn matches_reference_on_tracks() {
             script.push('\n');
         }
         let reference = run_reference(&exe, &script);
-        assert_eq!(reference.len(), cases.len(), "level {id}: driver printed {} lines for {} cases", reference.len(), cases.len());
+        assert_eq!(
+            reference.len(),
+            cases.len(),
+            "level {id}: driver printed {} lines for {} cases",
+            reference.len(),
+            cases.len()
+        );
 
         let mut collision = Collision::default();
         let (mut failures, mut hits, mut slams) = (0, 0, 0);
@@ -299,21 +407,45 @@ fn matches_reference_on_tracks() {
             hits += (collision.sps.did_touch_quadblock > 0) as u32;
             slams += got.contains(" S 6 ") as u32;
             multi += (collision.sps.num_scrub_triangles > 1) as u32;
-            projected += (collision.sps.quad_block_coll.search_flags & coll::search_flags::WALL_PROJECTION_DONE != 0) as u32;
-            hitbox += (collision.sps.num_bsp_hitboxes_hit > 0 || collision.sps.num_scrub_triangles > 0 && got.contains(" 2147")) as u32;
+            projected += (collision.sps.quad_block_coll.search_flags
+                & coll::search_flags::WALL_PROJECTION_DONE
+                != 0) as u32;
+            hitbox += (collision.sps.num_bsp_hitboxes_hit > 0
+                || collision.sps.num_scrub_triangles > 0 && got.contains(" 2147"))
+                as u32;
             if &got != want.trim_end() && got.trim_start() != want.trim_start() {
                 failures += 1;
                 if failures <= 3 {
-                    eprintln!("level {id}: MISMATCH on case {i}: `{}`\n  rust: {got}\n  ref:  {want}", case.script());
+                    eprintln!(
+                        "level {id}: MISMATCH on case {i}: `{}`\n  rust: {got}\n  ref:  {want}",
+                        case.script()
+                    );
                 }
             }
         }
-        eprintln!("level {id}: {} cases, {hits} with a hit, {slams} slams, {multi} with several scrubs, {projected} wall projections, {hitbox} hitbox hits", cases.len());
-        totals = [totals[0] + hits, totals[1] + slams, totals[2] + multi, totals[3] + projected, totals[4] + hitbox];
-        assert_eq!(failures, 0, "level {id}: {failures} of {} cases differ from the reference", cases.len());
+        eprintln!(
+            "level {id}: {} cases, {hits} with a hit, {slams} slams, {multi} with several scrubs, {projected} wall projections, {hitbox} hitbox hits",
+            cases.len()
+        );
+        totals = [
+            totals[0] + hits,
+            totals[1] + slams,
+            totals[2] + multi,
+            totals[3] + projected,
+            totals[4] + hitbox,
+        ];
+        assert_eq!(
+            failures,
+            0,
+            "level {id}: {failures} of {} cases differ from the reference",
+            cases.len()
+        );
     }
     eprintln!("total (hit, slam, multi, projected, hitbox): {totals:?}");
-    assert!(totals.iter().all(|&n| n > 0), "the cases do not cover hits, slams, repeated scrubs, wall projection and hitboxes: {totals:?}");
+    assert!(
+        totals.iter().all(|&n| n > 0),
+        "the cases do not cover hits, slams, repeated scrubs, wall projection and hitboxes: {totals:?}"
+    );
 }
 
 /// `SCRUBS` against the `MetaDataScrub` initialiser in the reference source.
@@ -324,19 +456,32 @@ fn scrub_table_matches_reference_source() {
         eprintln!("skipping: {} not found", source.display());
         return;
     };
-    let table = text.split(".MetaDataScrub =").nth(1).and_then(|t| t.split(".emSet_DirtLR").next()).expect("MetaDataScrub in zGlobal_DATA.c");
+    let table = text
+        .split(".MetaDataScrub =")
+        .nth(1)
+        .and_then(|t| t.split(".emSet_DirtLR").next())
+        .expect("MetaDataScrub in zGlobal_DATA.c");
     let number = |s: &str| match s.trim().strip_prefix("0x").or(s.trim().strip_prefix("0X")) {
         Some(hex) => i32::from_str_radix(hex, 16).unwrap(),
         None => s.trim().parse().unwrap(),
     };
     let entries: Vec<(i32, i32, i32)> = table
         .lines()
-        .filter_map(|l| l.trim().strip_prefix('{')?.split('}').next().map(str::to_owned))
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix('{')?
+                .split('}')
+                .next()
+                .map(str::to_owned)
+        })
         .filter_map(|l| {
             let f: Vec<&str> = l.split(',').collect();
             (f.len() == 4).then(|| (number(f[1]), number(f[2]), number(f[3])))
         })
         .collect();
-    let ours: Vec<(i32, i32, i32)> = SCRUBS.iter().map(|s| (s.flags as i32, s.speed_limit, s.impact_angle)).collect();
+    let ours: Vec<(i32, i32, i32)> = SCRUBS
+        .iter()
+        .map(|s| (s.flags as i32, s.speed_limit, s.impact_angle))
+        .collect();
     assert_eq!(entries, ours);
 }

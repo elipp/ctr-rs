@@ -30,13 +30,48 @@ pub struct Scrub {
 
 /// `data.MetaDataScrub`, indexed by scrub id.
 pub const SCRUBS: [Scrub; 7] = [
-    Scrub { name: "SOLID", flags: 0x3, speed_limit: 0xd00, impact_angle: 700 },
-    Scrub { name: "RUBBER", flags: 0x1, speed_limit: 0xd00, impact_angle: 0 },
-    Scrub { name: "SANDBAG", flags: 0x3, speed_limit: 0xd00, impact_angle: 0x100 },
-    Scrub { name: "SLOWDOWN", flags: 0xc, speed_limit: 0xf00, impact_angle: 0 },
-    Scrub { name: "NO EFFECT", flags: 0xc, speed_limit: 0x3e800, impact_angle: 0 },
-    Scrub { name: "ROAD", flags: 0xd, speed_limit: 0x3e800, impact_angle: 0 },
-    Scrub { name: "NO SCRUB", flags: 0x3, speed_limit: 0x3e800, impact_angle: 700 },
+    Scrub {
+        name: "SOLID",
+        flags: 0x3,
+        speed_limit: 0xd00,
+        impact_angle: 700,
+    },
+    Scrub {
+        name: "RUBBER",
+        flags: 0x1,
+        speed_limit: 0xd00,
+        impact_angle: 0,
+    },
+    Scrub {
+        name: "SANDBAG",
+        flags: 0x3,
+        speed_limit: 0xd00,
+        impact_angle: 0x100,
+    },
+    Scrub {
+        name: "SLOWDOWN",
+        flags: 0xc,
+        speed_limit: 0xf00,
+        impact_angle: 0,
+    },
+    Scrub {
+        name: "NO EFFECT",
+        flags: 0xc,
+        speed_limit: 0x3e800,
+        impact_angle: 0,
+    },
+    Scrub {
+        name: "ROAD",
+        flags: 0xd,
+        speed_limit: 0x3e800,
+        impact_angle: 0,
+    },
+    Scrub {
+        name: "NO SCRUB",
+        flags: 0x3,
+        speed_limit: 0x3e800,
+        impact_angle: 700,
+    },
 ];
 
 /// The scrub id for a quad block the player ran into.
@@ -99,17 +134,32 @@ fn load_light_matrix(gte: &mut gte::Gte, m: &LightMatrix) {
 }
 
 /// `CollMoved_ScrubImpact_GteLLV0`: `x, y, z` through the light matrix.
-fn light_matrix_times(gte: &mut gte::Gte, light_matrix: &LightMatrix, x: i32, y: i32, z: i32) -> math::Vec3 {
+fn light_matrix_times(
+    gte: &mut gte::Gte,
+    light_matrix: &LightMatrix,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> math::Vec3 {
     load_light_matrix(gte, light_matrix);
     gte.mtc2(mips::pack_s16_pair(x, y), data::VXY0);
     gte.mtc2(z as u32, data::VZ0);
     gte.cop2(0x04a6012);
-    math::Vec3 { x: gte.mfc2(data::MAC1) as i32, y: gte.mfc2(data::MAC2) as i32, z: gte.mfc2(data::MAC3) as i32 }
+    math::Vec3 {
+        x: gte.mfc2(data::MAC1) as i32,
+        y: gte.mfc2(data::MAC2) as i32,
+        z: gte.mfc2(data::MAC3) as i32,
+    }
 }
 
 /// `CollMoved_ScrubImpact_ProjectWallVelocity`: the velocity's horizontal
 /// part crossed with the wall normal twice, i.e. projected along the wall.
-fn project_wall_velocity(gte: &mut gte::Gte, normal: SVec3, old_vel_x: i32, old_vel_z: i32) -> math::Vec3 {
+fn project_wall_velocity(
+    gte: &mut gte::Gte,
+    normal: SVec3,
+    old_vel_x: i32,
+    old_vel_z: i32,
+) -> math::Vec3 {
     gte.mtc2(old_vel_x as u32, data::IR1);
     gte.mtc2(0, data::IR2);
     gte.mtc2(old_vel_z as u32, data::IR3);
@@ -127,7 +177,11 @@ fn project_wall_velocity(gte: &mut gte::Gte, normal: SVec3, old_vel_x: i32, old_
     gte.mtc2(r22, data::IR2);
     gte.mtc2(r33, data::IR3);
 
-    let cross = [gte.mfc2(data::MAC1), gte.mfc2(data::MAC2), gte.mfc2(data::MAC3)];
+    let cross = [
+        gte.mfc2(data::MAC1),
+        gte.mfc2(data::MAC2),
+        gte.mfc2(data::MAC3),
+    ];
 
     gte.ctc2(cross[0], ctrl::R_MATRIX);
     gte.ctc2(cross[1], ctrl::R22R23);
@@ -135,11 +189,19 @@ fn project_wall_velocity(gte: &mut gte::Gte, normal: SVec3, old_vel_x: i32, old_
 
     gte.cop2(OP_SF1);
 
-    math::Vec3 { x: gte.mfc2(data::MAC1) as i32, y: gte.mfc2(data::MAC2) as i32, z: gte.mfc2(data::MAC3) as i32 }
+    math::Vec3 {
+        x: gte.mfc2(data::MAC1) as i32,
+        y: gte.mfc2(data::MAC2) as i32,
+        z: gte.mfc2(data::MAC3) as i32,
+    }
 }
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// `COLL_MOVED_ScrubImpact`: reacts to the hit left in `coll.sps` by the moved
@@ -217,7 +279,11 @@ pub fn scrub_impact(
     }
 
     let scrub_speed = scrub.speed_limit;
-    let faster_rub_active = if d.wall_rub_timer == 0 { 0x3e7ff < scrub_speed } else { (d.wall_rub_speed_limit as i32) < scrub_speed };
+    let faster_rub_active = if d.wall_rub_timer == 0 {
+        0x3e7ff < scrub_speed
+    } else {
+        (d.wall_rub_speed_limit as i32) < scrub_speed
+    };
     if !faster_rub_active {
         d.wall_rub_timer = WALL_RUB_TIMER_START;
         d.wall_rub_speed_limit = scrub_speed as i16;
@@ -229,7 +295,11 @@ pub fn scrub_impact(
     }
 
     let impact = |axis: i16| mips::sra(mips::mul_lo(dot, axis as i32), 12);
-    let mut impact = math::Vec3 { x: impact(normal.x), y: impact(normal.y), z: impact(normal.z) };
+    let mut impact = math::Vec3 {
+        x: impact(normal.x),
+        y: impact(normal.y),
+        z: impact(normal.z),
+    };
     let mut speed_sq = 0;
 
     if scrub.impact_angle != 0 {
@@ -266,7 +336,9 @@ pub fn scrub_impact(
 
         if wall_speed != 0 && speed_approx > 0 {
             coll.sps.quad_block_coll.search_flags |= coll::search_flags::WALL_PROJECTION_DONE;
-            let scaled = |component: i32| mips::div(mips::mul_lo(component, speed_approx), wall_speed as i32);
+            let scaled = |component: i32| {
+                mips::div(mips::mul_lo(component, speed_approx), wall_speed as i32)
+            };
             d.velocity.x = scaled(wall_velocity.x);
             d.velocity.y = scaled(wall_velocity.y);
             d.velocity.z = scaled(wall_velocity.z);
@@ -276,12 +348,22 @@ pub fn scrub_impact(
         }
     }
 
-    let transformed_impact_xz = mips::add_lo(mips::mul_lo(impact.x, impact.x), mips::mul_lo(impact.z, impact.z));
+    let transformed_impact_xz = mips::add_lo(
+        mips::mul_lo(impact.x, impact.x),
+        mips::mul_lo(impact.z, impact.z),
+    );
 
-    if scrub_flags & scrub_flags::SLAM_ON_HARD_IMPACT != 0 && dot < -0x13ff && transformed_impact_xz > 0x190_0000 {
+    if scrub_flags & scrub_flags::SLAM_ON_HARD_IMPACT != 0
+        && dot < -0x13ff
+        && transformed_impact_xz > 0x190_0000
+    {
         if d.kart_state != kart_state::MASK_GRABBED {
             let pattern = if d.simp_turn_state < 1 { 0x1f } else { 0x2f };
-            effects.push(Effect::JogCon { driver_id: d.driver_id, pattern, strength: 0x60 });
+            effects.push(Effect::JogCon {
+                driver_id: d.driver_id,
+                pattern,
+                strength: 0x60,
+            });
         }
 
         if scrub.impact_angle != 0 {
@@ -298,9 +380,21 @@ pub fn scrub_impact(
         if d.kart_state != kart_state::MASK_GRABBED && transformed_impact_xz > 0x190_0000 {
             let echo = d.actions_flag_set & actions::ENGINE_ECHO != 0;
             effects.push(Effect::Sound { id: 6, echo });
-            effects.push(Effect::Voiceline { id: 6, driver_id: d.driver_id, priority: 0x10 });
-            effects.push(Effect::ShockFreq { driver_id: d.driver_id, a: 8, b: 0 });
-            effects.push(Effect::ShockForce { driver_id: d.driver_id, a: 8, b: 0x7f });
+            effects.push(Effect::Voiceline {
+                id: 6,
+                driver_id: d.driver_id,
+                priority: 0x10,
+            });
+            effects.push(Effect::ShockFreq {
+                driver_id: d.driver_id,
+                a: 8,
+                b: 0,
+            });
+            effects.push(Effect::ShockForce {
+                driver_id: d.driver_id,
+                a: 8,
+                b: 0x7f,
+            });
 
             if d.kart_state == kart_state::DRIFTING {
                 let turn_angle = d.turn_angle_curr;

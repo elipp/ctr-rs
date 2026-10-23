@@ -144,9 +144,13 @@ mod tests {
         let find = |index| icons.iter().find(|i| i.global_index == index).unwrap();
         let (atlas, _) = shadow_atlas([find(0), find(1)], &vram);
         for n in 0..2 {
-            let icon = &atlas.rgba[n * SPRITE_WIDTH * SPRITE_HEIGHT * 4..][..SPRITE_WIDTH * SPRITE_HEIGHT * 4];
+            let icon = &atlas.rgba[n * SPRITE_WIDTH * SPRITE_HEIGHT * 4..]
+                [..SPRITE_WIDTH * SPRITE_HEIGHT * 4];
             let visible = icon.chunks(4).filter(|p| p[3] != 0).count();
-            println!("shadow icon {n}: {visible} visible of {}", SPRITE_WIDTH * SPRITE_HEIGHT);
+            println!(
+                "shadow icon {n}: {visible} visible of {}",
+                SPRITE_WIDTH * SPRITE_HEIGHT
+            );
             assert!(visible > 200, "icon {n}: {visible}");
         }
     }

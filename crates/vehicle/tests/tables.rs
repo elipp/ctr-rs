@@ -45,11 +45,21 @@ fn split_top_level(s: &str) -> Vec<&str> {
 #[test]
 fn meta_phys_matches_reference_source() {
     let Some(text) = source() else { return };
-    let table = text.split(".metaPhys =").nth(1).and_then(|t| t.split(".emSet_Exhaust_Water").next()).expect("metaPhys in zGlobal_DATA.c");
+    let table = text
+        .split(".metaPhys =")
+        .nth(1)
+        .and_then(|t| t.split(".emSet_Exhaust_Water").next())
+        .expect("metaPhys in zGlobal_DATA.c");
     let rows: Vec<Vec<i64>> = table
         .split("PHYSWRAP(")
         .skip(1)
-        .map(|r| split_top_level(r.split(')').next().unwrap()).iter().skip(2).map(|v| number(v)).collect())
+        .map(|r| {
+            split_top_level(r.split(')').next().unwrap())
+                .iter()
+                .skip(2)
+                .map(|v| number(v))
+                .collect()
+        })
         .collect();
     assert_eq!(rows.len(), META_PHYS.len());
     for (i, (row, ours)) in rows.iter().zip(&META_PHYS).enumerate() {
@@ -60,7 +70,11 @@ fn meta_phys_matches_reference_source() {
 #[test]
 fn terrain_table_matches_reference_source() {
     let Some(text) = source() else { return };
-    let table = text.split(".MetaDataTerrain =").nth(1).and_then(|t| t.split("#define PHYSWRAP").next()).expect("MetaDataTerrain in zGlobal_DATA.c");
+    let table = text
+        .split(".MetaDataTerrain =")
+        .nth(1)
+        .and_then(|t| t.split("#define PHYSWRAP").next())
+        .expect("MetaDataTerrain in zGlobal_DATA.c");
     let entries: Vec<Vec<&str>> = table
         .split("[TERRAIN_")
         .skip(1)
@@ -92,7 +106,17 @@ fn terrain_table_matches_reference_source() {
             t.turn_response_scale as i64,
             t.sound as i64,
         ];
-        let theirs = [number(e[1]), number(e[2]), number(e[3]), number(e[4]), number(e[5]), number(e[8]), number(e[9]), number(e[10]), number(e[13])];
+        let theirs = [
+            number(e[1]),
+            number(e[2]),
+            number(e[3]),
+            number(e[4]),
+            number(e[5]),
+            number(e[8]),
+            number(e[9]),
+            number(e[10]),
+            number(e[13]),
+        ];
         assert_eq!(theirs, ours, "terrain {i} ({})", t.name);
     }
 }

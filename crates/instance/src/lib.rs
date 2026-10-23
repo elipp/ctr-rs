@@ -175,13 +175,21 @@ fn digit(def: &InstDef) -> Option<usize> {
 /// The thread of each object of a kind, one tick.
 fn th_tick_all<T: Instance>(list: &mut [Placed<T>], cx: &Context, out: &mut Tick) {
     for placed in list {
-        placed.sim.th_tick(&Context { frames: placed.frames, ..*cx }, out);
+        placed.sim.th_tick(
+            &Context {
+                frames: placed.frames,
+                ..*cx
+            },
+            out,
+        );
     }
 }
 
 /// The touch of the object of a kind that is `instance`, if there is one.
 fn touch_in<T: Instance>(list: &mut [Placed<T>], instance: usize, hit: &mut Touch) -> Option<i32> {
-    list.iter_mut().find(|p| p.instance == instance).map(|p| p.sim.touch(hit))
+    list.iter_mut()
+        .find(|p| p.instance == instance)
+        .map(|p| p.sim.touch(hit))
 }
 
 impl Objects {
@@ -205,33 +213,70 @@ impl Objects {
             let frames = || {
                 let model = Model::parse_at(dram, def.model).ok();
                 let animation = |i: usize| {
-                    model.as_ref().and_then(|m| m.headers.first()).and_then(|h| h.animations.get(i)).map_or(0, |a| a.num_frames as i32)
+                    model
+                        .as_ref()
+                        .and_then(|m| m.headers.first())
+                        .and_then(|h| h.animations.get(i))
+                        .map_or(0, |a| a.num_frames as i32)
                 };
                 [animation(0), animation(1)]
             };
             if let Some(kind) = Kind::of_model(def.model_id) {
-                objects.crates.push(Placed { instance, sim: CrateBox::new(kind), frames: [0; 2] });
+                objects.crates.push(Placed {
+                    instance,
+                    sim: CrateBox::new(kind),
+                    frames: [0; 2],
+                });
                 continue;
             }
             match def.model_name.as_str() {
                 "armadillo" => {
-                    let delay = digit(def).and_then(|d| level.spawn_delays.get(d)).copied().unwrap_or(0);
-                    objects.armadillos.push(Placed { instance, sim: Armadillo::new(def, delay), frames: frames() });
+                    let delay = digit(def)
+                        .and_then(|d| level.spawn_delays.get(d))
+                        .copied()
+                        .unwrap_or(0);
+                    objects.armadillos.push(Placed {
+                        instance,
+                        sim: Armadillo::new(def, delay),
+                        frames: frames(),
+                    });
                 }
                 "turtle" => {
                     let frames = frames();
-                    objects.turtles.push(Placed { instance, sim: Turtle::new(def, frames[0]), frames });
+                    objects.turtles.push(Placed {
+                        instance,
+                        sim: Turtle::new(def, frames[0]),
+                        frames,
+                    });
                 }
-                "fruit" => objects.fruit.push(Placed { instance, sim: Fruit::default(), frames: [0; 2] }),
-                "fireball" => objects.fireballs.push(Placed { instance, sim: Fireball::new(def), frames: [0; 2] }),
+                "fruit" => objects.fruit.push(Placed {
+                    instance,
+                    sim: Fruit::default(),
+                    frames: [0; 2],
+                }),
+                "fireball" => objects.fireballs.push(Placed {
+                    instance,
+                    sim: Fireball::new(def),
+                    frames: [0; 2],
+                }),
                 "minecart" => {
                     if let Some(sim) = Minecart::new(def, &objects.position_path) {
-                        objects.minecarts.push(Placed { instance, sim, frames: frames() });
+                        objects.minecarts.push(Placed {
+                            instance,
+                            sim,
+                            frames: frames(),
+                        });
                     }
                 }
                 "snowball" | "barrel" => {
-                    if let Some(path) = digit(def).filter(|&p| level.paths.get(p).is_some_and(|path| path.len() > 1)) {
-                        objects.rollers.push(Placed { instance, sim: Roller { path }, frames: [0; 2] });
+                    if let Some(path) = digit(def)
+                        .filter(|&p| level.paths.get(p).is_some_and(|path| path.len() > 1))
+                    {
+                        objects.rollers.push(Placed {
+                            instance,
+                            sim: Roller { path },
+                            frames: [0; 2],
+                        });
                     }
                 }
                 _ => {}
@@ -248,7 +293,12 @@ impl Objects {
     /// One game tick of every object.
     pub fn tick(&mut self) -> Tick {
         let mut tick = Tick::default();
-        let cx = Context { frames: [0; 2], ticks: self.ticks, position_path: &self.position_path, roll_paths: &self.roll_paths };
+        let cx = Context {
+            frames: [0; 2],
+            ticks: self.ticks,
+            position_path: &self.position_path,
+            roll_paths: &self.roll_paths,
+        };
         th_tick_all(&mut self.armadillos, &cx, &mut tick);
         th_tick_all(&mut self.fireballs, &cx, &mut tick);
         th_tick_all(&mut self.minecarts, &cx, &mut tick);
@@ -263,7 +313,9 @@ impl Objects {
     /// Where a roller is now and where it is a tick later, to draw it between the two.
     pub fn roller_frames(&self, roller: usize) -> (PosRot, PosRot) {
         let path = &self.roll_paths[self.rollers[roller].sim.path];
-        let at = |tick: u32| path[roller::frame_index(path.len(), tick).expect("a path of two points or more")];
+        let at = |tick: u32| {
+            path[roller::frame_index(path.len(), tick).expect("a path of two points or more")]
+        };
         (at(self.ticks), at(self.ticks + 1))
     }
 }
@@ -273,7 +325,11 @@ impl Objects {
 /// crates have one so far; the other models give 1, as those without an `LInC` do.
 impl Instances for Objects {
     fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &coll::Scratchpad) -> i32 {
-        let mut hit = Touch { driver, model: sps.input1.model_id, random_number: &mut self.random_number };
+        let mut hit = Touch {
+            driver,
+            model: sps.input1.model_id,
+            random_number: &mut self.random_number,
+        };
         touch_in(&mut self.turtles, instance, &mut hit)
             .or_else(|| touch_in(&mut self.fruit, instance, &mut hit))
             .or_else(|| touch_in(&mut self.crates, instance, &mut hit))
@@ -292,7 +348,13 @@ mod tests {
     #[test]
     fn a_contact_is_a_sphere_of_the_squared_radius() {
         // The armadillo's 0x2400 is a radius of 96 units.
-        let contact = Contact { pos: [100, 20, -50], damage: Damage::Spin, hit_radius: 0x2400, sound: 0x71, shape: Shape::Sphere };
+        let contact = Contact {
+            pos: [100, 20, -50],
+            damage: Damage::Spin,
+            hit_radius: 0x2400,
+            sound: 0x71,
+            shape: Shape::Sphere,
+        };
         assert!(contact.hits([100 + 95, 20, -50]));
         assert!(!contact.hits([100 + 96, 20, -50]));
         // Height counts too.
@@ -302,7 +364,13 @@ mod tests {
 
     #[test]
     fn the_minecart_reaches_up_without_end_and_down_a_little() {
-        let cart = Contact { pos: [0, 0, 0], damage: Damage::Squish, hit_radius: 0x10000, sound: 0, shape: Shape::Cylinder };
+        let cart = Contact {
+            pos: [0, 0, 0],
+            damage: Damage::Squish,
+            hit_radius: 0x10000,
+            sound: 0,
+            shape: Shape::Cylinder,
+        };
         assert!(cart.hits([100, 5000, 100]));
         assert!(cart.hits([100, -31, 100]));
         assert!(!cart.hits([100, -32, 100]));

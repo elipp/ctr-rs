@@ -37,7 +37,8 @@ pub fn reference_dir() -> PathBuf {
 pub fn build_driver(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<PathBuf> {
     // Tests of one binary run in parallel and want the same driver: it is built once, so that none
     // is run while another is writing it.
-    static BUILT: std::sync::Mutex<Vec<(String, Option<PathBuf>)>> = std::sync::Mutex::new(Vec::new());
+    static BUILT: std::sync::Mutex<Vec<(String, Option<PathBuf>)>> =
+        std::sync::Mutex::new(Vec::new());
     let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, exe)) = built.iter().find(|(name, _)| name == exe_name) {
         return exe.clone();
@@ -76,12 +77,19 @@ fn build_driver_now(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<P
         )
         // regionsEXE.h defines `sdata` (identically) in every translation unit;
         // the rest of the game that COLL.c calls into is never reached here.
-        .args(["-Wl,-z,muldefs", "-Wl,--unresolved-symbols=ignore-all", "-static"])
+        .args([
+            "-Wl,-z,muldefs",
+            "-Wl,--unresolved-symbols=ignore-all",
+            "-static",
+        ])
         .arg("-o")
         .arg(&exe)
         .status()
         .expect("failed to run gcc");
-    assert!(status.success(), "could not build the C reference driver (needs gcc with -m32)");
+    assert!(
+        status.success(),
+        "could not build the C reference driver (needs gcc with -m32)"
+    );
     Some(exe)
 }
 
@@ -98,7 +106,12 @@ pub fn describe_level(level: &Level) -> String {
             write!(s, "{i} ").unwrap();
         }
         let (a, b) = (q.bbox.min, q.bbox.max);
-        write!(s, "{} {} {} {} {} {} {} {} {}", q.flags, a.x, a.y, a.z, b.x, b.y, b.z, q.terrain_type, q.tri_normal_vec_bit_shift).unwrap();
+        write!(
+            s,
+            "{} {} {} {} {} {} {} {} {}",
+            q.flags, a.x, a.y, a.z, b.x, b.y, b.z, q.terrain_type, q.tri_normal_vec_bit_shift
+        )
+        .unwrap();
         for d in q.tri_normal_vec_dividend {
             write!(s, " {d}").unwrap();
         }
@@ -108,7 +121,12 @@ pub fn describe_level(level: &Level) -> String {
     writeln!(s, "B {}", level.bsp.len()).unwrap();
     for n in &level.bsp {
         let (a, b) = (n.bbox.min, n.bbox.max);
-        write!(s, "{} {} {} {} {} {} {} {} ", n.flag, n.id, a.x, a.y, a.z, b.x, b.y, b.z).unwrap();
+        write!(
+            s,
+            "{} {} {} {} {} {} {} {} ",
+            n.flag, n.id, a.x, a.y, a.z, b.x, b.y, b.z
+        )
+        .unwrap();
         match &n.kind {
             BspKind::Branch { children, .. } => {
                 s.push_str("0");
@@ -121,15 +139,37 @@ pub fn describe_level(level: &Level) -> String {
                     write!(s, " {raw}").unwrap();
                 }
             }
-            BspKind::Leaf { quad_blocks, hitboxes } => {
-                write!(s, "1 {} {} {}", quad_blocks.start, quad_blocks.len(), hitboxes.len()).unwrap();
+            BspKind::Leaf {
+                quad_blocks,
+                hitboxes,
+            } => {
+                write!(
+                    s,
+                    "1 {} {} {}",
+                    quad_blocks.start,
+                    quad_blocks.len(),
+                    hitboxes.len()
+                )
+                .unwrap();
                 for h in hitboxes {
                     let (a, b) = (h.bbox.min, h.bbox.max);
                     let flags = h.instance.map_or(0, |i| level.instances[i].flags as i32);
                     write!(
                         s,
                         " {} {} {} {} {} {} {} {}{} {} {} {} {}",
-                        h.flag, h.id, a.x, a.y, a.z, b.x, b.y, b.z, vec3(h.center), h.radius, h.offset, flags, h.instance.is_some() as u8
+                        h.flag,
+                        h.id,
+                        a.x,
+                        a.y,
+                        a.z,
+                        b.x,
+                        b.y,
+                        b.z,
+                        vec3(h.center),
+                        h.radius,
+                        h.offset,
+                        flags,
+                        h.instance.is_some() as u8
                     )
                     .unwrap();
                 }
@@ -156,7 +196,12 @@ pub fn index<T: Into<i64>>(i: Option<T>) -> i64 {
 pub fn dump(c: &Collision) -> String {
     let s = &c.sps;
     let mut o = String::new();
-    write!(o, "{} {} {} {}", s.num_triangles_tested, s.did_touch_quadblock, s.collision.step_flags, s.hit_fraction).unwrap();
+    write!(
+        o,
+        "{} {} {} {}",
+        s.num_triangles_tested, s.did_touch_quadblock, s.collision.step_flags, s.hit_fraction
+    )
+    .unwrap();
     o += &vec3(s.quad_block_coll.pos);
     o += &vec3(s.quad_block_coll.hit_pos);
     o += &vec3(s.hit.hit_pos);
@@ -169,11 +214,15 @@ pub fn dump(c: &Collision) -> String {
     write!(o, " {} {}", s.hit_barycentrics.v1, s.hit_barycentrics.v2).unwrap();
     let t = s.hit_level_triangle;
     write!(o, " {} {} {}", index(t[0]), index(t[1]), index(t[2])).unwrap();
-    let packed = (s.quad_second_tri_index_a as u32 * 65536 + s.quad_second_tri_index_b as u32) as i32;
+    let packed =
+        (s.quad_second_tri_index_a as u32 * 65536 + s.quad_second_tri_index_b as u32) as i32;
     write!(
         o,
         " {} {} {} {}",
-        s.collision.tri_normal_vec_dividend, s.collision.tri_normal_vec_bit_shift, s.collision.tri_normal_lod_shift, packed
+        s.collision.tri_normal_vec_dividend,
+        s.collision.tri_normal_vec_bit_shift,
+        s.collision.tri_normal_lod_shift,
+        packed
     )
     .unwrap();
     o += &vec3(s.candidate.push_out);
@@ -182,16 +231,39 @@ pub fn dump(c: &Collision) -> String {
     write!(
         o,
         " {} {} {} {} {}",
-        s.candidate.triangle_id, s.hit.triangle_id, s.hit.reorder_result, s.hit.normal_axis, s.input1.scrub_depth
+        s.candidate.triangle_id,
+        s.hit.triangle_id,
+        s.hit.reorder_result,
+        s.hit.normal_axis,
+        s.input1.scrub_depth
     )
     .unwrap();
     let h = s.hit_search_triangle;
     write!(o, " {} {} {}", index(h[0]), index(h[1]), index(h[2])).unwrap();
-    write!(o, " {} {} {}", s.did_touch_hitbox, s.num_bsp_hitboxes_hit, s.bsp_hitbox.map_or(-1, |h| h.offset as i64)).unwrap();
-    write!(o, " {} {}", s.quad_block_coll.search_flags, s.num_scrub_triangles).unwrap();
+    write!(
+        o,
+        " {} {} {}",
+        s.did_touch_hitbox,
+        s.num_bsp_hitboxes_hit,
+        s.bsp_hitbox.map_or(-1, |h| h.offset as i64)
+    )
+    .unwrap();
+    write!(
+        o,
+        " {} {}",
+        s.quad_block_coll.search_flags, s.num_scrub_triangles
+    )
+    .unwrap();
     for t in &s.scrub_triangles[..s.num_scrub_triangles as usize] {
         // A hitbox's key is above `i32::MAX` here, as the C driver prints it.
-        write!(o, " {} {} {}", index(t.quad.map(|q| q as i32)), t.triangle_id, t.scrub_depth).unwrap();
+        write!(
+            o,
+            " {} {} {}",
+            index(t.quad.map(|q| q as i32)),
+            t.triangle_id,
+            t.scrub_depth
+        )
+        .unwrap();
     }
     for v in &s.search_vert {
         o += &vec3(v.pos);
@@ -213,8 +285,15 @@ pub fn run_reference(exe: &Path, script: &str) -> Vec<String> {
     let writer = std::thread::spawn(move || stdin.write_all(script.as_bytes()));
     let out = child.wait_with_output().unwrap();
     // Check the exit status first: a driver that died early also breaks the pipe.
-    assert!(out.status.success(), "C reference driver failed: {}", out.status);
+    assert!(
+        out.status.success(),
+        "C reference driver failed: {}",
+        out.status
+    );
     writer.join().unwrap().unwrap();
-    String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect()
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
-

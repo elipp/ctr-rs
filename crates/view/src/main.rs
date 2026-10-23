@@ -22,14 +22,14 @@ mod bar;
 mod drive;
 mod exhaust;
 mod explosion;
-mod kart;
-mod lobby;
-mod remote;
 mod fire;
 mod flame;
+mod kart;
+mod lobby;
 mod mask;
 mod probe;
 mod props;
+mod remote;
 mod shadow;
 mod skid;
 mod sky;
@@ -93,14 +93,21 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
     let path = bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let file = big
-        .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character as u32).get())
+        .read(
+            &mut disc,
+            BigIndex::RACER_MODEL_HI.nth(character as u32).get(),
+        )
         .expect("read racer model");
-    let model = Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model");
+    let model =
+        Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model");
     let wheel_icons = if character as u32 == NITROS_OXIDE {
         Vec::new()
     } else {
         let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character as u32).get())
+            .read(
+                &mut disc,
+                BigIndex::ARCADE_1P_PACK.nth(character as u32).get(),
+            )
             .expect("read racer pack");
         parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
             .expect("parse racer pack icons")
@@ -384,29 +391,10 @@ fn main() {
     let textures = Textures { dram, vram };
     let drive = driving.then(|| new_drive(&loaded, &racer, character));
 
-    // Many workers on tiny tasks cost more in wake-ups than they save, and make the frame
-    // sensitive to other load on the machine: `CTR_THREADS` overrides the cap.
-    let threads = std::env::var("CTR_THREADS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3usize)
-        .max(1);
     // See the executor below: without a render thread, `CTR_EXECUTOR=multi` keeps the defaults.
     let single_threaded = std::env::var("CTR_EXECUTOR").as_deref() != Ok("multi");
     let mut app = App::new();
-    let mut plugins = DefaultPlugins.set(TaskPoolPlugin {
-        task_pool_options: TaskPoolOptions {
-            compute: bevy::app::TaskPoolThreadAssignmentPolicy {
-                min_threads: 1,
-                max_threads: threads,
-                percent: 1.0,
-                on_thread_spawn: None,
-                on_thread_destroy: None,
-            },
-            ..default()
-        },
-    })
-    .set(WindowPlugin {
+    let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: match options.racer {
                 Some(racer) => format!(
@@ -421,76 +409,76 @@ fn main() {
         }),
         ..default()
     });
-    // Nothing plays sound yet, and an open output device keeps CoreAudio's thread waking up.
-    plugins = plugins.disable::<bevy::audio::AudioPlugin>();
+    #[cfg(target_os = "macos")]
     if single_threaded {
         // The render thread would run the single-threaded schedules off the main thread, which
         // Metal's window surface does not allow.
         plugins = plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
     }
     app.add_plugins(plugins)
-    .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
-    .insert_resource(loaded)
-    .insert_resource(textures)
-    .insert_resource(Racer(racer))
-    .insert_resource(WheelIcons(wheel_icons))
-    .insert_resource(ShadowIcons(shadow_icons))
-    .insert_resource(SmokeIcon(smoke_icon))
-    .insert_resource(TiremarkIcon(tiremark_icon))
-    .insert_resource(FlameModels(flame_models))
-    .insert_resource(explosion::CrateExplosion::new(crate_explosion))
-    .insert_resource(mask::MaskModels(Some(masks)))
-    .insert_resource(options)
-    .insert_resource(LevelNumber(track_id))
-    .insert_resource(LowColors(low))
-    .insert_resource(ShowHidden { show_hidden, cull })
-    .add_systems(Startup, setup)
-    .add_systems(Update, log_draws)
-    .add_systems(Last, limit_frame_rate)
-    // After the cameras and karts have moved this frame, before their transforms propagate.
-    .add_systems(
-        PostUpdate,
-        wheels::update.before(TransformSystems::Propagate),
-    )
-    .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
-    .add_plugins(sky::SkyPlugin)
-    .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
-    .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
-    .add_systems(
-        FixedUpdate,
-        (
-            animate,
-            animate_water,
-            animate_scenery,
-            props::animate,
-            props::tick_objects,
-            props::pose_hazards,
-            props::hide_fruit,
-            props::pose_crates,
-            explosion::spawn,
-            explosion::animate,
-            fire::tick,
-            advance_tick,
+        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
+        .insert_resource(loaded)
+        .insert_resource(textures)
+        .insert_resource(Racer(racer))
+        .insert_resource(WheelIcons(wheel_icons))
+        .insert_resource(ShadowIcons(shadow_icons))
+        .insert_resource(SmokeIcon(smoke_icon))
+        .insert_resource(TiremarkIcon(tiremark_icon))
+        .insert_resource(FlameModels(flame_models))
+        .insert_resource(explosion::CrateExplosion::new(crate_explosion))
+        .insert_resource(mask::MaskModels(Some(masks)))
+        .insert_resource(options)
+        .insert_resource(LevelNumber(track_id))
+        .insert_resource(LowColors(low))
+        .insert_resource(ShowHidden { show_hidden, cull })
+        .add_systems(Startup, setup)
+        .add_systems(Update, log_draws)
+        // .add_systems(Last, limit_frame_rate)
+        // After the cameras and karts have moved this frame, before their transforms propagate.
+        .add_systems(
+            PostUpdate,
+            wheels::update.before(TransformSystems::Propagate),
         )
-            .chain(),
-    )
-    .add_systems(
-        Update,
-        (
-            switch_level,
-            props::roll,
-            props::place_hazards,
-            fire::update,
+        .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(sky::SkyPlugin)
+        .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
+        .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
+        .add_systems(
+            FixedUpdate,
+            (
+                animate,
+                animate_water,
+                animate_scenery,
+                props::animate,
+                props::tick_objects,
+                props::pose_hazards,
+                props::hide_fruit,
+                props::pose_crates,
+                explosion::spawn,
+                explosion::animate,
+                fire::tick,
+                advance_tick,
+            )
+                .chain(),
         )
-            .chain(),
-    );
+        .add_systems(
+            Update,
+            (
+                switch_level,
+                props::roll,
+                props::place_hazards,
+                fire::update,
+            )
+                .chain(),
+        );
     let world = app.world_mut();
     let mut scene_systems = vec![world.register_system(setup)];
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(mask::spawn));
         let character = drive.character as u8;
-        app.insert_resource(drive).add_plugins((drive::DrivePlugin, lobby::LobbyPlugin));
+        app.insert_resource(drive)
+            .add_plugins((drive::DrivePlugin, lobby::LobbyPlugin));
         if let Some(ticket) = join {
             app.insert_resource(lobby::Lobby::joining(ticket, character));
         }
@@ -531,7 +519,10 @@ fn switch_level(world: &mut World) {
     let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
-    let race_track = world.get_resource::<lobby::Lobby>().and_then(|l| l.online.as_ref()).map(|o| o.track);
+    let race_track = world
+        .get_resource::<lobby::Lobby>()
+        .and_then(|l| l.online.as_ref())
+        .map(|o| o.track);
     if race_track.is_some() {
         (level_step, racer_step) = (0, 0);
     }

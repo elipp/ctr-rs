@@ -3,7 +3,7 @@
 
 use loader::lev::PosRot;
 
-use crate::{Context, Contact, Damage, Instance, Shape, Tick};
+use crate::{Contact, Context, Damage, Instance, Shape, Tick};
 
 /// `RB_FindDriverCollision`'s radius: a squared distance, 256 units.
 const HIT_RADIUS: u32 = 0x10000;
@@ -20,7 +20,11 @@ pub struct Roller {
 pub fn frame_index(points: usize, tick: u32) -> Option<usize> {
     let last = points.checked_sub(1).filter(|&last| last > 0)? as u32;
     let point = tick % (last * 2);
-    Some(if point <= last { point } else { last * 2 - point } as usize)
+    Some(if point <= last {
+        point
+    } else {
+        last * 2 - point
+    } as usize)
 }
 
 /// Where a roller at `frame` of its path looks for drivers, and what it does to one.

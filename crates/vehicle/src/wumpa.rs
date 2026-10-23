@@ -21,7 +21,10 @@ pub fn gain_wumpa(d: &mut Driver, effects: &mut Vec<Effect>) -> bool {
     d.num_wumpas = (before + 1).clamp(0, MAX_COUNT) as i8;
     let juiced = before < JUICED_COUNT && d.num_wumpas as i32 == JUICED_COUNT;
     if juiced {
-        effects.push(Effect::Sound { id: SOUND_JUICED_UP, echo: false });
+        effects.push(Effect::Sound {
+            id: SOUND_JUICED_UP,
+            echo: false,
+        });
     }
     juiced
 }
@@ -45,7 +48,10 @@ pub fn hud_tick(d: &mut Driver, racing: bool, effects: &mut Vec<Effect>) {
         if racing && d.actions_flag_set & actions::BOT == 0 {
             gain_wumpa(d, effects);
         }
-        effects.push(Effect::Sound { id: SOUND_ARRIVED, echo: false });
+        effects.push(Effect::Sound {
+            id: SOUND_ARRIVED,
+            echo: false,
+        });
         if d.pickup_wumpa_collected != 0 {
             d.pickup_wumpa_cooldown = FLIGHT_TICKS;
         }
@@ -78,7 +84,19 @@ mod tests {
         assert_eq!(counts[16], 2);
         assert_eq!(counts[17], 3);
         assert_eq!((d.pickup_wumpa_collected, d.pickup_wumpa_cooldown), (0, 0));
-        assert_eq!(effects.iter().filter(|e| matches!(e, Effect::Sound { id: SOUND_ARRIVED, .. })).count(), 3);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(
+                    e,
+                    Effect::Sound {
+                        id: SOUND_ARRIVED,
+                        ..
+                    }
+                ))
+                .count(),
+            3
+        );
     }
 
     #[test]
@@ -89,7 +107,13 @@ mod tests {
         assert!(gain_wumpa(&mut d, &mut effects));
         assert!(!gain_wumpa(&mut d, &mut effects));
         assert_eq!(d.num_wumpas, 10);
-        assert_eq!(effects, [Effect::Sound { id: SOUND_JUICED_UP, echo: false }]);
+        assert_eq!(
+            effects,
+            [Effect::Sound {
+                id: SOUND_JUICED_UP,
+                echo: false
+            }]
+        );
     }
 
     #[test]

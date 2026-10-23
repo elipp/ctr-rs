@@ -58,7 +58,11 @@ const FLAG_NAMES: [(u16, &str); 13] = [
 ];
 
 fn flag_names(flags: u16) -> Vec<&'static str> {
-    FLAG_NAMES.iter().filter(|(f, _)| flags & f != 0).map(|(_, n)| *n).collect()
+    FLAG_NAMES
+        .iter()
+        .filter(|(f, _)| flags & f != 0)
+        .map(|(_, n)| *n)
+        .collect()
 }
 
 /// The arguments after the command, taken out as they are understood.
@@ -74,7 +78,8 @@ impl Args {
 
     fn number(&mut self, what: &str) -> Result<i32, String> {
         let text = self.positional(what)?;
-        text.parse().map_err(|_| format!("{what} is not a number: `{text}`"))
+        text.parse()
+            .map_err(|_| format!("{what} is not a number: `{text}`"))
     }
 
     fn switch(&mut self, name: &str) -> bool {
@@ -97,17 +102,29 @@ impl Args {
 
     fn option_number(&mut self, name: &str) -> Result<Option<i32>, String> {
         let mut values = self.options(name)?;
-        values.pop().map(|v| v.parse().map_err(|_| format!("{name} is not a number: `{v}`"))).transpose()
+        values
+            .pop()
+            .map(|v| {
+                v.parse()
+                    .map_err(|_| format!("{name} is not a number: `{v}`"))
+            })
+            .transpose()
     }
 
     /// `name X Y Z`
     fn point(&mut self, name: &str) -> Result<Option<[i32; 3]>, String> {
-        let Some(at) = self.0.iter().position(|a| a == name) else { return Ok(None) };
+        let Some(at) = self.0.iter().position(|a| a == name) else {
+            return Ok(None);
+        };
         if at + 3 >= self.0.len() {
             return Err(format!("{name} needs three numbers"));
         }
         let values: Vec<String> = self.0.drain(at..=at + 3).skip(1).collect();
-        let n = |i: usize| values[i].parse::<i32>().map_err(|_| format!("{name}: not a number: `{}`", values[i]));
+        let n = |i: usize| {
+            values[i]
+                .parse::<i32>()
+                .map_err(|_| format!("{name}: not a number: `{}`", values[i]))
+        };
         Ok(Some([n(0)?, n(1)?, n(2)?]))
     }
 
@@ -161,10 +178,14 @@ struct Loaded {
 fn load(id: LevelId) -> Result<Loaded, String> {
     let path = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"));
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
+        });
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let index = BigIndex::level(id, Lod::OnePlayer, LevFile::Lev);
-    let file = big.read(&mut disc, index.get()).map_err(|e| format!("reading level {}: {e}", id.0))?;
+    let file = big
+        .read(&mut disc, index.get())
+        .map_err(|e| format!("reading level {}: {e}", id.0))?;
     let dram = DramFile::parse(&file).map_err(|e| format!("level {}: {e}", id.0))?;
     let level = Level::parse(&dram).map_err(|e| format!("level {}: {e}", id.0))?;
     Ok(Loaded { id, dram, level })
@@ -196,11 +217,32 @@ fn quad_line(index: usize, q: &QuadBlock) -> String {
 
 fn level_summary(l: &Loaded) {
     let level = &l.level;
-    println!("level {}: {} quad blocks, {} vertices, {} instances", l.id.0, level.quad_blocks.len(), level.vertices.len(), level.instances.len());
-    println!("config flags {:#x}, jump vertical speed cap {}", level.config_flags, level.jump_vertical_speed_cap);
-    println!("{} restart points, {} BSP nodes", level.restart_points.len(), level.bsp.len());
-    let pads = level.quad_blocks.iter().filter(|q| render::mesh::is_turbo_pad(q)).count();
-    let hidden = level.quad_blocks.iter().filter(|q| render::mesh::is_collision_wall(q)).count();
+    println!(
+        "level {}: {} quad blocks, {} vertices, {} instances",
+        l.id.0,
+        level.quad_blocks.len(),
+        level.vertices.len(),
+        level.instances.len()
+    );
+    println!(
+        "config flags {:#x}, jump vertical speed cap {}",
+        level.config_flags, level.jump_vertical_speed_cap
+    );
+    println!(
+        "{} restart points, {} BSP nodes",
+        level.restart_points.len(),
+        level.bsp.len()
+    );
+    let pads = level
+        .quad_blocks
+        .iter()
+        .filter(|q| render::mesh::is_turbo_pad(q))
+        .count();
+    let hidden = level
+        .quad_blocks
+        .iter()
+        .filter(|q| render::mesh::is_collision_wall(q))
+        .count();
     println!("{pads} turbo pad blocks, {hidden} hidden collision blocks");
     let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
     for i in &level.instances {
@@ -215,7 +257,13 @@ fn level_summary(l: &Loaded) {
 
 fn quad_detail(l: &Loaded, index: usize) -> Result<(), String> {
     let level = &l.level;
-    let q = level.quad_blocks.get(index).ok_or_else(|| format!("level {} has {} quad blocks", l.id.0, level.quad_blocks.len()))?;
+    let q = level.quad_blocks.get(index).ok_or_else(|| {
+        format!(
+            "level {} has {} quad blocks",
+            l.id.0,
+            level.quad_blocks.len()
+        )
+    })?;
     println!("{}", quad_line(index, q));
     println!(
         "flags {:#06x}, checkpoint {}, draw_order_low {:#010x} high {:#010x} (face orders {:?}, low {:?})",
@@ -226,7 +274,10 @@ fn quad_detail(l: &Loaded, index: usize) -> Result<(), String> {
         q.draw_order_high.to_le_bytes().map(|b| b as i8),
         q.draw_order_low.to_le_bytes()[0] as i8
     );
-    println!("texture_mid {:x?}, texture_low {:#x}, pvs {:#x}", q.texture_mid, q.texture_low, q.pvs);
+    println!(
+        "texture_mid {:x?}, texture_low {:#x}, pvs {:#x}",
+        q.texture_mid, q.texture_low, q.pvs
+    );
     println!("the 3x3 patch (slot: position, colour_hi):");
     for (slot, &v) in q.vertex_index.iter().enumerate() {
         let v = &level.vertices[v as usize];
@@ -236,11 +287,26 @@ fn quad_detail(l: &Loaded, index: usize) -> Result<(), String> {
     for face in 0..if is_quad { 4 } else { 3 } {
         let ptr = q.texture_mid[face];
         let group = resolve_texture(&l.dram, ptr).ok().flatten();
-        let mode = if group.is_some() { FaceMode::of(q, face) } else { FaceMode { rotation: 0, mode: 0 } };
+        let mode = if group.is_some() {
+            FaceMode::of(q, face)
+        } else {
+            FaceMode {
+                rotation: 0,
+                mode: 0,
+            }
+        };
         let slots = face_polygon(face, mode).ok();
-        let red = slots.is_some_and(|s| s.iter().any(|&s| level.vertices[q.vertex_index[s] as usize].color_hi[..3] == [255, 0, 0]));
+        let red = slots.is_some_and(|s| {
+            s.iter()
+                .any(|&s| level.vertices[q.vertex_index[s] as usize].color_hi[..3] == [255, 0, 0])
+        });
         let texture = match group {
-            Some(g) => format!("tpage {:#06x} clut {:#06x} uv {:?}", g.best().tpage, g.best().clut, g.best().uv),
+            Some(g) => format!(
+                "tpage {:#06x} clut {:#06x} uv {:?}",
+                g.best().tpage,
+                g.best().clut,
+                g.best().uv
+            ),
             None => "no texture".to_string(),
         };
         let fate = if red {
@@ -267,7 +333,12 @@ fn near(l: &Loaded, at: [i32; 3], within: i32) {
         }
     }
     hits.sort();
-    println!("{} quad blocks over x {} z {} (within {within}), by distance in y:", hits.len(), at[0], at[2]);
+    println!(
+        "{} quad blocks over x {} z {} (within {within}), by distance in y:",
+        hits.len(),
+        at[0],
+        at[2]
+    );
     for (gap, i) in hits {
         println!("  y-off {gap:5}  {}", quad_line(i, &l.level.quad_blocks[i]));
     }
@@ -284,7 +355,15 @@ fn find(l: &Loaded, flags: u16, terrain: Option<i32>, pads: bool, limit: usize) 
         .filter(|(_, q)| !pads || render::mesh::is_turbo_pad(q))
         .map(|(i, _)| i)
         .collect();
-    println!("{} quad blocks match{}", hits.len(), if hits.len() > limit { format!(" (first {limit})") } else { String::new() });
+    println!(
+        "{} quad blocks match{}",
+        hits.len(),
+        if hits.len() > limit {
+            format!(" (first {limit})")
+        } else {
+            String::new()
+        }
+    );
     for &i in hits.iter().take(limit) {
         println!("  {}", quad_line(i, &l.level.quad_blocks[i]));
     }
@@ -298,12 +377,18 @@ fn footprint(q: &QuadBlock) -> [i16; 4] {
 
 fn pads(l: &Loaded) {
     let blocks = &l.level.quad_blocks;
-    for (i, pad) in blocks.iter().enumerate().filter(|(_, q)| render::mesh::is_turbo_pad(q)) {
+    for (i, pad) in blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| render::mesh::is_turbo_pad(q))
+    {
         println!("{}", quad_line(i, pad));
         let same: Vec<usize> = blocks
             .iter()
             .enumerate()
-            .filter(|(j, q)| *j != i && !render::mesh::is_collision_wall(q) && footprint(q) == footprint(pad))
+            .filter(|(j, q)| {
+                *j != i && !render::mesh::is_collision_wall(q) && footprint(q) == footprint(pad)
+            })
             .map(|(j, _)| j)
             .collect();
         if same.is_empty() {
@@ -318,7 +403,13 @@ fn pads(l: &Loaded) {
 fn inst_line(i: usize, d: &InstDef) -> String {
     format!(
         "#{i} {:?} model {:?} id {} pos {} rot {} scale {} flags {:#x}",
-        d.name, d.model_name, d.model_id, p(d.pos), p(d.rot), p(d.scale), d.flags
+        d.name,
+        d.model_name,
+        d.model_id,
+        p(d.pos),
+        p(d.rot),
+        p(d.scale),
+        d.flags
     )
 }
 
@@ -382,7 +473,14 @@ fn run() -> Result<(), String> {
             let mut flags = 0;
             for name in args.options("--flag")? {
                 let (bit, _) = FLAG_NAMES.iter().find(|(_, n)| *n == name).ok_or_else(|| {
-                    format!("no flag `{name}`: one of {}", FLAG_NAMES.iter().map(|(_, n)| *n).collect::<Vec<_>>().join(", "))
+                    format!(
+                        "no flag `{name}`: one of {}",
+                        FLAG_NAMES
+                            .iter()
+                            .map(|(_, n)| *n)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 })?;
                 flags |= bit;
             }

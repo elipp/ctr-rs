@@ -66,7 +66,11 @@ impl Turbo {
 
     /// The animation frames the first and the second pipe show.
     pub fn frames(&self) -> [usize; 2] {
-        [self.fire_anim_index, (self.fire_anim_index + SECOND_PIPE_FRAME_OFFSET) & (ANIM_FRAMES - 1)].map(|f| f as usize)
+        [
+            self.fire_anim_index,
+            (self.fire_anim_index + SECOND_PIPE_FRAME_OFFSET) & (ANIM_FRAMES - 1),
+        ]
+        .map(|f| f as usize)
     }
 }
 
@@ -76,7 +80,10 @@ pub fn tick(d: &mut Driver, elapsed_time_ms: i16) {
     let Some(mut t) = d.turbo else { return };
 
     // The cooldown runs out, and the fire shows.
-    t.fire_visibility_cooldown = t.fire_visibility_cooldown.wrapping_sub(elapsed_time_ms).max(0);
+    t.fire_visibility_cooldown = t
+        .fire_visibility_cooldown
+        .wrapping_sub(elapsed_time_ms)
+        .max(0);
     if t.fire_visibility_cooldown == 0 {
         t.hidden = false;
     }
@@ -86,13 +93,20 @@ pub fn tick(d: &mut Driver, elapsed_time_ms: i16) {
         t.fire_disappear_countdown -= 1;
     }
 
-    let stop = if matches!(d.kart_state, kart_state::MASK_GRABBED | kart_state::CRASHING | kart_state::WARP_PAD) {
+    let stop = if matches!(
+        d.kart_state,
+        kart_state::MASK_GRABBED | kart_state::CRASHING | kart_state::WARP_PAD
+    ) {
         true
     } else if d.reserves < RESERVES_DISAPPEAR_THRESHOLD || t.fire_disappear_countdown == 0 {
         if t.alpha_scale > ALPHA_FULL_MINUS_ONE {
             true
         } else {
-            t.alpha_scale += if t.fire_disappear_countdown == 0 { FADE_FAST_STEP } else { FADE_SLOW_STEP };
+            t.alpha_scale += if t.fire_disappear_countdown == 0 {
+                FADE_FAST_STEP
+            } else {
+                FADE_SLOW_STEP
+            };
             false
         }
     } else {
@@ -122,7 +136,10 @@ mod tests {
     fn a_new_fire_shows_once_its_cooldown_is_over() {
         let mut d = Driver::new(0, 0);
         d.reserves = 100;
-        d.turbo = Some(Turbo { fire_visibility_cooldown: 96, ..Turbo::new(false) });
+        d.turbo = Some(Turbo {
+            fire_visibility_cooldown: 96,
+            ..Turbo::new(false)
+        });
         for _ in 0..2 {
             tick(&mut d, 32);
             assert!(d.turbo.unwrap().hidden);

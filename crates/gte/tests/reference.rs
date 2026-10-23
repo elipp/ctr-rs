@@ -32,7 +32,14 @@ impl Rng {
         match self.below(9) {
             0 => 0,
             1 => 0x1000,
-            2 => [0x7fff, 0x8000, 0xffff, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff][self.below(6) as usize],
+            2 => [
+                0x7fff,
+                0x8000,
+                0xffff,
+                0x7fff_ffff,
+                0x8000_0000,
+                0xffff_ffff,
+            ][self.below(6) as usize],
             3 => small(self) & 0xffff | small(self) << 16,
             4 => small(self),
             5 => (self.next() as u32) & 0x0001_ffff,
@@ -69,7 +76,11 @@ fn script(trials: u64) -> Vec<Cmd> {
         // so that results of earlier commands feed into later ones.
         let (nd, nc) = if trial % 8 == 0 { (32, 32) } else { (4, 4) };
         for _ in 0..nd {
-            let reg = if nd == 32 { cmds.len() % 32 } else { rng.below(32) as usize };
+            let reg = if nd == 32 {
+                cmds.len() % 32
+            } else {
+                rng.below(32) as usize
+            };
             cmds.push(Cmd::Mtc2(reg, rng.value()));
         }
         for _ in 0..nc {
@@ -112,7 +123,10 @@ fn build_reference_driver() -> Option<PathBuf> {
         .arg(&exe)
         .status()
         .expect("failed to run gcc");
-    assert!(status.success(), "could not build the C reference driver (needs gcc with -m32)");
+    assert!(
+        status.success(),
+        "could not build the C reference driver (needs gcc with -m32)"
+    );
     Some(exe)
 }
 
@@ -178,7 +192,8 @@ fn matches_reference_gte() {
                 let ret = gte.cop2(*op);
                 let got = dump(&gte, ret);
                 if got != want {
-                    let (g, w): (Vec<_>, Vec<_>) = (got.split(' ').collect(), want.split(' ').collect());
+                    let (g, w): (Vec<_>, Vec<_>) =
+                        (got.split(' ').collect(), want.split(' ').collect());
                     let diffs: Vec<String> = (0..g.len().min(w.len()))
                         .filter(|&k| g[k] != w[k])
                         .map(|k| {
@@ -190,11 +205,18 @@ fn matches_reference_gte() {
                             format!("{name}: rust {} / ref {}", g[k], w[k])
                         })
                         .collect();
-                    panic!("command {i}: cop2 {op:#x} (funct {:#x}) differs:\n  {}", op & cmd::FUNCT_MASK, diffs.join("\n  "));
+                    panic!(
+                        "command {i}: cop2 {op:#x} (funct {:#x}) differs:\n  {}",
+                        op & cmd::FUNCT_MASK,
+                        diffs.join("\n  ")
+                    );
                 }
             }
         }
     }
     assert!(expected.next().is_none(), "reference produced extra output");
-    println!("{} commands over {trials} trials matched the reference", cmds.len());
+    println!(
+        "{} commands over {trials} trials matched the reference",
+        cmds.len()
+    );
 }

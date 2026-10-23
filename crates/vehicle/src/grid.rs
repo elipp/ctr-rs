@@ -47,7 +47,9 @@ pub fn spawn_order(mode: GridMode, players: usize, previous: SpawnOrder) -> Spaw
     }
     match mode {
         GridMode::TimeTrial => bytes(table::TIME_TRIAL),
-        GridMode::CrystalChallenge | GridMode::BossChallenge | GridMode::PurpleCup => bytes(table::DEFAULT),
+        GridMode::CrystalChallenge | GridMode::BossChallenge | GridMode::PurpleCup => {
+            bytes(table::DEFAULT)
+        }
         GridMode::Adventure => order,
         // `else if ((gameMode1 & ADVENTURE_MODE) == 0)`: this replaces the versus tables
         // above, so versus starts in driver order too.
@@ -68,14 +70,23 @@ mod tests {
     fn tables_decode_to_driver_order() {
         let identity = [0, 1, 2, 3, 4, 5, 6, 7];
         assert_eq!(spawn_order(GridMode::Arcade, 8, [0; 8]), identity);
-        assert_eq!(spawn_order(GridMode::TimeTrial, 1, [0; 8]), [1, 2, 0, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            spawn_order(GridMode::TimeTrial, 1, [0; 8]),
+            [1, 2, 0, 3, 4, 5, 6, 7]
+        );
         assert_eq!(bytes(table::VS_2P), [0, 1, 2, 4, 5, 6, 3, 7]);
     }
 
     #[test]
     fn arcade_overrides_the_versus_tables() {
-        assert_eq!(spawn_order(GridMode::Arcade, 2, [0; 8]), [0, 1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(spawn_order(GridMode::Adventure, 2, [0; 8]), [0, 1, 2, 4, 5, 6, 3, 7]);
+        assert_eq!(
+            spawn_order(GridMode::Arcade, 2, [0; 8]),
+            [0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        assert_eq!(
+            spawn_order(GridMode::Adventure, 2, [0; 8]),
+            [0, 1, 2, 4, 5, 6, 3, 7]
+        );
         assert_eq!(spawn_order(GridMode::Adventure, 1, [9; 8]), [9; 8]);
     }
 }

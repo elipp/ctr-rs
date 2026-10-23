@@ -31,7 +31,11 @@ pub struct Sim {
 
 impl Sim {
     pub fn new(objects: Objects) -> Sim {
-        Sim { start: objects.clone(), objects, last: instance::Tick::default() }
+        Sim {
+            start: objects.clone(),
+            objects,
+            last: instance::Tick::default(),
+        }
     }
 
     /// Puts every object back as it was at tick 0.
@@ -77,17 +81,24 @@ impl Shown {
             return;
         }
         self.shown = Some(animation);
-        let Some(pose) = animation_pose(&self.header, animation.0, animation.1) else { return };
+        let Some(pose) = animation_pose(&self.header, animation.0, animation.1) else {
+            return;
+        };
         let positions = mesh::model_positions(&self.header, &pose, self.inst_scale);
         for (handle, positions) in self.parts.iter().zip(positions) {
-            let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else { continue };
+            let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
+                continue;
+            };
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         }
     }
 
     fn moved(&mut self, pos: [i32; 3], matrix: &vehicle::Matrix) {
         self.previous = self.current;
-        self.current = (Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32) * SCALE, quat_of(matrix));
+        self.current = (
+            Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32) * SCALE,
+            quat_of(matrix),
+        );
     }
 }
 
@@ -120,15 +131,23 @@ const CRATE_DEPTH_BIAS: f32 = 4_000_000.0;
 pub struct CrateBody(pub usize);
 
 /// Sizes the crates as the sim says: gone when hit, growing back after a while.
-pub fn pose_crates(sim: Res<Sim>, mut crates: Query<(&CrateBody, &mut Transform, &mut Visibility)>) {
+pub fn pose_crates(
+    sim: Res<Sim>,
+    mut crates: Query<(&CrateBody, &mut Transform, &mut Visibility)>,
+) {
     for (body, mut transform, mut visibility) in &mut crates {
         let scale = sim.objects.crates[body.0].sim.scale;
-        let want = if scale == 0 { Visibility::Hidden } else { Visibility::Inherited };
+        let want = if scale == 0 {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
         if *visibility != want {
             *visibility = want;
         }
         if scale != 0 {
-            transform.scale = Vec3::splat(scale as f32 / instance::pickup::crates::FULL_SCALE as f32);
+            transform.scale =
+                Vec3::splat(scale as f32 / instance::pickup::crates::FULL_SCALE as f32);
         }
     }
 }
@@ -137,7 +156,11 @@ pub fn pose_crates(sim: Res<Sim>, mut crates: Query<(&CrateBody, &mut Transform,
 pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>) {
     for (body, mut visibility) in &mut fruit {
         let collected = sim.objects.fruit[body.0].sim.collected;
-        let want = if collected { Visibility::Hidden } else { Visibility::Inherited };
+        let want = if collected {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
         if *visibility != want {
             *visibility = want;
         }
@@ -155,7 +178,13 @@ fn rotation_of(gte: &mut gte::Gte, rot: loader::lev::SVec3) -> Quat {
 }
 
 fn quat_of(matrix: &vehicle::Matrix) -> Quat {
-    let column = |c: usize| Vec3::new(matrix.m[0][c] as f32, matrix.m[1][c] as f32, matrix.m[2][c] as f32) / 4096.0;
+    let column = |c: usize| {
+        Vec3::new(
+            matrix.m[0][c] as f32,
+            matrix.m[1][c] as f32,
+            matrix.m[2][c] as f32,
+        ) / 4096.0
+    };
     Quat::from_mat3(&Mat3::from_cols(column(0), column(1), column(2)))
 }
 
@@ -173,12 +202,18 @@ fn spawn_scale(model: &str) -> Option<i16> {
 
 /// The pose of a model at rest: its first animation's first frame, or its only frame.
 fn rest_pose(header: &ModelHeader) -> Option<&loader::model::Frame> {
-    header.animations.first().and_then(|a| a.frames.first()).or(header.static_frame.as_ref())
+    header
+        .animations
+        .first()
+        .and_then(|a| a.frames.first())
+        .or(header.static_frame.as_ref())
 }
 
 /// The entity a hazard's model hangs off, which the systems below move; `marker` says which.
 fn body(commands: &mut Commands, transform: Transform, marker: impl Bundle) -> Entity {
-    commands.spawn((marker, transform, Visibility::default())).id()
+    commands
+        .spawn((marker, transform, Visibility::default()))
+        .id()
 }
 
 /// Which hazard of which kind moves an instance.
@@ -205,13 +240,54 @@ pub fn spawn(
     subtract_materials: &mut Assets<SubtractMaterial>,
 ) {
     let mut by_instance: HashMap<usize, Hazard> = HashMap::new();
-    by_instance.extend(objects.armadillos.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Armadillo(i))));
-    by_instance.extend(objects.minecarts.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Minecart(i))));
-    by_instance.extend(objects.rollers.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Roller(i))));
-    by_instance.extend(objects.crates.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Crate(i))));
-    by_instance.extend(objects.fruit.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Fruit(i))));
-    by_instance.extend(objects.turtles.iter().enumerate().map(|(i, h)| (h.instance, Hazard::Turtle(i))));
-    by_instance.extend(objects.fireballs.iter().map(|h| (h.instance, Hazard::Fireball)));
+    by_instance.extend(
+        objects
+            .armadillos
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.instance, Hazard::Armadillo(i))),
+    );
+    by_instance.extend(
+        objects
+            .minecarts
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.instance, Hazard::Minecart(i))),
+    );
+    by_instance.extend(
+        objects
+            .rollers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.instance, Hazard::Roller(i))),
+    );
+    by_instance.extend(
+        objects
+            .crates
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.instance, Hazard::Crate(i))),
+    );
+    by_instance.extend(
+        objects
+            .fruit
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.instance, Hazard::Fruit(i))),
+    );
+    by_instance.extend(
+        objects
+            .turtles
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.instance, Hazard::Turtle(i))),
+    );
+    by_instance.extend(
+        objects
+            .fireballs
+            .iter()
+            .map(|h| (h.instance, Hazard::Fireball)),
+    );
 
     let mut props = Props::default();
     let mut armadillos = Armadillos::default();
@@ -221,7 +297,12 @@ pub fn spawn(
     let mut gte = gte::Gte::default();
     // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
     let show_letters = std::env::var_os("CTR_LETTERS").is_some();
-    for (n, inst) in level.instances.iter().enumerate().filter(|(_, i)| i.model != 0) {
+    for (n, inst) in level
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.model != 0)
+    {
         if !show_letters && matches!(inst.model_name.as_str(), "c" | "t" | "r") {
             continue;
         }
@@ -229,9 +310,15 @@ pub fn spawn(
         if matches!(by_instance.get(&n), Some(Hazard::Fireball)) {
             continue;
         }
-        let model = models.entry(inst.model).or_insert_with(|| Model::parse_at(dram, inst.model).ok());
-        let Some(header) = model.as_ref().and_then(|m| m.headers.first()) else { continue };
-        let Some(frame) = rest_pose(header) else { continue };
+        let model = models
+            .entry(inst.model)
+            .or_insert_with(|| Model::parse_at(dram, inst.model).ok());
+        let Some(header) = model.as_ref().and_then(|m| m.headers.first()) else {
+            continue;
+        };
+        let Some(frame) = rest_pose(header) else {
+            continue;
+        };
         let inst_scale = match spawn_scale(&inst.model_name) {
             Some(scale) => [scale; 3],
             None => [inst.scale.x, inst.scale.y, inst.scale.z],
@@ -260,7 +347,8 @@ pub fn spawn(
         };
 
         let rotation = rotation_of(&mut gte, inst.rot);
-        let transform = Transform::from_translation(Vec3::from(to_world(inst.pos))).with_rotation(rotation);
+        let transform =
+            Transform::from_translation(Vec3::from(to_world(inst.pos))).with_rotation(rotation);
         let pose = (transform.translation, transform.rotation);
 
         // A hazard's model hangs off an entity that the systems below move.
@@ -274,28 +362,67 @@ pub fn spawn(
             shown: None,
         };
         let (transform, parent) = match by_instance.get(&n) {
-            Some(&Hazard::Roller(i)) => (Transform::default(), Some(body(commands, transform, Rolling(i)))),
+            Some(&Hazard::Roller(i)) => (
+                Transform::default(),
+                Some(body(commands, transform, Rolling(i))),
+            ),
             // A fruit's model hangs off a body that is hidden once it is picked up.
-            Some(&Hazard::Fruit(i)) => (Transform::default(), Some(body(commands, transform, FruitBody(i)))),
+            Some(&Hazard::Fruit(i)) => (
+                Transform::default(),
+                Some(body(commands, transform, FruitBody(i))),
+            ),
             // A crate's model hangs off a body that shrinks when it is hit and grows back.
-            Some(&Hazard::Crate(i)) => (Transform::default(), Some(body(commands, transform, CrateBody(i)))),
+            Some(&Hazard::Crate(i)) => (
+                Transform::default(),
+                Some(body(commands, transform, CrateBody(i))),
+            ),
             Some(&Hazard::Armadillo(i)) => {
                 let parent = body(commands, transform, ArmadilloBody(i));
                 let mut s = shown(i);
-                s.parts = spawn_parts(data.parts, &base, Transform::default(), Some(parent), commands, meshes, materials, subtract_materials, 0);
+                s.parts = spawn_parts(
+                    data.parts,
+                    &base,
+                    Transform::default(),
+                    Some(parent),
+                    commands,
+                    meshes,
+                    materials,
+                    subtract_materials,
+                    0,
+                );
                 armadillos.0.push(s);
                 continue;
             }
             Some(&Hazard::Minecart(i)) => {
                 let parent = body(commands, transform, MinecartBody(i));
                 let mut s = shown(i);
-                s.parts = spawn_parts(data.parts, &base, Transform::default(), Some(parent), commands, meshes, materials, subtract_materials, 0);
+                s.parts = spawn_parts(
+                    data.parts,
+                    &base,
+                    Transform::default(),
+                    Some(parent),
+                    commands,
+                    meshes,
+                    materials,
+                    subtract_materials,
+                    0,
+                );
                 minecarts.0.push(s);
                 continue;
             }
             Some(&Hazard::Turtle(i)) => {
                 let mut s = shown(i);
-                s.parts = spawn_parts(data.parts, &base, transform, None, commands, meshes, materials, subtract_materials, 0);
+                s.parts = spawn_parts(
+                    data.parts,
+                    &base,
+                    transform,
+                    None,
+                    commands,
+                    meshes,
+                    materials,
+                    subtract_materials,
+                    0,
+                );
                 turtles.0.push(s);
                 continue;
             }
@@ -305,14 +432,36 @@ pub fn spawn(
         // toward the camera so the ground does not cut them.
         let crate_base;
         let base = if matches!(by_instance.get(&n), Some(Hazard::Crate(_))) {
-            crate_base = StandardMaterial { depth_bias: CRATE_DEPTH_BIAS, ..base.clone() };
+            crate_base = StandardMaterial {
+                depth_bias: CRATE_DEPTH_BIAS,
+                ..base.clone()
+            };
             &crate_base
         } else {
             &base
         };
-        let parts = spawn_parts(data.parts, base, transform, parent, commands, meshes, materials, subtract_materials, 0);
-        if header.animations.first().is_some_and(|a| a.frames.len() > 1) {
-            props.0.push(Animated { header: header.clone(), inst_scale, parts, shown: Some(0) });
+        let parts = spawn_parts(
+            data.parts,
+            base,
+            transform,
+            parent,
+            commands,
+            meshes,
+            materials,
+            subtract_materials,
+            0,
+        );
+        if header
+            .animations
+            .first()
+            .is_some_and(|a| a.frames.len() > 1)
+        {
+            props.0.push(Animated {
+                header: header.clone(),
+                inst_scale,
+                parts,
+                shown: Some(0),
+            });
         }
     }
     info!(
@@ -340,7 +489,10 @@ pub fn pose_hazards(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for t in &mut turtles.0 {
-        t.pose((0, sim.objects.turtles[t.index].sim.anim_frame), &mut meshes);
+        t.pose(
+            (0, sim.objects.turtles[t.index].sim.anim_frame),
+            &mut meshes,
+        );
     }
     for a in &mut armadillos.0 {
         let h = &sim.objects.armadillos[a.index].sim;
@@ -378,12 +530,17 @@ pub fn place_hazards(
 }
 
 /// Puts the rolling objects between the point of their path they are at and the next.
-pub fn roll(mut rolling: Query<(&Rolling, &mut Transform)>, sim: Res<Sim>, fixed: Res<Time<Fixed>>) {
+pub fn roll(
+    mut rolling: Query<(&Rolling, &mut Transform)>,
+    sim: Res<Sim>,
+    fixed: Res<Time<Fixed>>,
+) {
     let mut gte = gte::Gte::default();
     let fraction = fixed.overstep_fraction();
     for (rolling, mut transform) in &mut rolling {
         let (from, to) = sim.objects.roller_frames(rolling.0);
-        let mut place = |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(&mut gte, p.rot));
+        let mut place =
+            |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(&mut gte, p.rot));
         let ((from_pos, from_rot), (to_pos, to_rot)) = (place(from), place(to));
         transform.translation = from_pos.lerp(to_pos, fraction);
         transform.rotation = from_rot.slerp(to_rot, fraction);
@@ -393,16 +550,22 @@ pub fn roll(mut rolling: Query<(&Rolling, &mut Transform)>, sim: Res<Sim>, fixed
 /// Plays the placed models' first animation, once per game tick.
 pub fn animate(mut props: ResMut<Props>, tick: Res<GameTick>, mut meshes: ResMut<Assets<Mesh>>) {
     for prop in &mut props.0 {
-        let Some(animation) = prop.header.animations.first() else { continue };
+        let Some(animation) = prop.header.animations.first() else {
+            continue;
+        };
         let frame = (tick.0 % animation.num_frames.max(1) as u32) as i16;
         if prop.shown == Some(frame) {
             continue;
         }
         prop.shown = Some(frame);
-        let Some(pose) = animation_pose(&prop.header, 0, frame) else { continue };
+        let Some(pose) = animation_pose(&prop.header, 0, frame) else {
+            continue;
+        };
         let positions = mesh::model_positions(&prop.header, &pose, prop.inst_scale);
         for (handle, positions) in prop.parts.iter().zip(positions) {
-            let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else { continue };
+            let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
+                continue;
+            };
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         }
     }

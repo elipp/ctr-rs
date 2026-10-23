@@ -42,13 +42,21 @@ pub fn spawn(
     );
     image.sampler = ImageSampler::nearest();
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * QUADS]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4 * QUADS]);
     // The primitive's colour scales the texels that are subtracted.
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[GAIN, GAIN, GAIN, 1.0]; 4 * QUADS]);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        vec![[GAIN, GAIN, GAIN, 1.0]; 4 * QUADS],
+    );
     mesh.insert_indices(Indices::U32(
-        (0..QUADS as u32).flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i)).collect(),
+        (0..QUADS as u32)
+            .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
+            .collect(),
     ));
     commands.spawn((
         Shadow { uvs },

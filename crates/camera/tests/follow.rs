@@ -29,7 +29,9 @@ fn swing(camera: &CameraDc, d: &Driver) -> i32 {
 
 #[test]
 fn swings_out_in_a_powerslide() {
-    let Some(level) = level(LevelId::DINGO_CANYON) else { return };
+    let Some(level) = level(LevelId::DINGO_CANYON) else {
+        return;
+    };
     let mut coll = Collision::default();
     let mut d = Driver::new(0, 0);
     d.anim_num_frames = [30, 12, 20, 16, 24, 8, 8, 8];
@@ -50,9 +52,20 @@ fn swings_out_in_a_powerslide() {
             ..Input::default()
         };
         held = new_held;
-        let env = Env { elapsed_event_time: t as i32 * 32, timer: t, ..Env::default() };
+        let env = Env {
+            elapsed_event_time: t as i32 * 32,
+            timer: t,
+            ..Env::default()
+        };
         tick(&mut d, &mut coll, &level, &env, &input, &mut Vec::new());
-        camera.follow_driver(&d, &level, &camera::Input { elapsed_time_ms: 32, ..Default::default() });
+        camera.follow_driver(
+            &d,
+            &level,
+            &camera::Input {
+                elapsed_time_ms: 32,
+                ..Default::default()
+            },
+        );
 
         if t == 90 {
             straight = swing(&camera, &d);
@@ -62,6 +75,12 @@ fn swings_out_in_a_powerslide() {
         }
     }
     eprintln!("straight swing {straight}, largest swing in the drift {drifting}");
-    assert!(straight.abs() < 40, "the camera should be behind a kart driving straight, was {straight}");
-    assert!(drifting > 100, "the camera should swing out in a powerslide, largest swing {drifting}");
+    assert!(
+        straight.abs() < 40,
+        "the camera should be behind a kart driving straight, was {straight}"
+    );
+    assert!(
+        drifting > 100,
+        "the camera should swing out in a powerslide, largest swing {drifting}"
+    );
 }

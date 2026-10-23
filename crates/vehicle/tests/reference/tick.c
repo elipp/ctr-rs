@@ -158,7 +158,7 @@ static struct Field fields[] = {
 	F(d.vShiftStartGuardTimer, S16), F(d.vShiftWindowTimer, S16), F(d.driverRank, S16),
 	F(d.jump_TenBuffer, S16), F(d.jump_CooldownMS, S16), F(d.jump_CoyoteTimerMS, S16), F(d.jump_ForcedMS, S16),
 	F(d.jump_InitialVelY, S16), F(d.jump_HighJumpTimerMS, S16), F(d.jump_LandingBoost, S16),
-	F(d.numberOfJumps, S16), F(d.forcedJumpType, U8), F(d.buttonUsedToStartDrift, S16),
+	F(d.numberOfJumps, S16), F(d.jumpMeter, S16), F(d.jumpMeterTimer, S16), F(d.forcedJumpType, U8), F(d.buttonUsedToStartDrift, S16),
 	F(d.rotCurr.x, S16), F(d.rotCurr.y, S16), F(d.rotCurr.z, S16),
 	F(d.rotPrev.x, S16), F(d.rotPrev.y, S16), F(d.rotPrev.z, S16), F(d.rotPrev.w, S16),
 	MAT(d.matrixMovingDir), MAT(d.matrixFacingDir),
@@ -181,20 +181,14 @@ static int terrainIndex(struct Terrain *t)
 	return (int)(t - data.MetaDataTerrain);
 }
 
-/* The real VehPhysForce_TranslateMatrix also squashes and stretches the model, animates the baked
- * matrices and emits the wake; none of that is ported, only its facing matrix is. */
-static void oracle_translate_matrix(struct Thread *t, struct Driver *drv)
-{
-	VehPhysForce_RotAxisAngle(&drv->matrixFacingDir, CTR_VECTOR_DATA(&(drv->AxisAngle2_normalVec)), drv->rotCurr.y);
-}
-
 static void set_state(int state, int initPending)
 {
 	memset(d.funcPtrs, 0, sizeof(d.funcPtrs));
 	d.funcPtrs[DRIVER_FUNC_APPLY_FORCES] = VehPhysForce_OnApplyForces;
 	d.funcPtrs[DRIVER_FUNC_COLL_MOVED] = COLL_MOVED_PlayerSearch;
 	d.funcPtrs[DRIVER_FUNC_COLL_FIXED] = COLL_FIXED_PlayerSearch;
-	d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = oracle_translate_matrix;
+	d.funcPtrs[DRIVER_FUNC_COLLIDE_DRIVERS] = VehPhysForce_CollideDrivers;
+	d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = VehPhysForce_TranslateMatrix;
 	d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysGeneral_JumpAndFriction;
 	d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_Driving_PhysLinear;
 	d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysGeneral_PhysAngular;
@@ -326,10 +320,12 @@ int main(void)
 	gGT.level1 = &level;
 	gGT.numPlyrCurrGame = 1;
 	level.ptr_mesh_info = &mesh;
+	/* The animations end where the real tables do; their contents only move the model's instance. */
+	static const int bakedLengths[BAKED_GTE_MATRIX_COUNT] = {0, 0xb, 1, 9, 0x10, 0xf, 0x1b};
 	for (int i = 0; i < BAKED_GTE_MATRIX_COUNT; i++)
 	{
 		data.bakedGteMath[i].physEntry = bakedDummy;
-		data.bakedGteMath[i].numEntries = 256;
+		data.bakedGteMath[i].numEntries = i < BAKED_GTE_MATRIX_JUMP_BASE ? bakedLengths[i] : 4;
 	}
 	thread.inst = &inst;
 	thread.modelIndex = DYNAMIC_PLAYER;
@@ -446,17 +442,19 @@ int main(void)
 			maskGrab = 0;
 			for (int i = 0; i < DRIVER_FUNC_COUNT; i++)
 			{
-				/* Audio, kart-against-kart and particles are not ported. */
-				if (i == DRIVER_FUNC_AUDIO || i == DRIVER_FUNC_COLLIDE_DRIVERS || i == DRIVER_FUNC_PARTICLES)
+				/* Audio and particles are not ported. */
+				if (i == DRIVER_FUNC_AUDIO || i == DRIVER_FUNC_PARTICLES)
 					continue;
 				DriverFunc fn = d.funcPtrs[i];
 				if (fn == NULL)
 					continue;
 				/* Driving_Init installs the real one again. */
 				if (i == DRIVER_FUNC_TRANSLATE_MATRIX)
-					fn = oracle_translate_matrix;
+					fn = VehPhysForce_TranslateMatrix;
 				fn(&thread, &d);
 			}
+			/* The HUD's jump meter gives the hang-time turbo, after the drivers' tick. */
+			UI_JumpMeter_Update(&d);
 
 			struct ScratchpadStruct *pad = (struct ScratchpadStruct *)(scratchpad + 0x108);
 			print_driver();

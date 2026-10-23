@@ -95,16 +95,29 @@ fn track_lev_files_parse() {
         }
         if let Some(sky) = &lev.skybox {
             let faces: usize = sky.segments.iter().map(Vec::len).sum();
-            println!("level {id:>2}: skybox {} verts {faces} faces", sky.vertices.len());
+            println!(
+                "level {id:>2}: skybox {} verts {faces} faces",
+                sky.vertices.len()
+            );
             assert!(faces > 0, "level {id}: empty skybox");
         }
-        println!("level {id:>2}: position paths {:?}", lev.position_paths.iter().map(Vec::len).collect::<Vec<_>>());
-        println!("level {id:>2}: recorded paths {:?}", lev.paths.iter().map(Vec::len).collect::<Vec<_>>());
+        println!(
+            "level {id:>2}: position paths {:?}",
+            lev.position_paths.iter().map(Vec::len).collect::<Vec<_>>()
+        );
+        println!(
+            "level {id:>2}: recorded paths {:?}",
+            lev.paths.iter().map(Vec::len).collect::<Vec<_>>()
+        );
         let mut with_model = 0;
         for inst in lev.instances.iter().filter(|i| i.model != 0) {
             let model = loader::model::Model::parse_at(&dram, inst.model)
                 .unwrap_or_else(|e| panic!("level {id}: instance {} model: {e}", inst.name));
-            assert!(!model.headers.is_empty(), "level {id}: instance {} has no model LOD", inst.name);
+            assert!(
+                !model.headers.is_empty(),
+                "level {id}: instance {} has no model LOD",
+                inst.name
+            );
             with_model += 1;
         }
         println!(

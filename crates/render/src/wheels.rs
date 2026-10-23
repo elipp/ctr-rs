@@ -20,12 +20,15 @@ pub const SPRITE_SIZE: usize = 32;
 
 /// `sDrawTiresSpriteIndexTable`: `|axle . view| / 32` (0..=128) to icon number.
 const SPRITE_INDEX: [u8; 0x81] = [
-    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
-    0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
-    0x04, 0x04, 0x04, 0x04, 0x04, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
-    0x06, 0x06, 0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
-    0x08, 0x08, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0b, 0x0b, 0x0b, 0x0b,
-    0x0b, 0x0b, 0x0b, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0d, 0x0d, 0x0d, 0x0d, 0x0e, 0x0e, 0x0e, 0x0f, 0x0f, 0x10, 0x10,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02,
+    0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09,
+    0x09, 0x09, 0x09, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+    0x0b, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0d, 0x0d, 0x0d, 0x0d, 0x0e, 0x0e, 0x0e, 0x0f, 0x0f, 0x10,
+    0x10,
 ];
 
 /// `VEH_BIRTH_WHEEL_SIZE`: `Driver::wheelSize` (the picture's size, 0 hides the wheels).
@@ -101,7 +104,14 @@ fn sprite_for(angle: f32) -> usize {
 /// `position` and `rotation` are the kart's (instance) pose in world units,
 /// `scale` the instance scale per axis (0x1000 = 1.0) and `wheel_size` retail's
 /// `Driver::wheelSize`.
-pub fn wheel_quads(position: Vec3, rotation: Mat3, scale: [i32; 3], wheel_size: i32, wheel_rotation: i16, eye: Vec3) -> [WheelQuad; WHEELS] {
+pub fn wheel_quads(
+    position: Vec3,
+    rotation: Mat3,
+    scale: [i32; 3],
+    wheel_size: i32,
+    wheel_rotation: i16,
+    eye: Vec3,
+) -> [WheelQuad; WHEELS] {
     let radius = radius(wheel_size);
     let pairs = local_pairs(scale, wheel_rotation);
     std::array::from_fn(|i| {
@@ -116,7 +126,12 @@ pub fn wheel_quads(position: Vec3, rotation: Mat3, scale: [i32; 3], wheel_size: 
         let across = to_eye.cross(axle).normalize_or_zero();
         let along = -to_eye.cross(across).normalize_or_zero();
         let corner = |a: f32, b: f32| center + across * (a * radius) + along * (b * radius);
-        let [p0, p1, p2, p3] = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(-1.0, 1.0), corner(1.0, 1.0)];
+        let [p0, p1, p2, p3] = [
+            corner(-1.0, -1.0),
+            corner(1.0, -1.0),
+            corner(-1.0, 1.0),
+            corner(1.0, 1.0),
+        ];
 
         // `DrawTiresSolid_ApplyCornerOrder`: the picture is mirrored when the
         // axle points away from the camera, and the right-hand wheels are
@@ -202,18 +217,35 @@ mod tests {
     #[test]
     fn side_on_wheel_is_flat_and_end_on_wheel_faces_the_camera() {
         let eye_side = Vec3::new(500.0, 0.2, 0.0);
-        let quads = wheel_quads(Vec3::ZERO, Mat3::IDENTITY, [0xccc; 3], WHEEL_SIZE, 0, eye_side);
+        let quads = wheel_quads(
+            Vec3::ZERO,
+            Mat3::IDENTITY,
+            [0xccc; 3],
+            WHEEL_SIZE,
+            0,
+            eye_side,
+        );
         // Looking along the axle: the picture of the tyre seen from the side. (The rim vector
         // is the axle plus the wheel's offset, so retail's side-on view is a little short of 16.)
         assert!(quads[0].sprite >= 14, "{}", quads[0].sprite);
         assert!(quads[0].near_side && !quads[1].near_side);
         let eye_front = Vec3::new(0.0, 0.2, 500.0);
-        let quads = wheel_quads(Vec3::ZERO, Mat3::IDENTITY, [0xccc; 3], WHEEL_SIZE, 0, eye_front);
+        let quads = wheel_quads(
+            Vec3::ZERO,
+            Mat3::IDENTITY,
+            [0xccc; 3],
+            WHEEL_SIZE,
+            0,
+            eye_front,
+        );
         // Looking across the axle: the thin tread.
         assert!(quads[0].sprite <= 1, "{}", quads[0].sprite);
         // The square is as big as the picture says: 2 * 12.8 game units.
         let size = (quads[0].corners[0] - quads[0].corners[3]).length();
-        assert!((size / SCALE - 12.8 * 2.0 * 2.0f32.sqrt()).abs() < 0.5, "{size}");
+        assert!(
+            (size / SCALE - 12.8 * 2.0 * 2.0f32.sqrt()).abs() < 0.5,
+            "{size}"
+        );
     }
 
     #[test]
@@ -233,7 +265,8 @@ mod tests {
         let (atlas, uvs) = sprite_atlas(icons, &vram);
         assert_eq!(uvs.len(), 17);
         for n in 0..17 {
-            let sprite = &atlas.rgba[n * SPRITE_SIZE * SPRITE_SIZE * 4..][..SPRITE_SIZE * SPRITE_SIZE * 4];
+            let sprite =
+                &atlas.rgba[n * SPRITE_SIZE * SPRITE_SIZE * 4..][..SPRITE_SIZE * SPRITE_SIZE * 4];
             let visible = sprite.chunks(4).filter(|p| p[3] != 0).count();
             assert!(visible > 100, "icon {n}: {visible} visible texels");
         }

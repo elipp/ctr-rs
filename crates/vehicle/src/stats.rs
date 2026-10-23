@@ -15,7 +15,10 @@ pub enum EngineClass {
 /// joe, ntropy, penta, fake crash, oxide).
 pub const CHARACTER_ENGINES: [EngineClass; 16] = {
     use EngineClass::*;
-    [Balanced, Balanced, Speed, Accel, Accel, Speed, Turn, Turn, Accel, Speed, Turn, Balanced, Speed, Turn, Balanced, Balanced]
+    [
+        Balanced, Balanced, Speed, Accel, Accel, Speed, Turn, Turn, Accel, Speed, Turn, Balanced,
+        Speed, Turn, Balanced, Balanced,
+    ]
 };
 
 /// The `Driver::const_*` fields. Named after the C fields; types are the C
@@ -92,71 +95,71 @@ pub struct Stats {
 /// One `MetaPhys` row per field of [`Stats`], with the value for each engine class
 /// (balanced, accel, speed, turn).
 pub const META_PHYS: [[i32; 4]; 65] = [
-    [900, 900, 900, 900], // gravity
-    [4596, 4596, 4596, 4596], // jump_force
-    [350, 350, 350, 350], // pedal_friction_perpendicular
-    [120, 120, 120, 120], // pedal_friction_forward
-    [425, 425, 425, 425], // no_pedal_friction_perpendicular
-    [120, 120, 120, 120], // no_pedal_friction_forward
-    [260, 260, 260, 260], // brake_friction
-    [120, 120, 120, 120], // drift_curve
-    [120, 120, 120, 120], // drift_friction
-    [480, 544, 448, 512], // accel_class_stat
-    [1152, 1152, 1152, 1152], // accel_reserves
+    [900, 900, 900, 900],         // gravity
+    [4596, 4596, 4596, 4596],     // jump_force
+    [350, 350, 350, 350],         // pedal_friction_perpendicular
+    [120, 120, 120, 120],         // pedal_friction_forward
+    [425, 425, 425, 425],         // no_pedal_friction_perpendicular
+    [120, 120, 120, 120],         // no_pedal_friction_forward
+    [260, 260, 260, 260],         // brake_friction
+    [120, 120, 120, 120],         // drift_curve
+    [120, 120, 120, 120],         // drift_friction
+    [480, 544, 448, 512],         // accel_class_stat
+    [1152, 1152, 1152, 1152],     // accel_reserves
     [13140, 13520, 13900, 12950], // speed_class_stat
     [14640, 15020, 15400, 14450], // accel_speed_class_stat
-    [2048, 2048, 2048, 2048], // single_turbo_speed
-    [4096, 4096, 4096, 4096], // sacred_fire_speed
-    [5120, 5120, 5120, 5120], // backward_speed
-    [3900, 3900, 3900, 3900], // mask_speed
-    [4096, 4096, 4096, 4096], // damaged_speed
-    [28, 26, 24, 30], // turn_rate
-    [48, 48, 48, 48], // backward_turn_rate
-    [4080, 9080, 5666, 7252], // turn_decrease_rate
-    [5000, 4500, 4000, 5500], // turn_input_delay
-    [1000, 750, 500, 1250], // pre_turbo
+    [2048, 2048, 2048, 2048],     // single_turbo_speed
+    [4096, 4096, 4096, 4096],     // sacred_fire_speed
+    [5120, 5120, 5120, 5120],     // backward_speed
+    [3900, 3900, 3900, 3900],     // mask_speed
+    [4096, 4096, 4096, 4096],     // damaged_speed
+    [28, 26, 24, 30],             // turn_rate
+    [48, 48, 48, 48],             // backward_turn_rate
+    [4080, 9080, 5666, 7252],     // turn_decrease_rate
+    [5000, 4500, 4000, 5500],     // turn_input_delay
+    [1000, 750, 500, 1250],       // pre_turbo
     [20480, 20480, 20480, 20480], // terminal_velocity
-    [256, 256, 256, 256], // terrain_friction_boost
-    [64, 64, 64, 64], // steer_accel_stage4_first_frame
-    [4, 4, 4, 4], // steer_accel_stage2_first_frame
-    [8, 8, 8, 8], // steer_accel_stage2_frame_length
-    [3072, 3072, 3072, 3072], // steer_accel_stage1_max_steer
-    [0, 0, 0, 0], // steer_accel_stage1_min_steer
-    [128, 128, 128, 128], // steer_accel_turn_vel_scale
-    [0, 0, 0, 0], // steer_accel_turn_vel_limit
-    [350, 350, 350, 350], // model_rot_vel_max
-    [450, 450, 450, 450], // model_rot_vel_min
-    [30, 30, 30, 30], // model_turn_counter_steer_strength
-    [20, 20, 20, 20], // model_turn_return_strength
-    [60, 60, 60, 60], // model_turn_negative_return_strength
-    [10, 10, 10, 10], // model_turn_velocity_lerp
-    [32, 32, 32, 32], // turn_resist_min
-    [224, 224, 224, 224], // turn_resist_max
-    [-10, -10, -10, -10], // steer_vel_drift_switch_way
-    [22, 22, 22, 22], // steer_vel_drift_standard
-    [14, 10, 5, 18], // drift_turn_base
-    [100, 100, 100, 100], // drift_turn_startup_scale
-    [60, 60, 60, 60], // drift_turn_ramp_frames
-    [60, 60, 60, 60], // drifting_frames_till_spinout
-    [3000, 3000, 3000, 3000], // drift_spin_rate_accel
-    [500, 500, 500, 500], // drift_spin_rate_decel
-    [384, 384, 384, 384], // drifting_camera_spin_rate
-    [16, 16, 16, 16], // drift_camera_lerp_step
-    [15, 15, 15, 15], // drift_release_turn_assist_frames
-    [8192, 8192, 8192, 8192], // meta_phys_33
-    [8192, 8192, 8192, 8192], // meta_phys_34
-    [300, 300, 300, 300], // drift_turn_same_direction_angle
-    [-128, -128, -128, -128], // drift_turn_opposite_direction_angle
-    [768, 768, 768, 768], // drift_turn_angle_scale
-    [30, 30, 30, 30], // turbo_max_room
-    [15, 15, 15, 15], // turbo_low_room_warning
-    [60, 60, 60, 60], // turbo_full_bar_reserve_gain
-    [15, 15, 15, 15], // drift_boost_duration_frames
-    [36, 36, 36, 36], // drift_boost_axis_kick_rate
-    [256, 256, 300, 200], // collision_weight
-    [5120, 5120, 5120, 5120], // slope_forward_speed_bonus
-    [2560, 2560, 2560, 2560], // side_speed_clamp
-    [15, 15, 15, 15], // prototype_key
+    [256, 256, 256, 256],         // terrain_friction_boost
+    [64, 64, 64, 64],             // steer_accel_stage4_first_frame
+    [4, 4, 4, 4],                 // steer_accel_stage2_first_frame
+    [8, 8, 8, 8],                 // steer_accel_stage2_frame_length
+    [3072, 3072, 3072, 3072],     // steer_accel_stage1_max_steer
+    [0, 0, 0, 0],                 // steer_accel_stage1_min_steer
+    [128, 128, 128, 128],         // steer_accel_turn_vel_scale
+    [0, 0, 0, 0],                 // steer_accel_turn_vel_limit
+    [350, 350, 350, 350],         // model_rot_vel_max
+    [450, 450, 450, 450],         // model_rot_vel_min
+    [30, 30, 30, 30],             // model_turn_counter_steer_strength
+    [20, 20, 20, 20],             // model_turn_return_strength
+    [60, 60, 60, 60],             // model_turn_negative_return_strength
+    [10, 10, 10, 10],             // model_turn_velocity_lerp
+    [32, 32, 32, 32],             // turn_resist_min
+    [224, 224, 224, 224],         // turn_resist_max
+    [-10, -10, -10, -10],         // steer_vel_drift_switch_way
+    [22, 22, 22, 22],             // steer_vel_drift_standard
+    [14, 10, 5, 18],              // drift_turn_base
+    [100, 100, 100, 100],         // drift_turn_startup_scale
+    [60, 60, 60, 60],             // drift_turn_ramp_frames
+    [60, 60, 60, 60],             // drifting_frames_till_spinout
+    [3000, 3000, 3000, 3000],     // drift_spin_rate_accel
+    [500, 500, 500, 500],         // drift_spin_rate_decel
+    [384, 384, 384, 384],         // drifting_camera_spin_rate
+    [16, 16, 16, 16],             // drift_camera_lerp_step
+    [15, 15, 15, 15],             // drift_release_turn_assist_frames
+    [8192, 8192, 8192, 8192],     // meta_phys_33
+    [8192, 8192, 8192, 8192],     // meta_phys_34
+    [300, 300, 300, 300],         // drift_turn_same_direction_angle
+    [-128, -128, -128, -128],     // drift_turn_opposite_direction_angle
+    [768, 768, 768, 768],         // drift_turn_angle_scale
+    [30, 30, 30, 30],             // turbo_max_room
+    [15, 15, 15, 15],             // turbo_low_room_warning
+    [60, 60, 60, 60],             // turbo_full_bar_reserve_gain
+    [15, 15, 15, 15],             // drift_boost_duration_frames
+    [36, 36, 36, 36],             // drift_boost_axis_kick_rate
+    [256, 256, 300, 200],         // collision_weight
+    [5120, 5120, 5120, 5120],     // slope_forward_speed_bonus
+    [2560, 2560, 2560, 2560],     // side_speed_clamp
+    [15, 15, 15, 15],             // prototype_key
 ];
 
 impl Stats {

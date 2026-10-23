@@ -29,8 +29,15 @@ fn each_level_places_its_hazards() {
         (LevelId::MYSTERY_CAVES.0, [0, 6, 0, 0]),
         (LevelId::ROO_TUBES.0, [0, 0, 0, 0]),
     ] {
-        let Some((h, level)) = objects_of(id) else { return };
-        let found = [h.armadillos.len(), h.fireballs.len(), h.minecarts.len(), h.rollers.len()];
+        let Some((h, level)) = objects_of(id) else {
+            return;
+        };
+        let found = [
+            h.armadillos.len(),
+            h.fireballs.len(),
+            h.minecarts.len(),
+            h.rollers.len(),
+        ];
         assert_eq!(found, counts, "level {id}");
         for a in &h.armadillos {
             assert_eq!(level.instances[a.instance].model_name, "armadillo");
@@ -42,7 +49,9 @@ fn each_level_places_its_hazards() {
 
 #[test]
 fn the_hazards_run_and_reach_for_drivers() {
-    let Some((mut h, _)) = objects_of(LevelId::MYSTERY_CAVES.0) else { return };
+    let Some((mut h, _)) = objects_of(LevelId::MYSTERY_CAVES.0) else {
+        return;
+    };
     let (mut contacts, mut sparks) = (0, 0);
     for _ in 0..300 {
         let tick = h.tick();
@@ -58,7 +67,9 @@ fn the_hazards_run_and_reach_for_drivers() {
 #[test]
 fn the_state_can_be_copied_and_run_on() {
     // What the rollback needs: a copy ticks exactly like the original.
-    let Some((mut a, _)) = objects_of(LevelId::DINGO_CANYON.0) else { return };
+    let Some((mut a, _)) = objects_of(LevelId::DINGO_CANYON.0) else {
+        return;
+    };
     for _ in 0..100 {
         a.tick();
     }
@@ -71,7 +82,9 @@ fn the_state_can_be_copied_and_run_on() {
 
 #[test]
 fn a_roller_is_drawn_between_its_frame_and_the_next() {
-    let Some((mut h, level)) = objects_of(LevelId::BLIZZARD_BLUFF.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::BLIZZARD_BLUFF.0) else {
+        return;
+    };
     let path = &level.paths[h.rollers[0].sim.path];
     assert_eq!(h.roller_frames(0), (path[0], path[1]));
     h.tick();
@@ -86,7 +99,9 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
     use vehicle::search::moved_player_search;
     use vehicle::{Driver, forced_jump};
 
-    let Some((mut h, level)) = objects_of(LevelId::MYSTERY_CAVES.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::MYSTERY_CAVES.0) else {
+        return;
+    };
     assert_eq!(h.turtles.len(), 10);
     assert!(h.turtles.iter().all(|t| t.frames[0] == 11));
     let hitbox_of = |instance: usize| {
@@ -101,7 +116,10 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
             .find(|b| b.instance == Some(instance))
             .map(|b| b.center)
     };
-    assert!(h.turtles.iter().all(|t| hitbox_of(t.instance).is_some()), "every turtle has a hitbox");
+    assert!(
+        h.turtles.iter().all(|t| hitbox_of(t.instance).is_some()),
+        "every turtle has a hitbox"
+    );
 
     // A kart driving through the first turtle's hitbox, from 200 units before its centre to 200
     // after, at the given `speed_approx`: the jump it is given, if any.
@@ -132,7 +150,10 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
     let mut seen = std::collections::BTreeSet::new();
     for _ in 0..200 {
         let jump = drive_through(&h, 0x2000);
-        assert_eq!(jump == forced_jump::LOW, h.turtles[0].sim.state == instance::hazard::turtle::State::FullyDown);
+        assert_eq!(
+            jump == forced_jump::LOW,
+            h.turtles[0].sim.state == instance::hazard::turtle::State::FullyDown
+        );
         seen.insert(jump);
         assert_eq!(drive_through(&h, 0x1400), forced_jump::NONE);
         h.tick();
@@ -148,7 +169,9 @@ fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
     use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
     use vehicle::search::moved_player_search;
 
-    let Some((mut h, level)) = objects_of(LevelId::DINGO_CANYON.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::DINGO_CANYON.0) else {
+        return;
+    };
     assert_eq!(h.fruit.len(), 16);
     let center = level
         .bsp
@@ -169,7 +192,15 @@ fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
             z: (center.z as i32 - driver.origin_to_center.z) << 8,
         };
         driver.velocity.x = 300 << 8;
-        moved_player_search(driver, &mut Collision::default(), &level, &IDENTITY_LIGHT_MATRIX, 32, h, &mut Vec::new());
+        moved_player_search(
+            driver,
+            &mut Collision::default(),
+            &level,
+            &IDENTITY_LIGHT_MATRIX,
+            32,
+            h,
+            &mut Vec::new(),
+        );
     };
 
     let mut driver = Driver::new(0, 0);
@@ -191,7 +222,9 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
     use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
     use vehicle::search::moved_player_search;
 
-    let Some((mut h, level)) = objects_of(LevelId::DINGO_CANYON.0) else { return };
+    let Some((mut h, level)) = objects_of(LevelId::DINGO_CANYON.0) else {
+        return;
+    };
     // 16 weapon crates and 2 fruit crates.
     assert_eq!(h.crates.len(), 18);
     let center = level
@@ -213,7 +246,15 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
             z: (center.z as i32 - driver.origin_to_center.z) << 8,
         };
         driver.velocity.x = 300 << 8;
-        moved_player_search(driver, &mut Collision::default(), &level, &IDENTITY_LIGHT_MATRIX, 32, h, &mut Vec::new());
+        moved_player_search(
+            driver,
+            &mut Collision::default(),
+            &level,
+            &IDENTITY_LIGHT_MATRIX,
+            32,
+            h,
+            &mut Vec::new(),
+        );
     };
 
     let mut driver = Driver::new(0, 0);

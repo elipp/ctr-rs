@@ -763,14 +763,7 @@ mod tests {
             for img in parse_vram_file(&read(LevFile::Vram)).unwrap() {
                 vram.upload(&img).unwrap();
             }
-            let m = level_mesh(
-                &level,
-                &dram,
-                &vram,
-                false,
-                true,
-                true,
-            );
+            let m = level_mesh(&level, &dram, &vram, false, true, true);
             for p in m.parts.iter().chain(&m.water) {
                 assert_eq!(p.positions.len(), p.uvs.len());
                 assert_eq!(p.positions.len(), p.colors.len());

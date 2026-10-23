@@ -6,7 +6,7 @@ use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
 use vehicle::rotmat::convert_rot_to_matrix;
 
-use crate::{Context, Contact, Damage, Instance, Shape, Tick, interpolate};
+use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
 
 /// `betweenPoints_numFrames` and `rotSpeed` of a cart.
 const FRAMES_BETWEEN_POINTS: i16 = 8;
@@ -44,7 +44,12 @@ impl Minecart {
         if n < 3 {
             return None;
         }
-        let digit = def.name.chars().last().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+        let digit = def
+            .name
+            .chars()
+            .last()
+            .and_then(|c| c.to_digit(10))
+            .unwrap_or(0) as usize;
         let pos_index = match digit {
             0 => 1,
             1 => n / 3,
@@ -86,7 +91,11 @@ impl Minecart {
     /// One game tick. `path` is the one it was made with, `frames` the number of frames of its
     /// animation. Where it looks for drivers.
     pub fn tick(&mut self, path: &[SVec3], frames: i32) -> Contact {
-        self.anim_frame = if (self.anim_frame as i32 + 1) < frames { self.anim_frame + 1 } else { 0 };
+        self.anim_frame = if (self.anim_frame as i32 + 1) < frames {
+            self.anim_frame + 1
+        } else {
+            0
+        };
 
         let at = |i: usize| [path[i].x, path[i].y, path[i].z];
         if self.curr_frame < FRAMES_BETWEEN_POINTS {
@@ -111,13 +120,20 @@ impl Minecart {
         }
 
         for a in 0..3 {
-            self.pos[a] = self.pos_start[a] as i32 - (self.curr_frame as i32 * self.dir[a] as i32) / FRAMES_BETWEEN_POINTS as i32;
+            self.pos[a] = self.pos_start[a] as i32
+                - (self.curr_frame as i32 * self.dir[a] as i32) / FRAMES_BETWEEN_POINTS as i32;
         }
         self.rot_curr.y = interpolate(self.rot_curr.y, self.rot_desired.y, ROT_SPEED);
         self.rot_curr.x = interpolate(self.rot_curr.x, self.rot_desired.x, ROT_SPEED);
         self.matrix = convert_rot_to_matrix(&mut gte::Gte::default(), self.rot_curr);
 
-        Contact { pos: self.pos, damage: Damage::Squish, hit_radius: HIT_RADIUS, sound: 0, shape: Shape::Cylinder }
+        Contact {
+            pos: self.pos,
+            damage: Damage::Squish,
+            hit_radius: HIT_RADIUS,
+            sound: 0,
+            shape: Shape::Cylinder,
+        }
     }
 }
 
@@ -136,7 +152,11 @@ mod tests {
             name: name.into(),
             model: 0,
             model_name: String::new(),
-            scale: SVec3 { x: 4096, y: 4096, z: 4096 },
+            scale: SVec3 {
+                x: 4096,
+                y: 4096,
+                z: 4096,
+            },
             color_rgba: 0,
             flags: 0,
             pos: SVec3::default(),
@@ -146,7 +166,9 @@ mod tests {
     }
 
     fn path() -> Vec<SVec3> {
-        [(0, 0, 0), (80, 0, 0), (80, 0, 80), (160, 40, 80)].map(|(x, y, z)| SVec3 { x, y, z }).to_vec()
+        [(0, 0, 0), (80, 0, 0), (80, 0, 80), (160, 40, 80)]
+            .map(|(x, y, z)| SVec3 { x, y, z })
+            .to_vec()
     }
 
     #[test]
@@ -182,15 +204,34 @@ mod tests {
 
     #[test]
     fn the_three_carts_start_in_different_places() {
-        let path: Vec<_> = (0..50).map(|i| SVec3 { x: i * 10, y: 0, z: 0 }).collect();
+        let path: Vec<_> = (0..50)
+            .map(|i| SVec3 {
+                x: i * 10,
+                y: 0,
+                z: 0,
+            })
+            .collect();
         let index = |name: &str| Minecart::new(&def(name), &path).unwrap().pos_index;
-        assert_eq!([index("minecart#0"), index("minecart#1"), index("minecart#2")], [1, 16, 33]);
+        assert_eq!(
+            [
+                index("minecart#0"),
+                index("minecart#1"),
+                index("minecart#2")
+            ],
+            [1, 16, 33]
+        );
     }
 
     #[test]
     fn it_turns_to_face_the_way_it_goes() {
         // A straight road along +x: the direction is the other way round, and so is the yaw.
-        let path: Vec<_> = (0..10).map(|i| SVec3 { x: i * 80, y: 0, z: 0 }).collect();
+        let path: Vec<_> = (0..10)
+            .map(|i| SVec3 {
+                x: i * 80,
+                y: 0,
+                z: 0,
+            })
+            .collect();
         let mut cart = Minecart::new(&def("minecart#0"), &path).unwrap();
         assert_eq!(cart.rot_desired.y, (math::ratan2(-80, 0) - 0x800) as i16);
         for _ in 0..40 {
@@ -205,7 +246,10 @@ mod tests {
         let path = path();
         let mut cart = Minecart::new(&def("minecart#0"), &path).unwrap();
         let contact = cart.tick(&path, 10);
-        assert_eq!((contact.damage, contact.shape), (Damage::Squish, Shape::Cylinder));
+        assert_eq!(
+            (contact.damage, contact.shape),
+            (Damage::Squish, Shape::Cylinder)
+        );
         assert!(contact.hits([cart.pos[0] + 100, cart.pos[1] + 1000, cart.pos[2]]));
     }
 }

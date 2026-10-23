@@ -61,7 +61,11 @@ const WHEEL_ROTATION_STRENGTH: i32 = 0x40;
 const WHEEL_ROTATION_INTERP_STEP: i32 = 0x18;
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// Counts a timer down by `ms` (given negated), stopping at zero.
@@ -75,7 +79,11 @@ fn count_down(timer: &mut i16, neg_ms: i32) {
 /// `value / 2^shift`, rounding towards zero (`(v + bias) >> shift` when negative).
 fn shift_toward_zero(value: i32, shift: u32) -> i32 {
     let bias = (1 << shift) - 1;
-    if value < 0 { mips::sra(mips::add_lo(value, bias), shift) } else { mips::sra(value, shift) }
+    if value < 0 {
+        mips::sra(mips::add_lo(value, bias), shift)
+    } else {
+        mips::sra(value, shift)
+    }
 }
 
 /// `VehPhysGeneral_GetBaseSpeed`: the speed the driver is aiming for with the
@@ -102,7 +110,10 @@ pub fn base_speed(d: &Driver) -> i32 {
     if d.reserves != 0 {
         let single = stats.single_turbo_speed as i32;
         stat = mips::add_lo(stat, d.fire_speed_cap as i32);
-        let mut cap = mips::add_lo(single, mips::sll(mips::sub_lo(stats.sacred_fire_speed as i32, single), 1));
+        let mut cap = mips::add_lo(
+            single,
+            mips::sll(mips::sub_lo(stats.sacred_fire_speed as i32, single), 1),
+        );
         cap = mips::sub_lo(cap, d.fire_speed_cap as i32);
         if cap < 0 {
             cap = 0;
@@ -118,7 +129,13 @@ pub fn base_speed(d: &Driver) -> i32 {
         subtract = stats.damaged_speed as i32;
     }
     if d.clock_receive != 0 {
-        let clock_effect = mips::sra(mips::mul_lo(stats.damaged_speed as i32, mips::sub_lo(0x14, d.driver_rank as i32)), 4);
+        let clock_effect = mips::sra(
+            mips::mul_lo(
+                stats.damaged_speed as i32,
+                mips::sub_lo(0x14, d.driver_rank as i32),
+            ),
+            4,
+        );
         if subtract < clock_effect {
             subtract = clock_effect;
         }
@@ -136,9 +153,25 @@ struct Gas {
     actions: u32,
 }
 
-fn gas_and_brake(d: &mut Driver, input: &Input, env: &Env, mut a: u32, approx_speed: i32, cross: bool, mut square: bool) -> Gas {
-    let stick_ry = if env.end_of_race { STICK_CENTER } else { input.stick_ry as i32 };
-    let stick_ly = if env.end_of_race { STICK_CENTER } else { input.stick_ly as i32 };
+fn gas_and_brake(
+    d: &mut Driver,
+    input: &Input,
+    env: &Env,
+    mut a: u32,
+    approx_speed: i32,
+    cross: bool,
+    mut square: bool,
+) -> Gas {
+    let stick_ry = if env.end_of_race {
+        STICK_CENTER
+    } else {
+        input.stick_ry as i32
+    };
+    let stick_ly = if env.end_of_race {
+        STICK_CENTER
+    } else {
+        input.stick_ly as i32
+    };
     let mut cross = cross;
 
     // Square releases the reserves (unless on a turbo pad).
@@ -183,7 +216,8 @@ fn gas_and_brake(d: &mut Driver, input: &Input, env: &Env, mut a: u32, approx_sp
 
     if square {
         let stick = return_to_rest(stick_ly, STICK_CENTER);
-        let reverse_brake = stick >= REVERSE_STICK_THRESHOLD || (stick > 0 && a & actions::REVERSING_ENGINE != 0);
+        let reverse_brake =
+            stick >= REVERSE_STICK_THRESHOLD || (stick > 0 && a & actions::REVERSING_ENGINE != 0);
         if reverse_brake {
             let t = mips::add_lo(mips::sll(mips::neg_lo(backward), 1), mips::neg_lo(backward));
             target = shift_toward_zero(t, 2);
@@ -216,7 +250,9 @@ fn gas_and_brake(d: &mut Driver, input: &Input, env: &Env, mut a: u32, approx_sp
     } else {
         let pedal = mips::neg_lo(return_to_rest(stick_ry, STICK_CENTER));
         if pedal < 0 {
-            if d.speed_approx as i32 >= 0x301 || a & (actions::REVERSE_STEER_LEFT | actions::REVERSE_STEER_RIGHT) != 0 {
+            if d.speed_approx as i32 >= 0x301
+                || a & (actions::REVERSE_STEER_LEFT | actions::REVERSE_STEER_RIGHT) != 0
+            {
                 // Pulling back while still rolling forwards: brakes, and the
                 // kart steers as if reversing.
                 target = 0;
@@ -235,7 +271,8 @@ fn gas_and_brake(d: &mut Driver, input: &Input, env: &Env, mut a: u32, approx_sp
             let mut reverse_from_neutral = false;
             if pedal == 0 {
                 let centered = return_to_rest(stick_ly, STICK_CENTER);
-                reverse_from_neutral = centered >= REVERSE_STICK_THRESHOLD || (centered > 0 && a & actions::REVERSING_ENGINE != 0);
+                reverse_from_neutral = centered >= REVERSE_STICK_THRESHOLD
+                    || (centered > 0 && a & actions::REVERSING_ENGINE != 0);
             }
             if reverse_from_neutral {
                 a |= actions::REVERSING_ENGINE;
@@ -248,7 +285,11 @@ fn gas_and_brake(d: &mut Driver, input: &Input, env: &Env, mut a: u32, approx_sp
         }
     }
 
-    Gas { target, base: target_base, actions: a }
+    Gas {
+        target,
+        base: target_base,
+        actions: a,
+    }
 }
 
 /// `VehPhysProc_Driving_PhysLinear`.
@@ -311,7 +352,11 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
             let low_speed = approx_speed < 0x101;
             let timer = if low_speed {
                 let timer = d.hazard_timer as i32;
-                (if timer > 0 { mips::neg_lo(timer) } else { timer }) | 1
+                (if timer > 0 {
+                    mips::neg_lo(timer)
+                } else {
+                    timer
+                }) | 1
             } else if actions_in & actions::TOUCH_GROUND != 0 {
                 // Clock waddle: rumble in time with the waddle.
                 let clock = d.clock_receive as i32;
@@ -322,7 +367,11 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
                 let trig = math::sin(mips::sll(clock, 4) as u32);
                 waddle = mips::add_lo(waddle, mips::sra(trig, 5));
                 waddle = mips::add_lo(waddle, mips::sra(approx_speed, 8).min(0x20));
-                effects.push(Effect::ShockForce { driver_id: d.driver_id, a: 4, b: mips::add_lo(waddle, 0x18) as u8 });
+                effects.push(Effect::ShockForce {
+                    driver_id: d.driver_id,
+                    a: 4,
+                    b: mips::add_lo(waddle, 0x18) as u8,
+                });
                 abs(hazard) | 1
             } else {
                 mips::neg_lo(abs(hazard)) | 1
@@ -343,7 +392,11 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     let mut a = actions_in & ACTION_CARRY_MASK;
 
     // The retail ring of four normals has shrunk to one: the slot is always 0.
-    d.axis_angle4_normal_vec = if a & actions::TOUCH_GROUND != 0 { d.axis_angle1_normal_vec } else { d.axis_angle2_normal_vec };
+    d.axis_angle4_normal_vec = if a & actions::TOUCH_GROUND != 0 {
+        d.axis_angle1_normal_vec
+    } else {
+        d.axis_angle2_normal_vec
+    };
     d.normal_vec_id = 0;
 
     // === Mask weapon ===
@@ -353,15 +406,27 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     }
 
     // === Buttons ===
-    let held = if env.end_of_race { 0 } else { input.buttons_held };
-    let tapped = if env.end_of_race { 0 } else { input.buttons_tapped };
+    let held = if env.end_of_race {
+        0
+    } else {
+        input.buttons_held
+    };
+    let tapped = if env.end_of_race {
+        0
+    } else {
+        input.buttons_tapped
+    };
     let cross = held & buttons::CROSS != 0;
     let square = held & buttons::SQUARE != 0;
 
     // Tapping L1 or R1 starts a jump, and picks the button a drift is held with.
     let jump_taps = tapped & JUMP_BUTTON_MASK;
     if jump_taps != 0 && d.kart_state != kart_state::DRIFTING {
-        d.button_used_to_start_drift = (if jump_taps == JUMP_BUTTON_MASK { buttons::R1 } else { jump_taps }) as i16;
+        d.button_used_to_start_drift = (if jump_taps == JUMP_BUTTON_MASK {
+            buttons::R1
+        } else {
+            jump_taps
+        }) as i16;
         if rain != rain_cloud::JUMP_LOCKOUT {
             d.jump_ten_buffer = JUMP_BUFFER_FRAMES;
             a |= actions::JUMP_BUTTON_HELD;
@@ -384,7 +449,9 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     let mut gas_target = gas.target;
     let mut target_base = gas.base;
 
-    if d.accel_tap_window_timer == 0 || (d.kart_state != kart_state::NORMAL && d.kart_state != kart_state::ANTIVSHIFT) {
+    if d.accel_tap_window_timer == 0
+        || (d.kart_state != kart_state::NORMAL && d.kart_state != kart_state::ANTIVSHIFT)
+    {
         d.accel_tap_count = 0;
     }
 
@@ -409,23 +476,37 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     d.base_speed = gas_target as i16;
 
     // === Steering ===
-    let stick_lx = if env.end_of_race { STICK_CENTER } else { input.stick_lx as i32 };
-    let default_strength = mips::add_lo(d.stats.turn_rate as i32, mips::sll(d.turn_const as i32, 1) / 5);
-
-    let steer = if d.accel_tap_count >= ACCEL_TAP_STEER_COUNT && approx_speed < STEER_ACCEL_TAP_SPEED_MAX {
-        mips::neg_lo(strength_absolute(stick_lx, STEER_ACCEL_TAP_STRENGTH))
-    } else if d.wall_rub_timer != 0 {
-        mips::neg_lo(strength_absolute(stick_lx, STEER_WALL_RUB_STRENGTH))
-    } else if a & (actions::ACCEL_PREVENTION | actions::BRAKE_WITH_ACCEL) == 0 {
-        mips::neg_lo(strength_absolute(stick_lx, default_strength))
-    } else if !cross {
-        mips::neg_lo(strength_absolute(stick_lx, STEER_BRAKE_STRENGTH))
+    let stick_lx = if env.end_of_race {
+        STICK_CENTER
     } else {
-        // Braking with the gas down: as speed increases, turn rate decreases.
-        let class_speed = mips::sra(mips::sll(d.stats.speed_class_stat as u16 as i32, 16), 17);
-        let strength = map_to_range(abs(d.speed as i32), BRAKE_HIGH_SPEED_THRESHOLD, class_speed, STEER_BRAKE_STRENGTH, default_strength);
-        mips::neg_lo(strength_absolute(stick_lx, strength))
+        input.stick_lx as i32
     };
+    let default_strength = mips::add_lo(
+        d.stats.turn_rate as i32,
+        mips::sll(d.turn_const as i32, 1) / 5,
+    );
+
+    let steer =
+        if d.accel_tap_count >= ACCEL_TAP_STEER_COUNT && approx_speed < STEER_ACCEL_TAP_SPEED_MAX {
+            mips::neg_lo(strength_absolute(stick_lx, STEER_ACCEL_TAP_STRENGTH))
+        } else if d.wall_rub_timer != 0 {
+            mips::neg_lo(strength_absolute(stick_lx, STEER_WALL_RUB_STRENGTH))
+        } else if a & (actions::ACCEL_PREVENTION | actions::BRAKE_WITH_ACCEL) == 0 {
+            mips::neg_lo(strength_absolute(stick_lx, default_strength))
+        } else if !cross {
+            mips::neg_lo(strength_absolute(stick_lx, STEER_BRAKE_STRENGTH))
+        } else {
+            // Braking with the gas down: as speed increases, turn rate decreases.
+            let class_speed = mips::sra(mips::sll(d.stats.speed_class_stat as u16 as i32, 16), 17);
+            let strength = map_to_range(
+                abs(d.speed as i32),
+                BRAKE_HIGH_SPEED_THRESHOLD,
+                class_speed,
+                STEER_BRAKE_STRENGTH,
+                default_strength,
+            );
+            mips::neg_lo(strength_absolute(stick_lx, strength))
+        };
 
     if steer == 0 {
         d.num_frames_spent_steering = STEER_RESET_FRAMES;
@@ -442,7 +523,11 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
 
     // The front wheels follow the stick.
     let wheel = strength_absolute(stick_lx, WHEEL_ROTATION_STRENGTH);
-    d.wheel_rotation = interp_by_speed(d.wheel_rotation as i32, WHEEL_ROTATION_INTERP_STEP, mips::neg_lo(wheel)) as i16;
+    d.wheel_rotation = interp_by_speed(
+        d.wheel_rotation as i32,
+        WHEEL_ROTATION_INTERP_STEP,
+        mips::neg_lo(wheel),
+    ) as i16;
 
     d.actions_flag_set = a;
 }

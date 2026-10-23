@@ -390,7 +390,10 @@ impl Level {
             0 => return Ok(Vec::new()),
             delays => delays as usize,
         };
-        (0..DIGITS).map_while(|i| p.u16(delays + i * 2).ok()).map(Ok).collect()
+        (0..DIGITS)
+            .map_while(|i| p.u16(delays + i * 2).ok())
+            .map(Ok)
+            .collect()
     }
 
     fn parse_position_paths(p: &Payload) -> io::Result<Vec<Vec<SVec3>>> {
@@ -421,7 +424,12 @@ impl Level {
                 return Ok(Vec::new());
             }
             let first = p.ptr(at + 4, "path points")?;
-            p.array(first, points, POS_ROT_SIZE, |p, at| Ok(PosRot { pos: p.svec3(at)?, rot: p.svec3(at + 6)? }))
+            p.array(first, points, POS_ROT_SIZE, |p, at| {
+                Ok(PosRot {
+                    pos: p.svec3(at)?,
+                    rot: p.svec3(at + 6)?,
+                })
+            })
         })
     }
 
@@ -440,7 +448,11 @@ impl Level {
             Ok(InstDef {
                 name: text(p.bytes(at, 0x10)?),
                 model,
-                model_name: if model == 0 { String::new() } else { text(p.bytes(model as usize, 0x10)?) },
+                model_name: if model == 0 {
+                    String::new()
+                } else {
+                    text(p.bytes(model as usize, 0x10)?)
+                },
                 scale: p.svec3(at + 0x14)?,
                 color_rgba: p.u32(at + 0x1c)?,
                 flags: p.u32(at + 0x20)?,
@@ -452,7 +464,12 @@ impl Level {
     }
 
     /// The hitboxes at `at` (0 = none), up to the entry with a zero flag.
-    fn parse_hitboxes(p: &Payload, at: usize, instances_at: usize, num_instances: usize) -> io::Result<Vec<BspHitbox>> {
+    fn parse_hitboxes(
+        p: &Payload,
+        at: usize,
+        instances_at: usize,
+        num_instances: usize,
+    ) -> io::Result<Vec<BspHitbox>> {
         let mut hitboxes = Vec::new();
         if at == 0 {
             return Ok(hitboxes);
@@ -558,7 +575,12 @@ impl Level {
                 };
                 BspKind::Leaf {
                     quad_blocks: first..first + num,
-                    hitboxes: Self::parse_hitboxes(&p, p.u32(at + 0x14)? as usize, instances_at, num_instances)?,
+                    hitboxes: Self::parse_hitboxes(
+                        &p,
+                        p.u32(at + 0x14)? as usize,
+                        instances_at,
+                        num_instances,
+                    )?,
                 }
             };
             Ok(BspNode {

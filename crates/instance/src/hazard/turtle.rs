@@ -48,11 +48,25 @@ impl Turtle {
     /// turtle's number from the last character of its name, whatever that is: odd ones start
     /// fully down, about to rise, the others fully up.
     pub fn new(def: &InstDef, frames: i32) -> Turtle {
-        let id = def.name.bytes().last().map_or(0, |c| c as i32 - b'0' as i32);
+        let id = def
+            .name
+            .bytes()
+            .last()
+            .map_or(0, |c| c as i32 - b'0' as i32);
         if id & 1 != 0 {
-            Turtle { direction: Direction::Rising, timer: 0, state: State::FullyDown, anim_frame: frames as i16 }
+            Turtle {
+                direction: Direction::Rising,
+                timer: 0,
+                state: State::FullyDown,
+                anim_frame: frames as i16,
+            }
         } else {
-            Turtle { direction: Direction::Falling, timer: 0, state: State::NotFullyDown, anim_frame: 0 }
+            Turtle {
+                direction: Direction::Falling,
+                timer: 0,
+                state: State::NotFullyDown,
+                anim_frame: 0,
+            }
         }
     }
 
@@ -136,7 +150,10 @@ mod tests {
     fn the_last_character_of_the_name_picks_the_cycle() {
         // "turtle#4": even, fully up; "turtle#3": odd, fully down; "turtle": 'e' is odd.
         assert_eq!(Turtle::new(&def("turtle#4"), 11).state, State::NotFullyDown);
-        assert_eq!(Turtle::new(&def("turtle#10"), 11).state, State::NotFullyDown);
+        assert_eq!(
+            Turtle::new(&def("turtle#10"), 11).state,
+            State::NotFullyDown
+        );
         let down = Turtle::new(&def("turtle#3"), 11);
         assert_eq!((down.state, down.anim_frame), (State::FullyDown, 11));
         assert_eq!(Turtle::new(&def("turtle"), 11).state, State::FullyDown);
@@ -157,7 +174,10 @@ mod tests {
         }
         // The tick after the last frame is down.
         t.tick(11);
-        assert_eq!((t.direction, t.state), (Direction::Rising, State::FullyDown));
+        assert_eq!(
+            (t.direction, t.state),
+            (Direction::Rising, State::FullyDown)
+        );
         // Waits fully down, then the state changes before the shell is all the way up.
         for _ in 0..30 {
             t.tick(11);

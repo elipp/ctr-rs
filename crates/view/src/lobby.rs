@@ -40,8 +40,17 @@ impl Online {
             .filter(|&(slot, _)| slot != self.slot)
             .map(|(slot, pad)| format!("p{slot} {:x}", pad.held))
             .collect();
-        let wait = if self.frames.len() as u32 <= tick { " (waiting)" } else { "" };
-        format!("NET {tick} you p{}/{}{wait}  {}", self.slot, self.characters.len(), others.join("  "))
+        let wait = if self.frames.len() as u32 <= tick {
+            " (waiting)"
+        } else {
+            ""
+        };
+        format!(
+            "NET {tick} you p{}/{}{wait}  {}",
+            self.slot,
+            self.characters.len(),
+            others.join("  ")
+        )
     }
 }
 
@@ -56,7 +65,10 @@ impl Lobby {
     /// A lobby that is joined from the start, for `--join`.
     pub fn joining(ticket: Ticket, character: u8) -> Lobby {
         println!("joining {ticket}");
-        Lobby { session: Some(net::join(ticket, character)), online: None }
+        Lobby {
+            session: Some(net::join(ticket, character)),
+            online: None,
+        }
     }
 
     /// We drive another character now, which the others learn before the race starts.
@@ -78,11 +90,20 @@ pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Lobby>().init_resource::<crate::remote::Remotes>().add_systems(Update, (toggle, start, report, crate::remote::build).chain());
+        app.init_resource::<Lobby>()
+            .init_resource::<crate::remote::Remotes>()
+            .add_systems(
+                Update,
+                (toggle, start, report, crate::remote::build).chain(),
+            );
     }
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut lobby: ResMut<Lobby>, drive: Res<crate::drive::Drive>) {
+fn toggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut lobby: ResMut<Lobby>,
+    drive: Res<crate::drive::Drive>,
+) {
     if !keys.just_pressed(KeyCode::KeyL) {
         return;
     }
@@ -105,21 +126,47 @@ fn start(keys: Res<ButtonInput<KeyCode>>, lobby: Res<Lobby>, track: Res<crate::T
 }
 
 fn report(mut lobby: ResMut<Lobby>) {
-    let Some(session) = &lobby.session else { return };
+    let Some(session) = &lobby.session else {
+        return;
+    };
     let mut failed = false;
     let mut started = None;
     let mut frames = Vec::new();
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
-                println!("lobby open. To join it, run:\n  cargo run -p view -- --drive --join {ticket}\nPress G to start the race once the others have joined.")
+                println!(
+                    "lobby open. To join it, run:\n  cargo run -p view -- --drive --join {ticket}\nPress G to start the race once the others have joined."
+                )
             }
             Event::PeerJoined(id) => println!("{} joined", id.fmt_short()),
             Event::Joined(id) => println!("joined the lobby of {}", id.fmt_short()),
-            Event::PeerLeft(id) => println!("{} left{}", id.fmt_short(), if lobby.online.is_some() { " (the race waits for them)" } else { "" }),
-            Event::Started { slot, characters, track } => {
-                println!("race started: you are player {slot} of {}, characters {characters:?}, track {track}", characters.len());
-                started = Some(Online { slot, characters, track, frames: Vec::new(), fresh: true, built: false });
+            Event::PeerLeft(id) => println!(
+                "{} left{}",
+                id.fmt_short(),
+                if lobby.online.is_some() {
+                    " (the race waits for them)"
+                } else {
+                    ""
+                }
+            ),
+            Event::Started {
+                slot,
+                characters,
+                track,
+            } => {
+                println!(
+                    "race started: you are player {slot} of {}, characters {characters:?}, track {track}",
+                    characters.len()
+                );
+                started = Some(Online {
+                    slot,
+                    characters,
+                    track,
+                    frames: Vec::new(),
+                    fresh: true,
+                    built: false,
+                });
             }
             Event::Frame { tick, pads } => frames.push((tick, pads)),
             Event::Failed(why) => {

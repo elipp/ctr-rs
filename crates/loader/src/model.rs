@@ -37,7 +37,10 @@ fn half(dram: &DramFile, at: u32) -> io::Result<i16> {
 
 fn name(dram: &DramFile, at: u32) -> io::Result<String> {
     let at = at as usize;
-    let bytes = dram.data.get(at..at + 16).ok_or_else(|| invalid("model name is outside the payload"))?;
+    let bytes = dram
+        .data
+        .get(at..at + 16)
+        .ok_or_else(|| invalid("model name is outside the payload"))?;
     let len = bytes.iter().position(|&b| b == 0).unwrap_or(16);
     Ok(String::from_utf8_lossy(&bytes[..len]).into_owned())
 }
@@ -155,18 +158,34 @@ impl ModelHeader {
             }
         }
 
-        let max_texture = commands.iter().filter(|&&c| c >> 16 != 0).map(|c| c & 0x1ff).max().unwrap_or(0);
+        let max_texture = commands
+            .iter()
+            .filter(|&&c| c >> 16 != 0)
+            .map(|c| c & 0x1ff)
+            .max()
+            .unwrap_or(0);
         let textures = (1..=max_texture)
             .map(|i| {
                 let ptr = word(dram, tex_table + (i - 1) * 4)?;
-                let bytes = dram.data.get(ptr as usize..ptr as usize + TEXTURE_LAYOUT_SIZE);
-                TextureLayout::parse(bytes.ok_or_else(|| invalid("texture layout is outside the payload"))?)
+                let bytes = dram
+                    .data
+                    .get(ptr as usize..ptr as usize + TEXTURE_LAYOUT_SIZE);
+                TextureLayout::parse(
+                    bytes.ok_or_else(|| invalid("texture layout is outside the payload"))?,
+                )
             })
             .collect::<io::Result<Vec<_>>>()?;
 
-        let vertex_count = commands.iter().filter(|&&c| c >> 16 != 0 && c >> 24 & 4 == 0).count();
+        let vertex_count = commands
+            .iter()
+            .filter(|&&c| c >> 16 != 0 && c >> 24 & 4 == 0)
+            .count();
 
-        let static_frame = if frame_data != 0 { Some(read_frame(dram, frame_data, vertex_count, None)?) } else { None };
+        let static_frame = if frame_data != 0 {
+            Some(read_frame(dram, frame_data, vertex_count, None)?)
+        } else {
+            None
+        };
         let animations = (0..num_animations)
             .map(|i| {
                 let anim = word(dram, animations + i * 4)?;
@@ -178,9 +197,15 @@ impl ModelHeader {
             name: name(dram, at)?,
             max_distance_lod: half(dram, at + 0x14)?,
             flags: half(dram, at + 0x16)? as u16,
-            scale: [half(dram, at + 0x18)?, half(dram, at + 0x1a)?, half(dram, at + 0x1c)?],
+            scale: [
+                half(dram, at + 0x18)?,
+                half(dram, at + 0x1a)?,
+                half(dram, at + 0x1c)?,
+            ],
             commands,
-            colors: (0..color_count).map(|i| word(dram, colors + i * 4)).collect::<io::Result<_>>()?,
+            colors: (0..color_count)
+                .map(|i| word(dram, colors + i * 4))
+                .collect::<io::Result<_>>()?,
             textures,
             static_frame,
             animations,
@@ -219,7 +244,11 @@ impl ModelHeader {
             }
 
             if flags & 4 == 0 {
-                stack[stack_index].position = frame.vertices.get(vertex_index).copied().unwrap_or_default();
+                stack[stack_index].position = frame
+                    .vertices
+                    .get(vertex_index)
+                    .copied()
+                    .unwrap_or_default();
                 vertex_index += 1;
             }
             stack[stack_index].color = self.color(command >> 9 & 0x7f);
@@ -244,7 +273,11 @@ impl ModelHeader {
                 continue;
             }
 
-            let draw_command = if strip_length == 2 { prim_command } else { command };
+            let draw_command = if strip_length == 2 {
+                prim_command
+            } else {
+                command
+            };
             out.push(Triangle {
                 positions: [temp[1].position, temp[2].position, temp[3].position],
                 colors: [temp[1].color, temp[2].color, temp[3].color],
@@ -256,7 +289,10 @@ impl ModelHeader {
     }
 
     fn color(&self, index: u32) -> u32 {
-        self.colors.get(index as usize).copied().unwrap_or(0x80_8080)
+        self.colors
+            .get(index as usize)
+            .copied()
+            .unwrap_or(0x80_8080)
     }
 }
 
@@ -266,7 +302,11 @@ fn read_animation(dram: &DramFile, at: u32, vertex_count: usize) -> io::Result<A
     let count_word = word(dram, at + 0x10)?;
     let interpolated = count_word & 0x8000 != 0;
     let count = count_word & 0x7fff;
-    let frames = if interpolated && count > 0 { ((count - 1) >> 1) + 1 } else { count };
+    let frames = if interpolated && count > 0 {
+        ((count - 1) >> 1) + 1
+    } else {
+        count
+    };
     let frame_size = half(dram, at + 0x12)? as u16 as u32;
     let delta = word(dram, at + 0x14)?;
     let delta = (delta != 0).then_some(delta);
@@ -275,13 +315,25 @@ fn read_animation(dram: &DramFile, at: u32, vertex_count: usize) -> io::Result<A
         interpolated,
         num_frames: count as u16,
         frames: (0..frames)
-            .map(|i| read_frame(dram, at + MODEL_ANIM_SIZE + i * frame_size, vertex_count, delta))
+            .map(|i| {
+                read_frame(
+                    dram,
+                    at + MODEL_ANIM_SIZE + i * frame_size,
+                    vertex_count,
+                    delta,
+                )
+            })
             .collect::<io::Result<_>>()?,
     })
 }
 
 /// `RenderBucket_UncompressAnimationFrame` for every vertex of a frame.
-fn read_frame(dram: &DramFile, at: u32, vertex_count: usize, delta: Option<u32>) -> io::Result<Frame> {
+fn read_frame(
+    dram: &DramFile,
+    at: u32,
+    vertex_count: usize,
+    delta: Option<u32>,
+) -> io::Result<Frame> {
     let origin = [half(dram, at)?, half(dram, at + 2)?, half(dram, at + 4)?];
     let vertex_offset = word(dram, at + 0x18)?;
     let data = at + vertex_offset;
@@ -300,18 +352,33 @@ fn read_frame(dram: &DramFile, at: u32, vertex_count: usize, delta: Option<u32>)
             }
         }
         Some(delta) => {
-            let stream = dram.data.get(data as usize..).ok_or_else(|| invalid(format!("frame stream {data:#x} is outside the payload")))?;
+            let stream = dram
+                .data
+                .get(data as usize..)
+                .ok_or_else(|| invalid(format!("frame stream {data:#x} is outside the payload")))?;
             let (mut bit_index, mut accum) = (0usize, [0i32; 3]);
             for i in 0..vertex_count as u32 {
                 let temporal = word(dram, delta + i * 4)?;
                 let bits = [(temporal >> 6 & 7), (temporal >> 3 & 7), (temporal & 7)];
-                let base = [sign_extend(temporal >> 25, 7) << 1, sign_extend(temporal >> 17, 8), sign_extend(temporal >> 9, 8)];
+                let base = [
+                    sign_extend(temporal >> 25, 7) << 1,
+                    sign_extend(temporal >> 17, 8),
+                    sign_extend(temporal >> 9, 8),
+                ];
                 for c in 0..3 {
                     let value = read_signed_bits(stream, &mut bit_index, bits[c] + 1);
-                    accum[c] = if bits[c] == 7 { value as i8 as i32 } else { (accum[c] + value + base[c]) as i8 as i32 };
+                    accum[c] = if bits[c] == 7 {
+                        value as i8 as i32
+                    } else {
+                        (accum[c] + value + base[c]) as i8 as i32
+                    };
                 }
                 // Read order: x, then the GTE's Y, then its Z.
-                vertices.push([accum[0] as u8 as i32 + o[0], accum[1] as u8 as i32 + o[1], accum[2] as u8 as i32 + o[2]]);
+                vertices.push([
+                    accum[0] as u8 as i32 + o[0],
+                    accum[1] as u8 as i32 + o[1],
+                    accum[2] as u8 as i32 + o[2],
+                ]);
             }
         }
     }
@@ -326,7 +393,9 @@ fn sign_extend(value: u32, bits: u32) -> i32 {
 /// `RenderBucket_GetSignedBits`: an MSB-first bit stream of little-endian words.
 fn read_signed_bits(stream: &[u8], bit_index: &mut usize, bits: u32) -> i32 {
     let word_at = |i: usize| {
-        stream.get(i * 4..i * 4 + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
+        stream
+            .get(i * 4..i * 4 + 4)
+            .map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
     };
     let b = *bit_index >> 5;
     let shift = (32 - bits as i32) - (*bit_index & 31) as i32;

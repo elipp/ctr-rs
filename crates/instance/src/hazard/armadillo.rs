@@ -4,7 +4,7 @@
 use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
 
-use crate::{Context, Contact, Damage, Instance, Shape, Tick, interpolate};
+use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
 use vehicle::rotmat::convert_rot_to_matrix;
 
 /// Ticks of rolling are counted in milliseconds of `elapsedTimeMS`: 32 a tick, up to `ROLL_TIME`.
@@ -62,7 +62,11 @@ impl Armadillo {
     /// the level's table (`ptrSpawnType1`) for the digit its name ends in.
     pub fn new(def: &InstDef, delay: u16) -> Armadillo {
         let matrix = matrix_of(def.rot);
-        let rot = SVec3 { x: def.rot.x, y: def.rot.y.rem_euclid(FULL_TURN), z: def.rot.z };
+        let rot = SVec3 {
+            x: def.rot.x,
+            y: def.rot.y.rem_euclid(FULL_TURN),
+            z: def.rot.z,
+        };
         Armadillo {
             pos: [def.pos.x as i32, def.pos.y as i32, def.pos.z as i32],
             rot,
@@ -83,7 +87,13 @@ impl Armadillo {
     }
 
     fn contact(&self) -> Contact {
-        Contact { pos: self.pos, damage: Damage::Spin, hit_radius: HIT_RADIUS, sound: HIT_SOUND, shape: Shape::Sphere }
+        Contact {
+            pos: self.pos,
+            damage: Damage::Spin,
+            hit_radius: HIT_RADIUS,
+            sound: HIT_SOUND,
+            shape: Shape::Sphere,
+        }
     }
 
     /// One game tick. `frames` is the number of frames of its turn and roll animations. Where it
@@ -100,11 +110,12 @@ impl Armadillo {
                         self.time_rolling += ROLL_STEP;
                         self.pos[0] += self.vel[0] as i32;
                         self.pos[2] += self.vel[1] as i32;
-                        self.anim_frame = if (self.anim_frame as i32 + 1) < frames[anim::ROLL as usize] {
-                            self.anim_frame + 1
-                        } else {
-                            0
-                        };
+                        self.anim_frame =
+                            if (self.anim_frame as i32 + 1) < frames[anim::ROLL as usize] {
+                                self.anim_frame + 1
+                            } else {
+                                0
+                            };
                     } else {
                         self.time_rolling = 0;
                         self.anim_index = anim::TURN;
@@ -153,10 +164,18 @@ mod tests {
             name: "armadillo#0".into(),
             model: 0,
             model_name: String::new(),
-            scale: SVec3 { x: 4096, y: 4096, z: 4096 },
+            scale: SVec3 {
+                x: 4096,
+                y: 4096,
+                z: 4096,
+            },
             color_rgba: 0,
             flags: 0,
-            pos: SVec3 { x: 1000, y: 50, z: -2000 },
+            pos: SVec3 {
+                x: 1000,
+                y: 50,
+                z: -2000,
+            },
             rot: SVec3 { x: 0, y: yaw, z: 0 },
             model_id: 0,
         }
@@ -208,7 +227,10 @@ mod tests {
         // Waiting at the edge: no check.
         assert_eq!(a.tick(FRAMES), None);
         let contact = a.tick(FRAMES).unwrap();
-        assert_eq!((contact.pos, contact.damage, contact.hit_radius), (a.pos, Damage::Spin, 0x2400));
+        assert_eq!(
+            (contact.pos, contact.damage, contact.hit_radius),
+            (a.pos, Damage::Spin, 0x2400)
+        );
         // A driver on its path is hit, one a few car lengths off is not.
         assert!(contact.hits([a.pos[0] + 50, a.pos[1], a.pos[2]]));
         assert!(!contact.hits([a.pos[0], a.pos[1], a.pos[2] + 200]));

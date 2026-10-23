@@ -37,7 +37,8 @@ pub fn update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
             if d.jump_meter_timer == 0 {
                 d.jump_meter = 0;
             } else {
-                d.jump_meter_timer = mips::sub_lo(d.jump_meter_timer as i32, env.elapsed_time_ms) as i16;
+                d.jump_meter_timer =
+                    mips::sub_lo(d.jump_meter_timer as i32, env.elapsed_time_ms) as i16;
                 if d.jump_meter_timer < 0 {
                     d.jump_meter_timer = 0;
                 }
@@ -51,11 +52,23 @@ pub fn update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
             if d.jump_meter as i32 >= HANG_TIME_LARGE {
                 fire_level = FIRE_LARGE;
             }
-            fire::increment(d, HANG_TIME_RESERVES, turbo_type::POWER_SLIDE_HANG_TIME, fire_level, effects);
+            fire::increment(
+                d,
+                HANG_TIME_RESERVES,
+                turbo_type::POWER_SLIDE_HANG_TIME,
+                fire_level,
+                effects,
+            );
         }
     } else {
-        if LANDING_VOICELINE_MIN < d.jump_landing_boost as i32 && (d.jump_meter as i32) < LANDING_VOICELINE_CUTOFF {
-            effects.push(Effect::Voiceline { id: LANDING_VOICELINE_ID, driver_id: d.driver_id, priority: LANDING_VOICELINE_PRIORITY });
+        if LANDING_VOICELINE_MIN < d.jump_landing_boost as i32
+            && (d.jump_meter as i32) < LANDING_VOICELINE_CUTOFF
+        {
+            effects.push(Effect::Voiceline {
+                id: LANDING_VOICELINE_ID,
+                driver_id: d.driver_id,
+                priority: LANDING_VOICELINE_PRIORITY,
+            });
         }
 
         d.jump_meter = (d.jump_landing_boost as i32).min(METER_MAX) as i16;

@@ -16,7 +16,10 @@ pub fn fast_sqrt(n: u32, shift: u32) -> u32 {
         test_bit <<= 2;
     }
 
-    let mut add_bit = mips::sll(1, mips::add_lo(root_bit_index, mips::sub_lo(shift as i32, 1)) as u32) as u32;
+    let mut add_bit = mips::sll(
+        1,
+        mips::add_lo(root_bit_index, mips::sub_lo(shift as i32, 1)) as u32,
+    ) as u32;
 
     while test_bit != 0 {
         let mut shifted_result = mips::sll(result as i32, root_bit_index as u32) as u32;
@@ -84,12 +87,24 @@ pub fn steer_accel(
 ) -> i32 {
     // Stage 1: the first frames, steering accelerates harder as time passes.
     if steering_frame_count < stage2_first_frame {
-        return map_to_range(steering_frame_count, 0, stage2_first_frame, stage1_min_steer, stage1_max_steer);
+        return map_to_range(
+            steering_frame_count,
+            0,
+            stage2_first_frame,
+            stage1_min_steer,
+            stage1_max_steer,
+        );
     }
     // Stage 3: from there on it eases off (and from stage 4 on, it is zero).
     let stage3_first_frame = mips::add_lo(stage2_first_frame, stage2_frame_length);
     if stage3_first_frame < steering_frame_count {
-        return map_to_range(steering_frame_count, stage3_first_frame, stage4_first_frame, stage1_max_steer, 0);
+        return map_to_range(
+            steering_frame_count,
+            stage3_first_frame,
+            stage4_first_frame,
+            stage1_max_steer,
+            0,
+        );
     }
     // Stage 2: the maximum.
     stage1_max_steer

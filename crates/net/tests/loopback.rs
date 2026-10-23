@@ -33,7 +33,9 @@ fn a_host_and_a_peer_play_ticks() {
     wait_for(&peer, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the peer", |e| matches!(e, Event::PeerJoined(_)));
     std::thread::sleep(Duration::from_secs(8));
-    for s in [&host, &peer] { s.poll(); }
+    for s in [&host, &peer] {
+        s.poll();
+    }
     // Both change their minds after the lobby is up.
     host.set_character(4);
     peer.set_character(9);
@@ -47,7 +49,10 @@ fn a_host_and_a_peer_play_ticks() {
         assert!(Instant::now() < deadline, "stalled at {ticks:?}");
         for (i, session) in [&host, &peer].into_iter().enumerate() {
             for event in session.poll() {
-                if let Event::Started { characters, track, .. } = &event {
+                if let Event::Started {
+                    characters, track, ..
+                } = &event
+                {
                     assert_eq!(characters, &[4, 9]);
                     assert_eq!(*track, 5);
                     started += 1;

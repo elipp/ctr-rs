@@ -182,10 +182,13 @@ pub mod flag {
     pub const IR0_SATURATED: u32 = 1 << 12;
 
     // The same bits, indexed by channel (MAC1..3, IR1..3, R/G/B, SX2/SY2).
-    pub(crate) const MAC_OVERFLOW_POS: [u32; 3] = [MAC1_OVERFLOW_POS, MAC2_OVERFLOW_POS, MAC3_OVERFLOW_POS];
-    pub(crate) const MAC_OVERFLOW_NEG: [u32; 3] = [MAC1_OVERFLOW_NEG, MAC2_OVERFLOW_NEG, MAC3_OVERFLOW_NEG];
+    pub(crate) const MAC_OVERFLOW_POS: [u32; 3] =
+        [MAC1_OVERFLOW_POS, MAC2_OVERFLOW_POS, MAC3_OVERFLOW_POS];
+    pub(crate) const MAC_OVERFLOW_NEG: [u32; 3] =
+        [MAC1_OVERFLOW_NEG, MAC2_OVERFLOW_NEG, MAC3_OVERFLOW_NEG];
     pub(crate) const IR_SATURATED: [u32; 3] = [IR1_SATURATED, IR2_SATURATED, IR3_SATURATED];
-    pub(crate) const COLOR_SATURATED: [u32; 3] = [COLOR_R_SATURATED, COLOR_G_SATURATED, COLOR_B_SATURATED];
+    pub(crate) const COLOR_SATURATED: [u32; 3] =
+        [COLOR_R_SATURATED, COLOR_G_SATURATED, COLOR_B_SATURATED];
     pub(crate) const SXY_SATURATED: [u32; 2] = [SX2_SATURATED, SY2_SATURATED];
 
     /// `CTC2` keeps only these bits of a FLAG write.
@@ -301,7 +304,8 @@ fn divide(numerator: u16, denominator: u16) -> u32 {
     }
     let shift = leading_count(denominator as u32).wrapping_sub(UNR_DENOMINATOR_BITS) as i32;
     let r1 = (d << shift) & UNR_MANTISSA_MASK;
-    let r2 = UNR_TABLE[((r1 + UNR_TABLE_ROUND) >> UNR_TABLE_SHIFT) as usize] as i32 + UNR_TABLE_BIAS;
+    let r2 =
+        UNR_TABLE[((r1 + UNR_TABLE_ROUND) >> UNR_TABLE_SHIFT) as usize] as i32 + UNR_TABLE_BIAS;
     let r3 = ((UNR_STEP_BIAS - r2 * (r1 + UNR_IMPLICIT_ONE)) >> 8) & UNR_STEP_MASK;
     let reciprocal = ((r2 * r3 + UNR_STEP_BIAS) >> 8) as u32;
     (((reciprocal as u64) * ((n << shift) as u64) + UNR_ROUND) >> UNR_RESULT_SHIFT) as u32
@@ -345,7 +349,10 @@ impl Gte {
             data::IRGB => {
                 for i in 0..3 {
                     let channel = (value >> (IRGB_CHANNEL_BITS * i as u32)) & IRGB_CHANNEL_MASK;
-                    set_lo(&mut self.d[data::IR1 + i], (channel << IRGB_TO_IR_SHIFT) as i32);
+                    set_lo(
+                        &mut self.d[data::IR1 + i],
+                        (channel << IRGB_TO_IR_SHIFT) as i32,
+                    );
                 }
             }
             data::LZCS => self.d[data::LZCR] = leading_count(value),
@@ -361,11 +368,14 @@ impl Gte {
             data::VZ0 | data::VZ1 | data::VZ2 | data::IR0 | data::IR1 | data::IR2 | data::IR3 => {
                 self.d[reg] = lo_s(self.d[reg]) as u32
             }
-            data::OTZ | data::SZ0 | data::SZ1 | data::SZ2 | data::SZ3 => self.d[reg] = lo_u(self.d[reg]) as u32,
+            data::OTZ | data::SZ0 | data::SZ1 | data::SZ2 | data::SZ3 => {
+                self.d[reg] = lo_u(self.d[reg]) as u32
+            }
             data::SXYP => self.d[reg] = self.d[data::SXY2],
             data::IRGB | data::ORGB => {
                 self.d[reg] = (0..3).fold(0, |acc, i| {
-                    let channel = (self.ir(1 + i) >> IRGB_TO_IR_SHIFT).clamp(0, IRGB_CHANNEL_MASK as i32);
+                    let channel =
+                        (self.ir(1 + i) >> IRGB_TO_IR_SHIFT).clamp(0, IRGB_CHANNEL_MASK as i32);
                     acc | (channel as u32) << (IRGB_CHANNEL_BITS * i as u32)
                 });
             }
@@ -575,7 +585,9 @@ impl Gte {
     /// `MAC = L * v`, `IR = limit(MAC)`
     fn light_vector(&mut self, v: [i32; 3], lm: i32) {
         for i in 0..3 {
-            let sum: i64 = (0..3).map(|j| (self.mat(ctrl::L_MATRIX, i * 3 + j) * v[j]) as i64).sum();
+            let sum: i64 = (0..3)
+                .map(|j| (self.mat(ctrl::L_MATRIX, i * 3 + j) * v[j]) as i64)
+                .sum();
             let m = self.a(i, sum);
             self.set_mac(1 + i, m);
         }
@@ -596,9 +608,15 @@ impl Gte {
 
     /// `MAC = base + IR0 * limit(FC<<12 - base)`: interpolation towards the far colour.
     fn far_color_blend(&mut self, i: usize, base: i32) {
-        let inner = self.a(i, ((self.far_color(i) as i64) << FRACTION_BITS) - base as i64);
+        let inner = self.a(
+            i,
+            ((self.far_color(i) as i64) << FRACTION_BITS) - base as i64,
+        );
         let blended = self.lm_b(i, inner, 0);
-        let m = self.a(i, base.wrapping_add(self.ir(0).wrapping_mul(blended)) as i64);
+        let m = self.a(
+            i,
+            base.wrapping_add(self.ir(0).wrapping_mul(blended)) as i64,
+        );
         self.set_mac(1 + i, m);
     }
 
@@ -620,7 +638,9 @@ impl Gte {
     fn rot_trans_pers(&mut self, idx: usize, lm: i32) -> i32 {
         let v = self.vec(idx);
         for i in 0..3 {
-            let sum: i64 = (0..3).map(|j| (self.mat(ctrl::R_MATRIX, i * 3 + j) * v[j]) as i64).sum();
+            let sum: i64 = (0..3)
+                .map(|j| (self.mat(ctrl::R_MATRIX, i * 3 + j) * v[j]) as i64)
+                .sum();
             let m = self.a(i, ((self.translation(i) as i64) << FRACTION_BITS) + sum);
             self.set_mac(1 + i, m);
         }
@@ -726,7 +746,11 @@ impl Gte {
             }
             cmd::MVMVA => {
                 let field = |shift| ((op >> shift) & cmd::SELECTOR_MASK) as usize;
-                let (mx, v, cv) = (field(cmd::MX_SHIFT), field(cmd::V_SHIFT), field(cmd::CV_SHIFT));
+                let (mx, v, cv) = (
+                    field(cmd::MX_SHIFT),
+                    field(cmd::V_SHIFT),
+                    field(cmd::CV_SHIFT),
+                );
                 let vec = self.vec(v);
                 let matrix = |g: &Self, k: usize| -> i32 {
                     if mx != cmd::MX_GARBAGE {
@@ -752,7 +776,8 @@ impl Gte {
                     // The reference's far-colour path skips the X column in the
                     // stored result...
                     for i in 0..3 {
-                        let rest = (matrix(self, i * 3 + 1) * vec[1]) as i64 + (matrix(self, i * 3 + 2) * vec[2]) as i64;
+                        let rest = (matrix(self, i * 3 + 1) * vec[1]) as i64
+                            + (matrix(self, i * 3 + 2) * vec[2]) as i64;
                         let r = self.a(i, rest);
                         self.set_mac(1 + i, r);
                     }
@@ -764,7 +789,9 @@ impl Gte {
                     }
                 } else {
                     for i in 0..3 {
-                        let sum: i64 = (0..3).map(|j| (matrix(self, i * 3 + j) * vec[j]) as i64).sum();
+                        let sum: i64 = (0..3)
+                            .map(|j| (matrix(self, i * 3 + j) * vec[j]) as i64)
+                            .sum();
                         let r = self.a(i, offset(self, i) * ONE + sum);
                         self.set_mac(1 + i, r);
                     }
@@ -828,7 +855,10 @@ impl Gte {
             cmd::DPCT => {
                 for _ in 0..3 {
                     for i in 0..3 {
-                        self.far_color_blend(i, byte(self.d[data::RGB0], i as u32) << COLOR_BLEND_SHIFT);
+                        self.far_color_blend(
+                            i,
+                            byte(self.d[data::RGB0], i as u32) << COLOR_BLEND_SHIFT,
+                        );
                     }
                     self.ir_from_mac(lm);
                     self.push_color();
@@ -853,7 +883,8 @@ impl Gte {
             }
             cmd::GPL => {
                 for i in 0..3 {
-                    let v = shift(self.mac(1 + i) as i64, -self.sf) + (self.ir(0) * self.ir(1 + i)) as i64;
+                    let v = shift(self.mac(1 + i) as i64, -self.sf)
+                        + (self.ir(0) * self.ir(1 + i)) as i64;
                     let m = self.a(i, v);
                     self.set_mac(1 + i, m);
                 }

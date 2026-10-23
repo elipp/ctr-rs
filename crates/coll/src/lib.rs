@@ -265,7 +265,11 @@ fn pack(lo: i32, hi: i32) -> u32 {
 }
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// The two coordinates (x=0, y=1, z=2) a triangle is projected onto, for its
@@ -283,7 +287,11 @@ fn coords(p: SVec3) -> [i32; 3] {
 }
 
 fn sv(x: i32, y: i32, z: i32) -> SVec3 {
-    SVec3 { x: x as i16, y: y as i16, z: z as i16 }
+    SVec3 {
+        x: x as i16,
+        y: y as i16,
+        z: z as i16,
+    }
 }
 
 /// `COLL_FIXED_TRIANGL_Barycentrics`: the point on edge `v1`-`v2` closest to
@@ -291,7 +299,11 @@ fn sv(x: i32, y: i32, z: i32) -> SVec3 {
 pub fn triangle_barycentrics(gte: &mut Gte, v1: SVec3, v2: SVec3, point: SVec3) -> SVec3 {
     let (v1x, v1y, v1z) = (v1.x as i32, v1.y as i32, v1.z as i32);
     let edge = (v2.x as i32 - v1x, v2.y as i32 - v1y, v2.z as i32 - v1z);
-    let p = (point.x as i32 - v1x, point.y as i32 - v1y, point.z as i32 - v1z);
+    let p = (
+        point.x as i32 - v1x,
+        point.y as i32 - v1y,
+        point.z as i32 - v1z,
+    );
 
     gte.ctc2(pack(edge.0, edge.1), ctrl::R_MATRIX);
     gte.ctc2(pack(edge.2, p.0), ctrl::R13R21);
@@ -385,13 +397,24 @@ impl Collision {
         sps.input1.hit_radius_squared = radius_squared;
         sps.quad_block_coll.hit_radius_squared = radius_squared;
 
-        let axis = |top: i16, bottom: i16| if top < bottom { (top, bottom) } else { (bottom, top) };
+        let axis = |top: i16, bottom: i16| {
+            if top < bottom {
+                (top, bottom)
+            } else {
+                (bottom, top)
+            }
+        };
         (sps.bbox.min.x, sps.bbox.max.x) = axis(top.x, bottom.x);
         (sps.bbox.min.y, sps.bbox.max.y) = axis(top.y, bottom.y);
         (sps.bbox.min.z, sps.bbox.max.z) = axis(top.z, bottom.z);
 
         let bounds = sps.bbox;
-        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, false), self);
+        search_bsp(
+            level,
+            &bounds,
+            |this, level, leaf| this.test_leaf_quadblocks(level, leaf, false),
+            self,
+        );
     }
 
     /// `COLL_SearchBSP_CallbackPARAM` with `COLL_MOVED_BSPLEAF_TestQuadblocks`:
@@ -400,7 +423,12 @@ impl Collision {
     /// `sps` (`hit_fraction`, `hit`, `hit_level_triangle`, ...).
     pub fn search_moved(&mut self, level: &Level) {
         let bounds = self.sps.bbox;
-        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, true), self);
+        search_bsp(
+            level,
+            &bounds,
+            |this, level, leaf| this.test_leaf_quadblocks(level, leaf, true),
+            self,
+        );
     }
 
     /// `COLL_SearchBSP_CallbackPARAM` with `COLL_FIXED_BSPLEAF_TestQuadblocks`
@@ -408,7 +436,12 @@ impl Collision {
     /// caller sets up the scratchpad (segment, bounds, flags) first.
     pub fn search_fixed(&mut self, level: &Level) {
         let bounds = self.sps.bbox;
-        search_bsp(level, &bounds, |this, level, leaf| this.test_leaf_quadblocks(level, leaf, false), self);
+        search_bsp(
+            level,
+            &bounds,
+            |this, level, leaf| this.test_leaf_quadblocks(level, leaf, false),
+            self,
+        );
     }
 
     /// `COLL_FIXED_QUADBLK_TestTriangles` on a single quad block.
@@ -496,7 +529,11 @@ impl Collision {
             }
         }
 
-        sps.scrub_triangles[count] = ScrubTriangle { quad: Some(quad), triangle_id, scrub_depth: 0 };
+        sps.scrub_triangles[count] = ScrubTriangle {
+            quad: Some(quad),
+            triangle_id,
+            scrub_depth: 0,
+        };
         sps.quad_block_coll.search_flags = flags & !search_flags::REPEAT_SCRUB;
         sps.input1.scrub_depth = 0;
         sps.num_scrub_triangles += 1;
@@ -605,7 +642,8 @@ impl Collision {
         self.sps.collision.tri_normal_lod_shift = 2;
         self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift as u8;
 
-        let has_second_triangle = self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
+        let has_second_triangle =
+            self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
         if has_second_triangle {
             self.triangle_norm_vec(quad.tri_normal_vec_dividend[dividend::LO_1], 1, 3, 2);
         }
@@ -620,7 +658,8 @@ impl Collision {
         self.sps.collision.tri_normal_lod_shift = 0;
         self.sps.collision.tri_normal_vec_bit_shift = quad.tri_normal_vec_bit_shift as u8;
 
-        let has_second_triangle = self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
+        let has_second_triangle =
+            self.sps.quad_second_tri_index_a != self.sps.quad_second_tri_index_b;
         if has_second_triangle {
             self.triangle_norm_vec(quad.tri_normal_vec_dividend[dividend::HI_4], 8, 6, 7);
             self.triangle_norm_vec(quad.tri_normal_vec_dividend[dividend::HI_5], 7, 3, 8);
@@ -640,7 +679,11 @@ impl Collision {
         self.sps.collision.tri_normal_vec_dividend = dividend;
         let sps = &mut self.sps;
         let gte = &mut self.gte;
-        let (p1, p2, p3) = (sps.search_vert[v1].pos, sps.search_vert[v2].pos, sps.search_vert[v3].pos);
+        let (p1, p2, p3) = (
+            sps.search_vert[v1].pos,
+            sps.search_vert[v2].pos,
+            sps.search_vert[v3].pos,
+        );
 
         let (v1x, v1y, v1z) = (p1.x as i32, p1.y as i32, p1.z as i32);
         let edge_a = (p3.x as i32 - v1x, p3.y as i32 - v1y, p3.z as i32 - v1z);
@@ -707,7 +750,14 @@ impl Collision {
     }
 
     /// `COLL_FIXED_TRIANGL_TestPoint_Body`
-    fn triangle_test_point_body(&mut self, level: &Level, v1: usize, v2: usize, v3: usize, normal_zw: i32) {
+    fn triangle_test_point_body(
+        &mut self,
+        level: &Level,
+        v1: usize,
+        v2: usize,
+        v3: usize,
+        normal_zw: i32,
+    ) {
         let sps = &mut self.sps;
         let gte = &mut self.gte;
         let q = sps.quad_block_coll;
@@ -753,7 +803,11 @@ impl Collision {
 
         sps.candidate.hit_pos = sv(hit[0], hit[1], hit[2]);
 
-        let (p1, p2, p3) = (sps.search_vert[v1].pos, sps.search_vert[v2].pos, sps.search_vert[v3].pos);
+        let (p1, p2, p3) = (
+            sps.search_vert[v1].pos,
+            sps.search_vert[v2].pos,
+            sps.search_vert[v3].pos,
+        );
         let (c1, c2, c3) = (coords(p1), coords(p2), coords(p3));
 
         // Project onto the plane's two least-significant axes: (first, second).
@@ -768,10 +822,8 @@ impl Collision {
             std::mem::swap(&mut first_a, &mut first_b);
             (bary_v1, bary_v2) = (v3, v2);
         }
-        let (second_a_pos, second_b_pos) = (
-            sps.search_vert[bary_v1].pos,
-            sps.search_vert[bary_v2].pos,
-        );
+        let (second_a_pos, second_b_pos) =
+            (sps.search_vert[bary_v1].pos, sps.search_vert[bary_v2].pos);
         let origin = c1[second];
         let second_a = coords(second_a_pos)[second] - origin;
         let second_b = coords(second_b_pos)[second] - origin;
@@ -782,13 +834,19 @@ impl Collision {
 
         if first_a != 0 {
             let denom = mips::sra(
-                mips::sub_lo(mips::mul_lo(second_b, first_a), mips::mul_lo(first_b, second_a)),
+                mips::sub_lo(
+                    mips::mul_lo(second_b, first_a),
+                    mips::mul_lo(first_b, second_a),
+                ),
                 6,
             );
             if denom != 0 {
                 bary_b = mips::div(
                     mips::sll(
-                        mips::sub_lo(mips::mul_lo(second_hit, first_a), mips::mul_lo(first_hit, second_a)),
+                        mips::sub_lo(
+                            mips::mul_lo(second_hit, first_a),
+                            mips::mul_lo(first_hit, second_a),
+                        ),
                         6,
                     ),
                     denom,
@@ -885,19 +943,28 @@ impl Collision {
             bary_b = mips::div(mips::sll(p.first_hit, 12), p.first_b);
             if p.second_a != 0 {
                 bary_a = mips::div(
-                    mips::sub_lo(mips::sll(p.second_hit, 12), mips::mul_lo(bary_b, p.second_b)),
+                    mips::sub_lo(
+                        mips::sll(p.second_hit, 12),
+                        mips::mul_lo(bary_b, p.second_b),
+                    ),
                     p.second_a,
                 );
             }
         } else {
             let denom = mips::sra(
-                mips::sub_lo(mips::mul_lo(p.second_b, p.first_a), mips::mul_lo(p.first_b, p.second_a)),
+                mips::sub_lo(
+                    mips::mul_lo(p.second_b, p.first_a),
+                    mips::mul_lo(p.first_b, p.second_a),
+                ),
                 6,
             );
             if denom != 0 {
                 bary_b = mips::div(
                     mips::sll(
-                        mips::sub_lo(mips::mul_lo(p.second_hit, p.first_a), mips::mul_lo(p.first_hit, p.second_a)),
+                        mips::sub_lo(
+                            mips::mul_lo(p.second_hit, p.first_a),
+                            mips::mul_lo(p.first_hit, p.second_a),
+                        ),
                         6,
                     ),
                     denom,
@@ -927,7 +994,8 @@ impl Collision {
                 sps.candidate.hit_pos = vertex(bary_v3);
                 return clip::V3;
             }
-            sps.candidate.hit_pos = triangle_barycentrics(&mut self.gte, vertex(v1), vertex(bary_v3), push_out);
+            sps.candidate.hit_pos =
+                triangle_barycentrics(&mut self.gte, vertex(v1), vertex(bary_v3), push_out);
             return clip::EDGE_V1_V3;
         }
 
@@ -936,7 +1004,8 @@ impl Collision {
                 sps.candidate.hit_pos = push_out;
                 return clip::FACE;
             }
-            sps.candidate.hit_pos = triangle_barycentrics(&mut self.gte, vertex(bary_v2), vertex(bary_v3), push_out);
+            sps.candidate.hit_pos =
+                triangle_barycentrics(&mut self.gte, vertex(bary_v2), vertex(bary_v3), push_out);
             return clip::EDGE_V2_V3;
         }
 
@@ -944,7 +1013,8 @@ impl Collision {
             sps.candidate.hit_pos = vertex(bary_v2);
             return clip::V2;
         }
-        sps.candidate.hit_pos = triangle_barycentrics(&mut self.gte, vertex(v1), vertex(bary_v2), push_out);
+        sps.candidate.hit_pos =
+            triangle_barycentrics(&mut self.gte, vertex(v1), vertex(bary_v2), push_out);
         clip::EDGE_V1_V2
     }
 
@@ -965,7 +1035,9 @@ impl Collision {
         let plane = sps.candidate.plane;
         let normal_zw = pack(plane.normal.z as i32, plane.half_distance as i32) as i32;
 
-        if quad.flags & quad_flags::DOOR != 0 && (quad.terrain_type as i8 as i32 & self.door_access_flags as i32) != 0 {
+        if quad.flags & quad_flags::DOOR != 0
+            && (quad.terrain_type as i8 as i32 & self.door_access_flags as i32) != 0
+        {
             return;
         }
 
@@ -973,7 +1045,10 @@ impl Collision {
         gte.ctc2(pack(pos.x as i32, pos.y as i32), ctrl::R_MATRIX);
         gte.ctc2(pack(pos.z as i32, start.x as i32), ctrl::R13R21);
         gte.ctc2(pack(start.y as i32, start.z as i32), ctrl::R22R23);
-        gte.mtc2(pack(plane.normal.x as i32, plane.normal.y as i32), data::VXY0);
+        gte.mtc2(
+            pack(plane.normal.x as i32, plane.normal.y as i32),
+            data::VXY0,
+        );
         gte.mtc2(normal_zw as u32, data::VZ0);
         gte.cop2(RTV0_SF1);
 
@@ -982,14 +1057,18 @@ impl Collision {
         let mut plane_far = mips::sub_lo(gte.mfc2(data::MAC2) as i32, plane_offset);
 
         // A back-facing plane is flipped for triggers and double-sided quads.
-        if plane_far < 0 && (quad.flags & quad_flags::TRIGGER != 0 || quad.draw_order_low & DRAW_ORDER_LOW_DOUBLE_SIDED != 0) {
+        if plane_far < 0
+            && (quad.flags & quad_flags::TRIGGER != 0
+                || quad.draw_order_low & DRAW_ORDER_LOW_DOUBLE_SIDED != 0)
+        {
             plane_near = mips::neg_lo(plane_near);
             plane_far = mips::neg_lo(plane_far);
             let n = &mut sps.candidate.plane.normal;
             n.x = mips::neg_lo(n.x as i32) as i16;
             n.y = mips::neg_lo(n.y as i32) as i16;
             n.z = mips::neg_lo(n.z as i32) as i16;
-            sps.candidate.plane.half_distance = mips::neg_lo(sps.candidate.plane.half_distance as i32) as i16;
+            sps.candidate.plane.half_distance =
+                mips::neg_lo(sps.candidate.plane.half_distance as i32) as i16;
         }
 
         sps.num_triangles_tested = sps.num_triangles_tested.wrapping_add(1);
@@ -1015,7 +1094,10 @@ impl Collision {
                 mips::sub_lo(pos.y as i32, start.y as i32),
                 mips::sub_lo(pos.z as i32, start.z as i32),
             );
-            let fraction = mips::div(mips::sll(mips::neg_lo(plane_near), 12), mips::sub_lo(plane_far, plane_near));
+            let fraction = mips::div(
+                mips::sll(mips::neg_lo(plane_near), 12),
+                mips::sub_lo(plane_far, plane_near),
+            );
             gte.mtc2(fraction as u32, data::IR0);
             used_segment_projection = true;
         }
@@ -1040,7 +1122,11 @@ impl Collision {
 
         let sps = &mut self.sps;
         let gte = &mut self.gte;
-        let (from, hit_pos) = if used_segment_projection { (sps.candidate.push_out, sps.candidate.hit_pos) } else { (pos, sps.candidate.hit_pos) };
+        let (from, hit_pos) = if used_segment_projection {
+            (sps.candidate.push_out, sps.candidate.hit_pos)
+        } else {
+            (pos, sps.candidate.hit_pos)
+        };
         sps.candidate_delta = sv(
             mips::sub_lo(from.x as i32, hit_pos.x as i32),
             mips::sub_lo(from.y as i32, hit_pos.y as i32),
@@ -1060,7 +1146,8 @@ impl Collision {
         }
 
         if quad.flags & quad_flags::TRIGGER != 0
-            && (plane_near < 0 || (mips::sub_lo(plane_near, radius) | mips::sub_lo(plane_far, radius)) < 0)
+            && (plane_near < 0
+                || (mips::sub_lo(plane_near, radius) | mips::sub_lo(plane_far, radius)) < 0)
         {
             sps.collision.step_flags |= quad.terrain_type as u32;
             return;
@@ -1132,13 +1219,22 @@ struct Projection {
 /// `COLL_SearchBSP_CallbackPARAM`: calls `callback` on every BSP leaf whose
 /// bounds touch `bounds`, in the reference's order (the second child of a
 /// branch is visited before the first).
-fn search_bsp<T>(level: &Level, bounds: &BoundingBox, callback: impl Fn(&mut T, &Level, &BspNode), state: &mut T) {
-    let Some(root) = level.bsp.first() else { return };
+fn search_bsp<T>(
+    level: &Level,
+    bounds: &BoundingBox,
+    callback: impl Fn(&mut T, &Level, &BspNode),
+    state: &mut T,
+) {
+    let Some(root) = level.bsp.first() else {
+        return;
+    };
     let mut stack = [BspChild::None; BSP_STACK_LEN];
     let mut top = 0;
 
     let push_children = |node: &BspNode, stack: &mut [BspChild; BSP_STACK_LEN], top: &mut usize| {
-        let BspKind::Branch { children, .. } = &node.kind else { return };
+        let BspKind::Branch { children, .. } = &node.kind else {
+            return;
+        };
         for &child in &children[..2] {
             let index = match child {
                 BspChild::None => continue,

@@ -71,7 +71,9 @@ pub fn parse_icons(dram: &DramFile) -> io::Result<Vec<Icon>> {
     if count > 0x1000 {
         return Err(invalid(format!("implausible icon count {count}")));
     }
-    (0..count).map(|i| icon_at(dram, first + i * 0x20)).collect()
+    (0..count)
+        .map(|i| icon_at(dram, first + i * 0x20))
+        .collect()
 }
 
 /// Parses the `LevTexLookup` a pack starts with into its icon groups.
@@ -94,7 +96,9 @@ fn groups_at(dram: &DramFile, lookup: u32) -> io::Result<Vec<IconGroup>> {
     let num_groups = word(dram, lookup + 8)?;
     let groups = word(dram, lookup + 12)?;
     if num_groups > 0x100 {
-        return Err(invalid(format!("implausible icon group count {num_groups}")));
+        return Err(invalid(format!(
+            "implausible icon group count {num_groups}"
+        )));
     }
     (0..num_groups)
         .map(|i| {
@@ -102,7 +106,12 @@ fn groups_at(dram: &DramFile, lookup: u32) -> io::Result<Vec<IconGroup>> {
             let count = dram
                 .data
                 .get(at as usize + 0x10..at as usize + 0x14)
-                .map(|b| (i16::from_le_bytes([b[0], b[1]]), i16::from_le_bytes([b[2], b[3]])))
+                .map(|b| {
+                    (
+                        i16::from_le_bytes([b[0], b[1]]),
+                        i16::from_le_bytes([b[2], b[3]]),
+                    )
+                })
                 .ok_or_else(|| invalid(format!("icon group {at:#x} is outside the payload")))?;
             let (group_id, num_icons) = count;
             if !(0..=0x100).contains(&num_icons) {

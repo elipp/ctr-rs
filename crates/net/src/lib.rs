@@ -15,9 +15,9 @@ use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 
+use bytes::Bytes;
 use iroh::endpoint::{Connection, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
-use bytes::Bytes;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -40,7 +40,10 @@ pub struct Ticket {
 
 impl Ticket {
     fn of(addr: &EndpointAddr) -> Ticket {
-        Ticket { id: addr.id, relay: addr.relay_urls().next().cloned() }
+        Ticket {
+            id: addr.id,
+            relay: addr.relay_urls().next().cloned(),
+        }
     }
 
     fn addr(&self) -> EndpointAddr {
@@ -71,7 +74,9 @@ impl FromStr for Ticket {
             None => (s, None),
         };
         Ok(Ticket {
-            id: id.parse().map_err(|e| format!("bad endpoint id '{id}': {e}"))?,
+            id: id
+                .parse()
+                .map_err(|e| format!("bad endpoint id '{id}': {e}"))?,
             relay: relay
                 .map(|r| r.parse().map_err(|e| format!("bad relay url '{r}': {e}")))
                 .transpose()?,
@@ -92,7 +97,11 @@ pub enum Event {
     /// The race starts, and this is tick 0. `slot` is ours among the players, and `characters`
     /// is the character each slot drives (so its length is the number of players). The race is
     /// on the level `track` (a `LevelId`), which the game has to be showing.
-    Started { slot: usize, characters: Vec<u8>, track: u32 },
+    Started {
+        slot: usize,
+        characters: Vec<u8>,
+        track: u32,
+    },
     /// Everyone's pad for a tick, which the game plays. They come in order from tick 0.
     Frame { tick: Tick, pads: Frame },
     /// The session could not go on.
@@ -188,7 +197,11 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
                     .alpns(vec![ALPN.to_vec()])
                     .bind()
                     .await?;
-                let io = Io { events: events_tx.clone(), commands: commands_rx, stop: stop_rx };
+                let io = Io {
+                    events: events_tx.clone(),
+                    commands: commands_rx,
+                    stop: stop_rx,
+                };
                 let result = run(endpoint.clone(), io).await;
                 endpoint.close().await;
                 result
@@ -198,7 +211,12 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
             }
         })
         .expect("the network thread");
-    Session { events: Mutex::new(events), commands, stop: Some(stop), thread: Some(thread) }
+    Session {
+        events: Mutex::new(events),
+        commands,
+        stop: Some(stop),
+        thread: Some(thread),
+    }
 }
 
 /// How often the packets go out, once per game tick. They are sent whether or not there is
@@ -325,15 +343,27 @@ async fn run_host(endpoint: Endpoint, mut io: Io, mut character: u8) -> Result<(
                 }
             },
         }
-        if let Some(track) = start_wanted.filter(|_| race.is_none() && characters.iter().all(Option::is_some)) {
+        if let Some(track) =
+            start_wanted.filter(|_| race.is_none() && characters.iter().all(Option::is_some))
+        {
             start_wanted = None;
-            let all: Vec<u8> = std::iter::once(character).chain(characters.iter().flatten().map(|&(_, c)| c)).collect();
+            let all: Vec<u8> = std::iter::once(character)
+                .chain(characters.iter().flatten().map(|&(_, c)| c))
+                .collect();
             race = Some(lockstep::Host::new(all.len()));
             for (i, peer) in peers.iter().enumerate() {
-                let start = Message::Start { slot: i as u8 + 1, characters: all.clone(), track };
+                let start = Message::Start {
+                    slot: i as u8 + 1,
+                    characters: all.clone(),
+                    track,
+                };
                 let _ = send_reliably(peer, &start).await;
             }
-            io.event(Event::Started { slot: 0, characters: all, track });
+            io.event(Event::Started {
+                slot: 0,
+                characters: all,
+                track,
+            });
         }
         if let Some(race) = &mut race {
             for (tick, pads) in race.advance() {
@@ -343,7 +373,12 @@ async fn run_host(endpoint: Endpoint, mut io: Io, mut character: u8) -> Result<(
     }
 }
 
-async fn run_join(endpoint: Endpoint, mut io: Io, ticket: Ticket, character: u8) -> Result<(), Error> {
+async fn run_join(
+    endpoint: Endpoint,
+    mut io: Io,
+    ticket: Ticket,
+    character: u8,
+) -> Result<(), Error> {
     let connection: Connection = tokio::select! {
         _ = &mut io.stop => return Ok(()),
         connection = endpoint.connect(ticket.addr(), ALPN) => connection?,

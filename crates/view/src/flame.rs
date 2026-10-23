@@ -31,7 +31,10 @@ pub fn models(pack: &DramFile) -> io::Result<Vec<Model>> {
         .collect();
     models.sort_by_key(|m| m.id);
     if models.len() != ANIM_FRAMES as usize {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{} turbo models", models.len())));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} turbo models", models.len()),
+        ));
     }
     Ok(models)
 }
@@ -55,14 +58,22 @@ pub fn spawn(
 ) {
     for (frame, model) in models.iter().enumerate() {
         let header = &model.headers[0];
-        let Some(pose) = header.static_frame.as_ref().or_else(|| header.animations.first().and_then(|a| a.frames.first())) else {
+        let Some(pose) = header
+            .static_frame
+            .as_ref()
+            .or_else(|| header.animations.first().and_then(|a| a.frames.first()))
+        else {
             continue;
         };
         for pipe in 0..2 {
             // Unscaled: the fire's own size is set every frame.
             let data = mesh::model_mesh(header, pose, vram, [0x1000; 3]);
             let mut atlas = Image::new(
-                Extent3d { width: data.atlas.width as u32, height: data.atlas.height as u32, depth_or_array_layers: 1 },
+                Extent3d {
+                    width: data.atlas.width as u32,
+                    height: data.atlas.height as u32,
+                    depth_or_array_layers: 1,
+                },
                 TextureDimension::D2,
                 data.atlas.rgba,
                 TextureFormat::Rgba8UnormSrgb,
@@ -78,9 +89,24 @@ pub fn spawn(
                 ..default()
             };
             let group = commands
-                .spawn((Flame { frame, pipe }, Transform::default(), Visibility::Hidden, ChildOf(kart)))
+                .spawn((
+                    Flame { frame, pipe },
+                    Transform::default(),
+                    Visibility::Hidden,
+                    ChildOf(kart),
+                ))
                 .id();
-            crate::spawn_parts(data.parts, &base, Transform::default(), Some(group), commands, meshes, materials, subtract_materials, crate::KART_LAYER);
+            crate::spawn_parts(
+                data.parts,
+                &base,
+                Transform::default(),
+                Some(group),
+                commands,
+                meshes,
+                materials,
+                subtract_materials,
+                crate::KART_LAYER,
+            );
         }
     }
 }
@@ -91,18 +117,32 @@ pub fn update(
     drive: Res<Drive>,
     fixed: Res<Time<Fixed>>,
     mut flames: Query<(&Flame, &mut Transform, &mut Visibility, &Children)>,
-    parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<SubtractMaterial>>)>,
+    parts: Query<(
+        Option<&MeshMaterial3d<StandardMaterial>>,
+        Option<&MeshMaterial3d<SubtractMaterial>>,
+    )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
     let turbo = drive.driver.turbo.filter(|t| !t.hidden);
-    let offsets = turbo::pipe_offsets([drive.driver.inst_scale_x, drive.driver.inst_scale_y, drive.driver.inst_scale_z].map(i32::from));
+    let offsets = turbo::pipe_offsets(
+        [
+            drive.driver.inst_scale_x,
+            drive.driver.inst_scale_y,
+            drive.driver.inst_scale_z,
+        ]
+        .map(i32::from),
+    );
     // The fire is a child of the kart, whose squash and stretch it must not inherit (the
     // offsets already have the instance scale in them): undo the kart's scale.
     let inherited = crate::drive::interpolated(&drive, &fixed).scale.recip();
     for (flame, mut transform, mut visibility, children) in &mut flames {
         let shown = turbo.filter(|t| t.frames()[flame.pipe] == flame.frame);
-        *visibility = if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden };
+        *visibility = if shown.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         let Some(turbo) = shown else { continue };
         let size = turbo.scale();
         // The second pipe's fire is the first one's mirror image.
@@ -118,7 +158,9 @@ pub fn update(
             m.base_color = Color::linear_rgba(fade, fade, fade, if masked { 1.0 } else { fade });
         };
         for child in children {
-            let Ok((standard, subtract)) = parts.get(*child) else { continue };
+            let Ok((standard, subtract)) = parts.get(*child) else {
+                continue;
+            };
             if let Some(mut m) = standard.and_then(|h| materials.get_mut(&h.0)) {
                 dim(&mut *m);
             }

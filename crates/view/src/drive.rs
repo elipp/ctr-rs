@@ -19,9 +19,9 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use coll::Collision;
+use vehicle::demo::Demo;
 use vehicle::shadow::{GroundShadow, ground_shadow};
 use vehicle::sim::spawn;
-use vehicle::demo::Demo;
 use vehicle::{Driver, Effect, Env, Input, buttons};
 
 use crate::Track;
@@ -56,8 +56,15 @@ fn view_of(camera: &camera::CameraDc) -> View {
     // The push buffer looks along its rotation, away from where the camera
     // would sit behind the look-at point (it stays put while the mask holds the kart).
     let turns = |angle: i32| (angle & 0xfff) as f32 / 4096.0 * std::f32::consts::TAU;
-    let (yaw, pitch) = (turns(camera.pb_rot.y as i32), turns(0x800 - camera.pb_rot.x as i32));
-    let back = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
+    let (yaw, pitch) = (
+        turns(camera.pb_rot.y as i32),
+        turns(0x800 - camera.pb_rot.x as i32),
+    );
+    let back = Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    );
     let eye = at(p.x as i32, p.y as i32, p.z as i32);
     View {
         eye,
@@ -184,11 +191,20 @@ impl Drive {
 
     /// `driver_id` is the player's slot in an online race (0 offline), which picks its place on
     /// the grid.
-    pub(crate) fn birth(track: &Track, character: usize, anim_num_frames: [u16; 8], driver_id: usize) -> (Driver, Collision) {
+    pub(crate) fn birth(
+        track: &Track,
+        character: usize,
+        anim_num_frames: [u16; 8],
+        driver_id: usize,
+    ) -> (Driver, Collision) {
         let mut coll = Collision::default();
         let mut driver = Driver::new(driver_id as u8, character);
         driver.anim_num_frames = anim_num_frames;
-        let order = vehicle::grid::spawn_order(vehicle::grid::GridMode::Arcade, 1, [0, 1, 2, 3, 4, 5, 6, 7]);
+        let order = vehicle::grid::spawn_order(
+            vehicle::grid::GridMode::Arcade,
+            1,
+            [0, 1, 2, 3, 4, 5, 6, 7],
+        );
         spawn(&mut driver, &mut coll, &track.0, order[driver_id] as usize);
         (driver, coll)
     }
@@ -513,16 +529,27 @@ pub(crate) fn before_tick(
     let (_, at) = vehicle::baked::inst_matrix(driver);
     for contact in sim.last.contacts.iter().filter(|c| c.hits(at)) {
         let was_spinning = driver.kart_state == vehicle::kart_state::SPINNING;
-        if vehicle::pick::new_state(driver, contact.damage as u8, effects) && !was_spinning && contact.sound != 0 {
+        if vehicle::pick::new_state(driver, contact.damage as u8, effects)
+            && !was_spinning
+            && contact.sound != 0
+        {
             let echo = driver.actions_flag_set & vehicle::actions::ENGINE_ECHO != 0;
-            effects.push(Effect::Sound { id: contact.sound as u8, echo });
+            effects.push(Effect::Sound {
+                id: contact.sound as u8,
+                echo,
+            });
         }
     }
 }
 
 /// What a kart does after the stages of a tick. Ours also gives its sparks and exhaust to
 /// `particles`.
-pub(crate) fn after_tick(driver: &mut Driver, env: &Env, particles: Option<&mut crate::exhaust::Particles>, effects: &mut Vec<Effect>) {
+pub(crate) fn after_tick(
+    driver: &mut Driver,
+    env: &Env,
+    particles: Option<&mut crate::exhaust::Particles>,
+    effects: &mut Vec<Effect>,
+) {
     // The pickup HUD gives the fruit that were picked up to the driver.
     vehicle::wumpa::hud_tick(driver, true, effects);
 
@@ -561,7 +588,11 @@ fn drive_tick(
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
     let online = lobby.online.is_some();
     // The level of the race is not up yet.
-    if lobby.online.as_ref().is_some_and(|net| net.track != track.1.0) {
+    if lobby
+        .online
+        .as_ref()
+        .is_some_and(|net| net.track != track.1.0)
+    {
         return;
     }
 
@@ -687,7 +718,10 @@ fn drive_tick(
     drive.held = input.buttons_held;
     for mut text in &mut demo_label {
         text.0 = match &drive.demo {
-            _ if online => lobby.online.as_ref().map_or_else(String::new, |net| net.summary(drive.tick)),
+            _ if online => lobby
+                .online
+                .as_ref()
+                .map_or_else(String::new, |net| net.summary(drive.tick)),
             DemoMode::Off => String::new(),
             DemoMode::Recording(_) => format!("REC {}", drive.tick),
             DemoMode::Playing(demo) => format!("DEMO {}/{}", drive.tick, demo.length),
@@ -701,7 +735,10 @@ fn drive_tick(
     };
     // Everyone's karts play together, by slot, ours among them: each stage of the tick over all
     // the karts before the next, as the original runs its drivers.
-    let frame = lobby.online.as_ref().map(|net| &net.frames[drive.tick as usize][..]);
+    let frame = lobby
+        .online
+        .as_ref()
+        .map(|net| &net.frames[drive.tick as usize][..]);
     let own = lobby.online.as_ref().map_or(0, |net| net.slot);
     let (result, effects) = remotes.play(
         crate::remote::Own {

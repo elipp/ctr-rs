@@ -34,14 +34,22 @@ pub struct Landing {
 /// The sparks of a landing, if the kart landed fast and hard enough on a surface that throws them.
 pub fn landing(d: &Driver) -> Option<Landing> {
     let flags = TERRAINS[d.terrain_meta1 as usize].flags;
-    if flags & terrain_flags::LANDING_SPARKS == 0 || d.actions_flag_set & actions::STARTED_TOUCH_GROUND == 0 {
+    if flags & terrain_flags::LANDING_SPARKS == 0
+        || d.actions_flag_set & actions::STARTED_TOUCH_GROUND == 0
+    {
         return None;
     }
-    if (d.speed_approx as i32).abs() <= LANDING_MIN_SPEED || (d.jump_height_prev as i32).abs() <= LANDING_MIN_JUMP {
+    if (d.speed_approx as i32).abs() <= LANDING_MIN_SPEED
+        || (d.jump_height_prev as i32).abs() <= LANDING_MIN_JUMP
+    {
         return None;
     }
     let (m, _) = crate::baked::inst_matrix(d);
-    Some(Landing { back: rotate(&m, [0, 0, -0x1800]), side: rotate(&m, [0x1800, 0, 0]), push: rotate(&m, [0, 0, -0x200]) })
+    Some(Landing {
+        back: rotate(&m, [0, 0, -0x1800]),
+        side: rotate(&m, [0x1800, 0, 0]),
+        push: rotate(&m, [0, 0, -0x200]),
+    })
 }
 
 /// A spark from the kart's tire at the wall: `tire` is where it starts (1/256 game
@@ -59,7 +67,13 @@ pub fn wall(d: &Driver) -> Option<Wall> {
         return None;
     }
     let speed = d.speed_approx as i32;
-    let z = if speed > WALL_MIN_SPEED { WALL_FORWARD_Z } else if speed < -WALL_MIN_SPEED { WALL_REVERSE_Z } else { return None };
+    let z = if speed > WALL_MIN_SPEED {
+        WALL_FORWARD_Z
+    } else if speed < -WALL_MIN_SPEED {
+        WALL_REVERSE_Z
+    } else {
+        return None;
+    };
     let (m, _) = crate::baked::inst_matrix(d);
     // The vectors go through 16 bits, as on the GTE.
     let short = |v: [i32; 3]| v.map(|c| c as i16 as i32);
@@ -72,9 +86,15 @@ pub fn wall(d: &Driver) -> Option<Wall> {
         (d.pos_wall_coll.y as i32) << 8,
         (d.pos_wall_coll.z as i32) << 8,
     ];
-    let to_wall: [i32; 3] = std::array::from_fn(|a| (to_wall[a] - [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z][a]) as i16 as i32);
+    let to_wall: [i32; 3] = std::array::from_fn(|a| {
+        (to_wall[a] - [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z][a]) as i16 as i32
+    });
     let along = |tire: [i32; 3]| (0..3).map(|a| tire[a] * to_wall[a]).sum::<i32>() >> 12;
-    let tire = if along(left) < along(right) { right } else { left };
+    let tire = if along(left) < along(right) {
+        right
+    } else {
+        left
+    };
     Some(Wall { tire, matrix: m })
 }
 
@@ -85,7 +105,9 @@ mod tests {
 
     fn kart() -> Driver {
         let mut d = Driver::new(0, 0);
-        d.matrix_facing_dir = Matrix { m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]] };
+        d.matrix_facing_dir = Matrix {
+            m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]],
+        };
         d
     }
 
@@ -110,9 +132,15 @@ mod tests {
         d.speed_approx = 0x900;
         // The wall is to the right.
         d.pos_wall_coll = loader::lev::SVec3 { x: 100, y: 0, z: 0 };
-        assert_eq!(wall(&d).unwrap().tire, [WALL_RIGHT_X, WALL_Y, WALL_FORWARD_Z]);
+        assert_eq!(
+            wall(&d).unwrap().tire,
+            [WALL_RIGHT_X, WALL_Y, WALL_FORWARD_Z]
+        );
         d.pos_wall_coll.x = -100;
-        assert_eq!(wall(&d).unwrap().tire, [WALL_LEFT_X, WALL_Y, WALL_FORWARD_Z]);
+        assert_eq!(
+            wall(&d).unwrap().tire,
+            [WALL_LEFT_X, WALL_Y, WALL_FORWARD_Z]
+        );
         d.speed_approx = 0;
         assert!(wall(&d).is_none());
     }
