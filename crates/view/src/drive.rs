@@ -52,10 +52,16 @@ struct View {
 
 fn view_of(camera: &camera::CameraDc) -> View {
     let at = |x: i32, y: i32, z: i32| Vec3::new(x as f32, y as f32, z as f32) * SCALE;
-    let (p, t) = (camera.pb_pos, camera.look_at_pos);
+    let p = camera.pb_pos;
+    // The push buffer looks along its rotation, away from where the camera
+    // would sit behind the look-at point (it stays put while the mask holds the kart).
+    let turns = |angle: i32| (angle & 0xfff) as f32 / 4096.0 * std::f32::consts::TAU;
+    let (yaw, pitch) = (turns(camera.pb_rot.y as i32), turns(0x800 - camera.pb_rot.x as i32));
+    let back = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
+    let eye = at(p.x as i32, p.y as i32, p.z as i32);
     View {
-        eye: at(p.x as i32, p.y as i32, p.z as i32),
-        target: at(t.x, t.y, t.z),
+        eye,
+        target: eye - back * 256.0 * SCALE,
         roll: camera.pb_rot.z as f32 / 4096.0,
     }
 }
