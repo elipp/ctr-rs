@@ -95,25 +95,27 @@ pub enum Event {
     Open(Ticket),
     /// Someone joined the lobby we host.
     PeerJoined(EndpointId),
-    /// We host the lobby, and a guest says what it drives (`first` for the first time it says,
-    /// which is when it has joined; again when it changes its character). `character` is in
-    /// `GAME_CHARACTER_IDS` order.
-    Character {
-        id: EndpointId,
-        character: u8,
-        first: bool,
+    /// Who is in the lobby and the character each drives (`GAME_CHARACTER_IDS` order), the host
+    /// first. It comes to everyone whenever someone joins, leaves or changes character; a guest
+    /// is in it once it has said what it drives. `you` is our own place in the list, if we are in
+    /// it yet.
+    Lobby {
+        players: Vec<(EndpointId, u8)>,
+        you: Option<usize>,
     },
     /// We joined the lobby of this host.
     Joined(EndpointId),
     /// A peer is gone.
     PeerLeft(EndpointId),
     /// A race is about to start. `slot` is ours among the players, and `characters` is the
-    /// character each slot drives (so its length is the number of players). The race is on the
+    /// character each slot drives (so its length is the number of players), and `players` is the
+    /// endpoint of each slot (the host is 0). The race is on the
     /// level `track` (a `LevelId`), which the game has to be showing. Once it is, and the game
     /// has built the race, [`Session::ready`] says so; [`Event::Go`] then starts it.
     Started {
         slot: usize,
         characters: Vec<u8>,
+        players: Vec<EndpointId>,
         track: u32,
     },
     /// This is tick 0: the game plays it, and sends its pad for it with [`Session::input`].
@@ -286,6 +288,28 @@ fn send_interval() -> tokio::time::Interval {
 }
 
 /// A message on a stream of its own, which iroh delivers whole and in order.
+/// The host tells everyone, itself included, who is in the lobby: itself, then the guests that
+/// have said what they drive, in the order they joined.
+async fn tell_lobby(me: EndpointId, character: u8, guests: &[Guest], io: &Io) {
+    let players: Vec<(EndpointId, u8)> = std::iter::once((me, character))
+        .chain(
+            guests
+                .iter()
+                .filter_map(|g| g.hello.map(|(_, c)| (g.id, c))),
+        )
+        .collect();
+    let message = Message::Lobby {
+        players: players.iter().map(|&(id, c)| (*id.as_bytes(), c)).collect(),
+    };
+    for guest in guests {
+        let _ = send_reliably(&guest.connection, &message).await;
+    }
+    io.event(Event::Lobby {
+        players,
+        you: Some(0),
+    });
+}
+
 async fn send_reliably(connection: &Connection, message: &Message) -> Result<(), Error> {
     let mut stream = connection.open_uni().await?;
     stream.write_all(&message.to_bytes()).await?;
@@ -466,7 +490,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
     let mut running = false;
     // Which race this is, counted from 0, and our slot and the characters in it.
     let mut epoch: u32 = 0;
-    let mut race_info: Option<(usize, Vec<u8>)> = None;
+    let mut race_info: Option<(usize, Vec<u8>, Vec<EndpointId>)> = None;
     let mut timer = send_interval();
 
     loop {
@@ -510,7 +534,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 // The same players again: new links, and everyone ready before tick 0 once more.
                 Command::Restart { track } => if matches!(role, Role::Host)
                     && plan.is_some()
-                    && let Some((slot, characters)) = race_info.clone()
+                    && let Some((slot, characters, players)) = race_info.clone()
                 {
                     epoch += 1;
                     for guest in &guests {
@@ -519,7 +543,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     start_over(&mut links, epoch);
                     (running, game_ready, ready_sent) = (false, false, false);
                     ready_from.clear();
-                    io.event(Event::Started { slot, characters, track });
+                    io.event(Event::Started { slot, characters, players, track });
                 },
                 Command::Announce(text) => if matches!(role, Role::Host) {
                     for guest in &guests {
@@ -529,6 +553,9 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 },
                 Command::Character(c) => if plan.is_none() {
                     character = c;
+                    if matches!(role, Role::Host) {
+                        tell_lobby(me, character, &guests, &io).await;
+                    }
                     if let Some(connection) = &host_connection {
                         // The host takes the latest Hello it has, so one that is sent again overrides.
                         send_reliably(connection, &Message::Hello { character, seq: hellos }).await?;
@@ -556,14 +583,23 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
             },
             Some((from, heard)) = heard.recv() => match heard {
                 Heard::Message(message) => match message {
-                    Message::Hello { character, seq } => {
+                    Message::Hello { character: theirs, seq } => {
                         if let Some(guest) = guests.iter_mut().find(|g| g.id == from)
                             && guest.hello.is_none_or(|(have, _)| seq > have)
                         {
-                            let first = guest.hello.is_none();
-                            guest.hello = Some((seq, character));
-                            io.event(Event::Character { id: from, character, first });
+                            guest.hello = Some((seq, theirs));
+                            if plan.is_none() {
+                                tell_lobby(me, character, &guests, &io).await;
+                            }
                         }
+                    }
+                    Message::Lobby { players } if from == host_id && !matches!(role, Role::Host) => {
+                        let players: Vec<(EndpointId, u8)> = players
+                            .iter()
+                            .map(|(bytes, c)| EndpointId::from_bytes(bytes).map(|id| (id, *c)))
+                            .collect::<Result<_, _>>()?;
+                        let you = players.iter().position(|&(id, _)| id == me);
+                        io.event(Event::Lobby { players, you });
                     }
                     Message::Start { slot, characters, track, roster }
                         if plan.is_none() && from == host_id && !matches!(role, Role::Host) =>
@@ -582,18 +618,18 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         for &id in roster.iter().take(slot).skip(1) {
                             dial(endpoint.clone(), id, dialed_tx.clone());
                         }
-                        plan = Some(Plan { roster });
-                        race_info = Some((slot, characters.clone()));
-                        io.event(Event::Started { slot, characters, track });
+                        race_info = Some((slot, characters.clone(), roster.clone()));
+                        plan = Some(Plan { roster: roster.clone() });
+                        io.event(Event::Started { slot, characters, players: roster, track });
                     }
                     Message::Restart { epoch: new, track }
                         if plan.is_some() && from == host_id && !matches!(role, Role::Host) =>
                     {
-                        if let Some((slot, characters)) = race_info.clone() {
+                        if let Some((slot, characters, players)) = race_info.clone() {
                             epoch = new;
                             start_over(&mut links, epoch);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, track });
+                            io.event(Event::Started { slot, characters, players, track });
                         }
                     }
                     Message::Announce { text } => {
@@ -642,14 +678,21 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                             io.event(Event::Checksum { slot, tick, hash });
                         }
                     }
-                    Message::Snapshot { .. } | Message::Start { .. } | Message::Restart { .. } => {}
+                    Message::Snapshot { .. }
+                    | Message::Start { .. }
+                    | Message::Restart { .. }
+                    | Message::Lobby { .. } => {}
                 },
                 Heard::Closed => {
                     io.event(Event::PeerLeft(from));
                     links.remove(&from);
                     unclaimed.retain(|c| c.remote_id() != from);
                     if plan.is_none() {
+                        let had = guests.len();
                         guests.retain(|g| g.id != from);
+                        if guests.len() != had {
+                            tell_lobby(me, character, &guests, &io).await;
+                        }
                         // A guest whose host is gone has no lobby.
                         if from == host_id && !matches!(role, Role::Host) {
                             return Ok(());
@@ -685,11 +728,14 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 let _ = send_reliably(&guest.connection, &start).await;
                 links.insert(guest.id, Link::new(guest.connection.clone(), epoch));
             }
-            plan = Some(Plan { roster });
-            race_info = Some((0, characters.clone()));
+            race_info = Some((0, characters.clone(), roster.clone()));
+            plan = Some(Plan {
+                roster: roster.clone(),
+            });
             io.event(Event::Started {
                 slot: 0,
                 characters,
+                players: roster,
                 track,
             });
         }

@@ -26,6 +26,7 @@ mod explosion;
 mod fire;
 mod flame;
 mod kart;
+mod leaderboard;
 mod lobby;
 mod mask;
 mod probe;
@@ -493,6 +494,7 @@ fn main() {
         app.insert_resource(drive).add_plugins((
             drive::DrivePlugin,
             lobby::LobbyPlugin,
+            leaderboard::LeaderboardPlugin,
             toast::ToastPlugin,
         ));
         if let Some(ticket) = join {

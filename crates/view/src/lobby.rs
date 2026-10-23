@@ -20,6 +20,8 @@ pub struct Online {
     pub slot: usize,
     /// The character each slot drives, which sets its kart's stats.
     pub characters: Vec<u8>,
+    /// The short form of each slot's iroh key (`fmt_short`), as the players are known by.
+    pub names: Vec<String>,
     /// The `LevelId` it is on, which the viewer shows before anything is played.
     pub track: u32,
     /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
@@ -92,6 +94,11 @@ pub struct Lobby {
     session: Option<Session>,
     /// We joined someone else's lobby (`--join`) instead of opening one: the host starts the race.
     joined: bool,
+    /// Who is in the lobby and the character each drives (the short key and the character), as
+    /// the last [`Event::Lobby`] said, and whether there has been one: what changes in the next is
+    /// what the players are told.
+    roster: Vec<(String, u8)>,
+    roster_seen: bool,
     pub online: Option<Online>,
 }
 
@@ -102,6 +109,8 @@ impl Lobby {
         Lobby {
             session: Some(net::join(ticket, character)),
             joined: true,
+            roster: Vec::new(),
+            roster_seen: false,
             online: None,
         }
     }
@@ -178,8 +187,7 @@ impl Plugin for LobbyPlugin {
                 Update,
                 (
                     toggle,
-                    start,
-                    restart_race,
+                    countdown,
                     report,
                     crate::remote::build,
                     pace,
@@ -201,20 +209,15 @@ fn toggle(
     }
     if lobby.session.take().is_some() {
         lobby.online = None;
+        lobby.roster.clear();
+        lobby.roster_seen = false;
         toasts.write(Toast::new("Lobby closed!", 2000));
     } else {
         lobby.session = Some(net::host(drive.character as u8));
         lobby.joined = false;
+        lobby.roster.clear();
+        lobby.roster_seen = false;
         toasts.write(Toast::new("Opening lobby...", 3000));
-    }
-}
-
-fn start(keys: Res<ButtonInput<KeyCode>>, lobby: Res<Lobby>, track: Res<crate::Track>) {
-    if keys.just_pressed(KeyCode::KeyG)
-        && lobby.online.is_none()
-        && let Some(session) = &lobby.session
-    {
-        session.start(track.1.0);
     }
 }
 
@@ -223,6 +226,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         return;
     };
     let mut failed = false;
+    let mut roster = None;
     let mut started = None;
     let mut go = false;
     let mut pads = Vec::new();
@@ -240,22 +244,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 );
             }
             Event::PeerJoined(id) => println!("{} joined", id.fmt_short()),
-            Event::Character {
-                id,
-                character,
-                first,
-            } => {
-                let name = crate::CHARACTERS
-                    .get(character as usize)
-                    .copied()
-                    .unwrap_or("?");
-                let text = if first {
-                    format!("{} joined as {name}", id.fmt_short())
-                } else {
-                    format!("{} is now {name}", id.fmt_short())
-                };
-                toasts.write(Toast::new(text, 3000).color(Color::srgb(0.4, 1.0, 0.4)));
-            }
+            Event::Lobby { players, you } => roster = Some((players, you)),
             Event::Announce(text) => {
                 toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
@@ -272,6 +261,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             Event::Started {
                 slot,
                 characters,
+                players,
                 track,
             } => {
                 println!(
@@ -286,6 +276,10 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 started = Some(Online {
                     slot,
                     characters,
+                    names: players
+                        .iter()
+                        .map(|id| id.fmt_short().to_string())
+                        .collect(),
                     track,
                     inbox: Vec::new(),
                     fresh: true,
@@ -315,6 +309,40 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     }
     if started.is_some() {
         lobby.online = started;
+    }
+    if let Some((players, you)) = roster {
+        let players: Vec<(String, u8)> = players
+            .iter()
+            .map(|(id, c)| (id.fmt_short().to_string(), *c))
+            .collect();
+        // A guest that has just joined meets the lobby as it is, which is not news.
+        if lobby.roster_seen || !lobby.joined {
+            for (n, (id, character)) in players.iter().enumerate() {
+                let name = crate::CHARACTERS
+                    .get(*character as usize)
+                    .copied()
+                    .unwrap_or("?");
+                let who = if Some(n) == you { "you" } else { id.as_str() };
+                let before = lobby.roster.iter().find(|(known, _)| known == id);
+                let text = match before {
+                    // We know that we joined.
+                    None if Some(n) == you => continue,
+                    None => format!("{who} joined as {name}"),
+                    Some((_, was)) if was != character => format!("{who} is now {name}"),
+                    Some(_) => continue,
+                };
+                toasts.write(Toast::new(text, 3000).color(Color::srgb(0.4, 1.0, 0.4)));
+            }
+            for (id, _) in &lobby.roster {
+                if players.iter().all(|(now, _)| now != id) {
+                    toasts.write(
+                        Toast::new(format!("{id} left"), 3000).color(Color::srgb(1.0, 0.6, 0.3)),
+                    );
+                }
+            }
+        }
+        lobby.roster = players;
+        lobby.roster_seen = true;
     }
     if let Some(online) = &mut lobby.online {
         online.go |= go;
@@ -346,6 +374,8 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     if failed {
         lobby.session = None;
         lobby.online = None;
+        lobby.roster.clear();
+        lobby.roster_seen = false;
     }
 }
 
@@ -377,36 +407,51 @@ fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
 /// What the host says to everyone is yellow.
 const ANNOUNCE_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);
 
-/// The seconds of the countdown before the host's race starts over.
-const RESTART_SECONDS: u32 = 5;
+/// The seconds of the countdown before the host's race starts, or starts over.
+const COUNTDOWN_SECONDS: u32 = 5;
 
-/// The countdown of a restart: the seconds left, and when the last one was announced.
+/// What the countdown ends in.
+#[derive(Clone, Copy)]
+enum Then {
+    /// The first race of the lobby, on this track.
+    Start(u32),
+    /// The same players again, on this track.
+    Restart(u32),
+}
+
+/// The countdown of a start or a restart: the seconds left, and when the last one was announced.
 struct Countdown {
+    then: Then,
     left: u32,
     at: f32,
 }
 
-/// F9: the host starts the race over, after a countdown that everyone sees.
-fn restart_race(
+/// G starts the race and F9 starts it over (the host only), both after a countdown that everyone
+/// sees. Closing the lobby cancels it.
+fn countdown(
     keys: Res<ButtonInput<KeyCode>>,
     lobby: Res<Lobby>,
+    track: Res<crate::Track>,
     time: Res<Time<Real>>,
     mut countdown: Local<Option<Countdown>>,
 ) {
-    let Some(track) = lobby
-        .online
-        .as_ref()
-        .map(|net| net.track)
-        .filter(|_| !lobby.joined)
-    else {
+    if lobby.joined || lobby.session.is_none() {
         *countdown = None;
         return;
-    };
+    }
     let now = time.elapsed_secs();
-    if countdown.is_none() && keys.just_pressed(KeyCode::F9) {
-        lobby.announce(format!("Race restarts in {RESTART_SECONDS}"));
+    if countdown.is_none() {
+        let (then, text) = match &lobby.online {
+            None if keys.just_pressed(KeyCode::KeyG) => (Then::Start(track.1.0), "Race starts in"),
+            Some(net) if keys.just_pressed(KeyCode::F9) => {
+                (Then::Restart(net.track), "Race restarts in")
+            }
+            _ => return,
+        };
+        lobby.announce(format!("{text} {COUNTDOWN_SECONDS}"));
         *countdown = Some(Countdown {
-            left: RESTART_SECONDS,
+            then,
+            left: COUNTDOWN_SECONDS,
             at: now,
         });
     }
@@ -415,12 +460,19 @@ fn restart_race(
     };
     c.left -= 1;
     c.at += 1.0;
-    if c.left == 0 {
-        lobby.restart(track);
-        *countdown = None;
-    } else {
+    if c.left > 0 {
         lobby.announce(format!("{}...", c.left));
+        return;
     }
+    match c.then {
+        Then::Start(track) => {
+            if let Some(session) = &lobby.session {
+                session.start(track);
+            }
+        }
+        Then::Restart(track) => lobby.restart(track),
+    }
+    *countdown = None;
 }
 
 /// The label for the players who wait for the host.
