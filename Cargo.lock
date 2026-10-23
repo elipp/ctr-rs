@@ -7805,6 +7805,7 @@ dependencies = [
  "gte",
  "instance",
  "loader",
+ "math",
  "net",
  "race",
  "render",

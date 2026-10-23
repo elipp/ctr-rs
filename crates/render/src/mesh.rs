@@ -673,6 +673,47 @@ pub fn model_positions(
     parts
 }
 
+/// What changes between the poses of a model whose colours change too: the positions and the
+/// colours of the parts [`model_mesh`] makes of `header` in `frame`, in the same order.
+pub fn model_vertices(
+    header: &ModelHeader,
+    frame: &Frame,
+    inst_scale: [i16; 3],
+) -> [(Vec<[f32; 3]>, Vec<[f32; 4]>); PARTS] {
+    let k: [f32; 3] = std::array::from_fn(|a| {
+        header.scale[a] as f32 / 4096.0 * inst_scale[a] as f32 / 4096.0 * SCALE
+    });
+    let mut parts: [(Vec<[f32; 3]>, Vec<[f32; 4]>); PARTS] = Default::default();
+    for tri in header.triangles(frame) {
+        let texture = tri
+            .texture
+            .checked_sub(1)
+            .and_then(|i| header.textures.get(i))
+            .copied();
+        let face_passes = match &texture {
+            Some(t) => passes(t.blend()),
+            None => &[(Part::Opaque, TileKind::Full)],
+        };
+        let gain = if texture.is_some() {
+            2.0 / 255.0
+        } else {
+            1.0 / 255.0
+        };
+        for &(part, _) in face_passes {
+            let (positions, colors) = &mut parts[part as usize];
+            for corner in 0..3 {
+                let p = tri.positions[corner];
+                positions.push([p[0] as f32 * k[0], p[1] as f32 * k[1], p[2] as f32 * k[2]]);
+                let c = tri.colors[corner];
+                let [r, g, b] = [c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff]
+                    .map(|c| vertex_channel(c as f32 * gain));
+                colors.push([r, g, b, 1.0]);
+            }
+        }
+    }
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
