@@ -633,7 +633,9 @@ fn switch_level(world: &mut World) {
 /// ordered among themselves by depth, and never hidden by the track.
 const KART_LAYER: usize = 1;
 
-/// The camera that draws [`KART_LAYER`].
+/// The cameras that draw over the picture of the main one: the one for [`KART_LAYER`], and the
+/// HUD's (`wumpa_icon`). The systems that follow "the camera" (the wheels' view, the smoke, the
+/// skid marks) look for the main camera, which has not got this.
 #[derive(Component)]
 struct OverlayCamera;
 
