@@ -117,6 +117,10 @@ pub enum Event {
         first: Tick,
         pads: Vec<Pad>,
     },
+    /// How far ahead of player `slot` our clock is, in ticks (negative when behind): half the
+    /// difference between how far each of us is past the other's last pad. It comes with every
+    /// packet of theirs, so it is noisy; the game smooths it.
+    Lead { slot: usize, ahead: f32 },
     /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
     Checksum { slot: usize, tick: Tick, hash: u64 },
     /// The session could not go on.
@@ -543,6 +547,10 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                                 if let Some(slot) = plan.slot_of(from) {
                                     io.event(Event::Pads { slot, first: before, pads });
                                 }
+                            }
+                            if let Some(slot) = plan.slot_of(from) {
+                                let ours = link.sender.tick() as i32 - link.receiver.next() as i32;
+                                io.event(Event::Lead { slot, ahead: (ours - inputs.lead) as f32 / 2.0 });
                             }
                         }
                     }
