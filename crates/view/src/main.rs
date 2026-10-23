@@ -404,17 +404,19 @@ fn main() {
                 None => format!("ctr-rs view: level {track_id}"),
             },
             // The frame rate is `limit_frame_rate`'s.
-            present_mode: bevy::window::PresentMode::AutoNoVsync,
+            // present_mode: bevy::window::PresentMode::AutoNoVsync,
             ..default()
         }),
         ..default()
     });
     #[cfg(target_os = "macos")]
-    if single_threaded {
+    let plugins = if single_threaded {
         // The render thread would run the single-threaded schedules off the main thread, which
         // Metal's window surface does not allow.
-        plugins = plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
-    }
+        plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
+    } else {
+        plugins
+    };
     app.add_plugins(plugins)
         .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
         .insert_resource(loaded)
@@ -1104,8 +1106,8 @@ struct SceneryState {
 /// The frame rate the viewer is held to, in Hz; `CTR_FPS` overrides it, 0 for no limit.
 const FRAME_RATE: f64 = 120.0;
 
-/// Holds the loop to [`FRAME_RATE`] now that the display does not (no vsync): sleeps most of
-/// what is left of the frame, then spins the last stretch, as a sleep wakes up late.
+// Holds the loop to [`FRAME_RATE`] now that the display does not (no vsync): sleeps most of
+// what is left of the frame, then spins the last stretch, as a sleep wakes up late.
 fn limit_frame_rate(
     mut previous: Local<Option<std::time::Instant>>,
     mut configured: Local<Option<f64>>,
