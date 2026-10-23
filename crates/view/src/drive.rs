@@ -727,6 +727,10 @@ fn drive_tick(
             DemoMode::Playing(demo) => format!("DEMO {}/{}", drive.tick, demo.length),
         };
     }
+    // The objects tick with the karts, once per tick of the sim and before them, so that a tick
+    // that waits for the network (or a pause) does not let them run ahead. Together with
+    // the restart above that puts the hazards in the same state for every peer at tick 0.
+    sim.last = sim.objects.tick();
     let env = Env {
         elapsed_event_time: drive.tick as i32 * 32,
         timer: drive.tick,

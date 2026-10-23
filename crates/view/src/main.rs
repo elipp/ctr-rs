@@ -453,7 +453,8 @@ fn main() {
                 animate_water,
                 animate_scenery,
                 props::animate,
-                props::tick_objects,
+                // Driving ticks the objects with the karts (`drive_tick`).
+                props::tick_objects.run_if(not(resource_exists::<drive::Drive>)),
                 props::pose_hazards,
                 props::hide_fruit,
                 props::pose_crates,
