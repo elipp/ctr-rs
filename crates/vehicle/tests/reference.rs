@@ -89,6 +89,7 @@ fn effect_line(e: &Effect) -> String {
         Effect::JogCon { driver_id, pattern, strength } => format!(" J {driver_id} {pattern} {strength}"),
         Effect::ShockFreq { driver_id, a, b } => format!(" F {driver_id} {a} {b}"),
         Effect::ShockForce { driver_id, a, b } => format!(" G {driver_id} {a} {b}"),
+        Effect::DriverCrashing { echo, volume } => format!(" C {} {volume}", echo as u8),
         // Camera state is not part of the comparison.
         Effect::CameraFireSpeedZoom { .. } => String::new(),
     }

@@ -20,7 +20,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use coll::Collision;
 use vehicle::shadow::{GroundShadow, ground_shadow};
-use vehicle::sim::{spawn, tick_with};
+use vehicle::sim::spawn;
 use vehicle::demo::Demo;
 use vehicle::{Driver, Effect, Env, Input, buttons};
 
@@ -121,6 +121,8 @@ pub struct Drive {
     camera: camera::CameraDc,
     previous_view: View,
     current_view: View,
+    /// When the last bump of karts was heard.
+    feedback: vehicle::collide::Feedback,
 }
 
 impl Drive {
@@ -152,6 +154,7 @@ impl Drive {
             current: pose,
             shadow_previous: None,
             shadow_current: None,
+            feedback: Default::default(),
         }
     }
 
@@ -487,23 +490,14 @@ pub(crate) fn input_of_pad(pad: &net::Pad, previous_held: u32) -> Input {
     }
 }
 
-/// One game tick of a kart: the same for ours and for every other player's, so that all clients
-/// play every kart the same way. Ours also gives its sparks and exhaust to `particles`.
-pub(crate) fn play_kart(
+/// What a kart does before the stages of a tick: the same for ours and for every other player's,
+/// so that all clients play every kart the same way.
+pub(crate) fn before_tick(
     driver: &mut Driver,
-    coll: &mut Collision,
-    track: &Track,
-    tick: u32,
     input: &Input,
-    sim: &mut crate::props::Sim,
-    particles: Option<&mut crate::exhaust::Particles>,
+    sim: &crate::props::Sim,
     effects: &mut Vec<Effect>,
-) -> vehicle::sim::TickResult {
-    let env = Env {
-        elapsed_event_time: tick as i32 * 32,
-        timer: tick,
-        ..Env::default()
-    };
+) {
     // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
     // kart: it has the mask already.)
     if input.buttons_tapped & buttons::CIRCLE != 0
@@ -524,7 +518,11 @@ pub(crate) fn play_kart(
             effects.push(Effect::Sound { id: contact.sound as u8, echo });
         }
     }
-    let result = tick_with(driver, coll, &track.0, &env, input, &mut sim.objects, effects);
+}
+
+/// What a kart does after the stages of a tick. Ours also gives its sparks and exhaust to
+/// `particles`.
+pub(crate) fn after_tick(driver: &mut Driver, env: &Env, particles: Option<&mut crate::exhaust::Particles>, effects: &mut Vec<Effect>) {
     // The pickup HUD gives the fruit that were picked up to the driver.
     vehicle::wumpa::hud_tick(driver, true, effects);
 
@@ -540,7 +538,6 @@ pub(crate) fn play_kart(
     }
     vehicle::skid::skidmarks(driver);
     vehicle::turbo::tick(driver, env.elapsed_time_ms as i16);
-    result
 }
 
 /// One game tick of the sim.
@@ -649,6 +646,7 @@ fn drive_tick(
         sim.restart();
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
+        drive.feedback = Default::default();
         for (mut motion, ours) in &mut motions {
             if ours {
                 motion.reset(&drive.driver);
@@ -698,30 +696,28 @@ fn drive_tick(
     let env = Env {
         elapsed_event_time: drive.tick as i32 * 32,
         timer: drive.tick,
+        kart_collisions: crate::remote::kart_collisions(),
         ..Env::default()
     };
-    let mut effects = Vec::new();
-    // Online, the karts are played by slot, ours among them.
-    let slots = lobby.online.as_ref().map_or(0..0, |net| 0..net.characters.len());
+    // Everyone's karts play together, by slot, ours among them: each stage of the tick over all
+    // the karts before the next, as the original runs its drivers.
+    let frame = lobby.online.as_ref().map(|net| &net.frames[drive.tick as usize][..]);
     let own = lobby.online.as_ref().map_or(0, |net| net.slot);
-    if let Some(net) = &lobby.online {
-        let frame = &net.frames[drive.tick as usize];
-        remotes.play(slots.start..own, frame, drive.tick, &track, &mut sim, &mut motions);
-    }
-    let result = play_kart(
-        &mut drive.driver,
-        &mut drive.coll,
+    let (result, effects) = remotes.play(
+        crate::remote::Own {
+            driver: &mut drive.driver,
+            coll: &mut drive.coll,
+            input: &input,
+            slot: own,
+        },
+        frame,
+        &env,
         &track,
-        drive.tick,
-        &input,
         &mut sim,
-        Some(&mut particles),
-        &mut effects,
+        &mut particles,
+        &mut drive.feedback,
+        &mut motions,
     );
-    if let Some(net) = &lobby.online {
-        let frame = &net.frames[drive.tick as usize];
-        remotes.play(own + 1..slots.end, frame, drive.tick, &track, &mut sim, &mut motions);
-    }
     drive.tick += 1;
 
     // The mask grab put the kart back on the track: the camera swings round behind it.

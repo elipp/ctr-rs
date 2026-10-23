@@ -17,6 +17,7 @@
 pub mod angular;
 pub mod baked;
 pub mod calc;
+pub mod collide;
 pub mod crash;
 pub mod demo;
 pub mod exhaust;
@@ -165,6 +166,9 @@ pub struct Env {
     /// `elapsedTimeMS`. Retail derives it from the wall clock (clamped to
     /// 32..=64); here every 30 Hz tick is 32 so the simulation is deterministic.
     pub elapsed_time_ms: i32,
+    /// Whether karts bump into each other (`VehPhysForce_CollideDrivers`'s search of the other
+    /// drivers). Retail has it off online; here the caller decides.
+    pub kart_collisions: bool,
     /// `elapsedEventTime`: milliseconds since the race started.
     pub elapsed_event_time: i32,
     /// `timer`: the frame counter.
@@ -180,7 +184,7 @@ pub struct Env {
 
 impl Default for Env {
     fn default() -> Self {
-        Env { elapsed_time_ms: 32, elapsed_event_time: 0, timer: 0, end_of_race: false, respawns: true }
+        Env { elapsed_time_ms: 32, elapsed_event_time: 0, timer: 0, end_of_race: false, respawns: true, kart_collisions: true }
     }
 }
 
@@ -252,6 +256,8 @@ pub enum Effect {
     ShockFreq { driver_id: u8, a: u8, b: u8 },
     /// `GAMEPAD_ShockForce1`
     ShockForce { driver_id: u8, a: u8, b: u8 },
+    /// `OtherFX_DriverCrashing`: two karts bump (the sound by the volume).
+    DriverCrashing { echo: bool, volume: u8 },
     /// `cameraDC[driver_id].flags |= CAMERA_FLAG_FIRE_SPEED_ZOOM`: a boost pulls the camera back.
     CameraFireSpeedZoom { driver_id: u8 },
 }
@@ -399,6 +405,15 @@ pub struct Driver {
     pub jump_meter_timer: i16,
     pub number_of_jumps: i16,
     pub forced_jump_type: u8,
+    /// `pendingDamageType` (a [`pick::damage`]), `pendingDamageReasonByte` and
+    /// `pendingDamageAttacker` (the attacker's `driver_id`): a hit another driver has
+    /// queued, which the victim's next update takes.
+    pub pending_damage_type: u8,
+    pub pending_damage_reason: u8,
+    pub pending_damage_attacker: Option<u8>,
+    pub invincible_timer: i32,
+    /// `THREAD_FLAG_DISABLE_COLLISION` of the driver's thread: other karts pass through it.
+    pub collision_disabled: bool,
     pub button_used_to_start_drift: i16,
 
     pub rot_curr_x: i16,
