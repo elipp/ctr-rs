@@ -29,6 +29,7 @@ pub mod grid;
 pub mod joystick;
 pub mod jump;
 pub mod jump_meter;
+pub mod lap;
 pub mod linear;
 pub mod pick;
 pub mod powerslide;
@@ -192,6 +193,9 @@ pub struct Env {
     /// [`sim::TickResult`] and the driver carries on driving, as the reference's C oracle
     /// driver does with its stub of `MaskGrab_Init`.
     pub respawns: bool,
+    /// `trafficLightsTimer`, in milliseconds: the engine rev of the start of a race holds the
+    /// kart while it is above 0.
+    pub traffic_lights_timer: i32,
 }
 
 impl Default for Env {
@@ -203,6 +207,7 @@ impl Default for Env {
             end_of_race: false,
             respawns: true,
             kart_collisions: true,
+            traffic_lights_timer: 0,
         }
     }
 }
@@ -471,6 +476,18 @@ pub struct Driver {
     pub bool_first_frame_since_rev_engine: u8,
     pub quad_block_height: i32,
     pub distance_to_finish_checkpoint: u32,
+    /// `distanceToFinish_curr`: how far along the track the kart is, as `lap::update_progress`
+    /// finds it (the distance to the finish line, which counts down; wrapped by the track).
+    pub distance_to_finish_curr: u32,
+    /// `distanceDrivenBackwards`, 0 to 1000.
+    pub distance_driven_backwards: u32,
+    /// `lapIndex`: the lap being driven, from 0. The race is over at `Race::laps`.
+    pub lap_index: u8,
+    /// `lapTime`: when the lap began, in milliseconds of the race.
+    pub lap_time: i32,
+    /// `checkpoint.currentIndex` and `checkpoint.branchChoiceIndex`.
+    pub checkpoint_current_index: u8,
+    pub checkpoint_branch_choice_index: u8,
 
     pub time_until_drift_spinout: i16,
     pub previous_frame_mult_drift: i16,

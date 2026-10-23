@@ -12,12 +12,17 @@
 //!
 //! While the mask holds the kart the camera stays put (`KS_MASK_GRABBED`).
 //!
-//! Left out: the start-of-race fly-in and the other cutscene and end-of-race
+//! The start-of-race fly-in is [`CameraDc::fly_in`].
+//!
+//! Left out: the other cutscene and end-of-race
 //! cameras, the transitions between them, being blasted (the camera's
 //! lerp back), the mask grab and the rev-engine start, the two-player zoom.
 //! The camera uses its own collision scratchpad.
 
+mod fly_in;
 mod matrix;
+
+pub use fly_in::TRANSITION_FRAMES;
 
 use coll::Collision;
 use loader::lev::{Level, SVec3};
@@ -138,6 +143,8 @@ pub struct CameraDc {
     /// (`rot.x` is `0x800` minus the pitch, `rot.y` the heading, `rot.z` the roll).
     pub pb_pos: SVec3,
     pub pb_rot: SVec3,
+    /// `transitionBlend`: how much of the chase camera the fly-in has blended in, 0 to 0x1000.
+    transition_blend: i16,
     coll: Collision,
 }
 
@@ -157,6 +164,7 @@ impl Default for CameraDc {
             height_smoothing: HeightSmoothing::default(),
             pb_pos: SVec3::default(),
             pb_rot: SVec3::default(),
+            transition_blend: 0,
             coll: Collision::default(),
         }
     }

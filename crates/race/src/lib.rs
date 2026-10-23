@@ -14,9 +14,13 @@ use instance::Objects;
 use loader::lev::Level;
 use vehicle::collide::Feedback;
 use vehicle::exhaust::Puff;
+use vehicle::lap::Lap;
 use vehicle::sim::{Racer, TickResult, spawn};
 use vehicle::sparks::{Landing, Wall};
 use vehicle::{Driver, Effect, Env, Input, actions, kart_state};
+
+/// `driverRank` of a kart that has no place yet.
+const UNSORTED: i16 = -1;
 
 /// One tick of a controller: [`Input`] without the taps, which follow from the buttons held in
 /// the tick before.
@@ -112,7 +116,40 @@ pub struct KartTick {
     /// The sparks of a landing, and of the wall the kart scraped.
     pub landing: Option<Landing>,
     pub wall: Option<Wall>,
+    /// The line the kart crossed, if it did.
+    pub lap: Lap,
 }
+
+/// `trafficLightsTimer` at the start of a race, in milliseconds: it counts down 32 a tick.
+pub const START_LIGHTS_MS: i32 = 0xf00;
+
+/// The lights go out for good at this timer (`MainMain`'s floor).
+const LIGHTS_FLOOR_MS: i32 = -960;
+
+/// The ticks of the start-line fly-in (`CAM_StartOfRace`'s `transitionFrame`, 0xa5) and the one
+/// that ends it. The traffic lights only start to count when it is over.
+pub const INTRO_TICKS: u32 = 0xa6;
+
+/// A step of the traffic lights (`DotLights_AudioAndVideo`): the light that came on, and the
+/// sound of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Light {
+    Red1,
+    Red2,
+    Red3,
+    Green,
+}
+
+/// When each light comes on: the timer goes to or under this.
+const LIGHT_AT_MS: [(i32, Light); 4] = [
+    (0xb40, Light::Red1),
+    (0x780, Light::Red2),
+    (0x3c0, Light::Red3),
+    (0, Light::Green),
+];
+
+/// The laps of a race unless it is told otherwise (`gGT->numLaps`).
+pub const DEFAULT_LAPS: u8 = 3;
 
 /// A race at some tick.
 #[derive(Clone)]
@@ -130,6 +167,23 @@ pub struct Race {
     /// Whether karts bump into each other (retail has it off online). A rule of the race: it has
     /// to be the same for everyone.
     pub kart_collisions: bool,
+    /// How many laps the race has (`gGT->numLaps`). A rule of the race, like the one above.
+    pub laps: u8,
+    /// How many karts have finished the race (`numPlayersFinishedRace`): the next to finish is
+    /// that place.
+    pub finished: i16,
+    /// The time of each lap a kart has finished, by slot, in milliseconds (`gGT->lapTime`).
+    pub lap_times: Vec<Vec<i32>>,
+    /// `trafficLightsTimer`: above 0 the karts wait on the grid. It holds at the start while the
+    /// fly-in plays, and then counts down. 0 in a race with no start ceremony.
+    pub lights_ms: i32,
+    /// How many ticks the fly-in takes: the lights wait for it.
+    pub intro_ticks: u32,
+    /// The light that came on in the last tick, if one did.
+    pub light: Option<Light>,
+    /// `elapsedEventTime`: the milliseconds since the green light (since tick 0 in a race with
+    /// no ceremony). The lap times are of this clock.
+    pub event_ms: i32,
 }
 
 impl Race {
@@ -148,7 +202,79 @@ impl Race {
             feedback: Feedback::default(),
             tick: 0,
             kart_collisions,
+            laps: DEFAULT_LAPS,
+            finished: 0,
+            lap_times: vec![Vec::new(); specs.len()],
+            lights_ms: 0,
+            intro_ticks: 0,
+            light: None,
+            event_ms: 0,
         }
+    }
+
+    /// Starts the race with the ceremony: the camera flies in (if the level has the fly-in), then
+    /// the traffic lights count down, and the karts rev their engines on the grid until they go
+    /// green. (Without it a race starts straight in driving.)
+    pub fn start_ceremony(&mut self, level: &Level) {
+        self.lights_ms = START_LIGHTS_MS;
+        self.intro_ticks = if level.fly_in.is_some() {
+            INTRO_TICKS
+        } else {
+            0
+        };
+        for kart in &mut self.karts {
+            vehicle::stuck::rev_engine_init(&mut kart.driver);
+        }
+    }
+
+    /// `PlayLevel_UpdateLapStats`: every kart's progress along the track and the finish line,
+    /// then the places. The karts that finished have theirs, in the order they crossed (the
+    /// slot order when it is the same tick); the others are sorted by lap and distance.
+    fn update_laps(&mut self, level: &Level) -> Vec<Lap> {
+        let event_time = self.event_ms;
+        let mut next_place = 0;
+        let laps: Vec<Lap> = self
+            .karts
+            .iter_mut()
+            .map(|kart| {
+                let d = &mut kart.driver;
+                let lap = vehicle::lap::update(d, level, self.laps, event_time);
+                if lap.finished {
+                    d.driver_rank = self.finished;
+                    self.finished += 1;
+                }
+                if d.actions_flag_set & actions::RACE_FINISHED == 0 {
+                    d.driver_rank = UNSORTED;
+                } else {
+                    next_place = next_place.max(d.driver_rank as i32 + 1);
+                }
+                lap
+            })
+            .collect();
+        for place in next_place..self.karts.len() as i32 {
+            let mut best = None;
+            let mut best_lap = -10;
+            let mut nearest = 0x3fff_ffff;
+            for (slot, kart) in self.karts.iter().enumerate() {
+                let d = &kart.driver;
+                if d.driver_rank != UNSORTED {
+                    continue;
+                }
+                // A kart behind the start line has not begun its lap.
+                let lap = d.lap_index as i32
+                    - (d.actions_flag_set & actions::BEHIND_START_LINE != 0) as i32;
+                let to_finish = d.distance_to_finish_curr as i32;
+                if lap > best_lap || (lap == best_lap && to_finish < nearest) {
+                    nearest = to_finish;
+                    best_lap = lap;
+                    best = Some(slot);
+                }
+            }
+            if let Some(slot) = best {
+                self.karts[slot].driver.driver_rank = place as i16;
+            }
+        }
+        laps
     }
 
     /// One game tick: the objects, then every kart from its pad (`pads[slot]`), in the order of
@@ -158,8 +284,18 @@ impl Race {
         // The objects tick with the karts and before them, so that the contacts they give are
         // this tick's.
         self.last = self.objects.tick();
+        self.light = None;
+        if self.tick >= self.intro_ticks && self.lights_ms > LIGHTS_FLOOR_MS {
+            let before = self.lights_ms;
+            self.lights_ms = (before - 32).max(LIGHTS_FLOOR_MS);
+            self.light = LIGHT_AT_MS
+                .iter()
+                .find(|&&(at, _)| before > at && self.lights_ms <= at)
+                .map(|&(_, light)| light);
+        }
         let env = Env {
-            elapsed_event_time: self.tick as i32 * 32,
+            traffic_lights_timer: self.lights_ms,
+            elapsed_event_time: self.event_ms,
             timer: self.tick,
             kart_collisions: self.kart_collisions,
             ..Env::default()
@@ -199,7 +335,7 @@ impl Race {
                 &mut self.feedback,
             )
         };
-        let ticks = self
+        let mut ticks: Vec<KartTick> = self
             .karts
             .iter_mut()
             .zip(effects)
@@ -212,9 +348,19 @@ impl Race {
                     puffs,
                     landing,
                     wall,
+                    lap: Lap::default(),
                 }
             })
             .collect();
+        for ((slot, tick), lap) in ticks.iter_mut().enumerate().zip(self.update_laps(level)) {
+            if lap.new_lap {
+                self.lap_times[slot].push(lap.time);
+            }
+            tick.lap = lap;
+        }
+        if self.lights_ms < 1 {
+            self.event_ms += env.elapsed_time_ms;
+        }
         self.tick += 1;
         ticks
     }
@@ -297,8 +443,14 @@ impl Race {
         let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
         let _ = write!(
             hash,
-            "{} {:?} {:?}\n",
+            "{} {} {} {} {} {} {:?} {:?} {:?}\n",
             self.tick,
+            self.event_ms,
+            self.laps,
+            self.finished,
+            self.lights_ms,
+            self.intro_ticks,
+            self.lap_times,
             self.feedback,
             self.objects.ticks()
         );

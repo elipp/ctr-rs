@@ -214,12 +214,30 @@ pub struct InstDef {
     pub model_id: i32,
 }
 
+/// The start-line fly-in (`ST1_CAMERA_PATH`): the points the camera and what it looks at pass,
+/// one for each frame of the fly-in, in a frame that is set by the start of the grid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlyIn {
+    /// What the camera looks at (`FlyInData::ptrStart`).
+    pub target: Vec<SVec3>,
+    /// Where the camera is (`FlyInData::ptrEnd`).
+    pub eye: Vec<SVec3>,
+}
+
+impl FlyIn {
+    /// `FlyInData::frameCount2` and `frameCount1`.
+    pub const TARGET_POINTS: usize = 0x8e;
+    pub const EYE_POINTS: usize = 0x96;
+}
+
 #[derive(Debug, Clone)]
 pub struct Level {
     pub instances: Vec<InstDef>,
     /// How long each armadillo waits before it first moves (`ptrSpawnType1`'s spawn array), in
     /// ticks, indexed by the digit its instance name ends in.
     pub spawn_delays: Vec<u16>,
+    /// The fly-in of the start of a race; none on tracks without one (the battle arenas).
+    pub fly_in: Option<FlyIn>,
     /// The position-only paths (`ptrSpawnType2`): the minecarts of Dragon Mines follow the first,
     /// and several other objects (seals, spiders, turtles) use the others.
     pub position_paths: Vec<Vec<SVec3>>,
@@ -370,6 +388,30 @@ impl Level {
             })?;
         }
         Ok(Some(Skybox { vertices, segments }))
+    }
+
+    /// `ST1_CAMERA_PATH`, which a track has if its table has four entries.
+    fn parse_fly_in(p: &Payload) -> io::Result<Option<FlyIn>> {
+        const ST1_CAMERA_PATH: usize = 3;
+        let at = match p.u32(LEVEL_SPAWN_TYPE_1)? {
+            0 => return Ok(None),
+            at => at as usize,
+        };
+        if p.u32(at)? as usize <= ST1_CAMERA_PATH {
+            return Ok(None);
+        }
+        let path = match p.u32(at + 4 + 4 * ST1_CAMERA_PATH)? {
+            0 => return Ok(None),
+            path => path as usize,
+        };
+        let points = |first: usize, n: usize| -> io::Result<Vec<SVec3>> {
+            (0..n).map(|i| p.svec3(first + i * 6)).collect()
+        };
+        let eye_at = path + FlyIn::TARGET_POINTS * 6;
+        Ok(Some(FlyIn {
+            target: points(path, FlyIn::TARGET_POINTS)?,
+            eye: points(eye_at, FlyIn::EYE_POINTS)?,
+        }))
     }
 
     /// The delays of `ST1_SPAWN`: ten halfwords at most, one for each digit a name can end in.
@@ -623,6 +665,7 @@ impl Level {
         Ok(Self {
             instances: Self::parse_instances(&p)?,
             spawn_delays: Self::parse_spawn_delays(&p)?,
+            fly_in: Self::parse_fly_in(&p)?,
             position_paths: Self::parse_position_paths(&p)?,
             paths: Self::parse_paths(&p)?,
             skybox: Self::parse_skybox(&p)?,

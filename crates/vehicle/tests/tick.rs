@@ -410,6 +410,7 @@ fn frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
             end_of_race: rng.below(500) == 0,
             respawns: false,
             kart_collisions: true,
+            traffic_lights_timer: 0,
         };
         out.push(Frame {
             env,
@@ -460,6 +461,7 @@ fn drifter_frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
             end_of_race: false,
             respawns: false,
             kart_collisions: true,
+            traffic_lights_timer: 0,
         };
         out.push(Frame {
             env,

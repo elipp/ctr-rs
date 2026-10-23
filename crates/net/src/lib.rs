@@ -95,6 +95,14 @@ pub enum Event {
     Open(Ticket),
     /// Someone joined the lobby we host.
     PeerJoined(EndpointId),
+    /// We host the lobby, and a guest says what it drives (`first` for the first time it says,
+    /// which is when it has joined; again when it changes its character). `character` is in
+    /// `GAME_CHARACTER_IDS` order.
+    Character {
+        id: EndpointId,
+        character: u8,
+        first: bool,
+    },
     /// We joined the lobby of this host.
     Joined(EndpointId),
     /// A peer is gone.
@@ -121,6 +129,8 @@ pub enum Event {
     /// difference between how far each of us is past the other's last pad. It comes with every
     /// packet of theirs, so it is noisy; the game smooths it.
     Lead { slot: usize, ahead: f32 },
+    /// A message the host broadcast (see [`Session::announce`]) for the players to read.
+    Announce(String),
     /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
     Checksum { slot: usize, tick: Tick, hash: u64 },
     /// The session could not go on.
@@ -129,6 +139,8 @@ pub enum Event {
 
 enum Command {
     Start { track: u32 },
+    Restart { track: u32 },
+    Announce(String),
     Character(u8),
     Ready,
     Input(Pad),
@@ -153,6 +165,19 @@ impl Session {
     /// [`Event::Started`].
     pub fn start(&self, track: u32) {
         let _ = self.commands.send(Command::Start { track });
+    }
+
+    /// Starts the race again on level `track`, if we host the lobby and a race has been started
+    /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
+    /// the way it did the first time.
+    pub fn restart(&self, track: u32) {
+        let _ = self.commands.send(Command::Restart { track });
+    }
+
+    /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host
+    /// it.
+    pub fn announce(&self, text: impl Into<String>) {
+        let _ = self.commands.send(Command::Announce(text.into()));
     }
 
     /// Changes the character we drive, for the race that has not started yet. (Pass the one
@@ -290,7 +315,7 @@ fn listen(connection: Connection, from: EndpointId, heard: UnboundedSender<(Endp
                         Ok(bytes) => Some(Message::from_bytes(&bytes)),
                         Err(_) => continue,
                     },
-                    Err(_) => None,
+                    Err(_) => None ,
                 },
             };
             match message {
@@ -320,7 +345,7 @@ enum Role {
 struct Guest {
     id: EndpointId,
     connection: Connection,
-    /// What it said it drives, and the number of the Hello that said it; none until it comes.
+    /// What it said it drives, and the number of the Hello that said it; none  until it comes.
     hello: Option<(u32, u8)>,
 }
 
@@ -345,11 +370,14 @@ struct Link {
     receiver: InputReceiver,
     /// The first of our ticks it has not confirmed.
     peer_has: Tick,
+    /// The race the link is for.
+    epoch: u32,
 }
 
 impl Link {
-    fn new(connection: Connection) -> Link {
+    fn new(connection: Connection, epoch: u32) -> Link {
         Link {
+            epoch,
             connection,
             sender: InputSender::default(),
             receiver: InputReceiver::default(),
@@ -359,8 +387,17 @@ impl Link {
 
     /// Sends the pads it lacks of ours, and what we have of its.
     fn send(&mut self) {
-        let packet = self.sender.packet(self.peer_has, self.receiver.next());
+        let mut packet = self.sender.packet(self.peer_has, self.receiver.next());
+        packet.epoch = self.epoch;
         send_datagram(&self.connection, &Message::Inputs(packet));
+    }
+}
+
+/// Starts the links over for the race of `epoch`: nothing sent or received yet, on the
+/// connections that are up.
+fn start_over(links: &mut HashMap<EndpointId, Link>, epoch: u32) {
+    for link in links.values_mut() {
+        *link = Link::new(link.connection.clone(), epoch);
     }
 }
 
@@ -427,6 +464,9 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
     // The host: who is ready.
     let mut ready_from: HashSet<EndpointId> = HashSet::new();
     let mut running = false;
+    // Which race this is, counted from 0, and our slot and the characters in it.
+    let mut epoch: u32 = 0;
+    let mut race_info: Option<(usize, Vec<u8>)> = None;
     let mut timer = send_interval();
 
     loop {
@@ -445,9 +485,10 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 match &role {
                     // Nobody joins a race that has begun.
                     Role::Host if plan.is_none() => {
+                        let guest = Guest { id, connection: connection.clone(), hello: None };
                         io.event(Event::PeerJoined(id));
-                        listen(connection.clone(), id, heard_tx.clone());
-                        guests.push(Guest { id, connection, hello: None });
+                        listen(connection, id, heard_tx.clone());
+                        guests.push(guest);
                     }
                     Role::Host => {}
                     // The others of the race connect to us as the roster says.
@@ -466,6 +507,26 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 Command::Start { track } => if matches!(role, Role::Host) {
                     start_wanted = Some(track);
                 },
+                // The same players again: new links, and everyone ready before tick 0 once more.
+                Command::Restart { track } => if matches!(role, Role::Host)
+                    && plan.is_some()
+                    && let Some((slot, characters)) = race_info.clone()
+                {
+                    epoch += 1;
+                    for guest in &guests {
+                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track }).await;
+                    }
+                    start_over(&mut links, epoch);
+                    (running, game_ready, ready_sent) = (false, false, false);
+                    ready_from.clear();
+                    io.event(Event::Started { slot, characters, track });
+                },
+                Command::Announce(text) => if matches!(role, Role::Host) {
+                    for guest in &guests {
+                        let _ = send_reliably(&guest.connection, &Message::Announce { text: text.clone() }).await;
+                    }
+                    io.event(Event::Announce(text));
+                },
                 Command::Character(c) => if plan.is_none() {
                     character = c;
                     if let Some(connection) = &host_connection {
@@ -482,7 +543,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     }
                 },
                 Command::Checksum { tick, hash } => if running {
-                    let message = Message::Checksum { tick, hash };
+                    let message = Message::Checksum { epoch, tick, hash };
                     for link in links.values() {
                         // On a stream of its own, which the loop does not wait for.
                         let connection = link.connection.clone();
@@ -499,7 +560,9 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         if let Some(guest) = guests.iter_mut().find(|g| g.id == from)
                             && guest.hello.is_none_or(|(have, _)| seq > have)
                         {
+                            let first = guest.hello.is_none();
                             guest.hello = Some((seq, character));
+                            io.event(Event::Character { id: from, character, first });
                         }
                     }
                     Message::Start { slot, characters, track, roster }
@@ -513,14 +576,30 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         // The host is connected already.
                         links.insert(
                             host_id,
-                            Link::new(host_connection.clone().expect("a guest has the host")),
+                            Link::new(host_connection.clone().expect("a guest has the host"), epoch),
                         );
                         // Players connect to the ones before them; the ones after connect to us.
                         for &id in roster.iter().take(slot).skip(1) {
                             dial(endpoint.clone(), id, dialed_tx.clone());
                         }
                         plan = Some(Plan { roster });
+                        race_info = Some((slot, characters.clone()));
                         io.event(Event::Started { slot, characters, track });
+                    }
+                    Message::Restart { epoch: new, track }
+                        if plan.is_some() && from == host_id && !matches!(role, Role::Host) =>
+                    {
+                        if let Some((slot, characters)) = race_info.clone() {
+                            epoch = new;
+                            start_over(&mut links, epoch);
+                            (running, game_ready, ready_sent) = (false, false, false);
+                            io.event(Event::Started { slot, characters, track });
+                        }
+                    }
+                    Message::Announce { text } => {
+                        if from == host_id && !matches!(role, Role::Host) {
+                            io.event(Event::Announce(text));
+                        }
                     }
                     Message::Ready => {
                         if matches!(role, Role::Host) && plan.is_some() {
@@ -532,7 +611,9 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         io.event(Event::Go);
                     },
                     Message::Inputs(inputs) => {
-                        if let (Some(plan), Some(link)) = (&plan, links.get_mut(&from)) {
+                        if inputs.epoch != epoch {
+                            // The tail of the race before.
+                        } else if let (Some(plan), Some(link)) = (&plan, links.get_mut(&from)) {
                             link.peer_has = link.peer_has.max(inputs.ack);
                             let before = link.receiver.next();
                             link.receiver.accept(&inputs).map_err(|gap| {
@@ -554,14 +635,14 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                             }
                         }
                     }
-                    Message::Checksum { tick, hash } => {
-                        if let Some(slot) = plan.as_ref().and_then(|plan| plan.slot_of(from))
+                    Message::Checksum { epoch: sent, tick, hash } => {
+                        if sent == epoch && let Some(slot) = plan.as_ref().and_then(|plan| plan.slot_of(from))
                             && links.contains_key(&from)
                         {
                             io.event(Event::Checksum { slot, tick, hash });
                         }
                     }
-                    Message::Snapshot { .. } | Message::Start { .. } => {}
+                    Message::Snapshot { .. } | Message::Start { .. } | Message::Restart { .. } => {}
                 },
                 Heard::Closed => {
                     io.event(Event::PeerLeft(from));
@@ -602,9 +683,10 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                 };
                 let _ = send_reliably(&guest.connection, &start).await;
-                links.insert(guest.id, Link::new(guest.connection.clone()));
+                links.insert(guest.id, Link::new(guest.connection.clone(), epoch));
             }
             plan = Some(Plan { roster });
+            race_info = Some((0, characters.clone()));
             io.event(Event::Started {
                 slot: 0,
                 characters,
@@ -621,7 +703,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 }
                 links
                     .entry(id)
-                    .or_insert_with(|| Link::new(connection.clone()));
+                    .or_insert_with(|| Link::new(connection.clone(), epoch));
                 false
             });
         }

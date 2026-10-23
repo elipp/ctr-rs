@@ -13,9 +13,9 @@
 //! (the kart frozen at its last position, lifted by the mask) is ported.
 //!
 //! Not modelled either:
-//! - The race start's engine rev: a driver is spawned straight into driving
-//!   ([`crate::sim::spawn`]), so the traffic lights the rev waits for do not
-//!   exist and the rev here is only ever the mask grab's.
+//! - The race start's engine rev is the caller's to start: [`crate::sim::spawn`] puts a driver
+//!   straight into driving, and [`rev_engine_init`] after it makes the driver wait for
+//!   `Env::traffic_lights_timer` to run out.
 //! - Other drivers: [`find_dest_pos`] takes the positions of the other
 //!   drivers, because it does not respawn the kart where one of them is.
 //! - The camera: `CAMERA_FLAG_MASK_GRAB` (and its height offset) while lowered
@@ -651,11 +651,14 @@ pub fn rev_engine_init(d: &mut Driver) {
 
 /// `VehStuckProc_RevEngine_Update`: once the mask has lowered the kart close enough to the
 /// track, the rev ends, and gives a boost if it was high enough.
-pub fn rev_engine_update(d: &mut Driver, effects: &mut Vec<Effect>) {
-    // (The race start's rev would wait for the traffic lights here.)
-    if d.rev.bool_mask_grab
-        && mips::add_lo(d.quad_block_height, REV_MASK_RELEASE_HEIGHT) <= d.pos_curr.y
-    {
+pub fn rev_engine_update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
+    if d.rev.bool_mask_grab {
+        // A mask that has not lowered the kart close enough to the track yet holds it.
+        if mips::add_lo(d.quad_block_height, REV_MASK_RELEASE_HEIGHT) <= d.pos_curr.y {
+            return;
+        }
+    } else if env.traffic_lights_timer > 0 {
+        // The start of a race: wait for the traffic lights.
         return;
     }
 
