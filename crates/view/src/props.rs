@@ -15,40 +15,79 @@ use loader::dram::DramFile;
 use loader::lev::Level;
 use loader::model::{Model, ModelHeader};
 use loader::vram::Vram;
+use race::rollback::Rollback;
+use race::{KartSpec, Race};
 use render::mesh::{self, PARTS, SCALE, to_world};
 
 use crate::drive::animation_pose;
 use crate::subtract::SubtractMaterial;
-use crate::{GameTick, spawn_parts};
+use crate::{GameTick, Track, spawn_parts};
 
-/// The state of the level's objects, and what the last tick of them did.
+/// The ticks that are kept to be played again when a pad arrives late: 4 seconds.
+const ROLLBACK_WINDOW: usize = 120;
+
+/// How often the sims of an online race are hashed and compared: every second.
+const CHECK_EVERY: u32 = 30;
+
+/// The race that is being played: the karts, the level's objects and everything else the next
+/// tick depends on (`race::Race`). Out of a drive session it has no karts, only the objects.
 #[derive(Resource)]
 pub struct Sim {
-    pub objects: Objects,
-    pub last: instance::Tick,
+    /// The race as far as it has been played; it reads as a `Race`.
+    pub race: Rollback<Race>,
     /// The objects at tick 0, to start a race over.
     start: Objects,
+    /// Our kart among the race's.
+    pub own: usize,
 }
 
 impl Sim {
-    pub fn new(objects: Objects) -> Sim {
+    pub fn new(level: &Level, objects: Objects, specs: &[KartSpec]) -> Sim {
         Sim {
-            start: objects.clone(),
-            objects,
-            last: instance::Tick::default(),
+            race: Sim::rollback(level, objects.clone(), specs, 0),
+            start: objects,
+            own: 0,
         }
     }
 
-    /// Puts every object back as it was at tick 0.
-    pub fn restart(&mut self) {
-        self.objects = self.start.clone();
-        self.last = instance::Tick::default();
+    /// The race at tick 0 with the karts `specs`, ours being kart `own`.
+    fn rollback(level: &Level, objects: Objects, specs: &[KartSpec], own: usize) -> Rollback<Race> {
+        let race = Race::new(level, objects, specs, crate::remote::kart_collisions());
+        let rollback = Rollback::new(
+            race,
+            specs.len(),
+            (!specs.is_empty()).then_some(own),
+            ROLLBACK_WINDOW,
+        );
+        // Nobody to compare with alone.
+        if specs.len() > 1 {
+            rollback.check_every(CHECK_EVERY)
+        } else {
+            rollback
+        }
+    }
+
+    /// Puts the race back to tick 0 with the karts `specs`, ours being kart `own`; every object
+    /// is as it was at the start.
+    pub fn restart(&mut self, level: &Level, specs: &[KartSpec], own: usize) {
+        self.race = Sim::rollback(level, self.start.clone(), specs, own);
+        self.own = own;
+    }
+
+    /// Our kart.
+    pub fn kart(&self) -> &race::Kart {
+        &self.race.karts[self.own]
+    }
+
+    /// Our driver.
+    pub fn driver(&self) -> &vehicle::Driver {
+        &self.kart().driver
     }
 }
 
-/// One game tick of the objects.
-pub fn tick_objects(mut sim: ResMut<Sim>) {
-    sim.last = sim.objects.tick();
+/// One game tick of the objects, in a viewer that has no karts.
+pub fn tick_objects(mut sim: ResMut<Sim>, track: Res<Track>) {
+    sim.race.advance(&track.0);
 }
 
 /// A placed model whose pose changes with the tick.
@@ -146,7 +185,7 @@ pub fn spin_fruit(
     mut last: Local<(u32, f32)>,
     mut fruit: Query<(&FruitBody, &mut Transform)>,
 ) {
-    let ticks = sim.objects.ticks();
+    let ticks = sim.race.objects.ticks();
     let mut turns = ticks as f32 + fixed.overstep_fraction();
     if ticks >= last.0 {
         turns = turns.max(last.1);
@@ -174,7 +213,7 @@ pub fn pose_crates(
     mut crates: Query<(&CrateBody, &mut Transform, &mut Visibility)>,
 ) {
     for (body, mut transform, mut visibility) in &mut crates {
-        let scale = sim.objects.crates[body.0].sim.scale;
+        let scale = sim.race.objects.crates[body.0].sim.scale;
         let want = if scale == 0 {
             Visibility::Hidden
         } else {
@@ -193,7 +232,7 @@ pub fn pose_crates(
 /// Hides the fruit that were picked up.
 pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>) {
     for (body, mut visibility) in &mut fruit {
-        let collected = sim.objects.fruit[body.index].sim.collected;
+        let collected = sim.race.objects.fruit[body.index].sim.collected;
         let want = if collected {
             Visibility::Hidden
         } else {
@@ -536,17 +575,17 @@ pub fn pose_hazards(
 ) {
     for t in &mut turtles.0 {
         t.pose(
-            (0, sim.objects.turtles[t.index].sim.anim_frame),
+            (0, sim.race.objects.turtles[t.index].sim.anim_frame),
             &mut meshes,
         );
     }
     for a in &mut armadillos.0 {
-        let h = &sim.objects.armadillos[a.index].sim;
+        let h = &sim.race.objects.armadillos[a.index].sim;
         a.moved(h.pos, &h.matrix());
         a.pose((h.anim_index, h.anim_frame), &mut meshes);
     }
     for c in &mut minecarts.0 {
-        let h = &sim.objects.minecarts[c.index].sim;
+        let h = &sim.race.objects.minecarts[c.index].sim;
         c.moved(h.pos, &h.matrix());
         c.pose((0, h.anim_frame), &mut meshes);
     }
@@ -584,7 +623,7 @@ pub fn roll(
     let mut gte = gte::Gte::default();
     let fraction = fixed.overstep_fraction();
     for (rolling, mut transform) in &mut rolling {
-        let (from, to) = sim.objects.roller_frames(rolling.0);
+        let (from, to) = sim.race.objects.roller_frames(rolling.0);
         let mut place =
             |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(&mut gte, p.rot));
         let ((from_pos, from_rot), (to_pos, to_rot)) = (place(from), place(to));

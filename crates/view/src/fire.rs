@@ -92,11 +92,16 @@ pub fn spawn(
     });
 }
 
-/// One game tick, after the hazards': the sparks they left start, then every spark moves.
-pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>) {
+/// One game tick, after the hazards': the sparks they left start, then every spark moves. A
+/// tick of the sim is taken once, however many steps of the clock pass while it waits.
+pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>, mut seen: Local<Option<u32>>) {
     let Some(mut fire) = fire else { return };
+    if *seen == Some(sim.race.tick) {
+        return;
+    }
+    *seen = Some(sim.race.tick);
     let fire = &mut *fire;
-    for spark in &sim.last.sparks {
+    for spark in &sim.race.last.sparks {
         fire.sparks
             .push(Particle::fireball(spark.pos, spark.vel_y, &mut fire.rng));
     }

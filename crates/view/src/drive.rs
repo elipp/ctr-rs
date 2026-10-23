@@ -18,11 +18,11 @@
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
-use coll::Collision;
+use race::rollback::Step;
+use race::{KartSpec, Pad};
 use vehicle::demo::Demo;
 use vehicle::shadow::{GroundShadow, ground_shadow};
-use vehicle::sim::spawn;
-use vehicle::{Driver, Effect, Env, Input, buttons};
+use vehicle::{Driver, Effect, Input, buttons};
 
 use crate::Track;
 use render::mesh::SCALE;
@@ -80,6 +80,19 @@ struct Hud;
 #[derive(Component)]
 struct WumpaHud;
 
+/// How many ticks we may play past the last pad of another player before we wait for it: the
+/// prediction is that long at most (more than the latency of a good connection, in ticks).
+const MAX_LEAD: u32 = 10;
+
+/// The ticks between the beeps of an online race: a second.
+const TICKS_PER_BEEP: u32 = 60;
+
+/// The pitch of the first player's beep; each next player is a major third higher.
+const BEEP_HZ: f32 = 440.0;
+
+/// How long F7 and F8 freeze an online client for.
+const STALLS_MS: [u64; 2] = [500, 2000];
+
 /// The bar under the wumpa counter.
 #[derive(Component)]
 struct WumpaBar;
@@ -112,14 +125,12 @@ pub(crate) struct Pose {
     pub scale: Vec3,
 }
 
+/// What the viewer keeps of driving: the camera, the poses to draw between ticks, the demo. The
+/// race itself, our kart in it included, is [`crate::props::Sim`].
 #[derive(Resource)]
 pub struct Drive {
-    pub(crate) driver: Driver,
-    coll: Collision,
     pub(crate) character: usize,
     anim_num_frames: [u16; 8],
-    pub(crate) tick: u32,
-    held: u32,
     demo: DemoMode,
     previous: Pose,
     current: Pose,
@@ -128,17 +139,20 @@ pub struct Drive {
     camera: camera::CameraDc,
     previous_view: View,
     current_view: View,
-    /// When the last bump of karts was heard.
-    feedback: vehicle::collide::Feedback,
 }
 
 impl Drive {
-    pub fn new(track: &Track, character: usize, anim_num_frames: [u16; 8]) -> Drive {
-        let (driver, coll) = Drive::birth(track, character, anim_num_frames, 0);
-        let pose = pose_of(&driver);
+    /// Driving for `driver`, the kart of `character` on the grid.
+    pub fn new(
+        track: &Track,
+        driver: &Driver,
+        character: usize,
+        anim_num_frames: [u16; 8],
+    ) -> Drive {
+        let pose = pose_of(driver);
         let mut camera = camera::CameraDc::default();
         camera.follow_driver(
-            &driver,
+            driver,
             &track.0,
             &camera::Input {
                 elapsed_time_ms: 32,
@@ -150,18 +164,21 @@ impl Drive {
             camera,
             previous_view: view,
             current_view: view,
-            driver,
-            coll,
             character,
             anim_num_frames,
-            tick: 0,
-            held: 0,
             demo: DemoMode::Off,
             previous: pose,
             current: pose,
             shadow_previous: None,
             shadow_current: None,
-            feedback: Default::default(),
+        }
+    }
+
+    /// Our kart, as a race takes it.
+    pub fn spec(&self) -> KartSpec {
+        KartSpec {
+            character: self.character,
+            anim_num_frames: self.anim_num_frames,
         }
     }
 
@@ -187,26 +204,6 @@ impl Drive {
             Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
             before.height as f32 + (now.height - before.height) as f32 * t,
         ))
-    }
-
-    /// `driver_id` is the player's slot in an online race (0 offline), which picks its place on
-    /// the grid.
-    pub(crate) fn birth(
-        track: &Track,
-        character: usize,
-        anim_num_frames: [u16; 8],
-        driver_id: usize,
-    ) -> (Driver, Collision) {
-        let mut coll = Collision::default();
-        let mut driver = Driver::new(driver_id as u8, character);
-        driver.anim_num_frames = anim_num_frames;
-        let order = vehicle::grid::spawn_order(
-            vehicle::grid::GridMode::Arcade,
-            1,
-            [0, 1, 2, 3, 4, 5, 6, 7],
-        );
-        spawn(&mut driver, &mut coll, &track.0, order[driver_id] as usize);
-        (driver, coll)
     }
 }
 
@@ -495,76 +492,14 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     }
 }
 
-/// A pad as the input the sim takes; the taps follow from the buttons held a tick before.
-pub(crate) fn input_of_pad(pad: &net::Pad, previous_held: u32) -> Input {
-    Input {
-        buttons_held: pad.held,
-        buttons_tapped: pad.held & !previous_held,
-        stick_lx: pad.lx,
-        stick_ly: pad.ly,
-        stick_ry: pad.ry,
+/// The pad of the race for a pad of the network.
+pub(crate) fn pad_of(pad: &net::Pad) -> Pad {
+    Pad {
+        held: pad.held,
+        lx: pad.lx,
+        ly: pad.ly,
+        ry: pad.ry,
     }
-}
-
-/// What a kart does before the stages of a tick: the same for ours and for every other player's,
-/// so that all clients play every kart the same way.
-pub(crate) fn before_tick(
-    driver: &mut Driver,
-    input: &Input,
-    sim: &crate::props::Sim,
-    effects: &mut Vec<Effect>,
-) {
-    // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
-    // kart: it has the mask already.)
-    if input.buttons_tapped & buttons::CIRCLE != 0
-        && !matches!(
-            driver.kart_state,
-            vehicle::kart_state::MASK_GRABBED | vehicle::kart_state::ENGINE_REVVING
-        )
-    {
-        vehicle::stuck::shoot_mask(driver, effects);
-    }
-    // The hazards that reached the kart's instance in their last tick hurt it
-    // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
-    let (_, at) = vehicle::baked::inst_matrix(driver);
-    for contact in sim.last.contacts.iter().filter(|c| c.hits(at)) {
-        let was_spinning = driver.kart_state == vehicle::kart_state::SPINNING;
-        if vehicle::pick::new_state(driver, contact.damage as u8, effects)
-            && !was_spinning
-            && contact.sound != 0
-        {
-            let echo = driver.actions_flag_set & vehicle::actions::ENGINE_ECHO != 0;
-            effects.push(Effect::Sound {
-                id: contact.sound as u8,
-                echo,
-            });
-        }
-    }
-}
-
-/// What a kart does after the stages of a tick. Ours also gives its sparks and exhaust to
-/// `particles`.
-pub(crate) fn after_tick(
-    driver: &mut Driver,
-    env: &Env,
-    particles: Option<&mut crate::exhaust::Particles>,
-    effects: &mut Vec<Effect>,
-) {
-    // The pickup HUD gives the fruit that were picked up to the driver.
-    vehicle::wumpa::hud_tick(driver, true, effects);
-
-    // The exhaust and the skid marks keep their state in the driver, so they run for every kart
-    // even when nobody sees the particles.
-    let mut particles = particles;
-    if let Some(particles) = particles.as_deref_mut() {
-        particles.sparks(driver);
-    }
-    let puffs = vehicle::exhaust::exhaust(driver);
-    if let Some(particles) = particles {
-        particles.tick(&puffs);
-    }
-    vehicle::skid::skidmarks(driver);
-    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16);
 }
 
 /// One game tick of the sim.
@@ -577,21 +512,23 @@ fn drive_tick(
     mut drive: ResMut<Drive>,
     mut enter_held: Local<bool>,
     mut paused: Local<bool>,
-    mut demo_keys_held: Local<[bool; 2]>,
+    mut keys_held: Local<[bool; 4]>,
     mut label: Query<&mut Visibility, With<PausedHud>>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
-    mut remotes: ResMut<crate::remote::Remotes>,
+    remotes: Res<crate::remote::Remotes>,
     mut motions: Query<(&mut crate::kart::KartMotion, Has<Kart>)>,
+    mut commands: Commands,
+    mut pitches: ResMut<Assets<bevy::audio::Pitch>>,
 ) {
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
     let online = lobby.online.is_some();
-    // The level of the race is not up yet.
+    // The level of the race is not up yet, nor the karts of the others.
     if lobby
         .online
         .as_ref()
-        .is_some_and(|net| net.track != track.1.0)
+        .is_some_and(|net| net.track != track.1.0 || !net.built)
     {
         return;
     }
@@ -629,9 +566,8 @@ fn drive_tick(
         !online && keys.any_pressed([KeyCode::F5, KeyCode::Digit1]),
         !online && keys.any_pressed([KeyCode::F6, KeyCode::Digit2]),
     ];
-    let [record_pressed, play_pressed] =
-        std::array::from_fn(|i| demo_down[i] && !demo_keys_held[i]);
-    *demo_keys_held = demo_down;
+    let [record_pressed, play_pressed] = std::array::from_fn(|i| demo_down[i] && !keys_held[i]);
+    keys_held[..2].copy_from_slice(&demo_down);
     if record_pressed {
         if let DemoMode::Recording(demo) = &drive.demo {
             match std::fs::write(DEMO_FILE, demo.to_text()) {
@@ -659,6 +595,10 @@ fn drive_tick(
     } else if restart {
         drive.demo = DemoMode::Off;
     }
+    // The lobby closed, or the race failed: back to the grid with our kart alone.
+    if !online && sim.race.karts.len() != 1 {
+        restart = true;
+    }
     // The race starts: tick 0 for everyone.
     if let Some(net) = lobby.online.as_mut().filter(|net| net.fresh) {
         net.fresh = false;
@@ -666,132 +606,199 @@ fn drive_tick(
         restart = true;
     }
     if restart {
-        let (driver, coll) = Drive::birth(
-            &track,
-            drive.character,
-            drive.anim_num_frames,
-            lobby.online.as_ref().map_or(0, |net| net.slot),
-        );
-        (drive.driver, drive.coll, drive.tick) = (driver, coll, 0);
-        drive.held = 0;
-        sim.restart();
+        let (specs, own) = match &lobby.online {
+            Some(net) => (net.specs.clone(), net.slot),
+            None => (vec![drive.spec()], 0),
+        };
+        sim.restart(&track.0, &specs, own);
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
-        drive.feedback = Default::default();
-        for (mut motion, ours) in &mut motions {
-            if ours {
-                motion.reset(&drive.driver);
+        each_motion(&sim, &remotes, &mut motions, |motion, driver| {
+            motion.reset(driver)
+        });
+    }
+
+    // F7 and F8 freeze this client for a moment, to see the race put right after a hitch: the
+    // clock does not catch up (the frame is cut short), so the others run ahead and we wait.
+    let stall_down = [KeyCode::F7, KeyCode::F8].map(|key| online && keys.pressed(key));
+    for (i, millis) in STALLS_MS.into_iter().enumerate() {
+        if stall_down[i] && !keys_held[2 + i] {
+            info!("stalling for {millis} ms");
+            std::thread::sleep(std::time::Duration::from_millis(millis));
+        }
+    }
+    keys_held[2..].copy_from_slice(&stall_down);
+
+    // Tick 0 has to come first: the others must be ready as well.
+    if lobby.online.as_ref().is_some_and(|net| !net.go) {
+        for mut text in &mut demo_label {
+            text.0 = lobby
+                .online
+                .as_ref()
+                .map_or_else(String::new, |net| net.summary(0, 0));
+        }
+        return;
+    }
+
+    let tick = sim.race.tick();
+    let own = sim.own;
+    if let Some(net) = lobby.online.as_mut() {
+        // The pads of the others that came in since the last tick.
+        for (slot, first, pads) in net.inbox.drain(..) {
+            let pads: Vec<Pad> = pads.iter().map(pad_of).collect();
+            if let Err(hole) = sim.race.confirm_all(slot, first, &pads) {
+                error!(
+                    "pads of player {slot} from tick {first}: missing from {}",
+                    hole.expected
+                );
             }
         }
     }
-
-    let mut input = match &drive.demo {
-        DemoMode::Playing(demo) => demo.input(drive.tick, drive.held),
-        _ => None,
-    };
-    if let Some(net) = &lobby.online {
-        // Everyone's pad for this tick, or the sim waits for it.
-        let Some(frame) = net.frames.get(drive.tick as usize) else {
-            return;
+    // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
+    // rollback window) and predict the others further and further. It waits for them instead.
+    if online
+        && (0..sim.race.players())
+            .filter(|&slot| slot != own)
+            .any(|slot| tick > sim.race.confirmed_until(slot) + MAX_LEAD)
+    {
+        return;
+    }
+    // Our own pad for this tick, from the controller as it is now. It is played at once, and the
+    // others get it as well. (A tick that waits plays the pad it already has.)
+    if sim.race.confirmed_until(own) <= tick {
+        let held = sim.kart().held;
+        let pad = if online {
+            Pad::of_input(&read_input(&keys, &pads, held))
+        } else {
+            let mut input = match &drive.demo {
+                DemoMode::Playing(demo) => demo.input(tick, held),
+                _ => None,
+            };
+            if input.is_none() {
+                if matches!(drive.demo, DemoMode::Playing(_)) {
+                    info!("demo over after {tick} ticks");
+                    drive.demo = DemoMode::Off;
+                }
+                input = Some(read_input(&keys, &pads, held));
+            }
+            let input = input.unwrap();
+            if let DemoMode::Recording(demo) = &mut drive.demo {
+                demo.record(tick, &input);
+            }
+            Pad::of_input(&input)
         };
-        input = Some(input_of_pad(&frame[net.slot], drive.held));
-        // Ours for the tick INPUT_DELAY on.
-        let ours = read_input(&keys, &pads, 0);
-        lobby.send(net::Pad {
-            held: ours.buttons_held,
-            lx: ours.stick_lx,
-            ly: ours.stick_ly,
-            ry: ours.stick_ry,
-        });
-    }
-    if input.is_none() {
-        if matches!(drive.demo, DemoMode::Playing(_)) {
-            info!("demo over after {} ticks", drive.tick);
-            drive.demo = DemoMode::Off;
+        sim.race
+            .confirm(own, tick, pad)
+            .expect("our pads come in order");
+        if online {
+            lobby.send(net::Pad {
+                held: pad.held,
+                lx: pad.lx,
+                ly: pad.ly,
+                ry: pad.ry,
+            });
         }
-        input = Some(read_input(&keys, &pads, drive.held));
     }
-    let input = input.unwrap();
-    if let DemoMode::Recording(demo) = &mut drive.demo {
-        demo.record(drive.tick, &input);
-    }
-    drive.held = input.buttons_held;
     for mut text in &mut demo_label {
         text.0 = match &drive.demo {
             _ if online => lobby
                 .online
                 .as_ref()
-                .map_or_else(String::new, |net| net.summary(drive.tick)),
+                .map_or_else(String::new, |net| net.summary(tick, sim.race.unsettled())),
             DemoMode::Off => String::new(),
-            DemoMode::Recording(_) => format!("REC {}", drive.tick),
-            DemoMode::Playing(demo) => format!("DEMO {}/{}", drive.tick, demo.length),
+            DemoMode::Recording(_) => format!("REC {tick}"),
+            DemoMode::Playing(demo) => format!("DEMO {tick}/{}", demo.length),
         };
     }
-    // The objects tick with the karts, once per tick of the sim and before them, so that a tick
-    // that waits for the network (or a pause) does not let them run ahead. Together with
-    // the restart above that puts the hazards in the same state for every peer at tick 0.
-    sim.last = sim.objects.tick();
-    let env = Env {
-        elapsed_event_time: drive.tick as i32 * 32,
-        timer: drive.tick,
-        kart_collisions: crate::remote::kart_collisions(),
-        ..Env::default()
+
+    // Everyone's karts play together, by slot, ours among them. The pads that are not in yet
+    // are predicted, and put right when they come.
+    let advance = sim.race.advance(&track.0);
+    if advance.replayed > 0
+        && let Some(net) = lobby.online.as_mut()
+    {
+        net.corrections += 1;
+        net.replayed += advance.replayed;
+    }
+    // The hashes of the ticks that are final now: the others get ours, and ours are held up
+    // against theirs.
+    for (tick, hash) in sim.race.take_checksums() {
+        lobby.checksum(tick, hash);
+        if let Some(net) = lobby.online.as_mut() {
+            let found = net.checks.mine(tick, hash);
+            net.found(found);
+        }
+    }
+    let Step::Played(ticks) = advance.step else {
+        return;
     };
-    // Everyone's karts play together, by slot, ours among them: each stage of the tick over all
-    // the karts before the next, as the original runs its drivers.
-    let frame = lobby
-        .online
-        .as_ref()
-        .map(|net| &net.frames[drive.tick as usize][..]);
-    let own = lobby.online.as_ref().map_or(0, |net| net.slot);
-    let (result, effects) = remotes.play(
-        crate::remote::Own {
-            driver: &mut drive.driver,
-            coll: &mut drive.coll,
-            input: &input,
-            slot: own,
-        },
-        frame,
-        &env,
-        &track,
-        &mut sim,
-        &mut particles,
-        &mut drive.feedback,
-        &mut motions,
-    );
-    drive.tick += 1;
+    // A beep every second of ticks, higher for each player: the clients' beeps line up when
+    // their ticks do.
+    if online && tick % TICKS_PER_BEEP == 0 {
+        let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
+        let pitch = pitches.add(bevy::audio::Pitch::new(
+            frequency,
+            std::time::Duration::from_millis(100),
+        ));
+        commands.spawn((AudioPlayer(pitch), PlaybackSettings::DESPAWN));
+    }
+    let mine = &ticks[sim.own];
+    particles.sparks(mine.landing, mine.wall);
+    particles.tick(&mine.puffs);
 
     // The mask grab put the kart back on the track: the camera swings round behind it.
-    if result.respawned {
+    if mine.result.respawned {
         drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
     }
 
     // A boost pulls the camera back.
-    if effects
+    if mine
+        .effects
         .iter()
         .any(|e| matches!(e, Effect::CameraFireSpeedZoom { .. }))
     {
         drive.camera.flags |= camera::flags::FIRE_SPEED_ZOOM;
     }
     let camera_input = camera::Input {
-        elapsed_time_ms: env.elapsed_time_ms,
+        elapsed_time_ms: vehicle::Env::default().elapsed_time_ms,
         ..Default::default()
     };
+    let kart = sim.kart();
     drive
         .camera
-        .follow_driver(&drive.driver, &track.0, &camera_input);
+        .follow_driver(&kart.driver, &track.0, &camera_input);
 
     drive.shadow_previous = drive.shadow_current;
-    drive.shadow_current = ground_shadow(&drive.driver, &mut drive.coll.gte.clone());
+    drive.shadow_current = ground_shadow(&kart.driver, &mut kart.coll.gte.clone());
     drive.previous = drive.current;
-    drive.current = pose_of(&drive.driver);
-    for (mut motion, ours) in &mut motions {
-        if ours {
-            motion.push(&drive.driver);
-        }
-    }
+    drive.current = pose_of(&kart.driver);
+    each_motion(&sim, &remotes, &mut motions, |motion, driver| {
+        motion.push(driver)
+    });
     drive.previous_view = drive.current_view;
     drive.current_view = view_of(&drive.camera);
+}
+
+/// Runs `f` on the motion of each kart's drawing, with the driver it follows.
+fn each_motion(
+    sim: &crate::props::Sim,
+    remotes: &crate::remote::Remotes,
+    motions: &mut Query<(&mut crate::kart::KartMotion, Has<Kart>)>,
+    mut f: impl FnMut(&mut crate::kart::KartMotion, &Driver),
+) {
+    for (slot, kart) in sim.race.karts.iter().enumerate() {
+        if slot == sim.own {
+            for (mut motion, ours) in motions.iter_mut() {
+                if ours {
+                    f(&mut motion, &kart.driver);
+                }
+            }
+        } else if let Some(entity) = remotes.entities.get(slot).copied().flatten()
+            && let Ok((mut motion, _)) = motions.get_mut(entity)
+        {
+            f(&mut motion, &kart.driver);
+        }
+    }
 }
 
 /// The kart between the last two ticks.
@@ -827,9 +834,9 @@ fn chase(
 }
 
 /// The wumpa count.
-fn wumpa_hud(drive: Res<Drive>, mut text: Query<&mut Text, With<WumpaHud>>) {
+fn wumpa_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<WumpaHud>>) {
     for mut text in &mut text {
-        text.0 = format!("{}/10", drive.driver.num_wumpas);
+        text.0 = format!("{}/10", sim.driver().num_wumpas);
     }
 }
 
@@ -847,9 +854,9 @@ fn fps_hud(diagnostics: Res<DiagnosticsStore>, mut text: Query<&mut Text, With<F
     }
 }
 
-fn wumpa_bar(drive: Res<Drive>, mut bars: Query<&mut crate::bar::Bar, With<WumpaBar>>) {
+fn wumpa_bar(sim: Res<crate::props::Sim>, mut bars: Query<&mut crate::bar::Bar, With<WumpaBar>>) {
     for mut bar in &mut bars {
-        let value = drive.driver.num_wumpas as f32 / 10.0;
+        let value = sim.driver().num_wumpas as f32 / 10.0;
         // Only touch the bar when it changes, so its fill is not redone every frame.
         if bar.value != value {
             bar.value = value;
@@ -859,8 +866,8 @@ fn wumpa_bar(drive: Res<Drive>, mut bars: Query<&mut crate::bar::Bar, With<Wumpa
 
 /// The boost timing bar, `MAX - current` of the drift's meter: empty outside a drift, full when
 /// the window of the boost is reached.
-fn turbo_bar(drive: Res<Drive>, mut bars: Query<&mut crate::bar::Bar, With<TurboBar>>) {
-    let d = &drive.driver;
+fn turbo_bar(sim: Res<crate::props::Sim>, mut bars: Query<&mut crate::bar::Bar, With<TurboBar>>) {
+    let d = sim.driver();
     let max = (d.stats.turbo_max_room as i32) << 5;
     let value = if d.phys_state == vehicle::PhysState::PowerSlide && max > 0 {
         ((max - d.turbo_meter_room_left as i32) as f32 / max as f32).clamp(0.0, 1.0)
@@ -875,14 +882,14 @@ fn turbo_bar(drive: Res<Drive>, mut bars: Query<&mut crate::bar::Bar, With<Turbo
 }
 
 /// The boost reserves, always, up to 10000.
-fn reserves_hud(drive: Res<Drive>, mut text: Query<&mut Text, With<ReservesHud>>) {
+fn reserves_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<ReservesHud>>) {
     for mut text in &mut text {
-        text.0 = format!("{}", drive.driver.reserves);
+        text.0 = format!("{}", sim.driver().reserves);
     }
 }
 
-fn hud(drive: Res<Drive>, mut text: Query<&mut Text, With<Hud>>) {
-    let d = &drive.driver;
+fn hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<Hud>>) {
+    let d = sim.driver();
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     for mut text in &mut text {
         text.0 = format!(

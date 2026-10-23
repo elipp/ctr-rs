@@ -5,12 +5,12 @@
 //! * L: open a lobby (again to close it)
 //! * G: start the race, once the others have joined (the host only)
 //!
-//! The race is lockstep: a tick is played once everyone's pad for it is in, and the pads reach
-//! `drive_tick` through [`Online::frames`]. The other players' karts are not simulated yet; the
-//! HUD shows their buttons.
+//! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
+//! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
+//! that has not come yet is predicted, and put right when it does (`race::rollback`).
 
 use bevy::prelude::*;
-use net::{Event, Frame, Pad, Session, Ticket};
+use net::{Event, Pad, Session, Ticket};
 
 use crate::toast::Toast;
 
@@ -22,37 +22,65 @@ pub struct Online {
     pub characters: Vec<u8>,
     /// The `LevelId` it is on, which the viewer shows before anything is played.
     pub track: u32,
-    /// Everyone's pads, by tick.
-    pub frames: Vec<Frame>,
+    /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
+    /// the pads).
+    pub inbox: Vec<(usize, u32, Vec<Pad>)>,
     /// Set by the start and cleared by `drive_tick`, which puts the sim back to tick 0.
     pub fresh: bool,
     /// Set once `remote::build` has put the other karts on the grid.
     pub built: bool,
+    /// Tick 0 has come: everyone is ready.
+    pub go: bool,
+    /// The kart of each slot, as the race takes them: set by `remote::build`, which has their
+    /// models.
+    pub specs: Vec<race::KartSpec>,
+    /// How many times a late pad differed from its prediction, and the ticks played again for it.
+    pub corrections: u32,
+    pub replayed: u32,
+    /// The hashes of the sims, ours and the others'.
+    pub checks: race::desync::Checks,
+    /// The players whose sim differs from ours, with the first tick it was seen at.
+    pub desync: Vec<Desync>,
+}
+
+/// A player whose sim has parted from ours.
+pub struct Desync {
+    pub slot: usize,
+    pub tick: u32,
+    /// Whether the player has been told of it (by a toast).
+    pub told: bool,
 }
 
 impl Online {
-    /// A line for the HUD: where the race is, and the buttons the others held.
-    pub fn summary(&self, tick: u32) -> String {
-        let others: Vec<String> = self
-            .frames
-            .get(tick as usize)
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .filter(|&(slot, _)| slot != self.slot)
-            .map(|(slot, pad)| format!("p{slot} {:x}", pad.held))
-            .collect();
-        let wait = if self.frames.len() as u32 <= tick {
-            " (waiting)"
-        } else {
-            ""
-        };
-        format!(
-            "NET {tick} you p{}/{}{wait}  {}",
+    /// A line for the HUD: where the race is, and how many ticks were played on a prediction, and how often (and how far back) a
+    /// wrong one had to be put right.
+    pub fn summary(&self, tick: u32, predicted: u32) -> String {
+        let wait = if !self.go { " (waiting)" } else { "" };
+        let mut line = format!(
+            "NET {tick} you p{}/{}{wait}  predicting {predicted}  rollbacks {} ({} ticks)",
             self.slot,
             self.characters.len(),
-            others.join("  ")
-        )
+            self.corrections,
+            self.replayed,
+        );
+        for d in &self.desync {
+            line += &format!("  DESYNC with p{} at {}", d.slot, d.tick);
+        }
+        line
+    }
+
+    /// Notes the players whose hash differs from ours. A sim that has parted stays apart, so
+    /// only the first is kept for each player.
+    pub fn found(&mut self, mismatches: impl IntoIterator<Item = race::desync::Mismatch>) {
+        for m in mismatches {
+            if self.desync.iter().all(|d| d.slot != m.slot) {
+                self.desync.push(Desync {
+                    slot: m.slot,
+                    tick: m.tick,
+                    told: false,
+                });
+            }
+        }
     }
 }
 
@@ -80,10 +108,24 @@ impl Lobby {
         }
     }
 
-    /// Our pad for the tick `net::lockstep::INPUT_DELAY` after the one being played.
+    /// Our pad for the tick being played, which goes to the others at once.
     pub fn send(&self, pad: Pad) {
         if let Some(session) = &self.session {
             session.input(pad);
+        }
+    }
+
+    /// Our hash of the sim before `tick`, for the others to compare.
+    pub fn checksum(&self, tick: u32, hash: u64) {
+        if let Some(session) = &self.session {
+            session.checksum(tick, hash);
+        }
+    }
+
+    /// The race is built and can start, once the others are as well.
+    pub fn ready(&self) {
+        if let Some(session) = &self.session {
+            session.ready();
         }
     }
 }
@@ -142,7 +184,9 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     };
     let mut failed = false;
     let mut started = None;
-    let mut frames = Vec::new();
+    let mut go = false;
+    let mut pads = Vec::new();
+    let mut sums = Vec::new();
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
@@ -163,7 +207,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 "{} left{}",
                 id.fmt_short(),
                 if lobby.online.is_some() {
-                    " (the race waits for them)"
+                    " (the race goes on with their last pad)"
                 } else {
                     ""
                 }
@@ -177,16 +221,29 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     "race started: you are player {slot} of {}, characters {characters:?}, track {track}",
                     characters.len()
                 );
+                let characters_len = characters.len();
                 started = Some(Online {
                     slot,
                     characters,
                     track,
-                    frames: Vec::new(),
+                    inbox: Vec::new(),
                     fresh: true,
                     built: false,
+                    go: false,
+                    specs: Vec::new(),
+                    corrections: 0,
+                    replayed: 0,
+                    checks: race::desync::Checks::new(characters_len, slot),
+                    desync: Vec::new(),
                 });
             }
-            Event::Frame { tick, pads } => frames.push((tick, pads)),
+            Event::Go => go = true,
+            Event::Pads {
+                slot,
+                first,
+                pads: p,
+            } => pads.push((slot, first, p)),
+            Event::Checksum { slot, tick, hash } => sums.push((slot, tick, hash)),
             Event::Failed(why) => {
                 println!("lobby failed: {why}");
                 failed = true;
@@ -197,9 +254,23 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         lobby.online = started;
     }
     if let Some(online) = &mut lobby.online {
-        for (tick, pads) in frames {
-            debug_assert_eq!(tick as usize, online.frames.len());
-            online.frames.push(pads);
+        online.go |= go;
+        online.inbox.extend(pads);
+        for (slot, tick, hash) in sums {
+            let found = online.checks.theirs(slot, tick, hash);
+            online.found(found);
+        }
+        for d in online.desync.iter_mut().filter(|d| !d.told) {
+            d.told = true;
+            println!(
+                "DESYNC: the sim of player {} differs from ours at tick {}",
+                d.slot, d.tick
+            );
+            toasts.write(Toast::new(
+                format!("Out of sync with player {} (tick {})", d.slot, d.tick),
+                8000,
+                Color::srgb(1.0, 0.3, 0.3),
+            ));
         }
     }
     if failed {

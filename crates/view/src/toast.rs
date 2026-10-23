@@ -79,7 +79,10 @@ fn show(
     if toasts.is_empty() {
         return;
     }
-    let column = columns.iter().next().unwrap_or_else(|| column(&mut commands));
+    let column = columns
+        .iter()
+        .next()
+        .unwrap_or_else(|| column(&mut commands));
     for toast in toasts.read() {
         commands.spawn((
             Showing {

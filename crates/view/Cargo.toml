@@ -21,3 +21,4 @@ render = { path = "../render" }
 camera = { path = "../camera" }
 gte = { path = "../gte" }
 net = { path = "../net" }
+race = { path = "../race" }
