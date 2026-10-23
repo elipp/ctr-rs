@@ -25,3 +25,9 @@
 - The squash/shear of the baked matrix is approximated on the Bevy side: rotation from the (re-orthogonalised) up and forward columns, scale from the column lengths.
 - The squish offset (`squishTimer`) and the instance scale squash/stretch (`inst->scale`) are not ported, as before.
 - The oracle tests (`tick.rs`, `reference.rs`) now see `matrixArray` 1..3 during boosts; they need a run on Linux.
+
+**Wumpa fruit spin and bob (2026-10-23, NOT visually verified):** `view::props::spin_fruit` turns the fruit around their own vertical axis (once per `FRUIT_SPIN_TICKS`, 60) and bobs them up and down (`FRUIT_BOB_HEIGHT` 10 level units each way, `FRUIT_BOB_TICKS` 90, a different phase per fruit). Added on purpose, tuned by eye. Whether retail moves them was not checked, so this may or may not differ from it; the reference (`RB_Fruit_*`) has to be read before anyone calls it a match. Known differences:
+- The speeds, the axis and the height are ours. The angle and the height are functions of the tick (`Objects::ticks`) and the render's place in it, so they are cosmetic: peers agree and none of it is in the sim state.
+- The hitbox does not bob: it stays at the placed position, up to 10 units off the drawn fruit at the top and bottom of a bob. Syncing it would put the height in the sim and make the pickup test follow it.
+- It does not go back while ticks wait (a pause, a stalled network frame), but then it stands still until they go on.
+- The other placed props (bobbing crates) still stand still.

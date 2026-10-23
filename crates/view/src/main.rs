@@ -470,6 +470,7 @@ fn main() {
             (
                 switch_level,
                 props::roll,
+                props::spin_fruit,
                 props::place_hazards,
                 fire::update,
             )

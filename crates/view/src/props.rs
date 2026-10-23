@@ -4,7 +4,8 @@
 //! model with an animation plays its first one over and over at the game tick. The ones that
 //! move by the game's code (the armadillos, the minecarts, the snowball and the barrels) are
 //! `instance::Objects`: that is ticked here, and these only show it. What the game moves by other
-//! code (spinning fruit, bobbing crates, anything that reacts) stands still.
+//! code (bobbing crates, anything that reacts) stands still. The fruit spin on their own
+//! axis and bob, at a speed of our own (DIVERGENCE.md).
 
 use std::collections::HashMap;
 
@@ -119,9 +120,46 @@ pub struct ArmadilloBody(usize);
 #[derive(Component)]
 pub struct MinecartBody(usize);
 
-/// A placed wumpa fruit (its index among `Objects::fruit`).
+/// A placed wumpa fruit (its index among `Objects::fruit`), and the way it was placed.
 #[derive(Component)]
-pub struct FruitBody(usize);
+pub struct FruitBody {
+    index: usize,
+    /// Where and how it was placed.
+    home: Vec3,
+    rest: Quat,
+}
+
+/// The ticks a fruit takes to turn once around its own axis. Not retail's (see DIVERGENCE.md).
+const FRUIT_SPIN_TICKS: f32 = 60.0;
+
+/// The ticks of a bob up and down, and how far it goes either way (in level units). Only the
+/// drawing bobs: the hitbox stays where the level has it.
+const FRUIT_BOB_TICKS: f32 = 55.0;
+const FRUIT_BOB_HEIGHT: f32 = 10.0;
+
+/// Turns the fruit around their own vertical axis and bobs them, by the tick and how far the
+/// render is through it. The angle only depends on the tick, so every peer sees the same spin; it never goes back
+/// when ticks wait (a pause, the network) and the render keeps passing through the same tick.
+pub fn spin_fruit(
+    sim: Res<Sim>,
+    fixed: Res<Time<Fixed>>,
+    mut last: Local<(u32, f32)>,
+    mut fruit: Query<(&FruitBody, &mut Transform)>,
+) {
+    let ticks = sim.objects.ticks();
+    let mut turns = ticks as f32 + fixed.overstep_fraction();
+    if ticks >= last.0 {
+        turns = turns.max(last.1);
+    }
+    *last = (ticks, turns);
+    let angle = turns / FRUIT_SPIN_TICKS * std::f32::consts::TAU;
+    for (body, mut transform) in &mut fruit {
+        transform.rotation = body.rest * Quat::from_rotation_y(angle);
+        // Each fruit is a little ahead of the one before, so they do not bob as one.
+        let phase = (turns / FRUIT_BOB_TICKS + body.index as f32 * 0.17) * std::f32::consts::TAU;
+        transform.translation = body.home + Vec3::Y * (phase.sin() * FRUIT_BOB_HEIGHT * SCALE);
+    }
+}
 
 /// Constant depth bias (see `DEPTH_BIAS_PER_ORDER`) that keeps a crate in front of the ground it sinks into.
 const CRATE_DEPTH_BIAS: f32 = 4_000_000.0;
@@ -155,7 +193,7 @@ pub fn pose_crates(
 /// Hides the fruit that were picked up.
 pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>) {
     for (body, mut visibility) in &mut fruit {
-        let collected = sim.objects.fruit[body.0].sim.collected;
+        let collected = sim.objects.fruit[body.index].sim.collected;
         let want = if collected {
             Visibility::Hidden
         } else {
@@ -369,7 +407,15 @@ pub fn spawn(
             // A fruit's model hangs off a body that is hidden once it is picked up.
             Some(&Hazard::Fruit(i)) => (
                 Transform::default(),
-                Some(body(commands, transform, FruitBody(i))),
+                Some(body(
+                    commands,
+                    transform,
+                    FruitBody {
+                        index: i,
+                        home: transform.translation,
+                        rest: rotation,
+                    },
+                )),
             ),
             // A crate's model hangs off a body that shrinks when it is hit and grows back.
             Some(&Hazard::Crate(i)) => (
