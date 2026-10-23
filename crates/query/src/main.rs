@@ -37,6 +37,11 @@ commands:
                                       the placed instances (crates, fruit, hazards)
   pads LEVEL                          each turbo pad's collision block, and the visible blocks
                                       with the same footprint (the ones that show the pad)
+  icons [FIRST [LAST]]                which BIGFILE entries carry icons with global indices
+                                      FIRST..=LAST (default 32..=55, the driver portraits),
+                                      with each icon's name and texture layout
+  portraits [CHARACTER]               decodes the portraits the way the viewer's leaderboard
+                                      does: texel counts, and CHARACTER (0..15) as ASCII art
 
 environment: CTR_BIN is the disc image.
 ";
@@ -434,6 +439,83 @@ fn instances(l: &Loaded, name: Option<&str>, at: Option<[i32; 3]>, within: i32) 
     }
 }
 
+fn icon_scan(range: std::ops::RangeInclusive<i32>) -> Result<(), String> {
+    let path = std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
+        });
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    for index in 0..big.entries.len() {
+        let Ok(file) = big.read(&mut disc, index) else {
+            continue;
+        };
+        let Ok(dram) = DramFile::parse(&file) else {
+            continue;
+        };
+        let Ok(icons) = loader::icons::parse_icons(&dram) else {
+            continue;
+        };
+        for i in icons.iter().filter(|i| range.contains(&i.global_index)) {
+            println!(
+                "entry {index}: {} {:?} {:?}",
+                i.global_index, i.name, i.layout
+            );
+        }
+    }
+    Ok(())
+}
+
+fn portraits(show: Option<usize>) -> Result<(), String> {
+    use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
+    let path = std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
+        });
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut vram = loader::vram::Vram::default();
+    let shared = big
+        .read(&mut disc, BigIndex::SHARED_MPK_VRM.get())
+        .map_err(|e| e.to_string())?;
+    for img in loader::vram::parse_vram_file(&shared).map_err(|e| e.to_string())? {
+        vram.upload(&img).map_err(|e| e.to_string())?;
+    }
+    let pack = big
+        .read(&mut disc, BigIndex::ARCADE_1P_PACK.get())
+        .map_err(|e| e.to_string())?;
+    let icons = loader::icons::parse_icons(&DramFile::parse(&pack).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let atlas = portrait_atlas(&icons, &vram);
+    for n in 0..ICON_IDS.len() {
+        let picture = &atlas.rgba[n * WIDTH * HEIGHT * 4..][..WIDTH * HEIGHT * 4];
+        let visible = picture.chunks(4).filter(|p| p[3] != 0).count();
+        println!(
+            "character {n} (icon {}): {visible}/{} texels",
+            ICON_IDS[n],
+            WIDTH * HEIGHT
+        );
+        if show == Some(n) {
+            for row in picture.chunks(WIDTH * 4) {
+                let line: String = row
+                    .chunks(4)
+                    .map(
+                        |p| match (p[3], (p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) {
+                            (0, _) => ' ',
+                            (_, 0..=63) => '#',
+                            (_, 64..=127) => '*',
+                            (_, 128..=191) => '+',
+                            _ => '.',
+                        },
+                    )
+                    .collect();
+                println!("{line}");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
@@ -441,6 +523,22 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let command = args.remove(0);
+    if command == "icons" {
+        let first = args.first().map_or(Ok(32), |a| a.parse::<i32>());
+        let last = args.get(1).map_or(Ok(55), |a| a.parse::<i32>());
+        let (Ok(first), Ok(last)) = (first, last) else {
+            return Err("icons takes numbers".into());
+        };
+        return icon_scan(first..=last);
+    }
+    if command == "portraits" {
+        return portraits(
+            args.first()
+                .map(|a| a.parse::<usize>())
+                .transpose()
+                .map_err(|e| e.to_string())?,
+        );
+    }
     let mut args = Args(args);
     let level = level_id(&args.positional("LEVEL")?)?;
     let l = load(level)?;

@@ -5,5 +5,6 @@ pub mod explosion;
 pub mod mask;
 pub mod mesh;
 pub mod particles;
+pub mod portraits;
 pub mod shadow;
 pub mod wheels;

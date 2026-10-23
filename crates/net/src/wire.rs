@@ -88,6 +88,9 @@ pub enum Message {
     /// Reliable, host to each client: the race starts again, on `track`. The same players, on
     /// the same connections; `epoch` counts the races and tells their packets apart.
     Restart { epoch: u32, track: u32 },
+    /// Reliable, host to each client: who is in the lobby and what each drives, the host first.
+    /// It comes whenever that changes, in full, so a client that joins late catches up.
+    Lobby { players: Vec<([u8; 32], u8)> },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
@@ -251,6 +254,9 @@ mod tests {
             Message::Ready,
             Message::Go,
             Message::Restart { epoch: 2, track: 7 },
+            Message::Lobby {
+                players: vec![([1; 32], 4), ([2; 32], 15)],
+            },
             Message::Announce {
                 text: "Restarting in 5".into(),
             },

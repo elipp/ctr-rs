@@ -801,8 +801,12 @@ fn drive_tick(
         cues.light(light);
     }
     let mine = &ticks[sim.own];
-    particles.sparks(mine.landing, mine.wall);
-    particles.tick(&mine.puffs);
+    // Everyone's exhaust and sparks, ours and the others' (the others' as the sim has them).
+    for (slot, kart) in ticks.iter().enumerate() {
+        particles.sparks(slot, kart.landing, kart.wall);
+        particles.puffs(slot, &kart.puffs);
+    }
+    particles.tick();
 
     // The mask grab put the kart back on the track: the camera swings round behind it.
     if mine.result.respawned {
