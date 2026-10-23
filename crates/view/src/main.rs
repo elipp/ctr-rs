@@ -18,6 +18,7 @@
 //! `]` / Page Up and `[` / Page Down switch to the next and the previous level; `.` and `,` to the
 //! next and the previous racer.
 
+mod banner;
 mod bar;
 mod drive;
 mod exhaust;
@@ -458,6 +459,7 @@ fn main() {
                 animate_water,
                 animate_scenery,
                 props::animate,
+                banner::wave,
                 // Driving ticks the objects with the karts (`drive_tick`).
                 props::tick_objects.run_if(not(resource_exists::<drive::Drive>)),
                 props::pose_hazards,

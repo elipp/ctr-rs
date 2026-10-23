@@ -19,6 +19,7 @@ use race::rollback::Rollback;
 use race::{KartSpec, Race};
 use render::mesh::{self, PARTS, SCALE, to_world};
 
+use crate::banner::{Banner, Banners};
 use crate::drive::animation_pose;
 use crate::subtract::SubtractMaterial;
 use crate::{GameTick, Track, spawn_parts};
@@ -381,6 +382,7 @@ pub fn spawn(
     let mut armadillos = Armadillos::default();
     let mut minecarts = Minecarts::default();
     let mut turtles = Turtles::default();
+    let mut banners = Banners::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
     let mut gte = gte::Gte::default();
     // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
@@ -411,7 +413,26 @@ pub fn spawn(
             Some(scale) => [scale; 3],
             None => [inst.scale.x, inst.scale.y, inst.scale.z],
         };
-        let data = mesh::model_mesh(header, frame, vram, inst_scale);
+        // The banner waves: its commands are made over for it, and its mesh is posed each tick.
+        let mut banner = (inst.model_name == "startbanner")
+            .then(|| Banner::new(header, frame, inst_scale))
+            .flatten();
+        if inst.model_name == "startbanner" {
+            match &banner {
+                Some(b) => info!("start banner waves: {} vertices", b.vertex_count()),
+                None => warn!(
+                    "start banner does not wave: {} colours, {} animations",
+                    header.colors.len(),
+                    header.animations.len()
+                ),
+            }
+        }
+        let data = mesh::model_mesh(
+            banner.as_ref().map_or(header, |b| &b.header),
+            frame,
+            vram,
+            inst_scale,
+        );
 
         let mut atlas = Image::new(
             bevy::render::render_resource::Extent3d {
@@ -547,6 +568,11 @@ pub fn spawn(
             subtract_materials,
             0,
         );
+        if let Some(mut banner) = banner.take() {
+            banner.parts = parts;
+            banners.0.push(banner);
+            continue;
+        }
         if header
             .animations
             .first()
@@ -573,6 +599,7 @@ pub fn spawn(
     commands.insert_resource(armadillos);
     commands.insert_resource(minecarts);
     commands.insert_resource(turtles);
+    commands.insert_resource(banners);
 }
 
 /// After a tick of the hazards: the armadillos and the minecarts take their new place and the

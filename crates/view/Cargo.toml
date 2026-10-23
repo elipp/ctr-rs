@@ -22,3 +22,4 @@ camera = { path = "../camera" }
 gte = { path = "../gte" }
 net = { path = "../net" }
 race = { path = "../race" }
+math = { path = "../math" }
