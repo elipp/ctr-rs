@@ -33,6 +33,7 @@ mod remote;
 mod shadow;
 mod skid;
 mod sky;
+mod toast;
 mod subtract;
 mod wheels;
 
@@ -480,7 +481,7 @@ fn main() {
         scene_systems.push(app.world_mut().register_system(mask::spawn));
         let character = drive.character as u8;
         app.insert_resource(drive)
-            .add_plugins((drive::DrivePlugin, lobby::LobbyPlugin));
+            .add_plugins((drive::DrivePlugin, lobby::LobbyPlugin, toast::ToastPlugin));
         if let Some(ticket) = join {
             app.insert_resource(lobby::Lobby::joining(ticket, character));
         }
