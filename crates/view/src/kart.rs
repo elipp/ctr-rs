@@ -23,7 +23,14 @@ pub struct KartMotion {
     pub inst_scale: [i32; 3],
     /// `Driver::animIndex` and `animFrame`: which pose of the model to show.
     animation: (u8, i16),
+    /// The same one tick earlier, to blend from.
+    previous_animation: (u8, i16),
 }
+
+/// The furthest apart two ticks' frames of an animation can be and still be blended: an
+/// animation plays on a frame or two a tick, so more is a jump (a new animation, a wrap round
+/// to the first frame) that must not be blended through.
+const MAX_BLEND_FRAMES: i16 = 4;
 
 impl KartMotion {
     pub fn new(d: &Driver) -> KartMotion {
@@ -34,8 +41,10 @@ impl KartMotion {
             wheel_rotation: 0,
             inst_scale: [0; 3],
             animation: (0, 0),
+            previous_animation: (0, 0),
         }
         .pushed(d)
+        .settled()
     }
 
     fn pushed(mut self, d: &Driver) -> KartMotion {
@@ -45,12 +54,19 @@ impl KartMotion {
         self
     }
 
+    /// No animation to blend from.
+    fn settled(mut self) -> KartMotion {
+        self.previous_animation = self.animation;
+        self
+    }
+
     /// The kart after a tick.
     pub fn push(&mut self, d: &Driver) {
         let previous = self.current;
         *self = KartMotion {
             previous,
             current: pose_of(d),
+            previous_animation: self.animation,
             ..*self
         }
         .pushed(d);
@@ -71,13 +87,27 @@ impl KartMotion {
     }
 }
 
+impl KartMotion {
+    /// The frames to show and how far from the first to the second, `t` of the way through the
+    /// tick. Frames of different animations, or far apart, are not blended: the latest shows.
+    fn blend(&self, t: f32) -> ((u8, i16), (u8, i16), f32) {
+        let (from, to) = (self.previous_animation, self.animation);
+        if from.0 == to.0 && (to.1 - from.1).abs() <= MAX_BLEND_FRAMES && from != to {
+            (from, to, t)
+        } else {
+            (to, to, 0.0)
+        }
+    }
+}
+
 /// The kart model's faces, to pose as [`KartMotion`] says: steering plays a frame that matches
 /// the wheel, a jump or a spin-out others.
 #[derive(Component)]
 pub struct KartRig {
     header: ModelHeader,
     parts: [Option<Handle<Mesh>>; PARTS],
-    shown: Option<(u8, i16)>,
+    /// The blend on the mesh: two frames and the bits of how far between them.
+    shown: Option<((u8, i16), (u8, i16), u32)>,
 }
 
 /// A kart of `model` at `placement`, in render layer `layer`. With a `motion` the sim moves it.
@@ -158,22 +188,43 @@ pub fn show(fixed: Res<Time<Fixed>>, mut karts: Query<(&mut Transform, &KartMoti
     }
 }
 
-/// Poses the models as the sims' animations say, when that changes.
-pub fn animate(mut karts: Query<(&KartMotion, &mut KartRig)>, mut meshes: ResMut<Assets<Mesh>>) {
+/// Poses the models as the sims' animations say: the frame of the last tick and the one before
+/// it, blended by how far the render is through the tick, so that the 30 Hz animation moves
+/// smoothly at any frame rate.
+pub fn animate(
+    fixed: Res<Time<Fixed>>,
+    mut karts: Query<(&KartMotion, &mut KartRig)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let t = fixed.overstep_fraction();
     for (motion, mut rig) in &mut karts {
-        if rig.shown == Some(motion.animation) {
+        let (from, to, t) = motion.blend(t);
+        let key = (from, to, t.to_bits());
+        if rig.shown == Some(key) {
             continue;
         }
-        let Some(frame) = animation_pose(&rig.header, motion.animation.0, motion.animation.1)
-        else {
+        let pose = |frame: (u8, i16)| {
+            animation_pose(&rig.header, frame.0, frame.1).map(|frame| {
+                mesh::model_positions(
+                    &rig.header,
+                    &frame,
+                    [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
+                )
+            })
+        };
+        let Some(mut positions) = pose(to) else {
             continue;
         };
-        rig.shown = Some(motion.animation);
-        let positions = mesh::model_positions(
-            &rig.header,
-            &frame,
-            [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
-        );
+        if from != to
+            && let Some(before) = pose(from)
+        {
+            for (now, before) in positions.iter_mut().zip(&before) {
+                for (now, before) in now.iter_mut().zip(before) {
+                    *now = std::array::from_fn(|a| before[a] + (now[a] - before[a]) * t);
+                }
+            }
+        }
+        rig.shown = Some(key);
         for (handle, positions) in rig.parts.iter().zip(positions) {
             let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
                 continue;
