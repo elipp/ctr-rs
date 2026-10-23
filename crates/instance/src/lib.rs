@@ -172,24 +172,55 @@ fn digit(def: &InstDef) -> Option<usize> {
     Some(def.name.chars().last()?.to_digit(10)? as usize)
 }
 
-/// The thread of each object of a kind, one tick.
-fn th_tick_all<T: Instance>(list: &mut [Placed<T>], cx: &Context, out: &mut Tick) {
+/// Where an object of the level is kept: its kind, and its index among the objects of the kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Armadillo(usize),
+    Fireball(usize),
+    Minecart(usize),
+    Roller(usize),
+    Turtle(usize),
+    Fruit(usize),
+    Crate(usize),
+}
+
+/// An object of the level as [`Objects::each_object`] hands it out: whatever its kind, it is only
+/// an [`Instance`].
+pub struct Entry<'a> {
+    /// The instance of the level that it moves.
+    pub instance: usize,
+    pub object: &'a mut dyn Instance,
+    /// What its thread sees, with its own `frames`.
+    pub cx: Context<'a>,
+    /// `sdata->randomNumber`, for a [`Touch`].
+    pub random_number: &'a mut i32,
+}
+
+/// The objects of one kind, to `f`.
+fn each<T: Instance>(
+    list: &mut [Placed<T>],
+    cx: &Context,
+    random_number: &mut i32,
+    f: &mut impl FnMut(Entry),
+) {
     for placed in list {
-        placed.sim.th_tick(
-            &Context {
+        f(Entry {
+            instance: placed.instance,
+            object: &mut placed.sim,
+            cx: Context {
                 frames: placed.frames,
                 ..*cx
             },
-            out,
-        );
+            random_number: &mut *random_number,
+        });
     }
 }
 
-/// The touch of the object of a kind that is `instance`, if there is one.
-fn touch_in<T: Instance>(list: &mut [Placed<T>], instance: usize, hit: &mut Touch) -> Option<i32> {
-    list.iter_mut()
-        .find(|p| p.instance == instance)
-        .map(|p| p.sim.touch(hit))
+/// The slots of the objects of one kind.
+fn slots_of<T>(list: &[Placed<T>], slot: fn(usize) -> Slot) -> impl Iterator<Item = (usize, Slot)> {
+    list.iter()
+        .enumerate()
+        .map(move |(i, placed)| (placed.instance, slot(i)))
 }
 
 impl Objects {
@@ -290,22 +321,52 @@ impl Objects {
         self.ticks
     }
 
+    /// Every object, in the order their threads run (which the sim depends on). This and
+    /// [`Objects::slots`] are where the kinds are listed.
+    pub fn each_object(&mut self, mut f: impl FnMut(Entry)) {
+        let Objects {
+            armadillos,
+            fireballs,
+            minecarts,
+            rollers,
+            turtles,
+            fruit,
+            crates,
+            random_number,
+            position_path,
+            roll_paths,
+            ticks,
+        } = self;
+        let cx = Context {
+            frames: [0; 2],
+            ticks: *ticks,
+            position_path,
+            roll_paths,
+        };
+        each(armadillos, &cx, random_number, &mut f);
+        each(fireballs, &cx, random_number, &mut f);
+        each(minecarts, &cx, random_number, &mut f);
+        each(turtles, &cx, random_number, &mut f);
+        each(fruit, &cx, random_number, &mut f);
+        each(crates, &cx, random_number, &mut f);
+        each(rollers, &cx, random_number, &mut f);
+    }
+
+    /// The instance of each object and where the object is kept, for the ones that show them.
+    pub fn slots(&self) -> impl Iterator<Item = (usize, Slot)> {
+        slots_of(&self.armadillos, Slot::Armadillo)
+            .chain(slots_of(&self.fireballs, Slot::Fireball))
+            .chain(slots_of(&self.minecarts, Slot::Minecart))
+            .chain(slots_of(&self.rollers, Slot::Roller))
+            .chain(slots_of(&self.turtles, Slot::Turtle))
+            .chain(slots_of(&self.fruit, Slot::Fruit))
+            .chain(slots_of(&self.crates, Slot::Crate))
+    }
+
     /// One game tick of every object.
     pub fn tick(&mut self) -> Tick {
         let mut tick = Tick::default();
-        let cx = Context {
-            frames: [0; 2],
-            ticks: self.ticks,
-            position_path: &self.position_path,
-            roll_paths: &self.roll_paths,
-        };
-        th_tick_all(&mut self.armadillos, &cx, &mut tick);
-        th_tick_all(&mut self.fireballs, &cx, &mut tick);
-        th_tick_all(&mut self.minecarts, &cx, &mut tick);
-        th_tick_all(&mut self.turtles, &cx, &mut tick);
-        th_tick_all(&mut self.fruit, &cx, &mut tick);
-        th_tick_all(&mut self.crates, &cx, &mut tick);
-        th_tick_all(&mut self.rollers, &cx, &mut tick);
+        self.each_object(|e| e.object.th_tick(&e.cx, &mut tick));
         self.ticks += 1;
         tick
     }
@@ -325,19 +386,18 @@ impl Objects {
 /// crates have one so far; the other models give 1, as those without an `LInC` do.
 impl Instances for Objects {
     fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &coll::Scratchpad) -> i32 {
-        let mut hit = Touch {
-            driver,
-            model: sps.input1.model_id,
-            random_number: &mut self.random_number,
-        };
-        touch_in(&mut self.turtles, instance, &mut hit)
-            .or_else(|| touch_in(&mut self.fruit, instance, &mut hit))
-            .or_else(|| touch_in(&mut self.crates, instance, &mut hit))
-            .or_else(|| touch_in(&mut self.armadillos, instance, &mut hit))
-            .or_else(|| touch_in(&mut self.fireballs, instance, &mut hit))
-            .or_else(|| touch_in(&mut self.minecarts, instance, &mut hit))
-            .or_else(|| touch_in(&mut self.rollers, instance, &mut hit))
-            .unwrap_or(1)
+        let model = sps.input1.model_id;
+        let mut result = None;
+        self.each_object(|e| {
+            if e.instance == instance {
+                result = Some(e.object.touch(&mut Touch {
+                    driver: &mut *driver,
+                    model,
+                    random_number: e.random_number,
+                }));
+            }
+        });
+        result.unwrap_or(1)
     }
 }
 
