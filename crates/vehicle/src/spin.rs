@@ -31,7 +31,11 @@ const ANG_PI: i32 = 0x800;
 const WUMPA_MAX_COUNT: i32 = 10;
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// `RB_Player_ModifyWumpa` for a loss of wumpa fruit: the Aku Aku mask protects them.
@@ -51,7 +55,11 @@ pub fn first_init(d: &mut Driver, effects: &mut Vec<Effect>) {
 
     lose_wumpa(d, 1);
 
-    effects.push(Effect::Voiceline { id: SPIN_VOICELINE_ID, driver_id: d.driver_id, priority: SPIN_VOICELINE_PRIORITY });
+    effects.push(Effect::Voiceline {
+        id: SPIN_VOICELINE_ID,
+        driver_id: d.driver_id,
+        priority: SPIN_VOICELINE_PRIORITY,
+    });
 
     // Spinning left, unless the drift's turn was to the right.
     d.set_spin_dir(1);
@@ -65,8 +73,16 @@ pub fn first_init(d: &mut Driver, effects: &mut Vec<Effect>) {
     // `SpinFirst_InitSetUpdate` arms the update on the next tick.
     d.init_pending = true;
 
-    let pattern = if d.simp_turn_state > 0 { SPIN_RIGHT_FEEDBACK } else { SPIN_LEFT_FEEDBACK };
-    effects.push(Effect::JogCon { driver_id: d.driver_id, pattern, strength: SPIN_FEEDBACK_TIMER });
+    let pattern = if d.simp_turn_state > 0 {
+        SPIN_RIGHT_FEEDBACK
+    } else {
+        SPIN_LEFT_FEEDBACK
+    };
+    effects.push(Effect::JogCon {
+        driver_id: d.driver_id,
+        pattern,
+        strength: SPIN_FEEDBACK_TIMER,
+    });
 }
 
 /// `VehPhysProc_SpinFirst_Update`
@@ -82,12 +98,16 @@ pub fn first_update(d: &mut Driver) {
 pub fn first_after_phys_linear(d: &mut Driver) {
     d.base_speed = 0;
     d.fire_speed = 0;
-    d.actions_flag_set |= actions::WARP | actions::FRONT_SKID | actions::BACK_SKID | actions::ACCEL_PREVENTION;
+    d.actions_flag_set |=
+        actions::WARP | actions::FRONT_SKID | actions::BACK_SKID | actions::ACCEL_PREVENTION;
 }
 
 /// `VehPhysProc_SpinFirst_PhysLinear` before the driving one: the timer.
 pub fn first_before_phys_linear(d: &mut Driver, env: &Env) {
-    d.no_input_timer = mips::sub_lo(d.no_input_timer as u16 as i32, env.elapsed_time_ms as u16 as i32) as i16;
+    d.no_input_timer = mips::sub_lo(
+        d.no_input_timer as u16 as i32,
+        env.elapsed_time_ms as u16 as i32,
+    ) as i16;
     if d.no_input_timer < 0 {
         d.no_input_timer = 0;
     }
@@ -104,16 +124,24 @@ pub fn first_phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     d.rotation_spin_rate = spin_rate.wrapping_sub(spin_rate >> 3);
 
     d.turn_angle_curr = d.turn_angle_curr.wrapping_add(d.spin_rate());
-    d.turn_angle_curr = (d.turn_angle_curr.wrapping_add(ANG_PI as i16) & 0xfff).wrapping_sub(ANG_PI as i16);
+    d.turn_angle_curr =
+        (d.turn_angle_curr.wrapping_add(ANG_PI as i16) & 0xfff).wrapping_sub(ANG_PI as i16);
 
     d.amp_turn_state = d.rotation_spin_rate;
     d.turn_wobble_angle = d.turn_wobble_angle.wrapping_sub(d.turn_wobble_angle >> 3);
 
-    let step = mips::sra(mips::mul_lo(d.amp_turn_state as i32, elapsed), ANGLE_INTEGRATION_SHIFT) as i16;
+    let step = mips::sra(
+        mips::mul_lo(d.amp_turn_state as i32, elapsed),
+        ANGLE_INTEGRATION_SHIFT,
+    ) as i16;
     d.angle = d.angle.wrapping_add(step) & 0xfff;
 
-    d.rot_curr_y = d.angle.wrapping_add(d.turn_angle_curr).wrapping_add(d.turn_wobble_angle);
-    d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
+    d.rot_curr_y = d
+        .angle
+        .wrapping_add(d.turn_angle_curr)
+        .wrapping_add(d.turn_wobble_angle);
+    d.rot_curr_w =
+        interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
 
     let mut moving = d.matrix_moving_dir;
     rot_axis_angle(&mut moving, gte, d.axis_angle1_normal_vec, d.angle as i32);
@@ -154,9 +182,18 @@ pub fn last_phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
 
     // The model's spin turns back to facing forwards: within a range of the
     // front it slows to arrive there.
-    let recenter_rate = |angle: i32| mips::sra(mips::neg_lo(mips::sll(angle, SPIN_RECENTER_RATE_NUM_SHIFT)), SPIN_RECENTER_RATE_DEN_SHIFT) as i16;
+    let recenter_rate = |angle: i32| {
+        mips::sra(
+            mips::neg_lo(mips::sll(angle, SPIN_RECENTER_RATE_NUM_SHIFT)),
+            SPIN_RECENTER_RATE_DEN_SHIFT,
+        ) as i16
+    };
     let spin_step = |d: &Driver| {
-        (mips::add_lo(mips::add_lo(d.turn_angle_curr as u16 as i32, d.spin_rate() as u16 as i32), ANG_PI) & 0xfff).wrapping_sub(ANG_PI) as i16
+        (mips::add_lo(
+            mips::add_lo(d.turn_angle_curr as u16 as i32, d.spin_rate() as u16 as i32),
+            ANG_PI,
+        ) & 0xfff)
+            .wrapping_sub(ANG_PI) as i16
     };
 
     if drift_angle > 0 {
@@ -187,10 +224,20 @@ pub fn last_phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         }
     }
 
-    d.angle = (mips::add_lo(d.angle as u16 as i32, mips::sra(mips::mul_lo(d.amp_turn_state as i32, elapsed), ANGLE_INTEGRATION_SHIFT)) & 0xfff) as i16;
+    d.angle = (mips::add_lo(
+        d.angle as u16 as i32,
+        mips::sra(
+            mips::mul_lo(d.amp_turn_state as i32, elapsed),
+            ANGLE_INTEGRATION_SHIFT,
+        ),
+    ) & 0xfff) as i16;
 
-    d.rot_curr_y = mips::add_lo(d.turn_wobble_angle as u16 as i32, mips::add_lo(d.angle as u16 as i32, d.turn_angle_curr as u16 as i32)) as i16;
-    d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
+    d.rot_curr_y = mips::add_lo(
+        d.turn_wobble_angle as u16 as i32,
+        mips::add_lo(d.angle as u16 as i32, d.turn_angle_curr as u16 as i32),
+    ) as i16;
+    d.rot_curr_w =
+        interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
 
     let mut moving = d.matrix_moving_dir;
     rot_axis_angle(&mut moving, gte, d.axis_angle1_normal_vec, d.angle as i32);
@@ -213,11 +260,25 @@ pub fn stop_after_phys_linear(d: &mut Driver) {
 pub fn stop_phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     let elapsed = env.elapsed_time_ms;
 
-    d.angle = (mips::add_lo(d.angle as u16 as i32, mips::sra(mips::mul_lo(d.amp_turn_state as i32, elapsed), ANGLE_INTEGRATION_SHIFT)) & 0xfff) as i16;
-    d.rot_curr_y = mips::add_lo(d.turn_wobble_angle as u16 as i32, mips::add_lo(d.angle as u16 as i32, d.turn_angle_curr as u16 as i32)) as i16;
+    d.angle = (mips::add_lo(
+        d.angle as u16 as i32,
+        mips::sra(
+            mips::mul_lo(d.amp_turn_state as i32, elapsed),
+            ANGLE_INTEGRATION_SHIFT,
+        ),
+    ) & 0xfff) as i16;
+    d.rot_curr_y = mips::add_lo(
+        d.turn_wobble_angle as u16 as i32,
+        mips::add_lo(d.angle as u16 as i32, d.turn_angle_curr as u16 as i32),
+    ) as i16;
 
-    d.rot_curr_w = interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
-    d.turn_angle_curr = interp_by_speed(d.turn_angle_curr as i32, mips::sra(mips::sll(elapsed, 7), 5), 0) as i16;
+    d.rot_curr_w =
+        interp_by_speed(d.rot_curr_w as i32, mips::sra(mips::sll(elapsed, 5), 5), 0) as i16;
+    d.turn_angle_curr = interp_by_speed(
+        d.turn_angle_curr as i32,
+        mips::sra(mips::sll(elapsed, 7), 5),
+        0,
+    ) as i16;
 
     let mut moving = d.matrix_moving_dir;
     rot_axis_angle(&mut moving, gte, d.axis_angle1_normal_vec, d.angle as i32);
@@ -251,7 +312,8 @@ pub fn stop_animate(d: &mut Driver) {
             }
             _ => {
                 let target = start_frame(0, num_frames);
-                d.anim_frame = interp_by_speed(d.anim_frame as i32, SPIN_STOP_ANIM_RETURN_STEP, target) as i16;
+                d.anim_frame =
+                    interp_by_speed(d.anim_frame as i32, SPIN_STOP_ANIM_RETURN_STEP, target) as i16;
                 resume = d.anim_frame as i32 == target;
             }
         }

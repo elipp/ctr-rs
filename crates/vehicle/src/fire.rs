@@ -29,13 +29,22 @@ const RUMBLE_CHANNEL: u8 = 8;
 const RUMBLE_FORCE: u8 = 0x7f;
 
 /// `VehFire_Increment(driver, reserves, type, fireLevel)`
-pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effects: &mut Vec<Effect>) {
+pub fn increment(
+    d: &mut Driver,
+    reserves: i32,
+    ty: u32,
+    fire_level: i32,
+    effects: &mut Vec<Effect>,
+) {
     // A turbo pad does nothing while holding the brake.
     if ty & turbo_type::TURBO_PAD != 0 && d.actions_flag_set & actions::ACCEL_PREVENTION != 0 {
         return;
     }
 
-    if matches!(d.kart_state, kart_state::SPINNING | kart_state::BLASTED | kart_state::MASK_GRABBED) {
+    if matches!(
+        d.kart_state,
+        kart_state::SPINNING | kart_state::BLASTED | kart_state::MASK_GRABBED
+    ) {
         return;
     }
 
@@ -58,17 +67,25 @@ pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effect
 
     let single = d.stats.single_turbo_speed as i32;
     let sacred = d.stats.sacred_fire_speed as i32;
-    let new_speed_cap = mips::add_lo(mips::sra(mips::mul_lo(fire_level, mips::sub_lo(sacred, single)), FIRE_SPEED_CAP_SHIFT), single);
+    let new_speed_cap = mips::add_lo(
+        mips::sra(
+            mips::mul_lo(fire_level, mips::sub_lo(sacred, single)),
+            FIRE_SPEED_CAP_SHIFT,
+        ),
+        single,
+    );
 
     // Any gain in boost raises the cap; with the Sacred Fire speed, boosting
     // on something that is not a super turbo pad lowers it.
     if d.reserves == 0
         || (d.fire_speed_cap as i32) < new_speed_cap
-        || (sacred < d.fire_speed_cap as i32 && d.step_flag_set & step_triggers::SUPER_TURBO_PAD == 0)
+        || (sacred < d.fire_speed_cap as i32
+            && d.step_flag_set & step_triggers::SUPER_TURBO_PAD == 0)
     {
         d.fire_speed_cap = new_speed_cap as i16;
         if let Some(t) = &mut d.turbo {
-            t.fire_size = ((fire_level >> FIRE_SIZE_SHIFT) + FIRE_SIZE_BASE).min(FIRE_SIZE_MAX) as i16;
+            t.fire_size =
+                ((fire_level >> FIRE_SIZE_SHIFT) + FIRE_SIZE_BASE).min(FIRE_SIZE_MAX) as i16;
         }
     }
 
@@ -92,6 +109,12 @@ pub fn increment(d: &mut Driver, reserves: i32, ty: u32, fire_level: i32, effect
         d.reserves = reserves as i16;
     }
 
-    effects.push(Effect::CameraFireSpeedZoom { driver_id: d.driver_id });
-    effects.push(Effect::ShockForce { driver_id: d.driver_id, a: RUMBLE_CHANNEL, b: RUMBLE_FORCE });
+    effects.push(Effect::CameraFireSpeedZoom {
+        driver_id: d.driver_id,
+    });
+    effects.push(Effect::ShockForce {
+        driver_id: d.driver_id,
+        a: RUMBLE_CHANNEL,
+        b: RUMBLE_FORCE,
+    });
 }

@@ -37,7 +37,12 @@ pub struct Pad {
 impl Default for Pad {
     /// Nothing pressed, sticks centred.
     fn default() -> Pad {
-        Pad { held: 0, lx: 0x80, ly: 0x80, ry: 0x80 }
+        Pad {
+            held: 0,
+            lx: 0x80,
+            ly: 0x80,
+            ry: 0x80,
+        }
     }
 }
 
@@ -75,7 +80,11 @@ pub enum Message {
     /// Reliable, host to each client: the race starts, and this is tick 0. `slot` is the
     /// client's player among the `players`; `characters` is the character of each slot, and
     /// `track` the `LevelId` the race is on.
-    Start { slot: u8, characters: Vec<u8>, track: u32 },
+    Start {
+        slot: u8,
+        characters: Vec<u8>,
+        track: u32,
+    },
     /// Unreliable, client to host.
     Inputs(Inputs),
     /// Unreliable, host to client.
@@ -128,7 +137,11 @@ impl InputSender {
         let excess = self.pads.len().saturating_sub(MAX_WINDOW);
         self.pads.drain(..excess);
         self.base += excess as Tick;
-        Inputs { first: self.base, pads: self.pads.iter().copied().collect(), ack: ours_to_ack }
+        Inputs {
+            first: self.base,
+            pads: self.pads.iter().copied().collect(),
+            ack: ours_to_ack,
+        }
     }
 }
 
@@ -158,7 +171,10 @@ impl InputReceiver {
     pub fn accept(&mut self, packet: &Inputs) -> Result<(), Gap> {
         let next = self.next();
         if packet.first > next {
-            return Err(Gap { have_until: next, packet_starts: packet.first });
+            return Err(Gap {
+                have_until: next,
+                packet_starts: packet.first,
+            });
         }
         let known = (next - packet.first) as usize;
         self.pads.extend(packet.pads.iter().skip(known));
@@ -190,7 +206,10 @@ mod tests {
     use super::*;
 
     fn pad(tick: Tick) -> Pad {
-        Pad { held: tick, ..Pad::default() }
+        Pad {
+            held: tick,
+            ..Pad::default()
+        }
     }
 
     /// Both ends for one direction, with a link that drops the packets `lose` says to.
@@ -203,7 +222,9 @@ mod tests {
             let peer_has = receiver.next();
             let packet = sender.packet(peer_has, 0);
             let packet = Message::from_bytes(&Message::Inputs(packet).to_bytes()).unwrap();
-            let Message::Inputs(packet) = packet else { unreachable!() };
+            let Message::Inputs(packet) = packet else {
+                unreachable!()
+            };
             if !lose(tick) {
                 receiver.accept(&packet).unwrap();
             }
@@ -214,16 +235,33 @@ mod tests {
     #[test]
     fn messages_round_trip() {
         for message in [
-            Message::Hello { character: 9, seq: 3 },
-            Message::Start { slot: 2, characters: vec![0, 5, 15], track: 4 },
-            Message::Inputs(Inputs { first: 7, pads: vec![pad(1), Pad::default()], ack: 5 }),
+            Message::Hello {
+                character: 9,
+                seq: 3,
+            },
+            Message::Start {
+                slot: 2,
+                characters: vec![0, 5, 15],
+                track: 4,
+            },
+            Message::Inputs(Inputs {
+                first: 7,
+                pads: vec![pad(1), Pad::default()],
+                ack: 5,
+            }),
             Message::Frames(Frames {
                 first: 4,
                 frames: vec![vec![pad(1), pad(2)], vec![pad(3), pad(4)]],
                 ack: 9,
             }),
-            Message::Checksum { tick: 90, hash: u64::MAX },
-            Message::Snapshot { tick: 30, state: vec![1, 2, 3] },
+            Message::Checksum {
+                tick: 90,
+                hash: u64::MAX,
+            },
+            Message::Snapshot {
+                tick: 30,
+                state: vec![1, 2, 3],
+            },
         ] {
             assert_eq!(Message::from_bytes(&message.to_bytes()).unwrap(), message);
         }
@@ -247,7 +285,11 @@ mod tests {
     #[test]
     fn a_packet_that_comes_twice_or_late_changes_nothing() {
         let mut receiver = InputReceiver::default();
-        let packet = |first, n| Inputs { first, pads: (first..first + n).map(pad).collect(), ack: 0 };
+        let packet = |first, n| Inputs {
+            first,
+            pads: (first..first + n).map(pad).collect(),
+            ack: 0,
+        };
         receiver.accept(&packet(0, 5)).unwrap();
         receiver.accept(&packet(3, 5)).unwrap();
         receiver.accept(&packet(0, 5)).unwrap();
@@ -270,7 +312,10 @@ mod tests {
         let mut receiver = InputReceiver::default();
         assert_eq!(
             receiver.accept(&packet),
-            Err(Gap { have_until: 0, packet_starts: 140 })
+            Err(Gap {
+                have_until: 0,
+                packet_starts: 140
+            })
         );
         // The snapshot is of tick 140; the rest of the packet then fits.
         receiver.restart(140);

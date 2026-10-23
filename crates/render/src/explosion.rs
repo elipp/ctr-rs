@@ -14,7 +14,9 @@ pub const MODEL_ID: i16 = 0x26;
 
 /// The explosion of a racer pack: every racer's has the same.
 pub fn model(pack: &DramFile) -> io::Result<Option<Model>> {
-    Ok(parse_pack_models(pack)?.into_iter().find(|m| m.id == MODEL_ID))
+    Ok(parse_pack_models(pack)?
+        .into_iter()
+        .find(|m| m.id == MODEL_ID))
 }
 
 /// The tint of an instance's `colorRGBA`, which holds its three 8-bit channels at bits 20, 12
@@ -27,7 +29,11 @@ pub fn tint(color_rgba: u32) -> [u8; 3] {
 /// (0..1). The sim has no use for the number, so it is a hash of which crate broke and how often,
 /// the same for everyone.
 pub fn break_yaw(breaks: u32, crate_index: usize) -> f32 {
-    (breaks.wrapping_mul(0x9e37).wrapping_add(crate_index as u32 * 0x6255) % 0x1000) as f32 / 4096.0
+    (breaks
+        .wrapping_mul(0x9e37)
+        .wrapping_add(crate_index as u32 * 0x6255)
+        % 0x1000) as f32
+        / 4096.0
 }
 
 /// An explosion's progress: `animFrame`, which `RB_CrateAny_ThTick_Explode` advances a tick until

@@ -40,7 +40,12 @@ pub struct HitboxHit {
 
 impl HitboxHit {
     fn of(hitbox: &BspHitbox) -> HitboxHit {
-        HitboxHit { offset: hitbox.offset, class: hitbox.class(), flag: hitbox.flag, instance: hitbox.instance }
+        HitboxHit {
+            offset: hitbox.offset,
+            class: hitbox.class(),
+            flag: hitbox.flag,
+            instance: hitbox.instance,
+        }
     }
 }
 
@@ -65,14 +70,21 @@ fn overlaps(a: &crate::BoundingBox, b: &loader::lev::BoundingBox) -> bool {
 impl Collision {
     /// The `flags` of an instance, which the game changes as it hides it (a crate that was hit).
     pub fn instance_flags(&self, level: &Level, instance: usize) -> u32 {
-        self.instance_flags.get(instance).copied().unwrap_or(level.instances[instance].flags)
+        self.instance_flags
+            .get(instance)
+            .copied()
+            .unwrap_or(level.instances[instance].flags)
     }
 
     /// `CollMoved_PlayerSearch_StoreHitbox`: the hitbox the search ended on is dealt with, and
     /// the rest of the step skips it.
     pub fn store_hitbox(&mut self) {
         let sps = &mut self.sps;
-        if let (Some(hit), Some(slot)) = (sps.bsp_hitbox, sps.bsp_hitboxes_hit.get_mut(sps.num_bsp_hitboxes_hit as usize)) {
+        if let (Some(hit), Some(slot)) = (
+            sps.bsp_hitbox,
+            sps.bsp_hitboxes_hit
+                .get_mut(sps.num_bsp_hitboxes_hit as usize),
+        ) {
             *slot = Some(hit.offset);
             sps.num_bsp_hitboxes_hit += 1;
         }
@@ -80,7 +92,9 @@ impl Collision {
 
     /// `COLL_FIXED_BSPLEAF_TestInstance`: tests the hitboxes of a leaf the sweep reaches.
     pub(crate) fn test_leaf_instances(&mut self, level: &Level, leaf: &BspNode) {
-        let BspKind::Leaf { hitboxes, .. } = &leaf.kind else { return };
+        let BspKind::Leaf { hitboxes, .. } = &leaf.kind else {
+            return;
+        };
         for hitbox in hitboxes {
             let done = self.sps.num_bsp_hitboxes_hit.max(0) as usize;
             if self.sps.bsp_hitboxes_hit[..done].contains(&Some(hitbox.offset)) {
@@ -90,7 +104,9 @@ impl Collision {
             // the instance to be drawn.
             let tied = hitbox.flag & BspHitbox::COLLIDABLE != 0;
             let live = match hitbox.instance {
-                Some(instance) if tied => self.instance_flags(level, instance) & DRAW_COLLISION_MASK != 0,
+                Some(instance) if tied => {
+                    self.instance_flags(level, instance) & DRAW_COLLISION_MASK != 0
+                }
                 _ => true,
             };
             if live && overlaps(&self.sps.bbox, &hitbox.bbox) {
@@ -114,7 +130,11 @@ impl Collision {
         }
 
         if sps.quad_block_coll.search_flags & search_flags::FORCE_INSTANCE_HIT != 0 {
-            sps.hit.plane.normal = SVec3 { x: 0, y: FRACTION_ONE as i16, z: 0 };
+            sps.hit.plane.normal = SVec3 {
+                x: 0,
+                y: FRACTION_ONE as i16,
+                z: 0,
+            };
             sps.hit.reorder_result = clip::FACE as i8;
             sps.hit_fraction = 0;
             sps.bsp_hitbox = Some(hit);
@@ -129,8 +149,11 @@ impl Collision {
         let diff_z = to.z as i32 - from.z as i32;
         let center_diff_x = center.x as i32 - from.x as i32;
         let center_diff_z = center.z as i32 - from.z as i32;
-        let (diff_y, center_diff_y) =
-            if use_y { (to.y as i32 - from.y as i32, center.y as i32 - from.y as i32) } else { (0, 0) };
+        let (diff_y, center_diff_y) = if use_y {
+            (to.y as i32 - from.y as i32, center.y as i32 - from.y as i32)
+        } else {
+            (0, 0)
+        };
 
         gte.ctc2(pack(diff_x, diff_y), ctrl::R_MATRIX);
         gte.ctc2(pack(diff_z, center_diff_x), ctrl::R13R21);
@@ -154,10 +177,18 @@ impl Collision {
         }
 
         // How far along the segment the point nearest the center is.
-        let mut factor = if divisor != 0 { mips::div(dot_center, divisor) } else { 0 };
+        let mut factor = if divisor != 0 {
+            mips::div(dot_center, divisor)
+        } else {
+            0
+        };
 
         let proj_x = mips::sra(mips::mul_lo(factor, diff_x), 12);
-        let proj_y = if use_y { mips::sra(mips::mul_lo(factor, diff_y), 12) } else { 0 };
+        let proj_y = if use_y {
+            mips::sra(mips::mul_lo(factor, diff_y), 12)
+        } else {
+            0
+        };
         let proj_z = mips::sra(mips::mul_lo(factor, diff_z), 12);
 
         let rel_x = mips::sub_lo(proj_x, center_diff_x);
@@ -207,7 +238,11 @@ impl Collision {
         sps.did_touch_hitbox = sps.did_touch_hitbox.wrapping_add(1);
 
         let normal_x = mips::sub_lo(hit_x, center_diff_x);
-        let normal_y = if use_y { mips::sub_lo(hit_y, center_diff_y) } else { 0 };
+        let normal_y = if use_y {
+            mips::sub_lo(hit_y, center_diff_y)
+        } else {
+            0
+        };
         let normal_z = mips::sub_lo(hit_z, center_diff_z);
 
         gte.ctc2(pack(normal_x, normal_y), ctrl::R_MATRIX);
@@ -218,8 +253,13 @@ impl Collision {
 
         // The reference traps on a zero length (a hit dead on the center, never seen).
         let length = math::square_root0(gte.mfc2(data::MAC1) as i32);
-        let inv_length = if length != 0 { mips::div(0x100_0000, length) } else { 0 };
-        let normal = [normal_x, normal_y, normal_z].map(|n| mips::sra(mips::mul_lo(n, inv_length), 12));
+        let inv_length = if length != 0 {
+            mips::div(0x100_0000, length)
+        } else {
+            0
+        };
+        let normal =
+            [normal_x, normal_y, normal_z].map(|n| mips::sra(mips::mul_lo(n, inv_length), 12));
 
         let at = |origin: i16, delta: i32| mips::add_lo(origin as u16 as i32, delta) as i16;
         sps.quad_block_coll.hit_pos = SVec3 {
@@ -227,12 +267,19 @@ impl Collision {
             y: at(sps.quad_block_coll.pos.y, hit_y),
             z: at(sps.quad_block_coll.pos.z, hit_z),
         };
-        sps.hit.plane.normal = SVec3 { x: normal[0] as i16, y: normal[1] as i16, z: normal[2] as i16 };
+        sps.hit.plane.normal = SVec3 {
+            x: normal[0] as i16,
+            y: normal[1] as i16,
+            z: normal[2] as i16,
+        };
         sps.hit.reorder_result = clip::FACE as i8;
 
         let scaled = normal.map(|n| mips::sra(mips::mul_lo(n, radius), 12));
-        sps.hit.push_out =
-            SVec3 { x: at(center.x, scaled[0]), y: at(center.y, scaled[1]), z: at(center.z, scaled[2]) };
+        sps.hit.push_out = SVec3 {
+            x: at(center.x, scaled[0]),
+            y: at(center.y, scaled[1]),
+            z: at(center.z, scaled[2]),
+        };
         sps.hit.hit_pos = sps.hit.push_out;
         0
     }

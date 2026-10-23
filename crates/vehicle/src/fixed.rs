@@ -38,15 +38,31 @@ const LANDING_SFX: u8 = 7;
 const HAZARD_LAND_SFX: u8 = 0x10;
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// `COLL_FIXED_PlayerSearch_SetupSearch`: a vertical segment through the
 /// kart's position for the point test, and the surfaces it collides with.
 fn setup_search(d: &mut Driver, coll: &mut Collision) {
-    let pos = [mips::sra(d.pos_curr.x, 8), mips::sra(d.pos_curr.y, 8), mips::sra(d.pos_curr.z, 8)];
-    let bottom = SVec3 { x: pos[0] as i16, y: mips::add_lo(pos[1], -BOTTOM_Y_OFFSET) as i16, z: pos[2] as i16 };
-    let top = SVec3 { x: pos[0] as i16, y: mips::add_lo(pos[1], TOP_Y_OFFSET) as i16, z: pos[2] as i16 };
+    let pos = [
+        mips::sra(d.pos_curr.x, 8),
+        mips::sra(d.pos_curr.y, 8),
+        mips::sra(d.pos_curr.z, 8),
+    ];
+    let bottom = SVec3 {
+        x: pos[0] as i16,
+        y: mips::add_lo(pos[1], -BOTTOM_Y_OFFSET) as i16,
+        z: pos[2] as i16,
+    };
+    let top = SVec3 {
+        x: pos[0] as i16,
+        y: mips::add_lo(pos[1], TOP_Y_OFFSET) as i16,
+        z: pos[2] as i16,
+    };
 
     d.actions_flag_set &= !actions::ENGINE_ECHO;
 
@@ -54,7 +70,8 @@ fn setup_search(d: &mut Driver, coll: &mut Collision) {
     sps.quad_block_coll.pos = top;
     sps.input1.pos = bottom;
     sps.quad_block_coll.quad_flags_ignored = quad_flags::NO_COLLISION_RESPONSE as u32;
-    sps.quad_block_coll.quad_flags_wanted = (quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32;
+    sps.quad_block_coll.quad_flags_wanted =
+        (quad_flags::GROUND | quad_flags::COLLISION_SURFACE) as u32;
     sps.quad_block_coll.search_flags = search_flags::HIGH_LOD;
     sps.did_touch_quadblock = 0;
     sps.did_touch_hitbox = 0;
@@ -70,7 +87,10 @@ fn setup_search(d: &mut Driver, coll: &mut Collision) {
 }
 
 fn normalize(x: i32, y: i32, z: i32) -> SVec3 {
-    let sum = mips::add_lo(mips::add_lo(mips::mul_lo(x, x), mips::mul_lo(y, y)), mips::mul_lo(z, z)) as u32;
+    let sum = mips::add_lo(
+        mips::add_lo(mips::mul_lo(x, x), mips::mul_lo(y, y)),
+        mips::mul_lo(z, z),
+    ) as u32;
     let len = (fast_sqrt(sum, NORMAL_SQRT_SHIFT) >> 12) as i32;
     SVec3 {
         x: mips::div(mips::sll(x, 12), len) as i16,
@@ -104,7 +124,10 @@ fn check_mask_grab_progress(d: &mut Driver, level: &Level, quad: u32) -> bool {
 
     if d.actions_flag_set & actions::BEHIND_START_LINE == 0
         && node.next_forward > 1
-        && (mips::sll(track_length >> 2, 3)) < d.distance_to_finish_checkpoint.wrapping_sub(mips::mul_lo(node.dist_to_finish as i32, 8) as u32) as i32
+        && (mips::sll(track_length >> 2, 3))
+            < d.distance_to_finish_checkpoint
+                .wrapping_sub(mips::mul_lo(node.dist_to_finish as i32, 8) as u32)
+                as i32
     {
         return true;
     }
@@ -116,7 +139,10 @@ fn check_mask_grab_progress(d: &mut Driver, level: &Level, quad: u32) -> bool {
     let last_checkpoint = level.quad_blocks[last_valid as usize].checkpoint_index;
     if (node.dist_to_finish as i32) < (mips::mul_lo(track_length, 0xf) >> 4)
         && last_checkpoint != 0xff
-        && mips::add_lo(points[last_checkpoint as usize].dist_to_finish as i32, track_length >> 2) < node.dist_to_finish as i32
+        && mips::add_lo(
+            points[last_checkpoint as usize].dist_to_finish as i32,
+            track_length >> 2,
+        ) < node.dist_to_finish as i32
     {
         return true;
     }
@@ -128,7 +154,13 @@ fn check_mask_grab_progress(d: &mut Driver, level: &Level, quad: u32) -> bool {
 /// `COLL_FIXED_PlayerSearch`. Returns whether the kart should be grabbed by
 /// the mask and put back on the track (`VehStuckProc_MaskGrab_Init`, not
 /// ported).
-pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, effects: &mut Vec<Effect>) -> bool {
+pub fn fixed_player_search(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    env: &Env,
+    effects: &mut Vec<Effect>,
+) -> bool {
     setup_search(d, coll);
 
     if let Some(under) = d.under_driver {
@@ -150,9 +182,18 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
         // The normal of the surface, smoothed over a few ticks.
         let n = sps.hit.plane.normal;
         d.axis_angle3_normal_vec = normalize(
-            mips::add_lo(mips::mul_lo(d.axis_angle3_normal_vec.x as i32, AXIS3_OLD_NORMAL_WEIGHT), mips::mul_lo(n.x as i32, AXIS3_HIT_NORMAL_WEIGHT)),
-            mips::add_lo(mips::mul_lo(d.axis_angle3_normal_vec.y as i32, AXIS3_OLD_NORMAL_WEIGHT), mips::mul_lo(n.y as i32, AXIS3_HIT_NORMAL_WEIGHT)),
-            mips::add_lo(mips::mul_lo(d.axis_angle3_normal_vec.z as i32, AXIS3_OLD_NORMAL_WEIGHT), mips::mul_lo(n.z as i32, AXIS3_HIT_NORMAL_WEIGHT)),
+            mips::add_lo(
+                mips::mul_lo(d.axis_angle3_normal_vec.x as i32, AXIS3_OLD_NORMAL_WEIGHT),
+                mips::mul_lo(n.x as i32, AXIS3_HIT_NORMAL_WEIGHT),
+            ),
+            mips::add_lo(
+                mips::mul_lo(d.axis_angle3_normal_vec.y as i32, AXIS3_OLD_NORMAL_WEIGHT),
+                mips::mul_lo(n.y as i32, AXIS3_HIT_NORMAL_WEIGHT),
+            ),
+            mips::add_lo(
+                mips::mul_lo(d.axis_angle3_normal_vec.z as i32, AXIS3_OLD_NORMAL_WEIGHT),
+                mips::mul_lo(n.z as i32, AXIS3_HIT_NORMAL_WEIGHT),
+            ),
         );
 
         if q.flags & quad_flags::ENGINE_ECHO != 0 {
@@ -161,7 +202,9 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
 
         d.under_driver = Some(quad);
 
-        if d.pos_curr.y <= d.quad_block_height + 0x1000 || (q.terrain_type == terrain_type::MUD && d.pos_curr.y < 1) {
+        if d.pos_curr.y <= d.quad_block_height + 0x1000
+            || (q.terrain_type == terrain_type::MUD && d.pos_curr.y < 1)
+        {
             if q.flags & quad_flags::GROUND != 0 {
                 d.normal_vec_up = n;
                 d.collision_flags |= collision_flags::GROUNDED;
@@ -190,9 +233,18 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
         && d.collision_flags & (collision_flags::MASK_GRAB_REQUEST | collision_flags::GROUNDED) == 0
         && d.kart_state != kart_state::MASK_GRABBED
     {
-        d.velocity.x = mips::add_lo(d.velocity.x, mips::sra(d.axis_angle1_normal_vec.x as i32, 1));
-        d.velocity.y = mips::add_lo(d.velocity.y, mips::sra(d.axis_angle1_normal_vec.y as i32, 1));
-        d.velocity.z = mips::add_lo(d.velocity.z, mips::sra(d.axis_angle1_normal_vec.z as i32, 1));
+        d.velocity.x = mips::add_lo(
+            d.velocity.x,
+            mips::sra(d.axis_angle1_normal_vec.x as i32, 1),
+        );
+        d.velocity.y = mips::add_lo(
+            d.velocity.y,
+            mips::sra(d.axis_angle1_normal_vec.y as i32, 1),
+        );
+        d.velocity.z = mips::add_lo(
+            d.velocity.z,
+            mips::sra(d.axis_angle1_normal_vec.z as i32, 1),
+        );
     }
 
     d.x_speed = d.velocity.x;
@@ -222,7 +274,11 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
             d.current_terrain = terrain;
         }
         // Out-of-range terrain types are the first entry (`VehAfterColl_GetTerrain`).
-        let terrain = if (d.current_terrain as usize) < TERRAINS.len() { d.current_terrain } else { 0 };
+        let terrain = if (d.current_terrain as usize) < TERRAINS.len() {
+            d.current_terrain
+        } else {
+            0
+        };
         d.terrain_meta1 = terrain;
         d.terrain_meta2 = terrain;
         d.jump_coyote_timer_ms = COYOTE_TIME_MS;
@@ -230,13 +286,19 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
         let before = d.actions_flag_set;
         d.actions_flag_set = before | actions::TOUCH_GROUND;
         if d.actions_flag_set_prev_frame & actions::TOUCH_GROUND == 0 {
-            d.actions_flag_set = before | actions::TOUCH_GROUND | actions::STARTED_TOUCH_GROUND | actions::TURBO_INPUT_LATCH;
+            d.actions_flag_set = before
+                | actions::TOUCH_GROUND
+                | actions::STARTED_TOUCH_GROUND
+                | actions::TURBO_INPUT_LATCH;
             d.terrain_friction_timer = 0x140;
 
             // The landing sound's volume (`0x78..=0xfa`) is not reported.
             let _volume = map_to_range(abs(landing_delta), 0x100, 0x3c00, 0x78, 0xfa);
             if d.kart_state != kart_state::MASK_GRABBED {
-                effects.push(Effect::Sound { id: LANDING_SFX, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+                effects.push(Effect::Sound {
+                    id: LANDING_SFX,
+                    echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+                });
             }
         }
         normal_blend_weight = NORMAL_BLEND_GROUND_WEIGHT;
@@ -251,8 +313,10 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
         d.current_terrain = terrain_type::NONE;
         d.actions_flag_set &= !actions::TOUCH_GROUND;
 
-        d.jump_landing_boost = (d.jump_landing_boost as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
-        d.jump_coyote_timer_ms = (d.jump_coyote_timer_ms as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
+        d.jump_landing_boost =
+            (d.jump_landing_boost as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
+        d.jump_coyote_timer_ms =
+            (d.jump_coyote_timer_ms as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
         if d.jump_coyote_timer_ms < 0 {
             d.jump_coyote_timer_ms = 0;
         }
@@ -267,7 +331,10 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
     let inverse_weight = NORMAL_BLEND_TOTAL_WEIGHT - normal_blend_weight;
     let blend = |old: i16, new: i16| {
         mips::sra(
-            mips::add_lo(mips::mul_lo(normal_blend_weight, old as i32), mips::mul_lo(inverse_weight, new as i32)),
+            mips::add_lo(
+                mips::mul_lo(normal_blend_weight, old as i32),
+                mips::mul_lo(inverse_weight, new as i32),
+            ),
             NORMAL_BLEND_SHIFT,
         )
     };
@@ -277,9 +344,16 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
 
     // After being hit, the car wobbles.
     if d.hazard_timer > 0 {
-        let (sin, cos) = math::sin_cos(mips::mul_lo(d.hazard_timer as i32, HAZARD_WOBBLE_ANGLE_STEP) as u32);
-        let x = mips::sra(mips::mul_lo(sin, HAZARD_WOBBLE_AMPLITUDE), HAZARD_WOBBLE_SHIFT) as i16;
-        let z = mips::sra(mips::mul_lo(cos, HAZARD_WOBBLE_AMPLITUDE), HAZARD_WOBBLE_SHIFT) as i16;
+        let (sin, cos) =
+            math::sin_cos(mips::mul_lo(d.hazard_timer as i32, HAZARD_WOBBLE_ANGLE_STEP) as u32);
+        let x = mips::sra(
+            mips::mul_lo(sin, HAZARD_WOBBLE_AMPLITUDE),
+            HAZARD_WOBBLE_SHIFT,
+        ) as i16;
+        let z = mips::sra(
+            mips::mul_lo(cos, HAZARD_WOBBLE_AMPLITUDE),
+            HAZARD_WOBBLE_SHIFT,
+        ) as i16;
         let gte = &mut coll.gte;
         gte.mtc2(mips::pack_s16_pair(x as i32, 0), data::VXY0);
         gte.mtc2(mips::pack_s16_pair(z as i32, 0), data::VZ0);
@@ -294,7 +368,10 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
     {
         let (sin, cos) = math::sin_cos(d.angle as i32 as u32);
         let n = d.axis_angle2_normal_vec;
-        let numerator = mips::add_lo(mips::mul_lo(mips::neg_lo(n.x as i32), cos), mips::mul_lo(n.z as i32, sin));
+        let numerator = mips::add_lo(
+            mips::mul_lo(mips::neg_lo(n.x as i32), cos),
+            mips::mul_lo(n.z as i32, sin),
+        );
         d.rot_curr_z = math::ratan2(mips::sra(numerator, 12), n.y as i32) as i16;
     }
 
@@ -316,7 +393,10 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
     } else if abs(d.screen_offset_y as i32) < 4 {
         d.distance_from_ground = 4;
         if d.kart_state != kart_state::SPINNING && d.screen_offset_y > 0 {
-            effects.push(Effect::Sound { id: HAZARD_LAND_SFX, echo: false });
+            effects.push(Effect::Sound {
+                id: HAZARD_LAND_SFX,
+                echo: false,
+            });
         }
     }
 
@@ -331,7 +411,10 @@ pub fn fixed_player_search(d: &mut Driver, coll: &mut Collision, level: &Level, 
             if next < 1 {
                 d.screen_offset_y = 0;
                 if terrain.flags & terrain_flags::ONESHOT_GROUND_SOUND != 0 {
-                    effects.push(Effect::Sound { id: terrain.sound as u8, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+                    effects.push(Effect::Sound {
+                        id: terrain.sound as u8,
+                        echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+                    });
                 }
             }
         }

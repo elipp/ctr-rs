@@ -118,7 +118,11 @@ impl Scenery {
                     gte.cop2(DPCS);
                     gte.mfc2(22).to_le_bytes()
                 });
-                SceneryUpdate { vertex: v.vertex, pos, color }
+                SceneryUpdate {
+                    vertex: v.vertex,
+                    pos,
+                    color,
+                }
             })
             .collect()
     }
@@ -129,7 +133,14 @@ mod tests {
     use super::*;
 
     fn scenery(xy: u32, zw: u32, color: u32) -> Scenery {
-        Scenery { vertices: vec![SceneryVertex { vertex: 3, xy, zw, color }] }
+        Scenery {
+            vertices: vec![SceneryVertex {
+                vertex: 3,
+                xy,
+                zw,
+                color,
+            }],
+        }
     }
 
     #[test]
@@ -137,9 +148,23 @@ mod tests {
         let s = scenery(100 | 50 << 16, 200 | 0x8000 << 16, 0);
         let at = |tick| s.animate(tick, |_| true)[0].pos.unwrap();
         // Phase 0, tick 0: sin 0, cos 1.0 (0x1000 >> 7 = 32 units).
-        assert_eq!(at(0), SVec3 { x: 100, y: 50, z: 200 + 32 });
+        assert_eq!(
+            at(0),
+            SVec3 {
+                x: 100,
+                y: 50,
+                z: 200 + 32
+            }
+        );
         // A quarter turn is 0x400 angle units, 8 ticks.
-        assert_eq!(at(8), SVec3 { x: 100 + 32, y: 50, z: 200 });
+        assert_eq!(
+            at(8),
+            SVec3 {
+                x: 100 + 32,
+                y: 50,
+                z: 200
+            }
+        );
         // A whole turn is 32 ticks.
         assert_eq!(at(32), at(0));
         assert_eq!(s.animate(0, |_| true)[0].color, None);
@@ -147,7 +172,10 @@ mod tests {
 
     #[test]
     fn a_vertex_without_the_flag_is_left_alone() {
-        assert_eq!(scenery(0, 0x4000 << 16, 0x00ff_ffff).animate(0, |_| true)[0].pos, None);
+        assert_eq!(
+            scenery(0, 0x4000 << 16, 0x00ff_ffff).animate(0, |_| true)[0].pos,
+            None
+        );
     }
 
     #[test]

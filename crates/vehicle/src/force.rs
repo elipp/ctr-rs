@@ -12,9 +12,12 @@ use loader::lev::{Level, SVec3};
 use math::{Vec3, mips};
 
 use crate::calc::interp_by_speed;
-use crate::terrain::{TERRAINS, terrain_flags, terrain_type};
 use crate::fire::{self, turbo_type};
-use crate::{Driver, Effect, Env, Matrix, MatrixArray, actions, collision_flags, kart_state, rain_cloud, step_triggers};
+use crate::terrain::{TERRAINS, terrain_flags, terrain_type};
+use crate::{
+    Driver, Effect, Env, Matrix, MatrixArray, actions, collision_flags, kart_state, rain_cloud,
+    step_triggers,
+};
 
 /// `gte_mvmva(sf, mx, v, cv, lm)`
 pub fn mvmva(sf: u32, mx: u32, v: u32, cv: u32, lm: u32) -> u32 {
@@ -34,7 +37,11 @@ const MAX_MUD_SINK_Y_LEVEL: i32 = -(1 << 12);
 const ROLLBACK_WINDOW_TIMER: i16 = 0x280;
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// `CTR_GteSetRotMatrix`
@@ -52,7 +59,11 @@ fn set_color_matrix(gte: &mut Gte, matrix: &Matrix) {
 }
 
 fn mac(gte: &mut Gte) -> (i32, i32, i32) {
-    (gte.mfc2(data::MAC1) as i32, gte.mfc2(data::MAC2) as i32, gte.mfc2(data::MAC3) as i32)
+    (
+        gte.mfc2(data::MAC1) as i32,
+        gte.mfc2(data::MAC2) as i32,
+        gte.mfc2(data::MAC3) as i32,
+    )
 }
 
 /// `VehPhysForce_ConvertSpeedToVec`: the speed along the axis angles as a
@@ -70,7 +81,14 @@ pub fn convert_speed_to_vec(d: &Driver, velocity: &mut Vec3) {
 
 /// `VehPhysForce_OnGravity`: the velocity in the kart's frame (forward, side,
 /// up), with gravity, the speed limits and the friction applied, and back.
-pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, velocity: &mut Vec3, effects: &mut Vec<Effect>) {
+pub fn on_gravity(
+    d: &mut Driver,
+    gte: &mut Gte,
+    env: &Env,
+    level: &Level,
+    velocity: &mut Vec3,
+    effects: &mut Vec<Effect>,
+) {
     // The rotation matrix is matrixMovingDir; the light matrix is its
     // transpose, so that a vector goes from the world into the kart's frame.
     let w = d.matrix_moving_dir.words();
@@ -85,14 +103,19 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
     gte.ctc2(w[4], ctrl::L_MATRIX + 4);
 
     let world_to_local = mvmva(1, 1, 0, 3, 0);
-    gte.mtc2((velocity.x as u32 & 0xffff) | (velocity.y as u32) << 16, data::VXY0);
+    gte.mtc2(
+        (velocity.x as u32 & 0xffff) | (velocity.y as u32) << 16,
+        data::VXY0,
+    );
     gte.mtc2(velocity.z as u32, data::VZ0);
     gte.cop2(world_to_local);
     let (mut local_x, mut local_y, mut local_z) = mac(gte);
     let (original_local_x, mut original_local_y, original_local_z) = (local_x, local_y, local_z);
 
     let mut gravity_y = mips::neg_lo(d.stats.gravity as i32);
-    let quad_flags = d.under_driver.map_or(0, |q| level.quad_blocks[q as usize].flags);
+    let quad_flags = d
+        .under_driver
+        .map_or(0, |q| level.quad_blocks[q as usize].flags);
     let elapsed = env.elapsed_time_ms;
 
     if quad_flags & QUAD_LOW_GRAVITY != 0 {
@@ -107,14 +130,18 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
     let (mut gravity_x, gravity_local_y, mut gravity_z) = mac(gte);
     let forward_accel_impulse = d.forward_accel_impulse as i32;
 
-    if (gravity_z < 0 && forward_accel_impulse > 0) || (gravity_z > 0 && forward_accel_impulse < 0) {
+    if (gravity_z < 0 && forward_accel_impulse > 0) || (gravity_z > 0 && forward_accel_impulse < 0)
+    {
         gravity_z = 0;
     }
 
     let mut actions = d.actions_flag_set;
     let speed_approx = d.speed_approx as i32;
     let base_speed = d.base_speed as i32;
-    if actions & actions::ACCEL_PREVENTION != 0 || (base_speed > 0 && speed_approx < 0) || (base_speed < 0 && speed_approx > 0) {
+    if actions & actions::ACCEL_PREVENTION != 0
+        || (base_speed > 0 && speed_approx < 0)
+        || (base_speed < 0 && speed_approx > 0)
+    {
         gravity_x = 0;
         gravity_z = 0;
     }
@@ -186,7 +213,8 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
         local_z = 0;
     } else if d.actions_flag_set_prev_frame & actions::TOUCH_GROUND != 0
         || state == kart_state::BLASTED
-        || (speed_approx > d.terrain_scaled_base_speed as i32 && TERRAINS[d.terrain_meta2 as usize].speed_multiplier < 0x100)
+        || (speed_approx > d.terrain_scaled_base_speed as i32
+            && TERRAINS[d.terrain_meta2 as usize].speed_multiplier < 0x100)
     {
         let stats = d.stats;
         let (mut perpendicular, mut forward);
@@ -207,7 +235,9 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
             forward = perpendicular;
         } else if base_speed != 0 {
             let abs_speed = abs(speed_approx);
-            if abs_speed > SKID_SPEED_THRESHOLD && ((base_speed > 0 && speed_approx < 0) || (base_speed < 0 && speed_approx > 0)) {
+            if abs_speed > SKID_SPEED_THRESHOLD
+                && ((base_speed > 0 && speed_approx < 0) || (base_speed < 0 && speed_approx > 0))
+            {
                 // Pedal against the direction of travel: braking.
                 perpendicular = stats.pedal_friction_perpendicular as i32;
                 forward = stats.brake_friction as i32;
@@ -235,7 +265,10 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
         perpendicular = mips::sra(mips::mul_lo(perpendicular, elapsed), 5);
         forward = mips::sra(mips::mul_lo(forward, elapsed), 5);
         if terrain.ground_friction_scale != 0x100 {
-            perpendicular = mips::sra(mips::mul_lo(terrain.ground_friction_scale, perpendicular), 8);
+            perpendicular = mips::sra(
+                mips::mul_lo(terrain.ground_friction_scale, perpendicular),
+                8,
+            );
             forward = mips::sra(mips::mul_lo(terrain.ground_friction_scale, forward), 8);
         }
 
@@ -246,15 +279,26 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
             if timer == TERRAIN_SIDE_LOCK_TIMER {
                 perpendicular = mips::sra(abs_local_x, 1);
             } else {
-                perpendicular = mips::add_lo(perpendicular, mips::sra(mips::mul_lo(perpendicular, boost), 8));
+                perpendicular = mips::add_lo(
+                    perpendicular,
+                    mips::sra(mips::mul_lo(perpendicular, boost), 8),
+                );
                 if perpendicular < 0 {
                     perpendicular = 0;
                 }
             }
             if abs_local_x > 0 {
                 actions |= actions::BACK_SKID | actions::FRONT_SKID;
-                effects.push(Effect::ShockForce { driver_id: d.driver_id, a: 4, b: 0x7f });
-                effects.push(Effect::ShockFreq { driver_id: d.driver_id, a: 4, b: 0 });
+                effects.push(Effect::ShockForce {
+                    driver_id: d.driver_id,
+                    a: 4,
+                    b: 0x7f,
+                });
+                effects.push(Effect::ShockFreq {
+                    driver_id: d.driver_id,
+                    a: 4,
+                    b: 0,
+                });
             }
             timer = mips::add_lo(timer, elapsed);
             if timer > 0 {
@@ -266,7 +310,10 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
             if timer < 0 {
                 timer = 0;
             }
-            perpendicular = mips::add_lo(perpendicular, mips::sra(mips::mul_lo(perpendicular, boost), 8));
+            perpendicular = mips::add_lo(
+                perpendicular,
+                mips::sra(mips::mul_lo(perpendicular, boost), 8),
+            );
             d.terrain_friction_timer = timer as i16;
             if perpendicular < 0 {
                 perpendicular = 0;
@@ -281,7 +328,9 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
             }
             let min_forward = if local_z != 0 && base_speed != 0 && (local_z ^ base_speed) < 0 {
                 Some(abs(mips::sra(local_z, 1)))
-            } else if (local_z < base_speed && local_z <= 0) || (base_speed < local_z && local_z >= 0) {
+            } else if (local_z < base_speed && local_z <= 0)
+                || (base_speed < local_z && local_z >= 0)
+            {
                 Some(mips::sra(abs(mips::sub_lo(local_z, base_speed)), 1))
             } else {
                 None
@@ -305,7 +354,10 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
     }
 
     // Back into the world.
-    gte.mtc2((local_x as u32 & 0xffff) | (local_y as u32) << 16, data::VXY0);
+    gte.mtc2(
+        (local_x as u32 & 0xffff) | (local_y as u32) << 16,
+        data::VXY0,
+    );
     gte.mtc2(local_z as u32, data::VZ0);
     gte.cop2(mvmva(1, 0, 0, 3, 0));
     (velocity.x, velocity.y, velocity.z) = mac(gte);
@@ -333,7 +385,11 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
 
     // A change of direction along the kart is a "rollback". Many of them in
     // quick succession means the kart is jittering between quad blocks.
-    let rolled_back = if original_local_z < 0 { local_z > 0 } else { local_z < 0 || (original_local_z == 0 && local_z > 0) };
+    let rolled_back = if original_local_z < 0 {
+        local_z > 0
+    } else {
+        local_z < 0 || (original_local_z == 0 && local_z > 0)
+    };
     if rolled_back {
         if d.v_shift_window_timer != 0 {
             d.v_shift_count = d.v_shift_count.wrapping_add(1);
@@ -345,7 +401,13 @@ pub fn on_gravity(d: &mut Driver, gte: &mut Gte, env: &Env, level: &Level, veloc
 /// `VehPhysForce_OnApplyForces`: the centre of the kart, the velocity from the
 /// speed, mud, gravity, and the acceleration from collisions. Clears the
 /// collision results the search that follows sets again.
-pub fn on_apply_forces(d: &mut Driver, coll: &mut Collision, env: &Env, level: &Level, effects: &mut Vec<Effect>) {
+pub fn on_apply_forces(
+    d: &mut Driver,
+    coll: &mut Collision,
+    env: &Env,
+    level: &Level,
+    effects: &mut Vec<Effect>,
+) {
     if d.speed > MAX_SPEED {
         d.speed = MAX_SPEED;
     }
@@ -356,13 +418,19 @@ pub fn on_apply_forces(d: &mut Driver, coll: &mut Collision, env: &Env, level: &
     coll.gte.mtc2(0x190000, data::VXY0);
     coll.gte.mtc2(0, data::VZ0);
     coll.gte.cop2(mvmva(1, 2, 0, 3, 0));
-    (d.origin_to_center.x, d.origin_to_center.y, d.origin_to_center.z) = mac(&mut coll.gte);
+    (
+        d.origin_to_center.x,
+        d.origin_to_center.y,
+        d.origin_to_center.z,
+    ) = mac(&mut coll.gte);
 
     let mut velocity = d.velocity;
     convert_speed_to_vec(d, &mut velocity);
 
     if let Some(under) = d.under_driver {
-        if level.quad_blocks[under as usize].terrain_type == terrain_type::MUD && d.pos_curr.y > MAX_MUD_SINK_Y_LEVEL {
+        if level.quad_blocks[under as usize].terrain_type == terrain_type::MUD
+            && d.pos_curr.y > MAX_MUD_SINK_Y_LEVEL
+        {
             // Sink slower as you approach the mud's bottom.
             let sink_speed = mips::sub_lo(MAX_MUD_SINK_Y_LEVEL, d.pos_curr.y);
             if velocity.y < sink_speed {
@@ -373,8 +441,16 @@ pub fn on_apply_forces(d: &mut Driver, coll: &mut Collision, env: &Env, level: &
 
     on_gravity(d, &mut coll.gte, env, level, &mut velocity, effects);
 
-    d.axis_angle1_normal_vec = SVec3 { x: 0, y: 0x1000, z: 0 };
-    d.normal_vec_up = SVec3 { x: 0, y: 0x1000, z: 0 };
+    d.axis_angle1_normal_vec = SVec3 {
+        x: 0,
+        y: 0x1000,
+        z: 0,
+    };
+    d.normal_vec_up = SVec3 {
+        x: 0,
+        y: 0x1000,
+        z: 0,
+    };
     d.curr_block_touching = None;
     d.collision_flags = 0;
 
@@ -395,7 +471,12 @@ const SURFACE_PUSHBACK_SHIFT: u32 = 6;
 /// the velocity, requests a mask grab on a kill plane, applies the turbo pads,
 /// bumps into the other karts in reach ([`crate::collide`]) and pushes the kart
 /// out of a surface it is sinking into. The water split line is not ported.
-pub fn collide_drivers(d: &mut Driver, others: &mut crate::collide::Others, env: &Env, effects: &mut Vec<Effect>) {
+pub fn collide_drivers(
+    d: &mut Driver,
+    others: &mut crate::collide::Others,
+    env: &Env,
+    effects: &mut Vec<Effect>,
+) {
     let step_flags = d.step_flag_set;
 
     d.velocity.x = mips::sub_lo(d.velocity.x, d.accel.x as i32);
@@ -408,7 +489,13 @@ pub fn collide_drivers(d: &mut Driver, others: &mut crate::collide::Others, env:
 
     if step_flags & step_triggers::SUPER_TURBO_PAD != 0 {
         let flags = turbo_type::TURBO_PAD | turbo_type::FREEZE_RESERVES_ON_TURBO_PAD;
-        fire::increment(d, SUPER_TURBO_PAD_RESERVES, flags, SUPER_TURBO_PAD_FIRE_LEVEL, effects);
+        fire::increment(
+            d,
+            SUPER_TURBO_PAD_RESERVES,
+            flags,
+            SUPER_TURBO_PAD_FIRE_LEVEL,
+            effects,
+        );
     } else if step_flags & step_triggers::TURBO_PAD != 0 {
         let flags = turbo_type::TURBO_PAD | turbo_type::FREEZE_RESERVES_ON_TURBO_PAD;
         fire::increment(d, TURBO_PAD_RESERVES, flags, TURBO_PAD_FIRE_LEVEL, effects);
@@ -419,8 +506,10 @@ pub fn collide_drivers(d: &mut Driver, others: &mut crate::collide::Others, env:
     if d.collision_flags & collision_flags::SURFACE_PUSHBACK != 0 {
         let diff_x = mips::sub_lo(mips::sra(d.pos_curr.x, 8), d.sps_hit_pos.x as i32);
         let product_x = mips::mul_lo(d.sps_normal_vec.x as i32, diff_x);
-        let floor_diff_y =
-            mips::add_lo(mips::sub_lo(mips::sra(d.quad_block_height, 8), d.sps_hit_pos.y as i32), SURFACE_PUSHBACK_Y_BIAS);
+        let floor_diff_y = mips::add_lo(
+            mips::sub_lo(mips::sra(d.quad_block_height, 8), d.sps_hit_pos.y as i32),
+            SURFACE_PUSHBACK_Y_BIAS,
+        );
         let product_y = mips::mul_lo(d.sps_normal_vec.y as i32, floor_diff_y);
         let diff_z = mips::sub_lo(mips::sra(d.pos_curr.z, 8), d.sps_hit_pos.z as i32);
         let product_z = mips::mul_lo(d.sps_normal_vec.z as i32, diff_z);
@@ -463,10 +552,15 @@ pub fn rot_axis_angle(m: &mut Matrix, gte: &mut Gte, normal: SVec3, angle: i32) 
         // The normal points straight up (or down).
         let dot = mips::add_lo(mips::mul_lo(sin, nx), mips::mul_lo(cos, nz));
         out_y = mips::sra(mips::neg_lo(dot), 12);
-        out_x = if normal.y < 0 { mips::neg_lo(scaled_sin_y) } else { scaled_sin_y };
+        out_x = if normal.y < 0 {
+            mips::neg_lo(scaled_sin_y)
+        } else {
+            scaled_sin_y
+        };
         out_z = scaled_cos_y;
     } else {
-        let (mut normal_x_sq, mut normal_z_sq, mut cross_xz, mut denominator) = (normal_x_sq, normal_z_sq, cross_xz, denominator);
+        let (mut normal_x_sq, mut normal_z_sq, mut cross_xz, mut denominator) =
+            (normal_x_sq, normal_z_sq, cross_xz, denominator);
         shift = mips::sub_lo(0x14, shift);
         if shift > 0 {
             normal_x_sq = mips::sra(normal_x_sq, shift as u32);
@@ -477,8 +571,20 @@ pub fn rot_axis_angle(m: &mut Matrix, gte: &mut Gte, normal: SVec3, angle: i32) 
 
         let sin_remainder = mips::sub_lo(sin, scaled_sin_y);
         let cos_remainder = mips::sub_lo(cos, scaled_cos_y);
-        let div_x = mips::div(mips::add_lo(mips::mul_lo(sin_remainder, normal_z_sq), mips::mul_lo(cos_remainder, cross_xz)), denominator);
-        let div_z = mips::div(mips::add_lo(mips::mul_lo(sin_remainder, cross_xz), mips::mul_lo(cos_remainder, normal_x_sq)), denominator);
+        let div_x = mips::div(
+            mips::add_lo(
+                mips::mul_lo(sin_remainder, normal_z_sq),
+                mips::mul_lo(cos_remainder, cross_xz),
+            ),
+            denominator,
+        );
+        let div_z = mips::div(
+            mips::add_lo(
+                mips::mul_lo(sin_remainder, cross_xz),
+                mips::mul_lo(cos_remainder, normal_x_sq),
+            ),
+            denominator,
+        );
         let dot = mips::add_lo(mips::mul_lo(sin, nx), mips::mul_lo(cos, nz));
 
         out_x = mips::add_lo(scaled_sin_y, div_x);
@@ -527,7 +633,8 @@ pub fn counter_steer(d: &mut Driver, gte: &mut Gte) {
     let mut value = mips::sra(mips::mul_lo(ratio, -8000), 8);
 
     let limit = d.stats.model_turn_counter_steer_strength as i32;
-    let angle = mips::sub_lo(d.turn_angle_curr as i32, d.turn_angle_prev as i32).clamp(mips::neg_lo(limit), limit);
+    let angle = mips::sub_lo(d.turn_angle_curr as i32, d.turn_angle_prev as i32)
+        .clamp(mips::neg_lo(limit), limit);
     let sine = math::sin(angle as u32);
 
     value = mips::sra(mips::mul_lo(value, sine), 12);
@@ -535,7 +642,11 @@ pub fn counter_steer(d: &mut Driver, gte: &mut Gte) {
     gte.mtc2(0, data::VZ0);
     gte.cop2(mvmva(1, 0, 0, 3, 0));
     let (x, y, z) = mac(gte);
-    d.accel = SVec3 { x: x as i16, y: y as i16, z: z as i16 };
+    d.accel = SVec3 {
+        x: x as i16,
+        y: y as i16,
+        z: z as i16,
+    };
 }
 
 /// `VEH_PHYS_FORCE_KART_SCALE_BASE`: the kart's scale when it is neither squashed nor stretched.
@@ -558,7 +669,14 @@ const SQUISH_RESTORE_SFX: u8 = 0x5b;
 
 /// `VehPhysForce_TranslateMatrix_Div256TowardZero`
 fn div256_toward_zero(value: i32) -> i32 {
-    mips::sra(if value < 0 { mips::add_lo(value, 0xff) } else { value }, 8)
+    mips::sra(
+        if value < 0 {
+            mips::add_lo(value, 0xff)
+        } else {
+            value
+        },
+        8,
+    )
 }
 
 /// The squash and stretch of the kart model (the first part of `VehPhysForce_TranslateMatrix`):
@@ -575,7 +693,11 @@ fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
 
     if d.kart_state == kart_state::MASK_GRABBED && d.actions_flag_set & actions::TOUCH_GROUND == 0 {
         d.inst_scale_y = mips::add_lo(squish, KART_SCALE_BASE) as i16;
-        let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * MASK_GRAB_SCALE_XZ_FACTOR)).max(MIN_SQUASH_XZ_SCALE);
+        let xz = mips::sub_lo(
+            KART_SCALE_BASE,
+            div256_toward_zero(squish * MASK_GRAB_SCALE_XZ_FACTOR),
+        )
+        .max(MIN_SQUASH_XZ_SCALE);
         (d.inst_scale_x, d.inst_scale_z) = (xz as i16, xz as i16);
         return;
     }
@@ -586,11 +708,15 @@ fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
     if d.actions_flag_set & actions::JUMP_STARTED == 0 {
         let current = d.jump_squish_stretch2 as i32;
         let weighted = jump_height * 7;
-        target = mips::sll(mips::sub_lo(current, mips::sra(mips::add_lo(current * 9, weighted), 4)), 2);
+        target = mips::sll(
+            mips::sub_lo(current, mips::sra(mips::add_lo(current * 9, weighted), 4)),
+            2,
+        );
         if target.abs() < SQUISH_DEADBAND {
             target = 0;
         }
-        if (d.actions_flag_set | d.actions_flag_set_prev_frame) & actions::STARTED_TOUCH_GROUND != 0 {
+        if (d.actions_flag_set | d.actions_flag_set_prev_frame) & actions::STARTED_TOUCH_GROUND != 0
+        {
             target = target.max(LANDING_SQUISH_MIN);
         } else {
             target = target.max(AIR_SQUISH_MIN);
@@ -598,13 +724,22 @@ fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
         target = target.min(SQUISH_MAX);
     }
 
-    if d.hazard_timer > 0 && d.hazard_timer & HAZARD_BLINK_MASK == 0 && target > TARGET_SQUISH_DEFAULT {
+    if d.hazard_timer > 0
+        && d.hazard_timer & HAZARD_BLINK_MASK == 0
+        && target > TARGET_SQUISH_DEFAULT
+    {
         target = TARGET_SQUISH_DEFAULT;
     }
 
     // Falling stretches the kart more the farther it falls.
     if d.actions_flag_set & actions::TOUCH_GROUND == 0 && jump_height < 0 {
-        let stretch = crate::calc::map_to_range(-jump_height, 0, FALL_STRETCH_HEIGHT_MAX, FALL_STRETCH_MIN, FALL_STRETCH_MAX);
+        let stretch = crate::calc::map_to_range(
+            -jump_height,
+            0,
+            FALL_STRETCH_HEIGHT_MAX,
+            FALL_STRETCH_MIN,
+            FALL_STRETCH_MAX,
+        );
         target = target.max(stretch);
         d.jump_squish_stretch2 = jump_height as i16;
     }
@@ -612,22 +747,35 @@ fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
     if (d.jump_squish_stretch as i32).abs() < target.abs() {
         d.jump_squish_stretch = target as i16;
     }
-    d.jump_squish_stretch = interp_by_speed(d.jump_squish_stretch as i32, SQUISH_INTERP_SPEED, 0) as i16;
-    d.jump_squish_stretch2 = mips::sra(mips::add_lo(d.jump_squish_stretch2 as i32 * 9, jump_height * 7), 4) as i16;
+    d.jump_squish_stretch =
+        interp_by_speed(d.jump_squish_stretch as i32, SQUISH_INTERP_SPEED, 0) as i16;
+    d.jump_squish_stretch2 = mips::sra(
+        mips::add_lo(d.jump_squish_stretch2 as i32 * 9, jump_height * 7),
+        4,
+    ) as i16;
 
     let squish = d.jump_squish_stretch as i32;
     if d.squish_timer != 0 {
         d.inst_scale_y = 0;
     } else if d.inst_scale_y == 0 {
-        effects.push(Effect::Sound { id: SQUISH_RESTORE_SFX, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+        effects.push(Effect::Sound {
+            id: SQUISH_RESTORE_SFX,
+            echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+        });
         d.inst_scale_y = mips::add_lo(squish, KART_SCALE_BASE) as i16;
         d.matrix_array = MatrixArray::SquishRecover;
         d.matrix_index = 0;
     } else {
-        d.inst_scale_y =
-            interp_by_speed(d.inst_scale_y as i32, SQUISH_SCALE_INTERP_SPEED, mips::add_lo(squish, KART_SCALE_BASE)) as i16;
+        d.inst_scale_y = interp_by_speed(
+            d.inst_scale_y as i32,
+            SQUISH_SCALE_INTERP_SPEED,
+            mips::add_lo(squish, KART_SCALE_BASE),
+        ) as i16;
     }
-    let xz = mips::sub_lo(KART_SCALE_BASE, div256_toward_zero(squish * SQUISH_SCALE_XZ_FACTOR));
+    let xz = mips::sub_lo(
+        KART_SCALE_BASE,
+        div256_toward_zero(squish * SQUISH_SCALE_XZ_FACTOR),
+    );
     d.inst_scale_x = interp_by_speed(d.inst_scale_x as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
     d.inst_scale_z = interp_by_speed(d.inst_scale_z as i32, SQUISH_SCALE_INTERP_SPEED, xz) as i16;
 }
@@ -637,7 +785,12 @@ fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
 pub fn translate_matrix(d: &mut Driver, gte: &mut Gte, effects: &mut Vec<Effect>) {
     squash_stretch(d, effects);
     let mut facing = d.matrix_facing_dir;
-    rot_axis_angle(&mut facing, gte, d.axis_angle2_normal_vec, d.rot_curr_y as i32);
+    rot_axis_angle(
+        &mut facing,
+        gte,
+        d.axis_angle2_normal_vec,
+        d.rot_curr_y as i32,
+    );
     d.matrix_facing_dir = facing;
     crate::baked::update_matrix_animation(d);
 }
@@ -673,8 +826,14 @@ mod squash_tests {
         d.squish_timer = 0;
         squash_stretch(&mut d, &mut effects);
         assert_eq!(d.inst_scale_y, 0xccc);
-        assert_eq!((d.matrix_array, d.matrix_index), (MatrixArray::SquishRecover, 0));
-        assert!(effects.contains(&Effect::Sound { id: SQUISH_RESTORE_SFX, echo: false }));
+        assert_eq!(
+            (d.matrix_array, d.matrix_index),
+            (MatrixArray::SquishRecover, 0)
+        );
+        assert!(effects.contains(&Effect::Sound {
+            id: SQUISH_RESTORE_SFX,
+            echo: false
+        }));
 
         // The recovery runs its 15 entries and ends.
         for _ in 0..15 {

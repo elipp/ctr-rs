@@ -40,7 +40,9 @@ fn reference_dir() -> PathBuf {
 
 /// The body of `.trigApprox = { ... }` in `zGlobal_DATA.c`.
 fn trig_initialiser(source: &str) -> String {
-    let at = source.find(".trigApprox").expect("no .trigApprox in zGlobal_DATA.c");
+    let at = source
+        .find(".trigApprox")
+        .expect("no .trigApprox in zGlobal_DATA.c");
     let open = at + source[at..].find('{').unwrap();
     let mut depth = 0;
     for (i, c) in source[open..].char_indices() {
@@ -80,24 +82,30 @@ fn build_reference_driver() -> Option<PathBuf> {
         .arg("-I")
         .arg(&reference)
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"))
-        .args([
-            "platform/native_libgte.c",
-            "platform/native_gte_core.c",
-            "platform/native_inline_c.c",
-            "game/MATH/MATH_0_Sin.c",
-            "game/MATH/MATH_1_Cos.c",
-            "game/MATH/MATH_2_FastSqrt.c",
-            "game/MATH/MATH_4_VectorLength.c",
-            "game/MATH/MATH_5_VectorNormalize.c",
-            "game/MATH/MATH_7_MatrixStubs.c",
-        ].map(|f| reference.join(f)))
+        .args(
+            [
+                "platform/native_libgte.c",
+                "platform/native_gte_core.c",
+                "platform/native_inline_c.c",
+                "game/MATH/MATH_0_Sin.c",
+                "game/MATH/MATH_1_Cos.c",
+                "game/MATH/MATH_2_FastSqrt.c",
+                "game/MATH/MATH_4_VectorLength.c",
+                "game/MATH/MATH_5_VectorNormalize.c",
+                "game/MATH/MATH_7_MatrixStubs.c",
+            ]
+            .map(|f| reference.join(f)),
+        )
         // regionsEXE.h defines `sdata` (identically) in every translation unit.
         .arg("-Wl,-z,muldefs")
         .arg("-o")
         .arg(&exe)
         .status()
         .expect("failed to run gcc");
-    assert!(status.success(), "could not build the C reference driver (needs gcc with -m32)");
+    assert!(
+        status.success(),
+        "could not build the C reference driver (needs gcc with -m32)"
+    );
     Some(exe)
 }
 
@@ -159,7 +167,10 @@ fn cases(trials: u64) -> Vec<Case> {
         let n = -v;
         add(format!("Q {n}"), square_root0_stub(n).to_string());
         let (value, shift) = (rng.next() as u32, rng.below(63) as i32);
-        add(format!("f {} {shift}", value as i32), fast_sqrt(value, shift).to_string());
+        add(
+            format!("f {} {shift}", value as i32),
+            fast_sqrt(value, shift).to_string(),
+        );
     }
 
     // Vectors.
@@ -173,18 +184,30 @@ fn cases(trials: u64) -> Vec<Case> {
                 _ => rng.signed(8) as i16,
             };
         }
-        let sv = SVec3 { x: v[0], y: v[1], z: v[2] };
-        add(format!("l {} {} {}", v[0], v[1], v[2]), vector_length(sv).to_string());
+        let sv = SVec3 {
+            x: v[0],
+            y: v[1],
+            z: v[2],
+        };
+        add(
+            format!("l {} {} {}", v[0], v[1], v[2]),
+            vector_length(sv).to_string(),
+        );
         let mut n = sv;
         let len = vector_normalize(&mut n);
-        add(format!("n {} {} {}", v[0], v[1], v[2]), format!("{len} {} {} {}", n.x, n.y, n.z));
+        add(
+            format!("n {} {} {}", v[0], v[1], v[2]),
+            format!("{len} {} {} {}", n.x, n.y, n.z),
+        );
     }
     out
 }
 
 #[test]
 fn matches_reference_math() {
-    let Some(exe) = build_reference_driver() else { return };
+    let Some(exe) = build_reference_driver() else {
+        return;
+    };
     let trials: u64 = std::env::var("MATH_REFERENCE_TRIALS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -203,19 +226,37 @@ fn matches_reference_math() {
         .stdout(Stdio::piped())
         .output()
         .expect("failed to run the C reference driver");
-    assert!(out.status.success(), "C reference driver failed: {}", out.status);
+    assert!(
+        out.status.success(),
+        "C reference driver failed: {}",
+        out.status
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), cases.len(), "C driver printed {} lines for {} cases", lines.len(), cases.len());
+    assert_eq!(
+        lines.len(),
+        cases.len(),
+        "C driver printed {} lines for {} cases",
+        lines.len(),
+        cases.len()
+    );
 
     let mut failures = 0;
     for (c, got) in cases.iter().zip(lines) {
         if c.rust != got {
             failures += 1;
             if failures <= 20 {
-                eprintln!("MISMATCH `{}`: rust {} vs reference {got}", c.script, c.rust);
+                eprintln!(
+                    "MISMATCH `{}`: rust {} vs reference {got}",
+                    c.script, c.rust
+                );
             }
         }
     }
-    assert_eq!(failures, 0, "{failures} of {} cases differ from the reference", cases.len());
+    assert_eq!(
+        failures,
+        0,
+        "{failures} of {} cases differ from the reference",
+        cases.len()
+    );
 }

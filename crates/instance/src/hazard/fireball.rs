@@ -3,7 +3,7 @@
 
 use loader::lev::InstDef;
 
-use crate::{Context, Contact, Damage, Instance, Shape, Tick};
+use crate::{Contact, Context, Damage, Instance, Shape, Tick};
 
 /// Milliseconds a tick lasts (`elapsedTimeMS`).
 const TICK_MS: i16 = 32;
@@ -54,7 +54,12 @@ pub struct Step {
 impl Fireball {
     /// `RB_Fireball_LInB`: the digit the name ends in makes the odd ones wait.
     pub fn new(def: &InstDef) -> Fireball {
-        let id = def.name.chars().last().and_then(|c| c.to_digit(10)).unwrap_or(0);
+        let id = def
+            .name
+            .chars()
+            .last()
+            .and_then(|c| c.to_digit(10))
+            .unwrap_or(0);
         Fireball {
             pos: [def.pos.x as i32, def.pos.y as i32, def.pos.z as i32],
             rest_y: def.pos.y as i32,
@@ -77,10 +82,20 @@ impl Fireball {
             self.pos[1] += (self.vel_y as i32 * TICK_MS as i32) >> 5;
             self.vel_y = (self.vel_y - GRAVITY).max(TERMINAL_SPEED);
             // The spark goes against the ball's vertical motion.
-            let vel_y = (-(self.vel_y as i32) * SPARK_SPEED_SCALE).clamp(-SPARK_SPEED_LIMIT, SPARK_SPEED_LIMIT);
+            let vel_y = (-(self.vel_y as i32) * SPARK_SPEED_SCALE)
+                .clamp(-SPARK_SPEED_LIMIT, SPARK_SPEED_LIMIT);
             step = Some(Step {
-                spark: Spark { pos: self.pos, vel_y: vel_y as i16 },
-                contact: Contact { pos: self.pos, damage: Damage::Burn, hit_radius: HIT_RADIUS, sound: 0, shape: Shape::Sphere },
+                spark: Spark {
+                    pos: self.pos,
+                    vel_y: vel_y as i16,
+                },
+                contact: Contact {
+                    pos: self.pos,
+                    damage: Damage::Burn,
+                    hit_radius: HIT_RADIUS,
+                    sound: 0,
+                    shape: Shape::Sphere,
+                },
             });
         }
 
@@ -117,7 +132,11 @@ mod tests {
             scale: SVec3::default(),
             color_rgba: 0,
             flags: 0,
-            pos: SVec3 { x: 100, y: -1090, z: 200 },
+            pos: SVec3 {
+                x: 100,
+                y: -1090,
+                z: 200,
+            },
             rot: SVec3::default(),
             model_id: 0,
         }
@@ -150,7 +169,9 @@ mod tests {
         // Near the top it is slow and the spark is not.
         let mut f = Fireball::new(&def("fireball#0"));
         f.tick();
-        let slow = std::iter::from_fn(|| f.tick()).find(|s| s.spark.vel_y.abs() < 0x7fff).unwrap();
+        let slow = std::iter::from_fn(|| f.tick())
+            .find(|s| s.spark.vel_y.abs() < 0x7fff)
+            .unwrap();
         assert_eq!(slow.spark.vel_y as i32, -80 * 0x180);
     }
 
@@ -159,7 +180,10 @@ mod tests {
         let mut f = Fireball::new(&def("fireball#0"));
         f.tick();
         let step = f.tick().unwrap();
-        assert_eq!((step.contact.damage, step.contact.pos), (Damage::Burn, f.pos));
+        assert_eq!(
+            (step.contact.damage, step.contact.pos),
+            (Damage::Burn, f.pos)
+        );
         // 256 units around it, but not a track's width.
         assert!(step.contact.hits([f.pos[0] + 200, f.pos[1], f.pos[2]]));
         assert!(!step.contact.hits([f.pos[0] + 300, f.pos[1], f.pos[2]]));

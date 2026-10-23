@@ -75,7 +75,9 @@ impl Remotes {
         }
         let mut entries = Vec::new();
         for (slot, kart) in self.karts.iter_mut().enumerate() {
-            let (Some(kart), Some(frame)) = (kart, frame) else { continue };
+            let (Some(kart), Some(frame)) = (kart, frame) else {
+                continue;
+            };
             let input = input_of_pad(&frame[slot], kart.held);
             kart.held = input.buttons_held;
             entries.push(Entry {
@@ -104,14 +106,24 @@ impl Remotes {
         let results = {
             let mut racers: Vec<vehicle::sim::Racer> = entries
                 .iter_mut()
-                .map(|e| vehicle::sim::Racer { driver: &mut *e.driver, coll: &mut *e.coll, input: &e.input, effects: &mut e.effects })
+                .map(|e| vehicle::sim::Racer {
+                    driver: &mut *e.driver,
+                    coll: &mut *e.coll,
+                    input: &e.input,
+                    effects: &mut e.effects,
+                })
                 .collect();
             vehicle::sim::tick_all(&mut racers, &track.0, env, &mut sim.objects, feedback)
         };
 
         let mut ours = None;
         for (mut e, result) in entries.into_iter().zip(results) {
-            crate::drive::after_tick(e.driver, env, e.remote.is_none().then_some(&mut *particles), &mut e.effects);
+            crate::drive::after_tick(
+                e.driver,
+                env,
+                e.remote.is_none().then_some(&mut *particles),
+                &mut e.effects,
+            );
             match e.remote {
                 Some(entity) => {
                     if let Ok((mut motion, _)) = motions.get_mut(entity) {
@@ -139,7 +151,11 @@ pub fn build(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
     // Not before the level of the race is up.
-    let Some(online) = lobby.online.as_mut().filter(|online| !online.built && online.track == track.1.0) else {
+    let Some(online) = lobby
+        .online
+        .as_mut()
+        .filter(|online| !online.built && online.track == track.1.0)
+    else {
         if lobby.online.is_none() {
             for kart in remotes.karts.drain(..).flatten() {
                 commands.entity(kart.entity).try_despawn();
@@ -158,7 +174,9 @@ pub fn build(
             continue;
         }
         let character = character as usize;
-        let (model, wheel_icons) = models.entry(character).or_insert_with(|| crate::load_racer(character));
+        let (model, wheel_icons) = models
+            .entry(character)
+            .or_insert_with(|| crate::load_racer(character));
         let mut anim_num_frames = [0; 8];
         for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
             *n = anim.num_frames;
@@ -178,6 +196,11 @@ pub fn build(
             &mut materials,
             &mut subtract_materials,
         );
-        remotes.karts.push(Some(RemoteKart { driver, coll, held: 0, entity }));
+        remotes.karts.push(Some(RemoteKart {
+            driver,
+            coll,
+            held: 0,
+            entity,
+        }));
     }
 }

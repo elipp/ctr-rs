@@ -36,7 +36,8 @@ pub fn rotate(m: &Matrix, v: [i32; 3]) -> [i32; 3] {
 
 /// Whether the turbo meter is in the window where a tap gives a boost.
 fn in_boost_window(d: &Driver) -> bool {
-    let top = (d.stats.turbo_low_room_warning as i32 + TURBO_ROOM_WARNING_PAD) * TURBO_ROOM_WARNING_SCALE;
+    let top =
+        (d.stats.turbo_low_room_warning as i32 + TURBO_ROOM_WARNING_PAD) * TURBO_ROOM_WARNING_SCALE;
     (TURBO_METER_COLOR_MIN..=top).contains(&(d.turbo_meter_room_left as i32))
 }
 
@@ -58,7 +59,13 @@ pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
     let pipes = [(sx * 9) >> 3, (sx * -0x12) >> 4];
     // Revving at the start never runs here, so the window decides.
     let dark = d.kart_state != kart_state::ENGINE_REVVING && in_boost_window(d);
-    pipes.map(|x| Puff { position: rotate(m, [x, y, z]), velocity, dark }).to_vec()
+    pipes
+        .map(|x| Puff {
+            position: rotate(m, [x, y, z]),
+            velocity,
+            dark,
+        })
+        .to_vec()
 }
 
 #[cfg(test)]
@@ -67,7 +74,9 @@ mod tests {
 
     fn driver() -> Driver {
         let mut d = Driver::new(0, 0);
-        d.matrix_facing_dir = Matrix { m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]] };
+        d.matrix_facing_dir = Matrix {
+            m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]],
+        };
         d.stats.turbo_low_room_warning = 15;
         d
     }
@@ -103,7 +112,9 @@ mod tests {
     fn the_puffs_follow_the_kart_around() {
         let mut d = driver();
         // Facing the other way (a half turn around Y): back is +Z, pipes swap sides.
-        d.matrix_facing_dir = Matrix { m: [[-0x1000, 0, 0], [0, 0x1000, 0], [0, 0, -0x1000]] };
+        d.matrix_facing_dir = Matrix {
+            m: [[-0x1000, 0, 0], [0, 0x1000, 0], [0, 0, -0x1000]],
+        };
         let p = exhaust(&mut d);
         assert_eq!(p[0].position, [-3685, 11466, 11466]);
         assert_eq!(p[0].velocity, [0, 0x400, 0x400]);

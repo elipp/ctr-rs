@@ -67,59 +67,224 @@ mod emitter_flags {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entry {
     /// The particle's life and how it is drawn (`FuncInit`).
-    Func { flags: u16, color_flags: u16, lifespan: i16 },
+    Func {
+        flags: u16,
+        color_flags: u16,
+        lifespan: i16,
+    },
     /// How one axis starts (`AxisInit`): `[start, velocity, accel]` of the base
     /// value, and of the range that random values are drawn from.
-    Axis { flags: u16, axis: usize, base: [i32; 3], random: [i32; 3] },
+    Axis {
+        flags: u16,
+        axis: usize,
+        base: [i32; 3],
+        random: [i32; 3],
+    },
 }
 
 /// `data.emSet_Exhaust_High`: the exhaust of a single player.
 pub const EXHAUST_HIGH: [Entry; 7] = [
-    Entry::Func { flags: 1, color_flags: 0x08a3, lifespan: 5 },
-    Entry::Axis { flags: 18, axis: 0, base: [0, -250, 0], random: [0, 500, 0] },
-    Entry::Axis { flags: 22, axis: 1, base: [0, -250, -256], random: [0, 500, 0] },
-    Entry::Axis { flags: 18, axis: 2, base: [0, -250, 0], random: [0, 500, 0] },
-    Entry::Axis { flags: 3, axis: 5, base: [1536, 400, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 7, base: [16384, -2560, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 26, axis: 4, base: [0, 256, 0], random: [-512, -512, 0] },
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x08a3,
+        lifespan: 5,
+    },
+    Entry::Axis {
+        flags: 18,
+        axis: 0,
+        base: [0, -250, 0],
+        random: [0, 500, 0],
+    },
+    Entry::Axis {
+        flags: 22,
+        axis: 1,
+        base: [0, -250, -256],
+        random: [0, 500, 0],
+    },
+    Entry::Axis {
+        flags: 18,
+        axis: 2,
+        base: [0, -250, 0],
+        random: [0, 500, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 5,
+        base: [1536, 400, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 7,
+        base: [16384, -2560, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 26,
+        axis: 4,
+        base: [0, 256, 0],
+        random: [-512, -512, 0],
+    },
 ];
 
 /// `data.emSet_GroundSparks`: the burst of a hard landing.
 pub const GROUND_SPARKS: [Entry; 8] = [
-    Entry::Func { flags: 1, color_flags: 0x58a2, lifespan: 8 },
-    Entry::Axis { flags: 18, axis: 0, base: [0, -500, 0], random: [0, 1000, 0] },
-    Entry::Axis { flags: 18, axis: 2, base: [0, -500, 0], random: [0, 1000, 0] },
-    Entry::Axis { flags: 55, axis: 1, base: [2048, 1000, -300], random: [0, 800, 100] },
-    Entry::Axis { flags: 17, axis: 5, base: [131072, 0, 0], random: [0, 200, 0] },
-    Entry::Axis { flags: 3, axis: 7, base: [65280, -7680, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 8, base: [65280, -7680, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 9, base: [32768, -3840, 0], random: [0, 0, 0] },
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x58a2,
+        lifespan: 8,
+    },
+    Entry::Axis {
+        flags: 18,
+        axis: 0,
+        base: [0, -500, 0],
+        random: [0, 1000, 0],
+    },
+    Entry::Axis {
+        flags: 18,
+        axis: 2,
+        base: [0, -500, 0],
+        random: [0, 1000, 0],
+    },
+    Entry::Axis {
+        flags: 55,
+        axis: 1,
+        base: [2048, 1000, -300],
+        random: [0, 800, 100],
+    },
+    Entry::Axis {
+        flags: 17,
+        axis: 5,
+        base: [131072, 0, 0],
+        random: [0, 200, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 7,
+        base: [65280, -7680, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 8,
+        base: [65280, -7680, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 9,
+        base: [32768, -3840, 0],
+        random: [0, 0, 0],
+    },
 ];
 
 /// `data.emSet_WallSparks`: a spark from a scrape along a wall.
 pub const WALL_SPARKS: [Entry; 8] = [
-    Entry::Func { flags: 1, color_flags: 0x58a2, lifespan: 8 },
-    Entry::Axis { flags: 18, axis: 0, base: [0, -500, 0], random: [0, 1000, 0] },
-    Entry::Axis { flags: 18, axis: 2, base: [0, -500, 0], random: [0, 1000, 0] },
-    Entry::Axis { flags: 22, axis: 1, base: [0, 2000, -200], random: [0, 400, 0] },
-    Entry::Axis { flags: 1, axis: 5, base: [131072, 0, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 7, base: [65280, -2048, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 8, base: [65280, -3072, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 1, axis: 9, base: [1, 0, 0], random: [0, 0, 0] },
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x58a2,
+        lifespan: 8,
+    },
+    Entry::Axis {
+        flags: 18,
+        axis: 0,
+        base: [0, -500, 0],
+        random: [0, 1000, 0],
+    },
+    Entry::Axis {
+        flags: 18,
+        axis: 2,
+        base: [0, -500, 0],
+        random: [0, 1000, 0],
+    },
+    Entry::Axis {
+        flags: 22,
+        axis: 1,
+        base: [0, 2000, -200],
+        random: [0, 400, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 5,
+        base: [131072, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 7,
+        base: [65280, -2048, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 8,
+        base: [65280, -3072, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 9,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
 ];
 
 /// `emSet_Fireball`: a spark of the fire a Mystery Caves fireball trails. It starts one unit from
 /// where it is placed, shrinks and fades from white through orange to red.
 pub const FIREBALL: [Entry; 9] = [
-    Entry::Func { flags: 1, color_flags: 0x04a1, lifespan: 4 },
-    Entry::Axis { flags: 1, axis: 0, base: [1, 0, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 1, axis: 2, base: [1, 0, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 1, base: [1, 1, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 9, axis: 4, base: [1, 0, 0], random: [0x1000, 0, 0] },
-    Entry::Axis { flags: 3, axis: 5, base: [0xa00, -0xb0, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 0xb, axis: 7, base: [0xff00, 0xc000, 0], random: [0x5f00, 0, 0] },
-    Entry::Axis { flags: 3, axis: 8, base: [0x8000, 0xe000, 0], random: [0, 0, 0] },
-    Entry::Axis { flags: 3, axis: 9, base: [0x4000, 0xf000, 0], random: [0, 0, 0] },
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x04a1,
+        lifespan: 4,
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 0,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 2,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 1,
+        base: [1, 1, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 9,
+        axis: 4,
+        base: [1, 0, 0],
+        random: [0x1000, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 5,
+        base: [0xa00, -0xb0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 0xb,
+        axis: 7,
+        base: [0xff00, 0xc000, 0],
+        random: [0x5f00, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 8,
+        base: [0x8000, 0xe000, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 9,
+        base: [0x4000, 0xf000, 0],
+        random: [0, 0, 0],
+    },
 ];
 
 /// `MixRNG_Particles`' source: a stand-in for retail's `RngDeadCoed`.
@@ -169,14 +334,29 @@ pub enum DrawMode {
 impl Particle {
     /// `Particle_Init`.
     pub fn new(set: &[Entry], rng: &mut Rng) -> Particle {
-        let mut p = Particle { axes: Default::default(), axis_flags: 0, color_flags: 0, frames_left: 0, previous: [0; 3] };
+        let mut p = Particle {
+            axes: Default::default(),
+            axis_flags: 0,
+            color_flags: 0,
+            frames_left: 0,
+            previous: [0; 3],
+        };
         for entry in set {
             match *entry {
-                Entry::Func { color_flags, lifespan, .. } => {
+                Entry::Func {
+                    color_flags,
+                    lifespan,
+                    ..
+                } => {
                     p.color_flags = color_flags;
                     p.frames_left = lifespan;
                 }
-                Entry::Axis { flags, axis, base, random } => {
+                Entry::Axis {
+                    flags,
+                    axis,
+                    base,
+                    random,
+                } => {
                     let mut value = |base_flag, random_flag, i: usize| {
                         let mut v = 0i32;
                         if flags & base_flag != 0 {
@@ -189,8 +369,13 @@ impl Particle {
                     };
                     p.axes[axis] = Axis {
                         start: value(emitter_flags::BASE_START, emitter_flags::RANDOM_START, 0),
-                        velocity: value(emitter_flags::BASE_VELOCITY, emitter_flags::RANDOM_VELOCITY, 1) as i16,
-                        accel: value(emitter_flags::BASE_ACCEL, emitter_flags::RANDOM_ACCEL, 2) as i16,
+                        velocity: value(
+                            emitter_flags::BASE_VELOCITY,
+                            emitter_flags::RANDOM_VELOCITY,
+                            1,
+                        ) as i16,
+                        accel: value(emitter_flags::BASE_ACCEL, emitter_flags::RANDOM_ACCEL, 2)
+                            as i16,
                     };
                     p.axis_flags |= 1 << axis;
                 }
@@ -219,14 +404,20 @@ impl Particle {
             p.axes[a].velocity = velocity[a] as i16;
         }
         if dark {
-            p.color_flags = p.color_flags & !color_flags::DRAW_MODE_MASK | color_flags::DRAW_MODE_SUBTRACT;
+            p.color_flags =
+                p.color_flags & !color_flags::DRAW_MODE_MASK | color_flags::DRAW_MODE_SUBTRACT;
         }
         p
     }
 
     /// `VehEmitter_Sparks_Ground`: one of the sparks of a landing. `back`, `side` and `push`
     /// are the kart's axes in the world (see `vehicle::sparks::Landing`).
-    pub fn landing_spark(back: [i32; 3], side: [i32; 3], push: [i32; 3], rng: &mut Rng) -> Particle {
+    pub fn landing_spark(
+        back: [i32; 3],
+        side: [i32; 3],
+        push: [i32; 3],
+        rng: &mut Rng,
+    ) -> Particle {
         let mut p = Particle::new(&GROUND_SPARKS, rng);
         let raw = rng.mix(0x1000);
         let mut r = raw >> 1 & 0x7ff;
@@ -243,7 +434,11 @@ impl Particle {
 
     /// `VehEmitter_Sparks_Wall`: a spark from the tire at `tire`; `rotate` turns its velocity
     /// into the world's axes.
-    pub fn wall_spark(tire: [i32; 3], rotate: impl Fn([i32; 3]) -> [i32; 3], rng: &mut Rng) -> Particle {
+    pub fn wall_spark(
+        tire: [i32; 3],
+        rotate: impl Fn([i32; 3]) -> [i32; 3],
+        rng: &mut Rng,
+    ) -> Particle {
         let mut p = Particle::new(&WALL_SPARKS, rng);
         let velocity = rotate(std::array::from_fn(|a| p.axes[a].velocity as i32));
         for a in 0..3 {
@@ -269,14 +464,21 @@ impl Particle {
             }
         }
         if self.color_flags & color_flags::DESTROY_ON_SCALE_EXPIRE != 0 {
-            let small = |flag, axis: usize| self.axis_flags & flag != 0 && self.axes[axis].start < 1;
-            if small(axis_flags::SCALE_X, axis::SCALE_X) || small(axis_flags::SCALE_Y, axis::SCALE_Y) {
+            let small =
+                |flag, axis: usize| self.axis_flags & flag != 0 && self.axes[axis].start < 1;
+            if small(axis_flags::SCALE_X, axis::SCALE_X)
+                || small(axis_flags::SCALE_Y, axis::SCALE_Y)
+            {
                 return false;
             }
         }
         if self.color_flags & color_flags::DESTROY_ON_COLOR_EXPIRE != 0 {
             let channel = |flag, axis: usize| {
-                if self.axis_flags & flag != 0 && self.axes[axis].start > 0 { self.axes[axis].start } else { 0 }
+                if self.axis_flags & flag != 0 && self.axes[axis].start > 0 {
+                    self.axes[axis].start
+                } else {
+                    0
+                }
             };
             let color = channel(axis_flags::COLOR_R, axis::COLOR_R)
                 | channel(axis_flags::COLOR_G, axis::COLOR_G)
@@ -323,8 +525,14 @@ impl Particle {
     /// Where the tail of a line is, relative to its head, in 1/256 game units: the way the
     /// particle came in the last tick, `scale` times (65536 is once).
     pub fn line_tail(&self) -> [i32; 3] {
-        let scale = if self.axis_flags & axis_flags::SCALE_X != 0 { self.axes[axis::SCALE_X].start } else { 0 };
-        std::array::from_fn(|a| (((self.previous[a] - self.axes[a].start) as i64 * scale as i64) >> 16) as i32)
+        let scale = if self.axis_flags & axis_flags::SCALE_X != 0 {
+            self.axes[axis::SCALE_X].start
+        } else {
+            0
+        };
+        std::array::from_fn(|a| {
+            (((self.previous[a] - self.axes[a].start) as i64 * scale as i64) >> 16) as i32
+        })
     }
 
     /// The colour of a line particle (`Particle_SetColors`): the grey of its red channel,
@@ -335,8 +543,16 @@ impl Particle {
             return [0x80; 3];
         }
         let red = channel(axis::COLOR_R);
-        let green = if self.axis_flags & axis_flags::COLOR_G != 0 { channel(axis::COLOR_G) } else { red };
-        let blue = if self.axis_flags & axis_flags::COLOR_B != 0 { channel(axis::COLOR_B) } else { red };
+        let green = if self.axis_flags & axis_flags::COLOR_G != 0 {
+            channel(axis::COLOR_G)
+        } else {
+            red
+        };
+        let blue = if self.axis_flags & axis_flags::COLOR_B != 0 {
+            channel(axis::COLOR_B)
+        } else {
+            red
+        };
         [red, green, blue]
     }
 
@@ -346,15 +562,27 @@ impl Particle {
     /// Only the rotated and scaled sprite is supported.
     pub fn corners(&self, width: i32, height: i32) -> Option<[[i32; 2]; 4]> {
         let wanted = axis_flags::ROT_Y | axis_flags::SCALE_X;
-        if self.axis_flags & (axis_flags::ROT_X | axis_flags::ROT_Y | axis_flags::SCALE_X | axis_flags::SCALE_Y) != wanted {
+        if self.axis_flags
+            & (axis_flags::ROT_X | axis_flags::ROT_Y | axis_flags::SCALE_X | axis_flags::SCALE_Y)
+            != wanted
+        {
             return None;
         }
         let (sin, cos) = math::sin_cos(self.axes[axis::ROT_Y].start as u32);
         let scale = self.axes[axis::SCALE_X].start;
         let (c, s) = ((cos * scale) >> 12, (sin * scale) >> 12);
         // The GTE rotation matrix: x is stretched to twice the width.
-        let (r11, r12, r21, r22) = ((c << 1) as i16 as i32, (s << 1) as i16 as i32, -s as i16 as i32, c as i16 as i32);
-        let shift = if self.color_flags & color_flags::LARGE_QUAD != 0 { 4 } else { 1 };
+        let (r11, r12, r21, r22) = (
+            (c << 1) as i16 as i32,
+            (s << 1) as i16 as i32,
+            -s as i16 as i32,
+            c as i16 as i32,
+        );
+        let shift = if self.color_flags & color_flags::LARGE_QUAD != 0 {
+            4
+        } else {
+            1
+        };
         let (half_width, half_height) = (width << shift, height << shift);
         Some([(-1, -1), (1, -1), (-1, 1), (1, 1)].map(|(sx, sy)| {
             let (x, y) = (sx * half_width, sy * half_height);
@@ -373,20 +601,30 @@ mod tests {
     use super::*;
 
     fn puff(dark: bool) -> Particle {
-        Particle::exhaust([3685, 11466, -11466], [0, 1024, -1024], dark, &mut Rng::new(1))
+        Particle::exhaust(
+            [3685, 11466, -11466],
+            [0, 1024, -1024],
+            dark,
+            &mut Rng::new(1),
+        )
     }
 
     #[test]
     fn a_fireball_spark_is_a_large_quad() {
         let spark = Particle::fireball([0, 0, 0], 0, &mut Rng::new(1));
-        assert_eq!(spark.color_flags & color_flags::LARGE_QUAD, color_flags::LARGE_QUAD);
+        assert_eq!(
+            spark.color_flags & color_flags::LARGE_QUAD,
+            color_flags::LARGE_QUAD
+        );
         // Sixteen texels wide at scale 0xa00 (a third of the matrix's unit, and the x doubling).
         let [[left, _], [right, _], ..] = spark.corners(16, 16).unwrap();
         let normal = Particle::exhaust([0, 0, 0], [0, 0, 0], false, &mut Rng::new(1));
         let [[n_left, _], [n_right, _], ..] = normal.corners(16, 16).unwrap();
         // The exhaust starts at scale 1536 and a puff is not large; size per scale unit is 8 times.
         let per_scale = |l: i32, r: i32, scale: i32| (r - l) as f64 / scale as f64;
-        assert!((per_scale(left, right, 0xa00) / per_scale(n_left, n_right, 1536) - 8.0).abs() < 0.5);
+        assert!(
+            (per_scale(left, right, 0xa00) / per_scale(n_left, n_right, 1536) - 8.0).abs() < 0.5
+        );
     }
 
     #[test]
@@ -439,7 +677,12 @@ mod tests {
 
     #[test]
     fn a_spark_is_a_streak_that_fades_out_in_eight_ticks() {
-        let mut p = Particle::landing_spark([0, 0, -0x1800], [0x1800, 0, 0], [0, 0, -0x200], &mut Rng::new(3));
+        let mut p = Particle::landing_spark(
+            [0, 0, -0x1800],
+            [0x1800, 0, 0],
+            [0, 0, -0x200],
+            &mut Rng::new(3),
+        );
         assert!(p.is_line());
         let mut ticks = 0;
         while p.update() {
@@ -447,7 +690,10 @@ mod tests {
             // The tail trails behind the way the spark moves, about twice its last step.
             let tail = p.line_tail();
             let step: Vec<_> = (0..3).map(|a| p.axes[a].start - p.previous[a]).collect();
-            assert!((0..3).all(|a| (tail[a] + 2 * step[a]).abs() <= 2 * step[a].abs() / 4 + 2), "{tail:?} {step:?}");
+            assert!(
+                (0..3).all(|a| (tail[a] + 2 * step[a]).abs() <= 2 * step[a].abs() / 4 + 2),
+                "{tail:?} {step:?}"
+            );
         }
         assert_eq!(ticks, 8);
     }

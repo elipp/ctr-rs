@@ -29,9 +29,18 @@ impl Instances for NoInstances {
 }
 
 /// `CollMoved_PlayerSearch_RunHitboxLInC`, for the hitbox the search ended on.
-fn run_hitbox_linc(d: &mut Driver, coll: &Collision, level: &Level, instances: &mut dyn Instances) -> i32 {
-    let Some(hit) = coll.sps.bsp_hitbox else { return 1 };
-    let Some(instance) = hit.instance else { return 1 };
+fn run_hitbox_linc(
+    d: &mut Driver,
+    coll: &Collision,
+    level: &Level,
+    instances: &mut dyn Instances,
+) -> i32 {
+    let Some(hit) = coll.sps.bsp_hitbox else {
+        return 1;
+    };
+    let Some(instance) = hit.instance else {
+        return 1;
+    };
     if hit.flag & BspHitbox::COLLIDABLE != 0 {
         // Only an instance that is drawn can be hit.
         if coll.instance_flags(level, instance) & DRAW_COLLISION_MASK == 0 {
@@ -55,13 +64,18 @@ const QUADBLOCK_FLAG_UNDER_DRIVER_RELEASE: u16 = 0x8;
 /// `CollMoved_PlayerSearch_StepVelocity`: velocity over `elapsed_ms`, scaled
 /// by the 4.12 `multiplier` (what is left of the step).
 fn step_velocity(velocity: i32, elapsed_ms: i32, multiplier: i32) -> i32 {
-    mips::sra(mips::mul_lo(mips::sra(mips::mul_lo(velocity, elapsed_ms), 5), multiplier), 12)
+    mips::sra(
+        mips::mul_lo(mips::sra(mips::mul_lo(velocity, elapsed_ms), 5), multiplier),
+        12,
+    )
 }
 
 /// The sphere's centre in the scratchpad's units: `pos_curr` is 24.8, the
 /// scratchpad 1/256 of that, offset by `origin_to_center`.
 pub fn sphere_center(d: &Driver, pos: math::Vec3) -> SVec3 {
-    let axis = |origin_to_center: i32, pos: i32| mips::add_lo(origin_to_center as u16 as i32, mips::sra(pos, 8)) as i16;
+    let axis = |origin_to_center: i32, pos: i32| {
+        mips::add_lo(origin_to_center as u16 as i32, mips::sra(pos, 8)) as i16
+    };
     SVec3 {
         x: axis(d.origin_to_center.x, pos.x),
         y: axis(d.origin_to_center.y, pos.y),
@@ -118,9 +132,18 @@ pub fn moved_player_search(
 
         let hit_fraction = sps.hit_fraction;
         if hit_fraction > 0 {
-            d.pos_curr.x = mips::add_lo(d.pos_curr.x, mips::sra(mips::mul_lo(velocity.x, hit_fraction), 12));
-            d.pos_curr.y = mips::add_lo(d.pos_curr.y, mips::sra(mips::mul_lo(velocity.y, hit_fraction), 12));
-            d.pos_curr.z = mips::add_lo(d.pos_curr.z, mips::sra(mips::mul_lo(velocity.z, hit_fraction), 12));
+            d.pos_curr.x = mips::add_lo(
+                d.pos_curr.x,
+                mips::sra(mips::mul_lo(velocity.x, hit_fraction), 12),
+            );
+            d.pos_curr.y = mips::add_lo(
+                d.pos_curr.y,
+                mips::sra(mips::mul_lo(velocity.y, hit_fraction), 12),
+            );
+            d.pos_curr.z = mips::add_lo(
+                d.pos_curr.z,
+                mips::sra(mips::mul_lo(velocity.z, hit_fraction), 12),
+            );
         }
 
         if sps.did_touch_hitbox != 0 {
@@ -136,7 +159,14 @@ pub fn moved_player_search(
                 let depth = coll.sps.input1.scrub_depth as u16 as i32;
                 coll.sps.input1.scrub_depth = mips::add_lo(depth, HITBOX_SCRUB_DEPTH_BONUS) as i16;
 
-                let impact = scrub::scrub_impact(d, coll, level, light_matrix, scrub::surface(hit.class as usize), effects);
+                let impact = scrub::scrub_impact(
+                    d,
+                    coll,
+                    level,
+                    light_matrix,
+                    scrub::surface(hit.class as usize),
+                    effects,
+                );
                 if impact == Impact::None {
                     coll.store_hitbox();
                 }
@@ -161,9 +191,15 @@ pub fn moved_player_search(
         coll.find_scrub(Some(quad_index), triangle_id);
 
         let id = if quad_flags & quad_flags::GROUND == 0 {
-            if quad_flags & quad_flags::REFLECT_SPLIT_LINE_1 == 0 { scrub_id::SOLID } else { scrub_id::NO_SCRUB }
+            if quad_flags & quad_flags::REFLECT_SPLIT_LINE_1 == 0 {
+                scrub_id::SOLID
+            } else {
+                scrub_id::NO_SCRUB
+            }
         } else {
-            if d.under_driver != Some(quad_index) && quad_flags & QUADBLOCK_FLAG_UNDER_DRIVER_RELEASE != 0 {
+            if d.under_driver != Some(quad_index)
+                && quad_flags & QUADBLOCK_FLAG_UNDER_DRIVER_RELEASE != 0
+            {
                 d.under_driver = None;
             }
             d.curr_block_touching = Some(quad_index);
@@ -177,13 +213,18 @@ pub fn moved_player_search(
         d.sps_hit_pos = hit_pos;
         d.sps_normal_vec = normal;
 
-        if scrub::scrub_impact(d, coll, level, light_matrix, scrub::surface(id), effects) == Impact::Slammed {
+        if scrub::scrub_impact(d, coll, level, light_matrix, scrub::surface(id), effects)
+            == Impact::Slammed
+        {
             return;
         }
 
         let hit_fraction = coll.sps.hit_fraction;
         if hit_fraction > 0 {
-            multiplier = mips::sub_lo(multiplier, mips::sra(mips::mul_lo(multiplier, hit_fraction), 12));
+            multiplier = mips::sub_lo(
+                multiplier,
+                mips::sra(mips::mul_lo(multiplier, hit_fraction), 12),
+            );
             if multiplier < MIN_MULTIPLIER {
                 break;
             }

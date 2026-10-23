@@ -53,7 +53,11 @@ pub fn start_frame(anim_index: i32, num_frames: i32) -> i32 {
 
 /// `VehFrameInst_GetNumAnimFrames`
 pub fn num_anim_frames(d: &Driver, anim_index: u8) -> i32 {
-    (d.anim_num_frames.get(anim_index as usize).copied().unwrap_or(0) & NUM_FRAMES_MASK) as i32
+    (d.anim_num_frames
+        .get(anim_index as usize)
+        .copied()
+        .unwrap_or(0)
+        & NUM_FRAMES_MASK) as i32
 }
 
 /// `VehFrameProc_Driving`
@@ -62,7 +66,11 @@ pub fn driving(d: &mut Driver) {
 
     if d.kart_state != kart_state::WARP_PAD {
         if d.fire_speed < 0 {
-            desired = if d.speed_approx < 1 { ANIM_STATIONARY } else { ANIM_DRIVE };
+            desired = if d.speed_approx < 1 {
+                ANIM_STATIONARY
+            } else {
+                ANIM_DRIVE
+            };
         }
 
         if (d.jump_height_curr as i32 > JUMP_AIR_THRESHOLD || d.anim_index == ANIM_AIRBORNE)
@@ -124,7 +132,13 @@ pub fn driving(d: &mut Driver) {
             let target;
             if burn_timer != 0 && burn_timer < BURN_TIMER_LIMIT {
                 target = mips::add_lo(
-                    mips::sub_lo(mips::sll((burn_timer >> BURN_TIMER_SHIFT) % BURN_FRAME_PERIOD, BURN_FRAME_SHIFT), BURN_FRAME_BIAS),
+                    mips::sub_lo(
+                        mips::sll(
+                            (burn_timer >> BURN_TIMER_SHIFT) % BURN_FRAME_PERIOD,
+                            BURN_FRAME_SHIFT,
+                        ),
+                        BURN_FRAME_BIAS,
+                    ),
                     mips::sra(num_frames, 1),
                 );
                 d.anim_frame = target as i16;
@@ -144,7 +158,8 @@ pub fn driving(d: &mut Driver) {
             d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, target) as i16;
         }
         ANIM_AIRBORNE => {
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1) as i16;
+            d.anim_frame =
+                interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1) as i16;
 
             if d.kart_state == kart_state::MASK_GRABBED {
                 return;
@@ -158,12 +173,17 @@ pub fn driving(d: &mut Driver) {
                 character = CRASH_BANDICOOT;
             }
             // Oxide's pose is the first of the jump matrices.
-            let index = if character == NITROS_OXIDE { 0 } else { character };
+            let index = if character == NITROS_OXIDE {
+                0
+            } else {
+                character
+            };
             d.matrix_array = MatrixArray::Jump(index + AIRBORNE_MATRIX_BASE);
             d.matrix_index = d.anim_frame as u8;
         }
         _ => {
-            d.anim_frame = interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1) as i16;
+            d.anim_frame =
+                interp_by_speed(d.anim_frame as i32, INTERP_SPEED_NORMAL, num_frames - 1) as i16;
         }
     }
 }

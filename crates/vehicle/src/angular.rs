@@ -17,7 +17,11 @@ const WALL_RUB_TIMER_START: i16 = 0xf0;
 const ACCEL_TAP_STEER_COUNT: i16 = 7;
 
 fn abs(value: i32) -> i32 {
-    if value < 0 { mips::neg_lo(value) } else { value }
+    if value < 0 {
+        mips::neg_lo(value)
+    } else {
+        value
+    }
 }
 
 /// `VehPhysGeneral_LerpQuarterStrength`
@@ -34,7 +38,12 @@ fn lerp_quarter_strength(current: i32, desired: i32) -> i32 {
 
 /// `VehPhysGeneral_LerpToForwards`: the velocity at which the model's turn
 /// angle swings back towards `target_angle` (zero while it has not passed it).
-fn lerp_to_forwards(d: &mut Driver, current_angle: i32, current_velocity: i32, target_angle: i32) -> i32 {
+fn lerp_to_forwards(
+    d: &mut Driver,
+    current_angle: i32,
+    current_velocity: i32,
+    target_angle: i32,
+) -> i32 {
     let (mut angle, mut velocity, mut target) = (current_angle, current_velocity, target_angle);
     let mut mirrored = false;
 
@@ -50,20 +59,37 @@ fn lerp_to_forwards(d: &mut Driver, current_angle: i32, current_velocity: i32, t
     if d.wall_rub_timer != WALL_RUB_TIMER_START {
         if target < angle {
             let base = d.stats.model_turn_return_strength as i32;
-            let lerp_strength = if (d.stats.model_rot_vel_max as i32) < angle { mips::sub_lo(mips::sll(base, 4), base) } else { base };
-            desired = mips::neg_lo(lerp_quarter_strength(lerp_strength, mips::sub_lo(angle, target)));
+            let lerp_strength = if (d.stats.model_rot_vel_max as i32) < angle {
+                mips::sub_lo(mips::sll(base, 4), base)
+            } else {
+                base
+            };
+            desired = mips::neg_lo(lerp_quarter_strength(
+                lerp_strength,
+                mips::sub_lo(angle, target),
+            ));
         } else if angle < target {
             if angle < 0 {
-                desired = lerp_quarter_strength(d.stats.model_turn_negative_return_strength as i32, mips::sub_lo(target, angle));
+                desired = lerp_quarter_strength(
+                    d.stats.model_turn_negative_return_strength as i32,
+                    mips::sub_lo(target, angle),
+                );
             } else {
-                desired = lerp_quarter_strength(d.stats.model_turn_counter_steer_strength as i32, mips::sub_lo(target, angle));
+                desired = lerp_quarter_strength(
+                    d.stats.model_turn_counter_steer_strength as i32,
+                    mips::sub_lo(target, angle),
+                );
                 d.turn_angle_lerp_target = target as i16;
             }
         }
     }
 
     velocity = interp_by_speed(velocity, d.stats.model_turn_velocity_lerp as i32, desired);
-    if mirrored { mips::neg_lo(velocity) } else { velocity }
+    if mirrored {
+        mips::neg_lo(velocity)
+    } else {
+        velocity
+    }
 }
 
 /// `VehPhysGeneral_PhysAngular`
@@ -80,7 +106,11 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     lerp_step = lerp_step.min(stats.drift_camera_lerp_step as i32);
     let previous_rot = interp_by_speed(d.rot_prev[3] as i32, 8, lerp_step);
     d.rot_prev[3] = previous_rot as i16;
-    let interpolated_rot = interp_by_speed(remaining_rot, mips::sra(mips::mul_lo(previous_rot, elapsed), 5), 0);
+    let interpolated_rot = interp_by_speed(
+        remaining_rot,
+        mips::sra(mips::mul_lo(previous_rot, elapsed), 5),
+        0,
+    );
     d.rot_curr_w = interpolated_rot as i16;
 
     // Local copy of the actions: the steer-left flip below is not written back.
@@ -106,7 +136,8 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
 
     let speed_approx = abs(raw_speed);
     // Steering is slower at low speed (except on turbo pads).
-    if actions & actions::TOUCH_GROUND != 0 && d.step_flag_set & step_triggers::TURBO_PAD_MASK == 0 {
+    if actions & actions::TOUCH_GROUND != 0 && d.step_flag_set & step_triggers::TURBO_PAD_MASK == 0
+    {
         rotation = map_to_range(speed_approx, 0x10, 0x300, 0, rotation);
     }
 
@@ -116,7 +147,13 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     let turn_const = d.turn_const as i32;
     let rate_for = |scale: i32| {
         mips::sra(
-            mips::mul_lo(mips::add_lo(stats.turn_input_delay as i32, turn_const.wrapping_mul(scale)), terrain.turn_response_scale),
+            mips::mul_lo(
+                mips::add_lo(
+                    stats.turn_input_delay as i32,
+                    turn_const.wrapping_mul(scale),
+                ),
+                terrain.turn_response_scale,
+            ),
             8,
         )
     };
@@ -177,7 +214,13 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
             let model_speed = abs(d.speed as i32);
             let class_half_speed = mips::sra(class_speed_packed, 17);
             // Rotate the model to exaggerate steering above the steering speed threshold.
-            model_rot_velocity = map_to_range(model_speed, 0x300, class_half_speed, stats.model_rot_vel_min as i32, model_rot_velocity);
+            model_rot_velocity = map_to_range(
+                model_speed,
+                0x300,
+                class_half_speed,
+                stats.model_rot_vel_min as i32,
+                model_rot_velocity,
+            );
         } else {
             model_rot_velocity = stats.model_rot_vel_min as i32;
         }
@@ -186,13 +229,25 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     // This prevents you from steering sharp at low speeds.
     let turn_rate = mips::add_lo(stats.turn_rate as i32, mips::sll(turn_const, 1) / 5);
     let max_turn = mips::sll(turn_rate, 8);
-    let turn_resistance = map_to_range(abs(d.speed as i32), turn_resist_min, turn_resist_max, max_turn, 0);
+    let turn_resistance = map_to_range(
+        abs(d.speed as i32),
+        turn_resist_min,
+        turn_resist_max,
+        max_turn,
+        0,
+    );
 
     let mut lerp_target = 0;
     if speed_approx >= turn_resist_min {
         let rotation_abs = abs(rotation);
         if turn_resistance < rotation_abs {
-            lerp_target = map_to_range(abs(d.fire_speed as i32), turn_resist_min, turn_resist_max, lerp_target, model_rot_velocity);
+            lerp_target = map_to_range(
+                abs(d.fire_speed as i32),
+                turn_resist_min,
+                turn_resist_max,
+                lerp_target,
+                model_rot_velocity,
+            );
             lerp_target = map_to_range(rotation_abs, turn_resistance, max_turn, 0, lerp_target);
             if rotation < 0 {
                 lerp_target = mips::neg_lo(lerp_target);
@@ -209,7 +264,10 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     if terrain.turn_angle_scale != 0x100 {
         turn_angle_value = mips::sra(mips::mul_lo(terrain.turn_angle_scale, turn_angle_value), 8);
     }
-    turn_angle = mips::add_lo(turn_angle, mips::sra(mips::mul_lo(turn_angle_value, elapsed), 5));
+    turn_angle = mips::add_lo(
+        turn_angle,
+        mips::sra(mips::mul_lo(turn_angle_value, elapsed), 5),
+    );
     d.turn_angle_curr = turn_angle as i16;
 
     // Above a walking pace, on the ground, the steering accelerates.
@@ -223,7 +281,10 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
             stats.steer_accel_stage1_min_steer as i32,
             stats.steer_accel_stage1_max_steer as i32,
         );
-        let scaled = mips::sra(mips::mul_lo(stats.steer_accel_turn_vel_scale as i32, abs(rotation)), 8);
+        let scaled = mips::sra(
+            mips::mul_lo(stats.steer_accel_turn_vel_scale as i32, abs(rotation)),
+            8,
+        );
         d.num_frames_spent_steering = mips::add_lo(frames, 1) as i16;
 
         // The higher the value of the acceleration, the more steering is "locked up".
@@ -249,8 +310,12 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
     let mut wobble_timer = d.turn_wobble_timer as i32;
     let mut wobble_velocity = d.turn_wobble_velocity as i32;
     let mut keep_wobble_timer = false;
-    if terrain.flags & terrain_flags::SKIP_TURN_ASSIST == 0 && actions & actions::TOUCH_GROUND != 0 {
-        let threshold = mips::sra(mips::add_lo(mips::sll(model_rot_velocity, 1), model_rot_velocity), 2);
+    if terrain.flags & terrain_flags::SKIP_TURN_ASSIST == 0 && actions & actions::TOUCH_GROUND != 0
+    {
+        let threshold = mips::sra(
+            mips::add_lo(mips::sll(model_rot_velocity, 1), model_rot_velocity),
+            2,
+        );
         if threshold < abs(turn_angle) {
             if abs(turn_angle_value) < 3 && abs(wobble_angle) < 10 {
                 wobble_timer = 8;

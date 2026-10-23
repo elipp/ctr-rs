@@ -58,9 +58,15 @@ pub fn spawn(
     if seen.len() != breaks.len() {
         *seen = breaks.clone();
     }
-    let Some(model) = explosion.model.clone() else { return };
-    let Some(header) = model.headers.first() else { return };
-    let Some(pose) = animation_pose(header, 0, 0) else { return };
+    let Some(model) = explosion.model.clone() else {
+        return;
+    };
+    let Some(header) = model.headers.first() else {
+        return;
+    };
+    let Some(pose) = animation_pose(header, 0, 0) else {
+        return;
+    };
     let frames = header.animations.first().map_or(0, |a| a.num_frames as i16);
 
     for (body, transform) in &bodies {
@@ -75,14 +81,21 @@ pub fn spawn(
         if explosion.built.is_none() {
             let data = mesh::model_mesh(header, &pose, &textures.vram, [0x1000; 3]);
             let mut atlas = Image::new(
-                Extent3d { width: data.atlas.width as u32, height: data.atlas.height as u32, depth_or_array_layers: 1 },
+                Extent3d {
+                    width: data.atlas.width as u32,
+                    height: data.atlas.height as u32,
+                    depth_or_array_layers: 1,
+                },
                 TextureDimension::D2,
                 data.atlas.rgba,
                 TextureFormat::Rgba8UnormSrgb,
                 RenderAssetUsages::RENDER_WORLD,
             );
             atlas.sampler = ImageSampler::nearest();
-            explosion.built = Some(Built { parts: data.parts, atlas: images.add(atlas) });
+            explosion.built = Some(Built {
+                parts: data.parts,
+                atlas: images.add(atlas),
+            });
         }
         let built = explosion.built.as_ref().unwrap();
 
@@ -98,20 +111,44 @@ pub fn spawn(
             ..default()
         };
         // The weapon and time crates' break-up is turned by a random angle around the vertical.
-        let yaw = if crate_box.kind.explosion_turned() { break_yaw(crate_box.breaks, i) * std::f32::consts::TAU } else { 0.0 };
+        let yaw = if crate_box.kind.explosion_turned() {
+            break_yaw(crate_box.breaks, i) * std::f32::consts::TAU
+        } else {
+            0.0
+        };
         let place = Transform {
             translation: transform.translation,
             rotation: transform.rotation * Quat::from_rotation_y(yaw),
             scale: Vec3::ONE,
         };
         let entity = commands.spawn((place, Visibility::default())).id();
-        let parts = spawn_parts(built.parts.clone(), &base, Transform::default(), Some(entity), &mut commands, &mut meshes, &mut materials, &mut subtract_materials, 0);
-        commands.entity(entity).insert(Explosion { header: header.clone(), parts, playback: Playback::new(frames) });
+        let parts = spawn_parts(
+            built.parts.clone(),
+            &base,
+            Transform::default(),
+            Some(entity),
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+            0,
+        );
+        commands.entity(entity).insert(Explosion {
+            header: header.clone(),
+            parts,
+            playback: Playback::new(frames),
+        });
     }
 }
 
 /// One game tick of every explosion: the next frame, until the animation is over.
-pub fn animate(mut commands: Commands, tick: Res<GameTick>, mut explosions: Query<(Entity, &mut Explosion)>, mut meshes: ResMut<Assets<Mesh>>, mut last: Local<u32>) {
+pub fn animate(
+    mut commands: Commands,
+    tick: Res<GameTick>,
+    mut explosions: Query<(Entity, &mut Explosion)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut last: Local<u32>,
+) {
     // Only once per game tick, however often the system is scheduled.
     if std::mem::replace(&mut *last, tick.0) == tick.0 {
         return;
@@ -121,10 +158,14 @@ pub fn animate(mut commands: Commands, tick: Res<GameTick>, mut explosions: Quer
             commands.entity(entity).despawn();
             continue;
         }
-        let Some(pose) = animation_pose(&explosion.header, 0, explosion.playback.frame) else { continue };
+        let Some(pose) = animation_pose(&explosion.header, 0, explosion.playback.frame) else {
+            continue;
+        };
         let positions = mesh::model_positions(&explosion.header, &pose, [0x1000; 3]);
         for (handle, positions) in explosion.parts.iter().zip(positions) {
-            let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else { continue };
+            let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
+                continue;
+            };
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         }
     }

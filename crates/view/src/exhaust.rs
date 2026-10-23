@@ -24,19 +24,31 @@ pub struct Particles {
 
 impl Particles {
     pub fn new() -> Particles {
-        Particles { list: Vec::new(), rng: Rng::new(0x2545_f491) }
+        Particles {
+            list: Vec::new(),
+            rng: Rng::new(0x2545_f491),
+        }
     }
 
     /// The sparks of this game tick (before [`Particles::tick`]).
     pub fn sparks(&mut self, d: &vehicle::Driver) {
         if let Some(l) = vehicle::sparks::landing(d) {
             for _ in 0..LANDING_SPARKS {
-                self.list.push(Particle::landing_spark(l.back, l.side, l.push, &mut self.rng));
+                self.list.push(Particle::landing_spark(
+                    l.back,
+                    l.side,
+                    l.push,
+                    &mut self.rng,
+                ));
             }
         }
         if let Some(w) = vehicle::sparks::wall(d) {
             let m = w.matrix;
-            self.list.push(Particle::wall_spark(w.tire, |v| vehicle::exhaust::rotate(&m, v), &mut self.rng));
+            self.list.push(Particle::wall_spark(
+                w.tire,
+                |v| vehicle::exhaust::rotate(&m, v),
+                &mut self.rng,
+            ));
         }
     }
 
@@ -44,7 +56,12 @@ impl Particles {
     /// updates the particles after the threads, so a new puff starts at its pipe).
     pub fn tick(&mut self, puffs: &[vehicle::exhaust::Puff]) {
         for puff in puffs {
-            self.list.push(Particle::exhaust(puff.position, puff.velocity, puff.dark, &mut self.rng));
+            self.list.push(Particle::exhaust(
+                puff.position,
+                puff.velocity,
+                puff.dark,
+                &mut self.rng,
+            ));
         }
         self.list.retain_mut(|p| p.update());
     }
@@ -72,13 +89,21 @@ pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     for y in 0..height as usize {
         for x in 0..width as usize {
-            if let Ok(Some((c, _))) = vram.texel_stp(&icon.layout, u0.wrapping_add(x as u8), v0.wrapping_add(y as u8)) {
+            if let Ok(Some((c, _))) = vram.texel_stp(
+                &icon.layout,
+                u0.wrapping_add(x as u8),
+                v0.wrapping_add(y as u8),
+            ) {
                 rgba[(y * width as usize + x) * 4..][..4].copy_from_slice(&c);
             }
         }
     }
     let mut image = Image::new(
-        Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
+        Extent3d {
+            width: width as u32,
+            height: height as u32,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         rgba,
         TextureFormat::Rgba8UnormSrgb,
@@ -113,15 +138,22 @@ pub fn spawn(
     let image = images.add(image);
 
     let mut mesh = || {
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * MAX_QUADS]);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * MAX_QUADS]);
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_UV_0,
-            (0..MAX_QUADS).flat_map(|_| [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]).collect::<Vec<_>>(),
+            (0..MAX_QUADS)
+                .flat_map(|_| [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+                .collect::<Vec<_>>(),
         );
         mesh.insert_indices(Indices::U32(
-            (0..MAX_QUADS as u32).flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i)).collect(),
+            (0..MAX_QUADS as u32)
+                .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
+                .collect(),
         ));
         meshes.add(mesh)
     };
@@ -136,7 +168,11 @@ pub fn spawn(
     };
     let layer = RenderLayers::layer(crate::KART_LAYER);
     commands.spawn((
-        Smoke { mode: DrawMode::Add, width, height },
+        Smoke {
+            mode: DrawMode::Add,
+            width,
+            height,
+        },
         Mesh3d(mesh()),
         MeshMaterial3d(materials.add(base(AlphaMode::Add))),
         Transform::default(),
@@ -144,7 +180,11 @@ pub fn spawn(
         NoFrustumCulling,
     ));
     commands.spawn((
-        Smoke { mode: DrawMode::Subtract, width, height },
+        Smoke {
+            mode: DrawMode::Subtract,
+            width,
+            height,
+        },
         Mesh3d(mesh()),
         MeshMaterial3d(subtract_materials.add(SubtractMaterial {
             base: base(AlphaMode::Blend),
@@ -156,11 +196,16 @@ pub fn spawn(
     ));
 
     // The sparks: untextured streaks that fade out towards their tails.
-    let mut spark_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut spark_mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     spark_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * MAX_QUADS]);
     spark_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * MAX_QUADS]);
     spark_mesh.insert_indices(Indices::U32(
-        (0..MAX_QUADS as u32).flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i)).collect(),
+        (0..MAX_QUADS as u32)
+            .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
+            .collect(),
     ));
     commands.spawn((
         SparkLines,
@@ -183,7 +228,15 @@ pub fn spawn(
 pub fn update(
     smoke: Query<(&Smoke, &Mesh3d)>,
     karts: Query<&Transform, With<Kart>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
+    cameras: Query<
+        &Transform,
+        (
+            With<Camera3d>,
+            Without<Kart>,
+            Without<crate::OverlayCamera>,
+            Without<crate::sky::SkyCamera>,
+        ),
+    >,
     particles: Res<Particles>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -199,7 +252,11 @@ pub fn update(
         };
         let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
         let mut colors = vec![[0.0f32; 4]; 4 * MAX_QUADS];
-        let wanted = particles.list.iter().filter(|p| !p.is_line() && p.draw_mode() == smoke.mode).take(MAX_QUADS);
+        let wanted = particles
+            .list
+            .iter()
+            .filter(|p| !p.is_line() && p.draw_mode() == smoke.mode)
+            .take(MAX_QUADS);
         for (n, p) in wanted.enumerate() {
             let Some(corners) = p.corners(smoke.width, smoke.height) else {
                 continue;
@@ -207,11 +264,14 @@ pub fn update(
             // The offsets are from the kart, in 1/256 game units; a particle is
             // `t` of the way to where its next update puts it.
             let (position, velocity) = (p.position(), p.velocity());
-            let at = Vec3::from_array(std::array::from_fn(|a| position[a] as f32 + velocity[a] as f32 * t));
+            let at = Vec3::from_array(std::array::from_fn(|a| {
+                position[a] as f32 + velocity[a] as f32 * t
+            }));
             let center = kart.translation + at / 256.0 * SCALE;
             let gain = p.tint() as f32 / 128.0;
             for (k, [x, y]) in corners.into_iter().enumerate() {
-                let corner = center + right * quarter_units_to_world(x as f32) - up * (quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT);
+                let corner = center + right * quarter_units_to_world(x as f32)
+                    - up * (quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT);
                 positions[n * 4 + k] = corner.to_array();
                 colors[n * 4 + k] = [gain, gain, gain, 1.0];
             }
@@ -225,7 +285,15 @@ pub fn update(
 pub fn update_sparks(
     lines: Query<&Mesh3d, With<SparkLines>>,
     karts: Query<&Transform, With<Kart>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Kart>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
+    cameras: Query<
+        &Transform,
+        (
+            With<Camera3d>,
+            Without<Kart>,
+            Without<crate::OverlayCamera>,
+            Without<crate::sky::SkyCamera>,
+        ),
+    >,
     particles: Res<Particles>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -240,19 +308,32 @@ pub fn update_sparks(
         };
         let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
         let mut colors = vec![[0.0f32; 4]; 4 * MAX_QUADS];
-        for (n, p) in particles.list.iter().filter(|p| p.is_line()).take(MAX_QUADS).enumerate() {
+        for (n, p) in particles
+            .list
+            .iter()
+            .filter(|p| p.is_line())
+            .take(MAX_QUADS)
+            .enumerate()
+        {
             let world = |v: Vec3| v / 256.0 * SCALE;
             let (position, velocity) = (p.position(), p.velocity());
             let head = kart.translation
-                + world(Vec3::from_array(std::array::from_fn(|a| position[a] as f32 + velocity[a] as f32 * t)));
+                + world(Vec3::from_array(std::array::from_fn(|a| {
+                    position[a] as f32 + velocity[a] as f32 * t
+                })));
             let tail = head + world(Vec3::from_array(p.line_tail().map(|v| v as f32)));
             let along = tail - head;
             let toward_camera = camera.translation - head;
             let side = along.cross(toward_camera).normalize_or_zero() * (SPARK_WIDTH * SCALE / 2.0);
             let color = p.rgb().map(|c| c as f32 / 255.0);
-            for (k, (point, shade)) in [(head + side, 1.0), (head - side, 1.0), (tail + side, 0.0), (tail - side, 0.0)]
-                .into_iter()
-                .enumerate()
+            for (k, (point, shade)) in [
+                (head + side, 1.0),
+                (head - side, 1.0),
+                (tail + side, 0.0),
+                (tail - side, 0.0),
+            ]
+            .into_iter()
+            .enumerate()
             {
                 positions[n * 4 + k] = point.to_array();
                 colors[n * 4 + k] = [color[0] * shade, color[1] * shade, color[2] * shade, 1.0];

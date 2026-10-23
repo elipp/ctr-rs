@@ -34,7 +34,11 @@ const RUMBLE_FORCE: u8 = 0x7f;
 /// `VehPickState_NewState` for a hit without an attacker. The result is the game's: whether the
 /// driver was hurt.
 pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool {
-    let voice = |id| Effect::Voiceline { id, driver_id: d.driver_id, priority: VOICELINE_PRIORITY };
+    let voice = |id| Effect::Voiceline {
+        id,
+        driver_id: d.driver_id,
+        priority: VOICELINE_PRIORITY,
+    };
 
     if d.kart_state == kart_state::MASK_GRABBED {
         return false;
@@ -51,7 +55,10 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
         damage::BLAST | damage::MASK_GRAB => return false,
         damage::SQUISH => {
             if d.kart_state != kart_state::SPINNING {
-                effects.push(Effect::Sound { id: SOUND_SQUISH, echo: d.actions_flag_set & actions::ENGINE_ECHO != 0 });
+                effects.push(Effect::Sound {
+                    id: SOUND_SQUISH,
+                    echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+                });
                 effects.push(voice(VOICELINE_SQUISH));
             }
             d.squish_timer = SQUISH_TIMER;
@@ -60,7 +67,10 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
         }
         damage::BURN => {
             if d.burn_timer == 0 {
-                effects.push(Effect::Sound { id: SOUND_BURN, echo: false });
+                effects.push(Effect::Sound {
+                    id: SOUND_BURN,
+                    echo: false,
+                });
                 effects.push(voice(VOICELINE_COMMON_DAMAGE));
             }
             d.burn_timer = BURN_TIMER;
@@ -84,8 +94,16 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
     d.matrix_array = MatrixArray::None;
     d.matrix_index = 0;
 
-    effects.push(Effect::ShockFreq { driver_id: d.driver_id, a: RUMBLE_FRAMES, b: 0 });
-    effects.push(Effect::ShockForce { driver_id: d.driver_id, a: RUMBLE_FRAMES, b: RUMBLE_FORCE });
+    effects.push(Effect::ShockFreq {
+        driver_id: d.driver_id,
+        a: RUMBLE_FRAMES,
+        b: 0,
+    });
+    effects.push(Effect::ShockForce {
+        driver_id: d.driver_id,
+        a: RUMBLE_FRAMES,
+        b: RUMBLE_FORCE,
+    });
     true
 }
 
@@ -94,7 +112,11 @@ mod tests {
     use super::*;
 
     fn driving() -> Driver {
-        Driver { kart_state: kart_state::NORMAL, reserves: 5, ..Driver::default() }
+        Driver {
+            kart_state: kart_state::NORMAL,
+            reserves: 5,
+            ..Driver::default()
+        }
     }
 
     #[test]
@@ -102,8 +124,15 @@ mod tests {
         let mut d = driving();
         let mut effects = Vec::new();
         assert!(new_state(&mut d, damage::SPIN, &mut effects));
-        assert!((d.pending_spin, d.init_pending, d.no_input_timer, d.reserves) == (true, true, SPIN_NO_INPUT_TIMER, 0));
-        assert!(effects.iter().any(|e| matches!(e, Effect::ShockForce { .. })));
+        assert!(
+            (d.pending_spin, d.init_pending, d.no_input_timer, d.reserves)
+                == (true, true, SPIN_NO_INPUT_TIMER, 0)
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::ShockForce { .. }))
+        );
     }
 
     #[test]
@@ -112,19 +141,31 @@ mod tests {
         d.kart_state = kart_state::SPINNING;
         assert!(new_state(&mut d, damage::SPIN, &mut Vec::new()));
         assert!(!d.pending_spin);
-        assert_eq!((d.no_input_timer, d.kart_state), (SPIN_NO_INPUT_TIMER, kart_state::NORMAL));
+        assert_eq!(
+            (d.no_input_timer, d.kart_state),
+            (SPIN_NO_INPUT_TIMER, kart_state::NORMAL)
+        );
     }
 
     #[test]
     fn a_squish_and_a_burn_set_their_timers() {
         let mut d = driving();
         assert!(new_state(&mut d, damage::SQUISH, &mut Vec::new()));
-        assert_eq!((d.squish_timer, d.no_input_timer, d.pending_spin), (SQUISH_TIMER, SQUISH_NO_INPUT_TIMER, true));
+        assert_eq!(
+            (d.squish_timer, d.no_input_timer, d.pending_spin),
+            (SQUISH_TIMER, SQUISH_NO_INPUT_TIMER, true)
+        );
         let mut d = driving();
         let mut effects = Vec::new();
         assert!(new_state(&mut d, damage::BURN, &mut effects));
-        assert_eq!((d.burn_timer, d.no_input_timer), (BURN_TIMER, BURN_NO_INPUT_TIMER));
-        assert!(effects.contains(&Effect::Sound { id: SOUND_BURN, echo: false }));
+        assert_eq!(
+            (d.burn_timer, d.no_input_timer),
+            (BURN_TIMER, BURN_NO_INPUT_TIMER)
+        );
+        assert!(effects.contains(&Effect::Sound {
+            id: SOUND_BURN,
+            echo: false
+        }));
         // Already burning: no new sound.
         let mut effects = Vec::new();
         new_state(&mut d, damage::BURN, &mut effects);

@@ -54,7 +54,10 @@ pub fn spawn(
     if positions.is_empty() {
         return;
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     let indices = (0..positions.len() as u32).collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
@@ -75,7 +78,10 @@ pub fn spawn(
     commands.spawn((
         SkyCamera,
         Camera3d::default(),
-        Camera { order: -1, ..default() },
+        Camera {
+            order: -1,
+            ..default()
+        },
         Projection::Perspective(projection),
         Transform::default(),
         RenderLayers::layer(SKY_LAYER),
@@ -86,7 +92,9 @@ fn follow(
     main: Query<(&Camera, &GlobalTransform), (With<Camera3d>, Without<SkyCamera>)>,
     mut sky: Query<&mut Transform, With<SkyCamera>>,
 ) {
-    let Some((_, at)) = main.iter().find(|(camera, _)| camera.order == 0) else { return };
+    let Some((_, at)) = main.iter().find(|(camera, _)| camera.order == 0) else {
+        return;
+    };
     for mut transform in &mut sky {
         transform.rotation = at.rotation();
     }

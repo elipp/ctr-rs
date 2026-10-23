@@ -1,5 +1,6 @@
 //! The wheels of a kart as Bevy entities; the placement is `render::wheels`.
 
+use crate::kart::KartMotion;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::image::ImageSampler;
@@ -7,9 +8,10 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::icons::Icon;
-use crate::kart::KartMotion;
 use loader::vram::Vram;
-use render::wheels::{DRIVER_INSTANCE_SCALE, WHEEL_SIZE, WHEELS, radius, sprite_atlas, wheel_quads};
+use render::wheels::{
+    DRIVER_INSTANCE_SCALE, WHEEL_SIZE, WHEELS, radius, sprite_atlas, wheel_quads,
+};
 
 /// The four wheels of a kart: one mesh of four squares, rewritten every frame
 /// for the camera's position.
@@ -50,12 +52,17 @@ pub fn spawn(
     );
     image.sampler = ImageSampler::nearest();
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * WHEELS]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4 * WHEELS]);
     // Corners are in UV order (top left, top right, bottom left, bottom right).
     mesh.insert_indices(Indices::U32(
-        (0..WHEELS as u32).flat_map(|w| [0, 2, 1, 1, 2, 3].map(|i| w * 4 + i)).collect(),
+        (0..WHEELS as u32)
+            .flat_map(|w| [0, 2, 1, 1, 2, 3].map(|i| w * 4 + i))
+            .collect(),
     ));
     commands.spawn((
         Wheels {
@@ -85,7 +92,14 @@ pub fn spawn(
 pub fn update(
     wheels: Query<(Entity, &Wheels, &Mesh3d)>,
     karts: Query<(&Transform, Option<&KartMotion>), Without<Wheels>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<crate::OverlayCamera>, Without<crate::sky::SkyCamera>)>,
+    cameras: Query<
+        &Transform,
+        (
+            With<Camera3d>,
+            Without<crate::OverlayCamera>,
+            Without<crate::sky::SkyCamera>,
+        ),
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
@@ -102,7 +116,9 @@ pub fn update(
             continue;
         };
         // The tires sit at the kart's squashed and stretched size.
-        let (wheel_rotation, scale) = motion.map_or((0, [DRIVER_INSTANCE_SCALE; 3]), |m| (m.wheel_rotation, m.inst_scale));
+        let (wheel_rotation, scale) = motion.map_or((0, [DRIVER_INSTANCE_SCALE; 3]), |m| {
+            (m.wheel_rotation, m.inst_scale)
+        });
         let quads = wheel_quads(
             pose.translation,
             Mat3::from_quat(pose.rotation),

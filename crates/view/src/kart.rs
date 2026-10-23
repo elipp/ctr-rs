@@ -28,7 +28,14 @@ pub struct KartMotion {
 impl KartMotion {
     pub fn new(d: &Driver) -> KartMotion {
         let pose = pose_of(d);
-        KartMotion { previous: pose, current: pose, wheel_rotation: 0, inst_scale: [0; 3], animation: (0, 0) }.pushed(d)
+        KartMotion {
+            previous: pose,
+            current: pose,
+            wheel_rotation: 0,
+            inst_scale: [0; 3],
+            animation: (0, 0),
+        }
+        .pushed(d)
     }
 
     fn pushed(mut self, d: &Driver) -> KartMotion {
@@ -41,7 +48,12 @@ impl KartMotion {
     /// The kart after a tick.
     pub fn push(&mut self, d: &Driver) {
         let previous = self.current;
-        *self = KartMotion { previous, current: pose_of(d), ..*self }.pushed(d);
+        *self = KartMotion {
+            previous,
+            current: pose_of(d),
+            ..*self
+        }
+        .pushed(d);
     }
 
     /// The kart was put somewhere else: it does not travel there.
@@ -90,12 +102,26 @@ pub fn spawn(
         .map(|a| &a.frames[a.frames.len() / 2])
         .or(header.static_frame.as_ref())
         .expect("racer model has a pose");
-    let data = mesh::model_mesh(header, frame, vram, [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3]);
+    let data = mesh::model_mesh(
+        header,
+        frame,
+        vram,
+        [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
+    );
     let base = crate::kart_material(data.atlas, images);
 
     let root = commands.spawn((placement, Visibility::default())).id();
     if !wheel_icons.is_empty() {
-        crate::wheels::spawn(commands, images, meshes, materials, wheel_icons, vram, root, layer);
+        crate::wheels::spawn(
+            commands,
+            images,
+            meshes,
+            materials,
+            wheel_icons,
+            vram,
+            root,
+            layer,
+        );
     }
     let parts = crate::spawn_parts(
         data.parts,
@@ -109,7 +135,14 @@ pub fn spawn(
         layer,
     );
     if let Some(motion) = motion {
-        commands.entity(root).insert((motion, KartRig { header: header.clone(), parts, shown: None }));
+        commands.entity(root).insert((
+            motion,
+            KartRig {
+                header: header.clone(),
+                parts,
+                shown: None,
+            },
+        ));
     }
     root
 }
@@ -131,12 +164,16 @@ pub fn animate(mut karts: Query<(&KartMotion, &mut KartRig)>, mut meshes: ResMut
         if rig.shown == Some(motion.animation) {
             continue;
         }
-        let Some(frame) = animation_pose(&rig.header, motion.animation.0, motion.animation.1) else {
+        let Some(frame) = animation_pose(&rig.header, motion.animation.0, motion.animation.1)
+        else {
             continue;
         };
         rig.shown = Some(motion.animation);
-        let positions =
-            mesh::model_positions(&rig.header, &frame, [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3]);
+        let positions = mesh::model_positions(
+            &rig.header,
+            &frame,
+            [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
+        );
         for (handle, positions) in rig.parts.iter().zip(positions) {
             let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
                 continue;

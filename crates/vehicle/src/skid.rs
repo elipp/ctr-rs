@@ -64,19 +64,30 @@ pub fn skidmarks(d: &mut Driver) {
             d.actions_flag_set |= actions::BACK_SKID;
             d.actions_flag_set &= !actions::FRONT_SKID;
         }
-        MatrixArray::WheelieHold | MatrixArray::WheelieRecover => d.actions_flag_set &= !actions::FRONT_SKID,
+        MatrixArray::WheelieHold | MatrixArray::WheelieRecover => {
+            d.actions_flag_set &= !actions::FRONT_SKID
+        }
         _ => {}
     }
 
     let skidding = d.actions_flag_set & (actions::BACK_SKID | actions::FRONT_SKID) != 0;
-    if d.actions_flag_set & actions::TOUCH_GROUND == 0 || !skidding || (d.speed_approx as i32).abs() < MIN_SPEED {
+    if d.actions_flag_set & actions::TOUCH_GROUND == 0
+        || !skidding
+        || (d.speed_approx as i32).abs() < MIN_SPEED
+    {
         return;
     }
 
     let angle = d.axis_rotation_x as i32 as u32;
-    let (sin, cos) = (math::sin(angle) * LATERAL_SCALE, math::cos(angle) * LATERAL_SCALE);
+    let (sin, cos) = (
+        math::sin(angle) * LATERAL_SCALE,
+        math::cos(angle) * LATERAL_SCALE,
+    );
     // Across the tire, and the extension in front of the strip.
-    let width = [(math::cos(angle) * WIDTH_SCALE) >> 12, (math::sin(angle) * -WIDTH_SCALE) >> 12];
+    let width = [
+        (math::cos(angle) * WIDTH_SCALE) >> 12,
+        (math::sin(angle) * -WIDTH_SCALE) >> 12,
+    ];
     let lateral = [sin >> 12, cos >> 12];
     let flags = forced as u8;
 
@@ -86,16 +97,39 @@ pub fn skidmarks(d: &mut Driver) {
 
     let put = |d: &mut Driver, slot: usize, t: usize, x: i32, y: i32, z: i32, w: [i32; 2]| {
         d.skidmarks[slot][t] = Mark {
-            edge: [[(x + w[0]) as i16, y as i16, (z + w[1]) as i16], [(x - w[0]) as i16, y as i16, (z - w[1]) as i16]],
+            edge: [
+                [(x + w[0]) as i16, y as i16, (z + w[1]) as i16],
+                [(x - w[0]) as i16, y as i16, (z - w[1]) as i16],
+            ],
             flags,
         };
     };
 
     let wheels = [
-        (actions::BACK_SKID, tire::BACK_LEFT, TIRE_LEFT_X, TIRE_BACK_Z),
-        (actions::BACK_SKID, tire::BACK_RIGHT, TIRE_RIGHT_X, TIRE_BACK_Z),
-        (actions::FRONT_SKID, tire::FRONT_LEFT, TIRE_LEFT_X, TIRE_FRONT_Z),
-        (actions::FRONT_SKID, tire::FRONT_RIGHT, TIRE_RIGHT_X, TIRE_FRONT_Z),
+        (
+            actions::BACK_SKID,
+            tire::BACK_LEFT,
+            TIRE_LEFT_X,
+            TIRE_BACK_Z,
+        ),
+        (
+            actions::BACK_SKID,
+            tire::BACK_RIGHT,
+            TIRE_RIGHT_X,
+            TIRE_BACK_Z,
+        ),
+        (
+            actions::FRONT_SKID,
+            tire::FRONT_LEFT,
+            TIRE_LEFT_X,
+            TIRE_FRONT_Z,
+        ),
+        (
+            actions::FRONT_SKID,
+            tire::FRONT_RIGHT,
+            TIRE_RIGHT_X,
+            TIRE_FRONT_Z,
+        ),
     ];
     for (action, t, local_x, local_z) in wheels {
         if d.actions_flag_set & action == 0 {
@@ -106,12 +140,24 @@ pub fn skidmarks(d: &mut Driver) {
         let (pos_x, y, pos_z) = (origin[0] + at[0], origin[1] + at[1], origin[2] + at[2]);
         // The strip is centred half the extension behind the tire (the left rear
         // tire takes the unrounded half of it).
-        let half_x = if t == tire::BACK_LEFT { sin >> 13 } else { lateral[0] >> 1 };
+        let half_x = if t == tire::BACK_LEFT {
+            sin >> 13
+        } else {
+            lateral[0] >> 1
+        };
         let (x, z) = (pos_x - half_x, pos_z - (lateral[1] >> 1));
         put(d, current, t, x, y, z, width);
         // The slot the next tick takes carries the strip's far end, a step ahead and narrower.
         let half_width = [width[0] >> 1, width[1] >> 1];
-        put(d, previous, t, x + lateral[0], y, z + lateral[1], half_width);
+        put(
+            d,
+            previous,
+            t,
+            x + lateral[0],
+            y,
+            z + lateral[1],
+            half_width,
+        );
     }
 }
 
@@ -200,11 +246,17 @@ mod tests {
 
     fn skidding_driver() -> Driver {
         let mut d = Driver::new(0, 0);
-        d.matrix_facing_dir = Matrix { m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]] };
+        d.matrix_facing_dir = Matrix {
+            m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]],
+        };
         d.actions_flag_set = actions::TOUCH_GROUND | actions::BACK_SKID;
         d.speed_approx = 0x1000;
         d.terrain_meta1 = terrain_type::ASPHALT;
-        d.pos_curr = math::Vec3 { x: 100 << 8, y: 50 << 8, z: 200 << 8 };
+        d.pos_curr = math::Vec3 {
+            x: 100 << 8,
+            y: 50 << 8,
+            z: 200 << 8,
+        };
         d
     }
 
@@ -241,7 +293,11 @@ mod tests {
         }
         // Back left and back right, joining the current tick to the extension and two older ones.
         let segments = segments(&d);
-        let ages: Vec<_> = segments.iter().filter(|s| s.tire == tire::BACK_LEFT).map(|s| s.age).collect();
+        let ages: Vec<_> = segments
+            .iter()
+            .filter(|s| s.tire == tire::BACK_LEFT)
+            .map(|s| s.age)
+            .collect();
         assert_eq!(ages, [0, 1, 2]);
         // Nothing is drawn for a single tick: only the current nibble is set.
         let mut d = skidding_driver();
@@ -259,7 +315,8 @@ mod tests {
         d.terrain_meta1 = terrain_type::ICE;
         skidmarks(&mut d);
         skidmarks(&mut d);
-        let forced = TERRAINS[terrain_type::ICE as usize].flags & terrain_flags::FORCE_SKIDMARKS != 0;
+        let forced =
+            TERRAINS[terrain_type::ICE as usize].flags & terrain_flags::FORCE_SKIDMARKS != 0;
         assert_eq!(d.skidmark_enable_flags & 0xf == 0xf, forced);
         assert_eq!(segments(&d).iter().all(|s| s.light), forced);
     }

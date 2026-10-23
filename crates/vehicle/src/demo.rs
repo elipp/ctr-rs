@@ -48,12 +48,19 @@ pub struct Demo {
 
 impl Demo {
     pub fn new(character: usize) -> Demo {
-        Demo { character, ..Demo::default() }
+        Demo {
+            character,
+            ..Demo::default()
+        }
     }
 
     /// Records the input of `tick`. Ticks must come in order, from 0.
     pub fn record(&mut self, tick: u32, input: &Input) {
-        debug_assert!(tick == self.length, "tick {tick} recorded after {}", self.length);
+        debug_assert!(
+            tick == self.length,
+            "tick {tick} recorded after {}",
+            self.length
+        );
         if !self.changes.last().is_some_and(|last| last.same_as(input)) {
             self.changes.push(Change::of(tick, input));
         }
@@ -118,8 +125,13 @@ impl Demo {
             if demo.changes.last().is_some_and(|last| last.tick >= tick) {
                 return Err(format!("demo ticks out of order at '{line}'"));
             }
-            demo.changes
-                .push(Change { tick, buttons_held, stick_lx, stick_ly, stick_ry });
+            demo.changes.push(Change {
+                tick,
+                buttons_held,
+                stick_lx,
+                stick_ly,
+                stick_ry,
+            });
         }
         if !ended {
             return Err("demo has no end line (cut short?)".into());
@@ -134,7 +146,12 @@ mod tests {
     use crate::buttons;
 
     fn input(held: u32, lx: u8) -> Input {
-        Input { buttons_held: held, buttons_tapped: 0, stick_lx: lx, ..Input::default() }
+        Input {
+            buttons_held: held,
+            buttons_tapped: 0,
+            stick_lx: lx,
+            ..Input::default()
+        }
     }
 
     fn sample() -> Demo {
@@ -157,14 +174,18 @@ mod tests {
     fn only_changes_are_stored() {
         let demo = sample();
         assert_eq!(demo.length, 6);
-        assert_eq!(demo.changes.iter().map(|c| c.tick).collect::<Vec<_>>(), [0, 1, 3, 4, 5]);
+        assert_eq!(
+            demo.changes.iter().map(|c| c.tick).collect::<Vec<_>>(),
+            [0, 1, 3, 4, 5]
+        );
     }
 
     #[test]
     fn plays_back_what_was_recorded() {
         let demo = sample();
-        let held: Vec<u32> =
-            (0..6).map(|t| demo.input(t, 0).unwrap().buttons_held).collect();
+        let held: Vec<u32> = (0..6)
+            .map(|t| demo.input(t, 0).unwrap().buttons_held)
+            .collect();
         assert_eq!(
             held,
             [

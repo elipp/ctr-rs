@@ -21,14 +21,14 @@ pub mod collide;
 pub mod crash;
 pub mod demo;
 pub mod exhaust;
-pub mod fixed;
 pub mod fire;
+pub mod fixed;
 pub mod force;
 pub mod frame;
 pub mod grid;
+pub mod joystick;
 pub mod jump;
 pub mod jump_meter;
-pub mod joystick;
 pub mod linear;
 pub mod pick;
 pub mod powerslide;
@@ -36,9 +36,9 @@ pub mod rotmat;
 pub mod scrub;
 pub mod search;
 pub mod shadow;
+pub mod sim;
 pub mod skid;
 pub mod sparks;
-pub mod sim;
 pub mod spin;
 pub mod stats;
 pub mod stuck;
@@ -138,7 +138,13 @@ impl Matrix {
     pub fn words(&self) -> [u32; 5] {
         let m = &self.m;
         let pack = |lo: i16, hi: i16| lo as u16 as u32 | (hi as u16 as u32) << 16;
-        [pack(m[0][0], m[0][1]), pack(m[0][2], m[1][0]), pack(m[1][1], m[1][2]), pack(m[2][0], m[2][1]), m[2][2] as u16 as u32]
+        [
+            pack(m[0][0], m[0][1]),
+            pack(m[0][2], m[1][0]),
+            pack(m[1][1], m[1][2]),
+            pack(m[2][0], m[2][1]),
+            m[2][2] as u16 as u32,
+        ]
     }
 }
 
@@ -156,7 +162,13 @@ pub struct Input {
 
 impl Default for Input {
     fn default() -> Self {
-        Input { buttons_held: 0, buttons_tapped: 0, stick_lx: 0x80, stick_ly: 0x80, stick_ry: 0x80 }
+        Input {
+            buttons_held: 0,
+            buttons_tapped: 0,
+            stick_lx: 0x80,
+            stick_ly: 0x80,
+            stick_ry: 0x80,
+        }
     }
 }
 
@@ -184,7 +196,14 @@ pub struct Env {
 
 impl Default for Env {
     fn default() -> Self {
-        Env { elapsed_time_ms: 32, elapsed_event_time: 0, timer: 0, end_of_race: false, respawns: true, kart_collisions: true }
+        Env {
+            elapsed_time_ms: 32,
+            elapsed_event_time: 0,
+            timer: 0,
+            end_of_race: false,
+            respawns: true,
+            kart_collisions: true,
+        }
     }
 }
 
@@ -247,7 +266,11 @@ pub enum PhysState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// `GAMEPAD_JogCon1`
-    JogCon { driver_id: u8, pattern: u8, strength: u8 },
+    JogCon {
+        driver_id: u8,
+        pattern: u8,
+        strength: u8,
+    },
     /// `OtherFX_Play_LowLevel(id, 1, HowlSfx_Pack(center, none, max, echo))`
     Sound { id: u8, echo: bool },
     /// `Voiceline_RequestPlay(id, characterIDs[driver_id], priority)`

@@ -20,18 +20,28 @@ impl Bar {
 
     /// Red below, yellow in the middle, green above.
     pub fn traffic_light() -> Vec<(f32, Color)> {
-        vec![(0.0, Color::srgb(0.9, 0.1, 0.1)), (0.5, Color::srgb(0.95, 0.85, 0.1)), (1.0, Color::srgb(0.2, 0.85, 0.2))]
+        vec![
+            (0.0, Color::srgb(0.9, 0.1, 0.1)),
+            (0.5, Color::srgb(0.95, 0.85, 0.1)),
+            (1.0, Color::srgb(0.2, 0.85, 0.2)),
+        ]
     }
 
     /// The colour of the fill at the current value.
     pub fn color(&self) -> Color {
         let value = self.value.clamp(0.0, 1.0);
-        let Some(&(_, first)) = self.ramp.first() else { return Color::WHITE };
+        let Some(&(_, first)) = self.ramp.first() else {
+            return Color::WHITE;
+        };
         let mut previous = (self.ramp[0].0, first);
         for &(at, color) in &self.ramp {
             if value <= at {
                 let span = at - previous.0;
-                let t = if span > 0.0 { (value - previous.0) / span } else { 1.0 };
+                let t = if span > 0.0 {
+                    (value - previous.0) / span
+                } else {
+                    1.0
+                };
                 return previous.1.mix(&color, t);
             }
             previous = (at, color);
@@ -52,7 +62,10 @@ pub fn spawn(commands: &mut Commands, node: Node, bar: Bar) -> Entity {
     let color = bar.color();
     let entity = commands.spawn((
         bar,
-        Node { border: UiRect::all(Val::Px(2.0)), ..node },
+        Node {
+            border: UiRect::all(Val::Px(2.0)),
+            ..node
+        },
         BackgroundColor(TRACK),
         BorderColor::all(BORDER),
     ));
@@ -75,7 +88,10 @@ pub fn spawn(commands: &mut Commands, node: Node, bar: Bar) -> Entity {
 }
 
 /// Sizes and colours the fills of the bars whose value changed.
-pub fn update(bars: Query<(&Bar, &Children), Changed<Bar>>, mut fills: Query<(&mut Node, &mut BackgroundColor), With<BarFill>>) {
+pub fn update(
+    bars: Query<(&Bar, &Children), Changed<Bar>>,
+    mut fills: Query<(&mut Node, &mut BackgroundColor), With<BarFill>>,
+) {
     for (bar, children) in &bars {
         for &child in children {
             if let Ok((mut node, mut background)) = fills.get_mut(child) {
