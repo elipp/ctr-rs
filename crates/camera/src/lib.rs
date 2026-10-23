@@ -10,6 +10,8 @@
 //! push buffer's position and rotation ([`CameraDc::pb_pos`], `pb_rot`) and
 //! the point it looks at ([`CameraDc::look_at_pos`]), in world units.
 //!
+//! While the mask holds the kart the camera stays put (`KS_MASK_GRABBED`).
+//!
 //! Left out: the start-of-race fly-in and the other cutscene and end-of-race
 //! cameras, the transitions between them, being blasted (the camera's
 //! lerp back), the mask grab and the rev-engine start, the two-player zoom.
@@ -23,6 +25,7 @@ use math::{Vec3, mips};
 use vehicle::Driver;
 use vehicle::calc::map_to_range;
 use vehicle::actions;
+use vehicle::kart_state;
 
 pub use matrix::convert_rot_to_matrix;
 
@@ -326,6 +329,16 @@ impl CameraDc {
             8,
         ) as i16;
 
+        // A kart the mask holds (falling off the track, out of bounds): the
+        // push buffer stays where it is and the camera starts from there.
+        let grabbed = d.kart_state == kart_state::MASK_GRABBED;
+        if grabbed {
+            pos_x = self.pb_pos.x as i32;
+            pos_y = self.pb_pos.y as i32;
+            pos_z = self.pb_pos.z as i32;
+            self.height_smoothing = HeightSmoothing::default();
+        }
+
         // Keep above the track.
         let kart_y = mips::sra(d.pos_curr.y, 8);
         let hit = self.find_closest_quadblock(level, Vec3 { x: pos_x, y: pos_y, z: pos_z });
@@ -370,12 +383,20 @@ impl CameraDc {
             pos_y = zoom.vert_distance as i32;
         }
 
-        // The direction from the look-at point to the camera is the push buffer's rotation.
-        let dir = Vec3 { x: pos_x - delta.x, y: pos_y - delta.y, z: pos_z - delta.z };
-        self.pb_rot.y = math::ratan2(dir.x, dir.z) as i16;
-        let flat = math::square_root0_stub(mips::add_lo(mips::mul_lo(dir.x, dir.x), mips::mul_lo(dir.z, dir.z)));
-        self.pb_rot.x = (0x800 - math::ratan2(dir.y, flat)) as i16;
-        self.pb_rot.z = mips::sra(mips::mul_lo(zoom.angle[0] as i32, self.desired_rot_x as i32), 8) as i16;
+        if grabbed {
+            // The camera keeps its heading, levels out and unrolls.
+            self.pb_rot.z -= self.pb_rot.z >> 3;
+            if self.pb_rot.x < 0x800 {
+                self.pb_rot.x = (self.pb_rot.x + 0x10).min(0x800);
+            }
+        } else {
+            // The direction from the look-at point to the camera is the push buffer's rotation.
+            let dir = Vec3 { x: pos_x - delta.x, y: pos_y - delta.y, z: pos_z - delta.z };
+            self.pb_rot.y = math::ratan2(dir.x, dir.z) as i16;
+            let flat = math::square_root0_stub(mips::add_lo(mips::mul_lo(dir.x, dir.x), mips::mul_lo(dir.z, dir.z)));
+            self.pb_rot.x = (0x800 - math::ratan2(dir.y, flat)) as i16;
+            self.pb_rot.z = mips::sra(mips::mul_lo(zoom.angle[0] as i32, self.desired_rot_x as i32), 8) as i16;
+        }
 
         // The push buffer follows the camera, within a little slack.
         let pos = Vec3 { x: pos_x, y: pos_y, z: pos_z };
@@ -388,9 +409,11 @@ impl CameraDc {
         correction.y = correction.y.clamp(-PUSH_BUFFER_CORRECTION_LIMIT, PUSH_BUFFER_CORRECTION_LIMIT);
         correction.z = correction.z.clamp(-PUSH_BUFFER_CORRECTION_LIMIT, PUSH_BUFFER_CORRECTION_LIMIT);
 
-        self.pb_pos.x = self.pb_pos.x.wrapping_add((copy.x as i16).wrapping_add(correction.x as i16));
-        self.pb_pos.y = self.pb_pos.y.wrapping_add((copy.y as i16).wrapping_add(correction.y as i16));
-        self.pb_pos.z = self.pb_pos.z.wrapping_add((copy.z as i16).wrapping_add(correction.z as i16));
+        if !grabbed {
+            self.pb_pos.x = self.pb_pos.x.wrapping_add((copy.x as i16).wrapping_add(correction.x as i16));
+            self.pb_pos.y = self.pb_pos.y.wrapping_add((copy.y as i16).wrapping_add(correction.y as i16));
+            self.pb_pos.z = self.pb_pos.z.wrapping_add((copy.z as i16).wrapping_add(correction.z as i16));
+        }
 
         self.camera_pos = pos;
         self.look_at_pos = delta;
