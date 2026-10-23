@@ -181,7 +181,7 @@ pub struct FruitBody {
 }
 
 /// The ticks a fruit takes to turn once around its own axis. Not retail's (see DIVERGENCE.md).
-const FRUIT_SPIN_TICKS: f32 = 60.0;
+pub(crate) const FRUIT_SPIN_TICKS: f32 = 60.0;
 
 /// The ticks of a bob up and down, and how far it goes either way (in level units). Only the
 /// drawing bobs: the hitbox stays where the level has it.
@@ -262,7 +262,7 @@ pub struct Rolling(usize);
 
 /// The orientation of an angle triple, as the matrix `ConvertRotToMatrix` makes of it: its
 /// columns are where the model's axes go (as for the kart).
-fn rotation_of(gte: &mut gte::Gte, rot: loader::lev::SVec3) -> Quat {
+pub(crate) fn rotation_of(gte: &mut gte::Gte, rot: loader::lev::SVec3) -> Quat {
     quat_of(&vehicle::rotmat::convert_rot_to_matrix(gte, rot))
 }
 
@@ -290,7 +290,7 @@ fn spawn_scale(model: &str) -> Option<i16> {
 }
 
 /// The pose of a model at rest: its first animation's first frame, or its only frame.
-fn rest_pose(header: &ModelHeader) -> Option<&loader::model::Frame> {
+pub(crate) fn rest_pose(header: &ModelHeader) -> Option<&loader::model::Frame> {
     header
         .animations
         .first()

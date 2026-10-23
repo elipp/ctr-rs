@@ -53,8 +53,8 @@ const SHINE_SIZE: Vec2 = Vec2::new(
 const THETA_STEP: f32 = 0x100 as f32;
 const FRAMES_PER_SECOND: f32 = 30.0;
 
-/// The middle of the wumpa counter, from the top right corner of the screen.
-const WUMPA_CENTER: Vec2 = Vec2::new(65.0, 32.0);
+/// The middle of the wumpa counter, the fruit and the count, from the top right corner of the screen.
+const WUMPA_CENTER: Vec2 = Vec2::new(79.0, 32.0);
 
 /// `UI_WEAPON_ROULETTE_RACING_COUNT`: the roulette shuffles through the first twelve items.
 const ROULETTE_ITEMS: u32 = 12;
