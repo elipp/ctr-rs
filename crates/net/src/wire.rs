@@ -51,6 +51,10 @@ pub struct Inputs {
     pub pads: Vec<Pad>,
     /// The sender has all of the receiver's pads below this tick.
     pub ack: Tick,
+    /// The sender's tick (the pads it has made) minus `ack`: how far past the receiver it is,
+    /// as far as it can tell. The latency is in it, as it is in the receiver's own figure, so
+    /// half the difference of the two is how far ahead the receiver's clock is.
+    pub lead: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -130,6 +134,7 @@ impl InputSender {
             first: self.base,
             pads: self.pads.iter().copied().collect(),
             ack: ours_to_ack,
+            lead: self.tick() as i32 - ours_to_ack as i32,
         }
     }
 }
@@ -240,6 +245,7 @@ mod tests {
                 first: 7,
                 pads: vec![pad(1), Pad::default()],
                 ack: 5,
+                lead: -3,
             }),
             Message::Checksum {
                 tick: 90,
@@ -292,6 +298,7 @@ mod tests {
             first,
             pads: (first..first + n).map(pad).collect(),
             ack: 0,
+            lead: 0,
         };
         receiver.accept(&packet(0, 5)).unwrap();
         receiver.accept(&packet(3, 5)).unwrap();

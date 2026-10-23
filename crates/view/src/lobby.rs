@@ -39,6 +39,8 @@ pub struct Online {
     pub replayed: u32,
     /// The hashes of the sims, ours and the others'.
     pub checks: race::desync::Checks,
+    /// How many ticks our clock is ahead of each player's (smoothed; ours is 0), from `net`.
+    pub ahead: Vec<f32>,
     /// The players whose sim differs from ours, with the first tick it was seen at.
     pub desync: Vec<Desync>,
 }
@@ -88,6 +90,8 @@ impl Online {
 #[derive(Resource, Default)]
 pub struct Lobby {
     session: Option<Session>,
+    /// We joined someone else's lobby (`--join`) instead of opening one: the host starts the race.
+    joined: bool,
     pub online: Option<Online>,
 }
 
@@ -97,6 +101,7 @@ impl Lobby {
         println!("joining {ticket}");
         Lobby {
             session: Some(net::join(ticket, character)),
+            joined: true,
             online: None,
         }
     }
@@ -130,15 +135,34 @@ impl Lobby {
     }
 }
 
+/// How much of a new reading of the clocks' difference is taken in (they come 30 times a second
+/// from each player).
+const LEAD_SMOOTHING: f32 = 0.1;
+
+/// The ticks we may be ahead of the others before the clock is slowed.
+const LEAD_ALLOWED: f32 = 1.0;
+
+/// How much slower the clock runs for each tick ahead past that, and the slowest it gets.
+const SLOWDOWN_PER_TICK: f32 = 0.03;
+const SLOWEST: f32 = 0.9;
+
+/// The longest frame the clock takes in during an online race: after a hitch the ticks that were
+/// missed are played at once, instead of being lost (Bevy's own limit is a quarter second).
+const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Bevy's own limit on a frame, for everything but an online race.
+const NORMAL_MAX_DELTA: std::time::Duration = std::time::Duration::from_millis(250);
+
 pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lobby>()
+            .add_systems(Startup, spawn_waiting)
             .init_resource::<crate::remote::Remotes>()
             .add_systems(
                 Update,
-                (toggle, start, report, crate::remote::build).chain(),
+                (toggle, start, report, crate::remote::build, pace, waiting).chain(),
             );
     }
 }
@@ -161,6 +185,7 @@ fn toggle(
         ));
     } else {
         lobby.session = Some(net::host(drive.character as u8));
+        lobby.joined = false;
         toasts.write(Toast::new(
             "Opening lobby...",
             3000,
@@ -187,6 +212,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     let mut go = false;
     let mut pads = Vec::new();
     let mut sums = Vec::new();
+    let mut leads = Vec::new();
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
@@ -233,6 +259,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     specs: Vec::new(),
                     corrections: 0,
                     replayed: 0,
+                    ahead: vec![0.0; characters_len],
                     checks: race::desync::Checks::new(characters_len, slot),
                     desync: Vec::new(),
                 });
@@ -243,6 +270,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 first,
                 pads: p,
             } => pads.push((slot, first, p)),
+            Event::Lead { slot, ahead } => leads.push((slot, ahead)),
             Event::Checksum { slot, tick, hash } => sums.push((slot, tick, hash)),
             Event::Failed(why) => {
                 println!("lobby failed: {why}");
@@ -256,6 +284,11 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     if let Some(online) = &mut lobby.online {
         online.go |= go;
         online.inbox.extend(pads);
+        for (slot, ahead) in leads {
+            if let Some(smoothed) = online.ahead.get_mut(slot) {
+                *smoothed += (ahead - *smoothed) * LEAD_SMOOTHING;
+            }
+        }
         for (slot, tick, hash) in sums {
             let found = online.checks.theirs(slot, tick, hash);
             online.found(found);
@@ -276,5 +309,69 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     if failed {
         lobby.session = None;
         lobby.online = None;
+    }
+}
+
+/// Keeps the clock of an online race with the others': it catches up after a hitch, and runs a bit
+/// slow while it is ahead of any of them (the ones behind do not hurry; they play on as they do).
+fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
+    let running = lobby.online.as_ref().filter(|net| net.go);
+    let max_delta = if running.is_some() {
+        CATCH_UP
+    } else {
+        NORMAL_MAX_DELTA
+    };
+    if time.max_delta() != max_delta {
+        time.set_max_delta(max_delta);
+    }
+    let ahead = running.map_or(0.0, |net| {
+        net.ahead
+            .iter()
+            .enumerate()
+            .filter(|&(slot, _)| slot != net.slot)
+            .fold(0.0_f32, |most, (_, &a)| most.max(a))
+    });
+    let speed = (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST);
+    if time.relative_speed() != speed {
+        time.set_relative_speed(speed);
+    }
+}
+
+/// The label for the players who wait for the host.
+#[derive(Component)]
+struct WaitingHud;
+
+/// How often the label blinks: a second on, a second off.
+const BLINK_SECONDS: f32 = 1.0;
+
+pub fn spawn_waiting(mut commands: Commands) {
+    commands.spawn((
+        WaitingHud,
+        Text::new("Waiting for host to start the race"),
+        TextLayout::justify(Justify::Center),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(20.0),
+            width: Val::Percent(100.0),
+            ..default()
+        },
+    ));
+}
+
+/// Shows the label, blinking, to a player who is in a lobby and has not been started yet.
+fn waiting(
+    lobby: Res<Lobby>,
+    time: Res<Time<Real>>,
+    mut label: Query<&mut Visibility, With<WaitingHud>>,
+) {
+    let waiting = lobby.joined && lobby.session.is_some() && lobby.online.is_none();
+    let on = (time.elapsed_secs() / BLINK_SECONDS) as u32 % 2 == 0;
+    for mut visibility in &mut label {
+        *visibility = if waiting && on {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }

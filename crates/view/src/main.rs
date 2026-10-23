@@ -486,6 +486,7 @@ fn main() {
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(mask::spawn));
+        scene_systems.push(app.world_mut().register_system(lobby::spawn_waiting));
         let character = drive.character as u8;
         app.insert_resource(drive).add_plugins((
             drive::DrivePlugin,

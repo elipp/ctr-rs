@@ -81,8 +81,9 @@ struct Hud;
 struct WumpaHud;
 
 /// How many ticks we may play past the last pad of another player before we wait for it: the
-/// prediction is that long at most (more than the latency of a good connection, in ticks).
-const MAX_LEAD: u32 = 10;
+/// prediction is that long at most. The clock is kept with the others' without this (see
+/// `lobby::pace`), so it only matters when one of them stalls for good: 2 seconds.
+const MAX_LEAD: u32 = 60;
 
 /// The ticks between the beeps of an online race: a second.
 const TICKS_PER_BEEP: u32 = 60;
