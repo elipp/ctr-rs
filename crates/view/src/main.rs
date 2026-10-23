@@ -413,7 +413,7 @@ fn main() {
     let plugins = if single_threaded {
         // The render thread would run the single-threaded schedules off the main thread, which
         // Metal's window surface does not allow.
-        plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
+        plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
     } else {
         plugins
     };
