@@ -2,11 +2,12 @@
 //! shrinks to nothing at once, waits about a second, and grows back to full size (a time crate
 //! does not come back). Its thread exists only from the first touch until it is whole again.
 //!
-//! What breaking one gives a driver is only done for the fruit crate: 5 to 8 wumpa for the
-//! pickup HUD to give. The weapon crate's item roulette and the time crate's bonus are not here.
+//! What breaking one gives a driver is done for the fruit crate (5 to 8 wumpa for the pickup HUD
+//! to give) and the weapon crate (the item roulette, see `vehicle::item`). The time crate's bonus
+//! is not here.
 
 use coll::model_id;
-use vehicle::{Driver, wumpa};
+use vehicle::{Driver, item, wumpa};
 
 use crate::{Context, Instance, Tick, Touch};
 
@@ -102,8 +103,12 @@ impl CrateBox {
                 self.breaks += 1;
                 // A time crate is spent for good.
                 self.pause_cooldown |= self.kind == Kind::Time;
-                if self.kind == Kind::Fruit {
-                    self.give_wumpa(driver, model, random_number);
+                match self.kind {
+                    Kind::Fruit => self.give_wumpa(driver, model, random_number),
+                    // A bomb, missile or shield that breaks the crate gives its owner the roulette
+                    // in retail; the weapons are not ported, so only a driver's touch counts.
+                    Kind::Weapon if model == model_id::PLAYER => item::start_roulette(driver),
+                    _ => {}
                 }
                 return 1;
             }

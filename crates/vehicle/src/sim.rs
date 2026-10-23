@@ -64,6 +64,7 @@ impl Driver {
             terrain_meta2: terrain_type::NONE,
             current_terrain: terrain_type::NONE,
             rain_cloud_effect: rain_cloud::NONE,
+            held_item_id: crate::item::held::NONE,
             ..Driver::default()
         }
     }

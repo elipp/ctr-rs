@@ -37,6 +37,7 @@ mod skid;
 mod sky;
 mod subtract;
 mod toast;
+mod weapon;
 mod wheels;
 
 use std::path::PathBuf;
@@ -495,6 +496,7 @@ fn main() {
             drive::DrivePlugin,
             lobby::LobbyPlugin,
             leaderboard::LeaderboardPlugin,
+            weapon::WeaponPlugin,
             toast::ToastPlugin,
         ));
         if let Some(ticket) = join {
