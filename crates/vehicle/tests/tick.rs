@@ -227,6 +227,7 @@ fn effect_line(e: &Effect, d: &Driver) -> String {
         Effect::JogCon { driver_id, pattern, strength } => format!(" J {driver_id} {pattern} {strength}"),
         Effect::ShockFreq { driver_id, a, b } => format!(" F {driver_id} {a} {b}"),
         Effect::ShockForce { driver_id, a, b } => format!(" G {driver_id} {a} {b}"),
+        Effect::DriverCrashing { echo, volume } => format!(" C {} {volume}", echo as u8),
         // Camera state is not part of the comparison.
         Effect::CameraFireSpeedZoom { .. } => String::new(),
     }
@@ -349,7 +350,7 @@ fn frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
             held = (held & !(buttons::L1 | buttons::R1)) | hop_button;
             hop_ticks = rng.range(2, 140);
         }
-        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: rng.below(500) == 0, respawns: false };
+        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: rng.below(500) == 0, respawns: false, kart_collisions: true };
         out.push(Frame { env, input: Input { buttons_held: held, buttons_tapped: held & !prev, stick_lx: lx, stick_ly: ly, stick_ry: ry } });
     }
     out
@@ -383,7 +384,7 @@ fn drifter_frames(rng: &mut Rng, ticks: usize) -> Vec<Frame> {
         if rng.below(45) == 0 {
             lx = [0, 0xff, 0x20, 0xe0, 0x80][rng.below(5) as usize];
         }
-        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: false, respawns: false };
+        let env = Env { elapsed_time_ms: 32, elapsed_event_time: t as i32 * 32, timer: t as u32, end_of_race: false, respawns: false, kart_collisions: true };
         out.push(Frame { env, input: Input { buttons_held: held, buttons_tapped: held & !prev, stick_lx: lx, ..Input::default() } });
     }
     out

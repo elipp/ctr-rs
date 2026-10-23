@@ -13,6 +13,7 @@ use math::mips;
 use crate::angular::phys_angular;
 use crate::calc::interp_by_speed;
 use crate::fixed::fixed_player_search;
+use crate::collide::{self, Feedback, Others};
 use crate::force::{KART_SCALE_BASE, collide_drivers, on_apply_forces, rot_axis_angle, translate_matrix};
 use crate::frame;
 use crate::jump::jump_and_friction;
@@ -292,6 +293,76 @@ pub fn tick_with(
     instances: &mut dyn Instances,
     effects: &mut Vec<Effect>,
 ) -> TickResult {
+    let mut feedback = Feedback::default();
+    tick_among(d, coll, level, env, input, instances, &mut Others { drivers: &mut [], feedback: &mut feedback }, effects)
+}
+
+/// [`tick_with`], where `others` are the drivers that tick after this one, which it can bump into.
+///
+/// (The original runs each stage over all the drivers before the next stage: see [`tick_all`],
+/// which does that, and the three parts this one runs.)
+pub fn tick_among(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    env: &Env,
+    input: &Input,
+    instances: &mut dyn Instances,
+    others: &mut Others,
+    effects: &mut Vec<Effect>,
+) -> TickResult {
+    collide::take_pending_damage(d, effects);
+    let respawned = tick_to_coll_moved(d, coll, level, env, input, instances, effects);
+    collide_drivers_stage(d, others, env, effects);
+    tick_from_coll_fixed(d, coll, level, env, respawned, effects)
+}
+
+/// A driver of a [`tick_all`].
+pub struct Racer<'a> {
+    pub driver: &'a mut Driver,
+    pub coll: &'a mut Collision,
+    pub input: &'a Input,
+    /// What the driver's stages ask for. What a bump asks for goes to the driver that bumped.
+    pub effects: &'a mut Vec<Effect>,
+}
+
+/// One 30 Hz tick of all the drivers, in `MainFrame`'s order: each stage over every driver, in
+/// the thread list's order, before the next stage. A driver bumps into the ones after it in the
+/// list (the original's sibling threads), which have run the stages before it and not those after.
+/// `feedback` times the bump sounds.
+pub fn tick_all(racers: &mut [Racer], level: &Level, env: &Env, instances: &mut dyn Instances, feedback: &mut Feedback) -> Vec<TickResult> {
+    // `VehPickupItem_ShootOnCirclePress`, for all first: the hits queued by the last bumps land.
+    for r in racers.iter_mut() {
+        collide::take_pending_damage(r.driver, r.effects);
+    }
+    let respawned: Vec<bool> = racers
+        .iter_mut()
+        .map(|r| tick_to_coll_moved(r.driver, r.coll, level, env, r.input, instances, r.effects))
+        .collect();
+    for i in 0..racers.len() {
+        let (head, tail) = racers.split_at_mut(i + 1);
+        let r = &mut head[i];
+        let mut later: Vec<&mut Driver> = tail.iter_mut().map(|r| &mut *r.driver).collect();
+        collide_drivers_stage(r.driver, &mut Others { drivers: &mut later, feedback }, env, r.effects);
+    }
+    racers
+        .iter_mut()
+        .zip(respawned)
+        .map(|(r, respawned)| tick_from_coll_fixed(r.driver, r.coll, level, env, respawned, r.effects))
+        .collect()
+}
+
+/// The stages up to `DRIVER_FUNC_COLL_MOVED`. The result is whether the mask grab let go of the
+/// driver and put it back on the track.
+fn tick_to_coll_moved(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    env: &Env,
+    input: &Input,
+    instances: &mut dyn Instances,
+    effects: &mut Vec<Effect>,
+) -> bool {
     let mut respawned = false;
 
     // DRIVER_FUNC_INIT
@@ -346,17 +417,27 @@ pub fn tick_with(
     }
 
     // The rev has no forces and no collisions: the mask lowers the kart, or it stands still.
-    let mut mask_grab = false;
     if d.phys_state != PhysState::RevEngine {
         // DRIVER_FUNC_APPLY_FORCES
         on_apply_forces(d, coll, env, level, effects);
 
         // DRIVER_FUNC_COLL_MOVED
         moved_player_search(d, coll, level, &IDENTITY_LIGHT_MATRIX, env.elapsed_time_ms, instances, effects);
+    }
+    respawned
+}
 
-        // DRIVER_FUNC_COLLIDE_DRIVERS: nothing to collide with, but the turbo pads are here.
-        collide_drivers(d, effects);
+/// `DRIVER_FUNC_COLLIDE_DRIVERS`: the other karts, and the turbo pads are here too.
+fn collide_drivers_stage(d: &mut Driver, others: &mut Others, env: &Env, effects: &mut Vec<Effect>) {
+    if d.phys_state != PhysState::RevEngine {
+        collide_drivers(d, others, env, effects);
+    }
+}
 
+/// The stages from `DRIVER_FUNC_COLL_FIXED` on.
+fn tick_from_coll_fixed(d: &mut Driver, coll: &mut Collision, level: &Level, env: &Env, respawned: bool, effects: &mut Vec<Effect>) -> TickResult {
+    let mut mask_grab = false;
+    if d.phys_state != PhysState::RevEngine {
         // DRIVER_FUNC_COLL_FIXED
         mask_grab = fixed_player_search(d, coll, level, env, effects);
         if mask_grab && env.respawns {

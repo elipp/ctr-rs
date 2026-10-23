@@ -391,12 +391,11 @@ const SUPER_TURBO_PAD_FIRE_LEVEL: i32 = 0x800;
 const SURFACE_PUSHBACK_Y_BIAS: i32 = 4;
 const SURFACE_PUSHBACK_SHIFT: u32 = 6;
 
-/// `VehPhysForce_CollideDrivers` for a kart alone on the track: takes the
-/// collision acceleration back out of the velocity, requests a mask grab on a
-/// kill plane, applies the turbo pads and pushes the kart out of a surface it
-/// is sinking into. Kart-against-kart collisions and the water split line are
-/// not ported.
-pub fn collide_drivers(d: &mut Driver, effects: &mut Vec<Effect>) {
+/// `VehPhysForce_CollideDrivers`: takes the collision acceleration back out of
+/// the velocity, requests a mask grab on a kill plane, applies the turbo pads,
+/// bumps into the other karts in reach ([`crate::collide`]) and pushes the kart
+/// out of a surface it is sinking into. The water split line is not ported.
+pub fn collide_drivers(d: &mut Driver, others: &mut crate::collide::Others, env: &Env, effects: &mut Vec<Effect>) {
     let step_flags = d.step_flag_set;
 
     d.velocity.x = mips::sub_lo(d.velocity.x, d.accel.x as i32);
@@ -414,6 +413,8 @@ pub fn collide_drivers(d: &mut Driver, effects: &mut Vec<Effect>) {
         let flags = turbo_type::TURBO_PAD | turbo_type::FREEZE_RESERVES_ON_TURBO_PAD;
         fire::increment(d, TURBO_PAD_RESERVES, flags, TURBO_PAD_FIRE_LEVEL, effects);
     }
+
+    crate::collide::collide(d, others, env, effects);
 
     if d.collision_flags & collision_flags::SURFACE_PUSHBACK != 0 {
         let diff_x = mips::sub_lo(mips::sra(d.pos_curr.x, 8), d.sps_hit_pos.x as i32);

@@ -219,7 +219,12 @@ pub fn spawn(
     let mut turtles = Turtles::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
     let mut gte = gte::Gte::default();
+    // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
+    let show_letters = std::env::var_os("CTR_LETTERS").is_some();
     for (n, inst) in level.instances.iter().enumerate().filter(|(_, i)| i.model != 0) {
+        if !show_letters && matches!(inst.model_name.as_str(), "c" | "t" | "r") {
+            continue;
+        }
         // The fireballs hide their model (`HIDE_MODEL`); see `fire`.
         if matches!(by_instance.get(&n), Some(Hazard::Fireball)) {
             continue;
