@@ -115,6 +115,7 @@ pub fn spawn(
 /// fades out.
 pub fn update(
     drive: Res<Drive>,
+    sim: Res<crate::props::Sim>,
     fixed: Res<Time<Fixed>>,
     mut flames: Query<(&Flame, &mut Transform, &mut Visibility, &Children)>,
     parts: Query<(
@@ -124,12 +125,13 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let turbo = drive.driver.turbo.filter(|t| !t.hidden);
+    let driver = sim.driver();
+    let turbo = driver.turbo.filter(|t| !t.hidden);
     let offsets = turbo::pipe_offsets(
         [
-            drive.driver.inst_scale_x,
-            drive.driver.inst_scale_y,
-            drive.driver.inst_scale_z,
+            driver.inst_scale_x,
+            driver.inst_scale_y,
+            driver.inst_scale_z,
         ]
         .map(i32::from),
     );

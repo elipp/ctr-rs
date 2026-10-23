@@ -183,6 +183,7 @@ fn spawn_part(
 /// frame of its animation.
 pub fn update(
     drive: Res<Drive>,
+    sim: Res<crate::props::Sim>,
     fixed: Res<Time<Fixed>>,
     mut instances: Query<(&mut MaskPart, &mut Transform, &mut Visibility, &Children)>,
     parts: Query<(
@@ -193,7 +194,7 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let mask = drive.driver.mask;
+    let mask = sim.driver().mask;
     let kart = {
         let pose = interpolated(&drive, &fixed);
         Transform {
@@ -216,7 +217,7 @@ pub fn update(
         };
 
         // A new tick: what was current is previous.
-        if part.tick != drive.tick || part.current.is_none() {
+        if part.tick != sim.race.tick || part.current.is_none() {
             let placement = Placement::new(
                 &mask,
                 &shown,
@@ -224,7 +225,7 @@ pub fn update(
             );
             part.previous = Some(part.current.unwrap_or(placement));
             part.current = Some(placement);
-            part.tick = drive.tick;
+            part.tick = sim.race.tick;
         }
         let (Some(before), Some(now)) = (part.previous, part.current) else {
             continue;

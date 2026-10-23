@@ -1,6 +1,7 @@
 //! What clients say to each other, and the bookkeeping that makes the inputs survive loss.
 //!
-//! Inputs go in unreliable datagrams, one packet per tick, and each packet repeats every input
+//! Every player sends its pads to every other player, directly. They go in unreliable datagrams,
+//! one packet per tick (and one at once when a pad is made), and each packet repeats every input
 //! the peer has not yet confirmed (`ack`). A lost or reordered packet is covered by the next one
 //! without a resend or a wait for a timeout. The inputs are tiny (a few bytes a tick), so
 //! repeating a handful of them costs next to nothing.
@@ -16,13 +17,9 @@ use bitcode::{Decode, Encode};
 /// A game tick (30 Hz) counted from the start of the race.
 pub type Tick = u32;
 
-/// The most ticks one packet repeats. Past this (about 2 s) the peer needs a snapshot.
-pub const MAX_WINDOW: usize = 60;
-
-/// The most frames one [`Frames`] packet carries. The sim never runs further ahead of the
-/// slowest player than the input delay, so this is plenty, and it keeps eight players' pads
-/// in one datagram.
-pub const FRAMES_WINDOW: usize = 20;
+/// The most ticks one packet repeats: the ticks a sim keeps to roll back (4 s). Past this the
+/// peer needs a snapshot.
+pub const MAX_WINDOW: usize = 120;
 
 /// One tick of a controller: `vehicle::Input` without the taps, which follow from the
 /// held buttons of the tick before.
@@ -46,26 +43,13 @@ impl Default for Pad {
     }
 }
 
-/// The pads of every player in one tick, by slot.
-pub type Frame = Vec<Pad>;
-
-/// A client's own inputs, as the unreliable datagram of a tick carries them.
+/// A player's own inputs, as the unreliable datagram to another player carries them.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Inputs {
     /// The tick of `pads[0]`.
     pub first: Tick,
     pub pads: Vec<Pad>,
-    /// The client has all [`Frames`] below this tick.
-    pub ack: Tick,
-}
-
-/// The host's answer: the ticks it has everyone's input for.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct Frames {
-    /// The tick of `frames[0]`.
-    pub first: Tick,
-    pub frames: Vec<Frame>,
-    /// The host has all of the client's [`Inputs`] below this tick.
+    /// The sender has all of the receiver's pads below this tick.
     pub ack: Tick,
 }
 
@@ -77,18 +61,23 @@ pub enum Message {
     /// `seq` counts the client's Hellos from 0: they go on streams of their own, which can
     /// arrive in any order, and the host keeps the one with the highest.
     Hello { character: u8, seq: u32 },
-    /// Reliable, host to each client: the race starts, and this is tick 0. `slot` is the
-    /// client's player among the `players`; `characters` is the character of each slot, and
-    /// `track` the `LevelId` the race is on.
+    /// Reliable, host to each client: a race is about to start. `slot` is the client's player
+    /// among the players; `characters` is the character of each slot, and `track` the `LevelId`
+    /// the race is on. `roster` is the endpoint id of each slot (the host is 0), which the
+    /// clients connect to each other by.
     Start {
         slot: u8,
         characters: Vec<u8>,
         track: u32,
+        roster: Vec<[u8; 32]>,
     },
-    /// Unreliable, client to host.
+    /// Reliable, client to host: connected to every other player, with the level up. Once the
+    /// host has this from everyone (and is ready itself) it sends [`Message::Go`].
+    Ready,
+    /// Reliable, host to each client: this is tick 0.
+    Go,
+    /// Unreliable, between any two players.
     Inputs(Inputs),
-    /// Unreliable, host to client.
-    Frames(Frames),
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
     Checksum { tick: Tick, hash: u64 },
     /// Reliable. The sim as it is at the start of `tick`. The bytes are the game's to make and
@@ -243,16 +232,14 @@ mod tests {
                 slot: 2,
                 characters: vec![0, 5, 15],
                 track: 4,
+                roster: vec![[1; 32], [2; 32], [3; 32]],
             },
+            Message::Ready,
+            Message::Go,
             Message::Inputs(Inputs {
                 first: 7,
                 pads: vec![pad(1), Pad::default()],
                 ack: 5,
-            }),
-            Message::Frames(Frames {
-                first: 4,
-                frames: vec![vec![pad(1), pad(2)], vec![pad(3), pad(4)]],
-                ack: 9,
             }),
             Message::Checksum {
                 tick: 90,
@@ -265,6 +252,22 @@ mod tests {
         ] {
             assert_eq!(Message::from_bytes(&message.to_bytes()).unwrap(), message);
         }
+    }
+
+    #[test]
+    fn a_packet_of_the_whole_window_fits_in_a_datagram() {
+        let mut sender = InputSender::default();
+        for tick in 0..MAX_WINDOW as Tick {
+            // The worst case for the encoding: every field changes, with big values.
+            sender.push(Pad {
+                held: 0xffff - tick,
+                lx: tick as u8 ^ 0x5a,
+                ly: 0xff - tick as u8,
+                ry: tick as u8 | 0x81,
+            });
+        }
+        let bytes = Message::Inputs(sender.packet(0, 12345)).to_bytes();
+        assert!(bytes.len() < 1100, "{} bytes", bytes.len());
     }
 
     #[test]
@@ -314,15 +317,16 @@ mod tests {
             receiver.accept(&packet),
             Err(Gap {
                 have_until: 0,
-                packet_starts: 140
+                packet_starts: 200 - MAX_WINDOW as Tick
             })
         );
-        // The snapshot is of tick 140; the rest of the packet then fits.
-        receiver.restart(140);
+        // The snapshot is of the tick the packet starts at; the rest of the packet then fits.
+        let start = 200 - MAX_WINDOW as Tick;
+        receiver.restart(start);
         receiver.accept(&packet).unwrap();
         assert_eq!(receiver.next(), 200);
-        assert_eq!(receiver.get(139), None);
-        assert_eq!(receiver.get(150), Some(pad(150)));
+        assert_eq!(receiver.get(start - 1), None);
+        assert_eq!(receiver.get(start + 10), Some(pad(start + 10)));
     }
 
     #[test]

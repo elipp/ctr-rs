@@ -30,9 +30,14 @@ impl Particles {
         }
     }
 
-    /// The sparks of this game tick (before [`Particles::tick`]).
-    pub fn sparks(&mut self, d: &vehicle::Driver) {
-        if let Some(l) = vehicle::sparks::landing(d) {
+    /// The sparks of this game tick (before [`Particles::tick`]): the landing and the scrape of a
+    /// wall that the sim saw.
+    pub fn sparks(
+        &mut self,
+        landing: Option<vehicle::sparks::Landing>,
+        wall: Option<vehicle::sparks::Wall>,
+    ) {
+        if let Some(l) = landing {
             for _ in 0..LANDING_SPARKS {
                 self.list.push(Particle::landing_spark(
                     l.back,
@@ -42,7 +47,7 @@ impl Particles {
                 ));
             }
         }
-        if let Some(w) = vehicle::sparks::wall(d) {
+        if let Some(w) = wall {
             let m = w.matrix;
             self.list.push(Particle::wall_spark(
                 w.tire,

@@ -33,8 +33,8 @@ mod remote;
 mod shadow;
 mod skid;
 mod sky;
-mod toast;
 mod subtract;
+mod toast;
 mod wheels;
 
 use std::path::PathBuf;
@@ -324,7 +324,12 @@ fn new_drive(track: &Track, racer: &Option<Model>, character: usize) -> drive::D
     for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
         *n = anim.num_frames;
     }
-    drive::Drive::new(track, character, anim_num_frames)
+    let spec = race::KartSpec {
+        character,
+        anim_num_frames,
+    };
+    let kart = race::Kart::birth(&track.0, 0, &spec);
+    drive::Drive::new(track, &kart.driver, character, anim_num_frames)
 }
 
 #[derive(Component)]
@@ -482,8 +487,11 @@ fn main() {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(mask::spawn));
         let character = drive.character as u8;
-        app.insert_resource(drive)
-            .add_plugins((drive::DrivePlugin, lobby::LobbyPlugin, toast::ToastPlugin));
+        app.insert_resource(drive).add_plugins((
+            drive::DrivePlugin,
+            lobby::LobbyPlugin,
+            toast::ToastPlugin,
+        ));
         if let Some(ticket) = join {
             app.insert_resource(lobby::Lobby::joining(ticket, character));
         }
@@ -857,13 +865,16 @@ fn setup(
         &mut meshes,
         &mut materials,
     );
-    commands.insert_resource(props::Sim::new(objects));
+    let specs: Vec<race::KartSpec> = driving.iter().map(|d| d.spec()).collect();
+    let sim = props::Sim::new(level, objects, &specs);
 
     if let Some(model) = &racer.0 {
         let kart = spawn_racer(
             model,
             level.driver_spawns[0],
-            driving.as_ref().map(|d| kart::KartMotion::new(&d.driver)),
+            driving
+                .as_ref()
+                .map(|_| kart::KartMotion::new(sim.driver())),
             &textures.vram,
             &wheel_icons.0,
             &mut commands,
@@ -885,6 +896,7 @@ fn setup(
             );
         }
     }
+    commands.insert_resource(sim);
 
     if let (Some(icons), true) = (&shadow_icons.0, driving.is_some()) {
         shadow::spawn(

@@ -11,7 +11,6 @@ use loader::vram::Vram;
 use render::mesh::SCALE;
 use vehicle::skid::{fade_anchor, intensity, segments};
 
-use crate::drive::Drive;
 use crate::exhaust::icon_image;
 use crate::subtract::{self, SubtractMaterial};
 
@@ -117,7 +116,7 @@ pub fn update(
             Without<crate::sky::SkyCamera>,
         ),
     >,
-    drive: Res<Drive>,
+    sim: Res<crate::props::Sim>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -130,7 +129,7 @@ pub fn update(
     let forward = camera.forward().as_vec3();
     let point = |p: [i16; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
 
-    let d = &drive.driver;
+    let d = sim.driver();
     // The distance of the newest mark sets the brightness of all of them, and
     // one too far on any axis is not drawn at all.
     let anchor = point(fade_anchor(d)) - eye;

@@ -3,12 +3,18 @@
 //! One client [`host`]s a lobby and prints its [`Ticket`]; the others [`join`] with it. A
 //! session runs on a thread of its own, so the game never waits on the network: it polls
 //! [`Session::events`] once per frame.
+//!
+//! The host only coordinates: it takes the joins, starts the race, and says when tick 0 is. The
+//! race itself is a mesh. When it starts, every player connects to every other, and each sends
+//! its pads straight to each of the others ([`Event::Pads`] brings the ones that came in). There
+//! is no relay and no delay: a player plays its own pad at once, and the others' as they arrive
+//! (the game predicts them until then, see `race::rollback`).
 
-pub mod lockstep;
 pub mod wire;
 
-pub use wire::{Frame, Pad, Tick};
+pub use wire::{Pad, Tick};
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Mutex;
@@ -21,11 +27,10 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::lockstep::FrameReceiver;
-use crate::wire::{InputSender, Message};
+use crate::wire::{InputReceiver, InputSender, Message};
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/1";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/2";
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -94,16 +99,26 @@ pub enum Event {
     Joined(EndpointId),
     /// A peer is gone.
     PeerLeft(EndpointId),
-    /// The race starts, and this is tick 0. `slot` is ours among the players, and `characters`
-    /// is the character each slot drives (so its length is the number of players). The race is
-    /// on the level `track` (a `LevelId`), which the game has to be showing.
+    /// A race is about to start. `slot` is ours among the players, and `characters` is the
+    /// character each slot drives (so its length is the number of players). The race is on the
+    /// level `track` (a `LevelId`), which the game has to be showing. Once it is, and the game
+    /// has built the race, [`Session::ready`] says so; [`Event::Go`] then starts it.
     Started {
         slot: usize,
         characters: Vec<u8>,
         track: u32,
     },
-    /// Everyone's pad for a tick, which the game plays. They come in order from tick 0.
-    Frame { tick: Tick, pads: Frame },
+    /// This is tick 0: the game plays it, and sends its pad for it with [`Session::input`].
+    Go,
+    /// Pads of the player `slot`, for the ticks from `first` on. They come in order, each once,
+    /// and may come before [`Event::Go`] (the others started first).
+    Pads {
+        slot: usize,
+        first: Tick,
+        pads: Vec<Pad>,
+    },
+    /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
+    Checksum { slot: usize, tick: Tick, hash: u64 },
     /// The session could not go on.
     Failed(String),
 }
@@ -111,7 +126,9 @@ pub enum Event {
 enum Command {
     Start { track: u32 },
     Character(u8),
+    Ready,
     Input(Pad),
+    Checksum { tick: Tick, hash: u64 },
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -140,10 +157,22 @@ impl Session {
         let _ = self.commands.send(Command::Character(character));
     }
 
-    /// Our pad for the tick [`lockstep::INPUT_DELAY`] after the one just played. One per tick played, from
-    /// the first [`Event::Frame`] on.
+    /// The game is ready to play tick 0 (the level is up and the race built), after
+    /// [`Event::Started`]. Once every player is, [`Event::Go`] comes.
+    pub fn ready(&self) {
+        let _ = self.commands.send(Command::Ready);
+    }
+
+    /// Our pad for the tick being played, which goes to the others at once. One per tick
+    /// played, from [`Event::Go`] on.
     pub fn input(&self, pad: Pad) {
         let _ = self.commands.send(Command::Input(pad));
+    }
+
+    /// Tells the others the hash of our sim before `tick`, for them to compare with theirs.
+    /// (The hashes are taken at the same ticks by all, see `race::rollback::Rollback`.)
+    pub fn checksum(&self, tick: Tick, hash: u64) {
+        let _ = self.commands.send(Command::Checksum { tick, hash });
     }
 }
 
@@ -171,12 +200,12 @@ impl Io {
 
 /// Opens a lobby, driving `character`. [`Event::Open`] comes once it can be reached.
 pub fn host(character: u8) -> Session {
-    spawn(move |endpoint, io| Box::pin(run_host(endpoint, io, character)))
+    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Host, character)))
 }
 
 /// Joins the lobby of `ticket`, driving `character`.
 pub fn join(ticket: Ticket, character: u8) -> Session {
-    spawn(move |endpoint, io| Box::pin(run_join(endpoint, io, ticket, character)))
+    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Join(ticket), character)))
 }
 
 type Task = std::pin::Pin<Box<dyn Future<Output = Result<(), Error>>>>;
@@ -247,7 +276,7 @@ enum Heard {
 }
 
 /// Reads the datagrams and the reliable messages of a connection until it closes.
-fn listen(connection: Connection, heard: UnboundedSender<Heard>) {
+fn listen(connection: Connection, from: EndpointId, heard: UnboundedSender<(EndpointId, Heard)>) {
     tokio::spawn(async move {
         loop {
             let message = tokio::select! {
@@ -262,14 +291,14 @@ fn listen(connection: Connection, heard: UnboundedSender<Heard>) {
             };
             match message {
                 Some(Ok(message)) => {
-                    if heard.send(Heard::Message(message)).is_err() {
+                    if heard.send((from, Heard::Message(message))).is_err() {
                         return;
                     }
                 }
                 // Not ours to understand: a stranger's, or a newer build's.
                 Some(Err(_)) => {}
                 None => {
-                    let _ = heard.send(Heard::Closed);
+                    let _ = heard.send((from, Heard::Closed));
                     return;
                 }
             }
@@ -277,161 +306,346 @@ fn listen(connection: Connection, heard: UnboundedSender<Heard>) {
     });
 }
 
-async fn run_host(endpoint: Endpoint, mut io: Io, mut character: u8) -> Result<(), Error> {
-    tokio::select! {
-        _ = &mut io.stop => return Ok(()),
-        _ = endpoint.online() => {}
-    }
-    io.event(Event::Open(Ticket::of(&endpoint.addr())));
+#[derive(Clone)]
+enum Role {
+    Host,
+    Join(Ticket),
+}
 
-    // Slot 0 is us; the peers are 1.. in the order they came.
-    let mut peers: Vec<Connection> = Vec::new();
-    // What each peer said it drives; none until its Hello comes.
-    let mut characters: Vec<Option<(u32, u8)>> = Vec::new();
-    // The track of a start that waits for the Hellos.
-    let mut start_wanted: Option<u32> = None;
-    let (heard_tx, mut heard) = unbounded_channel::<(usize, Heard)>();
-    let mut race: Option<lockstep::Host> = None;
-    let mut timer = send_interval();
-    loop {
-        tokio::select! {
-            _ = &mut io.stop => return Ok(()),
-            // Nobody joins a race that has begun.
-            incoming = endpoint.accept(), if race.is_none() => {
-                let Some(incoming) = incoming else { return Ok(()) };
-                let Ok(accepting) = incoming.accept() else { continue };
-                let Ok(connection) = accepting.await else { continue };
-                let slot = peers.len() + 1;
-                io.event(Event::PeerJoined(connection.remote_id()));
-                let (tx, mut rx) = unbounded_channel();
-                listen(connection.clone(), tx);
-                let heard_tx = heard_tx.clone();
-                tokio::spawn(async move {
-                    while let Some(h) = rx.recv().await {
-                        if heard_tx.send((slot, h)).is_err() {
-                            return;
-                        }
-                    }
-                });
-                peers.push(connection);
-                characters.push(None);
-            }
-            Some(command) = io.commands.recv() => match command {
-                // Goes ahead below, once every peer has said what it drives.
-                Command::Start { track } => start_wanted = Some(track),
-                Command::Character(c) => character = c,
-                Command::Input(pad) => if let Some(race) = &mut race {
-                    race.push_local(pad);
-                },
-            },
-            Some((slot, heard)) = heard.recv() => match heard {
-                Heard::Message(Message::Inputs(inputs)) => if let Some(race) = &mut race {
-                    let _ = race.accept(slot, &inputs);
-                },
-                Heard::Message(Message::Hello { character, seq }) => {
-                    let known = &mut characters[slot - 1];
-                    if known.is_none_or(|(have, _)| seq > have) {
-                        *known = Some((seq, character));
-                    }
-                }
-                Heard::Message(_) => {}
-                Heard::Closed => io.event(Event::PeerLeft(peers[slot - 1].remote_id())),
-            },
-            _ = timer.tick() => if let Some(race) = &race {
-                for (i, peer) in peers.iter().enumerate() {
-                    send_datagram(peer, &Message::Frames(race.packet(i + 1)));
-                }
-            },
-        }
-        if let Some(track) =
-            start_wanted.filter(|_| race.is_none() && characters.iter().all(Option::is_some))
-        {
-            start_wanted = None;
-            let all: Vec<u8> = std::iter::once(character)
-                .chain(characters.iter().flatten().map(|&(_, c)| c))
-                .collect();
-            race = Some(lockstep::Host::new(all.len()));
-            for (i, peer) in peers.iter().enumerate() {
-                let start = Message::Start {
-                    slot: i as u8 + 1,
-                    characters: all.clone(),
-                    track,
-                };
-                let _ = send_reliably(peer, &start).await;
-            }
-            io.event(Event::Started {
-                slot: 0,
-                characters: all,
-                track,
-            });
-        }
-        if let Some(race) = &mut race {
-            for (tick, pads) in race.advance() {
-                io.event(Event::Frame { tick, pads });
-            }
-        }
+/// A player in the lobby, as the host knows it.
+struct Guest {
+    id: EndpointId,
+    connection: Connection,
+    /// What it said it drives, and the number of the Hello that said it; none until it comes.
+    hello: Option<(u32, u8)>,
+}
+
+/// The race as agreed at the start.
+struct Plan {
+    /// The endpoint of each slot. The host is 0.
+    roster: Vec<EndpointId>,
+}
+
+impl Plan {
+    fn slot_of(&self, id: EndpointId) -> Option<usize> {
+        self.roster.iter().position(|&r| r == id)
     }
 }
 
-async fn run_join(
-    endpoint: Endpoint,
-    mut io: Io,
-    ticket: Ticket,
-    character: u8,
-) -> Result<(), Error> {
-    let connection: Connection = tokio::select! {
-        _ = &mut io.stop => return Ok(()),
-        connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
-    };
-    io.event(Event::Joined(ticket.id));
-    send_reliably(&connection, &Message::Hello { character, seq: 0 }).await?;
-    let mut hellos = 1;
+/// The connection to another player in the race, and the pads that go over it.
+struct Link {
+    connection: Connection,
+    /// Our pads, until it confirms them.
+    sender: InputSender,
+    /// Its pads, as far as they have come in.
+    receiver: InputReceiver,
+    /// The first of our ticks it has not confirmed.
+    peer_has: Tick,
+}
 
-    let (heard_tx, mut heard) = unbounded_channel();
-    listen(connection.clone(), heard_tx);
-    // Once the race has started: our pads, and the frames that came.
-    let mut race: Option<(InputSender, FrameReceiver, Tick)> = None;
+impl Link {
+    fn new(connection: Connection) -> Link {
+        Link {
+            connection,
+            sender: InputSender::default(),
+            receiver: InputReceiver::default(),
+            peer_has: 0,
+        }
+    }
+
+    /// Sends the pads it lacks of ours, and what we have of its.
+    fn send(&mut self) {
+        let packet = self.sender.packet(self.peer_has, self.receiver.next());
+        send_datagram(&self.connection, &Message::Inputs(packet));
+    }
+}
+
+/// Connects to a player of the roster, trying for a while: it may not be listening yet.
+fn dial(endpoint: Endpoint, id: EndpointId, dialed: UnboundedSender<Connection>) {
+    tokio::spawn(async move {
+        for _ in 0..20 {
+            if let Ok(connection) = endpoint.connect(EndpointAddr::new(id), ALPN).await {
+                let _ = dialed.send(connection);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
+}
+
+/// The session of a lobby host or of a player who joined one. They differ in the lobby (the
+/// host takes the joins and starts the race) and in the barrier before tick 0 (the host collects
+/// the [`Message::Ready`]s and sends the [`Message::Go`]); the race is the same for both.
+async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> Result<(), Error> {
+    let me = endpoint.id();
+    let (heard_tx, mut heard) = unbounded_channel::<(EndpointId, Heard)>();
+    let (dialed_tx, mut dialed) = unbounded_channel::<Connection>();
+
+    // The lobby. The host has the guests; a guest has the host.
+    let mut guests: Vec<Guest> = Vec::new();
+    let mut host_connection: Option<Connection> = None;
+    let mut hellos = 0;
+    // The track of a start that waits for the Hellos.
+    let mut start_wanted: Option<u32> = None;
+
+    match &role {
+        Role::Host => {
+            tokio::select! {
+                _ = &mut io.stop => return Ok(()),
+                _ = endpoint.online() => {}
+            }
+            io.event(Event::Open(Ticket::of(&endpoint.addr())));
+        }
+        Role::Join(ticket) => {
+            let connection: Connection = tokio::select! {
+                _ = &mut io.stop => return Ok(()),
+                connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
+            };
+            io.event(Event::Joined(ticket.id));
+            send_reliably(&connection, &Message::Hello { character, seq: 0 }).await?;
+            hellos = 1;
+            listen(connection.clone(), ticket.id, heard_tx.clone());
+            host_connection = Some(connection);
+        }
+    }
+    let host_id = match &role {
+        Role::Host => me,
+        Role::Join(ticket) => ticket.id,
+    };
+
+    // The race.
+    let mut plan: Option<Plan> = None;
+    let mut links: HashMap<EndpointId, Link> = HashMap::new();
+    // Connections from players that are not in the roster (yet): the start may not have come.
+    let mut unclaimed: Vec<Connection> = Vec::new();
+    let mut game_ready = false;
+    let mut ready_sent = false;
+    // The host: who is ready.
+    let mut ready_from: HashSet<EndpointId> = HashSet::new();
+    let mut running = false;
     let mut timer = send_interval();
+
     loop {
         tokio::select! {
             _ = &mut io.stop => {
-                connection.close(0u32.into(), b"bye");
+                for link in links.values() {
+                    link.connection.close(0u32.into(), b"bye");
+                }
                 return Ok(());
             }
+            incoming = endpoint.accept() => {
+                let Some(incoming) = incoming else { return Ok(()) };
+                let Ok(accepting) = incoming.accept() else { continue };
+                let Ok(connection) = accepting.await else { continue };
+                let id = connection.remote_id();
+                match &role {
+                    // Nobody joins a race that has begun.
+                    Role::Host if plan.is_none() => {
+                        io.event(Event::PeerJoined(id));
+                        listen(connection.clone(), id, heard_tx.clone());
+                        guests.push(Guest { id, connection, hello: None });
+                    }
+                    Role::Host => {}
+                    // The others of the race connect to us as the roster says.
+                    Role::Join(_) => {
+                        listen(connection.clone(), id, heard_tx.clone());
+                        unclaimed.push(connection);
+                    }
+                }
+            }
+            Some(connection) = dialed.recv() => {
+                listen(connection.clone(), connection.remote_id(), heard_tx.clone());
+                unclaimed.push(connection);
+            }
             Some(command) = io.commands.recv() => match command {
-                Command::Input(pad) => if let Some((sender, ..)) = &mut race {
-                    sender.push(pad);
+                // Goes ahead below, once every guest has said what it drives.
+                Command::Start { track } => if matches!(role, Role::Host) {
+                    start_wanted = Some(track);
                 },
-                // The host takes the latest Hello it has, so one that is sent again overrides.
-                Command::Character(character) if race.is_none() => {
-                    send_reliably(&connection, &Message::Hello { character, seq: hellos }).await?;
-                    hellos += 1;
-                }
-                Command::Character(_) | Command::Start { .. } => {}
-            },
-            Some(heard) = heard.recv() => match heard {
-                Heard::Message(Message::Start { slot, characters, track }) if race.is_none() => {
-                    race = Some((lockstep::local_sender(), FrameReceiver::default(), 0));
-                    io.event(Event::Started { slot: slot as usize, characters, track });
-                }
-                Heard::Message(Message::Frames(frames)) => if let Some((_, receiver, host_has)) = &mut race {
-                    *host_has = (*host_has).max(frames.ack);
-                    // A gap needs a snapshot, which the race does not have (yet).
-                    let new = receiver.accept(&frames).map_err(|g| format!("lost frames {g:?}"))?;
-                    for (tick, pads) in new {
-                        io.event(Event::Frame { tick, pads });
+                Command::Character(c) => if plan.is_none() {
+                    character = c;
+                    if let Some(connection) = &host_connection {
+                        // The host takes the latest Hello it has, so one that is sent again overrides.
+                        send_reliably(connection, &Message::Hello { character, seq: hellos }).await?;
+                        hellos += 1;
                     }
                 },
-                Heard::Message(_) => {}
+                Command::Ready => game_ready = true,
+                Command::Input(pad) => if running {
+                    for link in links.values_mut() {
+                        link.sender.push(pad);
+                        link.send();
+                    }
+                },
+                Command::Checksum { tick, hash } => if running {
+                    let message = Message::Checksum { tick, hash };
+                    for link in links.values() {
+                        // On a stream of its own, which the loop does not wait for.
+                        let connection = link.connection.clone();
+                        let message = message.clone();
+                        tokio::spawn(async move {
+                            let _ = send_reliably(&connection, &message).await;
+                        });
+                    }
+                },
+            },
+            Some((from, heard)) = heard.recv() => match heard {
+                Heard::Message(message) => match message {
+                    Message::Hello { character, seq } => {
+                        if let Some(guest) = guests.iter_mut().find(|g| g.id == from)
+                            && guest.hello.is_none_or(|(have, _)| seq > have)
+                        {
+                            guest.hello = Some((seq, character));
+                        }
+                    }
+                    Message::Start { slot, characters, track, roster }
+                        if plan.is_none() && from == host_id && !matches!(role, Role::Host) =>
+                    {
+                        let roster: Vec<EndpointId> = roster
+                            .iter()
+                            .map(|bytes| EndpointId::from_bytes(bytes))
+                            .collect::<Result<_, _>>()?;
+                        let slot = slot as usize;
+                        // The host is connected already.
+                        links.insert(
+                            host_id,
+                            Link::new(host_connection.clone().expect("a guest has the host")),
+                        );
+                        // Players connect to the ones before them; the ones after connect to us.
+                        for &id in roster.iter().take(slot).skip(1) {
+                            dial(endpoint.clone(), id, dialed_tx.clone());
+                        }
+                        plan = Some(Plan { roster });
+                        io.event(Event::Started { slot, characters, track });
+                    }
+                    Message::Ready => {
+                        if matches!(role, Role::Host) && plan.is_some() {
+                            ready_from.insert(from);
+                        }
+                    }
+                    Message::Go => if from == host_id && !running {
+                        running = true;
+                        io.event(Event::Go);
+                    },
+                    Message::Inputs(inputs) => {
+                        if let (Some(plan), Some(link)) = (&plan, links.get_mut(&from)) {
+                            link.peer_has = link.peer_has.max(inputs.ack);
+                            let before = link.receiver.next();
+                            link.receiver.accept(&inputs).map_err(|gap| {
+                                format!("lost pads of player {}: {gap:?}", plan.slot_of(from).unwrap_or(0))
+                            })?;
+                            let after = link.receiver.next();
+                            if after > before {
+                                let pads = (before..after)
+                                    .map(|t| link.receiver.get(t).expect("just accepted"))
+                                    .collect();
+                                link.receiver.forget(after);
+                                if let Some(slot) = plan.slot_of(from) {
+                                    io.event(Event::Pads { slot, first: before, pads });
+                                }
+                            }
+                        }
+                    }
+                    Message::Checksum { tick, hash } => {
+                        if let Some(slot) = plan.as_ref().and_then(|plan| plan.slot_of(from))
+                            && links.contains_key(&from)
+                        {
+                            io.event(Event::Checksum { slot, tick, hash });
+                        }
+                    }
+                    Message::Snapshot { .. } | Message::Start { .. } => {}
+                },
                 Heard::Closed => {
-                    io.event(Event::PeerLeft(ticket.id));
-                    return Ok(());
+                    io.event(Event::PeerLeft(from));
+                    links.remove(&from);
+                    unclaimed.retain(|c| c.remote_id() != from);
+                    if plan.is_none() {
+                        guests.retain(|g| g.id != from);
+                        // A guest whose host is gone has no lobby.
+                        if from == host_id && !matches!(role, Role::Host) {
+                            return Ok(());
+                        }
+                    }
                 }
             },
-            _ = timer.tick() => if let Some((sender, receiver, host_has)) = &mut race {
-                let packet = sender.packet(*host_has, receiver.next());
-                send_datagram(&connection, &Message::Inputs(packet));
+            _ = timer.tick() => if running {
+                for link in links.values_mut() {
+                    link.send();
+                }
             },
+        }
+
+        // The host starts the race once every guest has said what it drives.
+        if let Some(track) =
+            start_wanted.filter(|_| plan.is_none() && guests.iter().all(|g| g.hello.is_some()))
+        {
+            start_wanted = None;
+            let characters: Vec<u8> = std::iter::once(character)
+                .chain(guests.iter().filter_map(|g| g.hello.map(|(_, c)| c)))
+                .collect();
+            let roster: Vec<EndpointId> = std::iter::once(me)
+                .chain(guests.iter().map(|g| g.id))
+                .collect();
+            for (i, guest) in guests.iter().enumerate() {
+                let start = Message::Start {
+                    slot: i as u8 + 1,
+                    characters: characters.clone(),
+                    track,
+                    roster: roster.iter().map(|id| *id.as_bytes()).collect(),
+                };
+                let _ = send_reliably(&guest.connection, &start).await;
+                links.insert(guest.id, Link::new(guest.connection.clone()));
+            }
+            plan = Some(Plan { roster });
+            io.event(Event::Started {
+                slot: 0,
+                characters,
+                track,
+            });
+        }
+
+        // Connections that the roster knows are links now.
+        if let Some(plan) = &plan {
+            unclaimed.retain(|connection| {
+                let id = connection.remote_id();
+                if plan.slot_of(id).is_none() {
+                    return true;
+                }
+                links
+                    .entry(id)
+                    .or_insert_with(|| Link::new(connection.clone()));
+                false
+            });
+        }
+
+        // Connected to every other player, with the game ready: tell the host.
+        if let Some(plan) = &plan
+            && game_ready
+            && !ready_sent
+            && plan
+                .roster
+                .iter()
+                .all(|&id| id == me || links.contains_key(&id))
+        {
+            ready_sent = true;
+            match &host_connection {
+                Some(connection) => send_reliably(connection, &Message::Ready).await?,
+                None => {
+                    ready_from.insert(me);
+                }
+            }
+        }
+        // The host: everyone is ready, so this is tick 0.
+        if matches!(role, Role::Host)
+            && !running
+            && let Some(plan) = &plan
+            && plan.roster.iter().all(|id| ready_from.contains(id))
+        {
+            running = true;
+            for guest in &guests {
+                let _ = send_reliably(&guest.connection, &Message::Go).await;
+            }
+            io.event(Event::Go);
         }
     }
 }
