@@ -903,7 +903,7 @@ fn chase(
 /// The wumpa count.
 fn wumpa_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<WumpaHud>>) {
     for mut text in &mut text {
-        text.0 = format!("{}/10", sim.driver().num_wumpas);
+        text.0 = format!("x {}", sim.driver().num_wumpas);
     }
 }
 

@@ -39,6 +39,7 @@ mod subtract;
 mod toast;
 mod weapon;
 mod wheels;
+mod wumpa_icon;
 
 use std::path::PathBuf;
 
@@ -497,6 +498,7 @@ fn main() {
             lobby::LobbyPlugin,
             leaderboard::LeaderboardPlugin,
             weapon::WeaponPlugin,
+            wumpa_icon::WumpaIconPlugin,
             toast::ToastPlugin,
         ));
         if let Some(ticket) = join {
