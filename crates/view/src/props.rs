@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use instance::Objects;
+use instance::{Objects, Slot};
 use loader::dram::DramFile;
 use loader::lev::Level;
 use loader::model::{Model, ModelHeader};
@@ -305,18 +305,6 @@ fn body(commands: &mut Commands, transform: Transform, marker: impl Bundle) -> E
         .id()
 }
 
-/// Which hazard of which kind moves an instance.
-enum Hazard {
-    Armadillo(usize),
-    Minecart(usize),
-    Roller(usize),
-    Turtle(usize),
-    Fruit(usize),
-    Crate(usize),
-    /// Only its sparks show (`fire`).
-    Fireball,
-}
-
 pub fn spawn(
     level: &Level,
     objects: &Objects,
@@ -328,55 +316,8 @@ pub fn spawn(
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
 ) {
-    let mut by_instance: HashMap<usize, Hazard> = HashMap::new();
-    by_instance.extend(
-        objects
-            .armadillos
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h.instance, Hazard::Armadillo(i))),
-    );
-    by_instance.extend(
-        objects
-            .minecarts
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h.instance, Hazard::Minecart(i))),
-    );
-    by_instance.extend(
-        objects
-            .rollers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h.instance, Hazard::Roller(i))),
-    );
-    by_instance.extend(
-        objects
-            .crates
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h.instance, Hazard::Crate(i))),
-    );
-    by_instance.extend(
-        objects
-            .fruit
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h.instance, Hazard::Fruit(i))),
-    );
-    by_instance.extend(
-        objects
-            .turtles
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (h.instance, Hazard::Turtle(i))),
-    );
-    by_instance.extend(
-        objects
-            .fireballs
-            .iter()
-            .map(|h| (h.instance, Hazard::Fireball)),
-    );
+    // Which object of which kind moves an instance.
+    let by_instance: HashMap<usize, Slot> = objects.slots().collect();
 
     let mut props = Props::default();
     let mut armadillos = Armadillos::default();
@@ -397,7 +338,7 @@ pub fn spawn(
             continue;
         }
         // The fireballs hide their model (`HIDE_MODEL`); see `fire`.
-        if matches!(by_instance.get(&n), Some(Hazard::Fireball)) {
+        if matches!(by_instance.get(&n), Some(Slot::Fireball(_))) {
             continue;
         }
         let model = models
@@ -471,12 +412,12 @@ pub fn spawn(
             shown: None,
         };
         let (transform, parent) = match by_instance.get(&n) {
-            Some(&Hazard::Roller(i)) => (
+            Some(&Slot::Roller(i)) => (
                 Transform::default(),
                 Some(body(commands, transform, Rolling(i))),
             ),
             // A fruit's model hangs off a body that is hidden once it is picked up.
-            Some(&Hazard::Fruit(i)) => (
+            Some(&Slot::Fruit(i)) => (
                 Transform::default(),
                 Some(body(
                     commands,
@@ -489,11 +430,11 @@ pub fn spawn(
                 )),
             ),
             // A crate's model hangs off a body that shrinks when it is hit and grows back.
-            Some(&Hazard::Crate(i)) => (
+            Some(&Slot::Crate(i)) => (
                 Transform::default(),
                 Some(body(commands, transform, CrateBody(i))),
             ),
-            Some(&Hazard::Armadillo(i)) => {
+            Some(&Slot::Armadillo(i)) => {
                 let parent = body(commands, transform, ArmadilloBody(i));
                 let mut s = shown(i);
                 s.parts = spawn_parts(
@@ -510,7 +451,7 @@ pub fn spawn(
                 armadillos.0.push(s);
                 continue;
             }
-            Some(&Hazard::Minecart(i)) => {
+            Some(&Slot::Minecart(i)) => {
                 let parent = body(commands, transform, MinecartBody(i));
                 let mut s = shown(i);
                 s.parts = spawn_parts(
@@ -527,7 +468,7 @@ pub fn spawn(
                 minecarts.0.push(s);
                 continue;
             }
-            Some(&Hazard::Turtle(i)) => {
+            Some(&Slot::Turtle(i)) => {
                 let mut s = shown(i);
                 s.parts = spawn_parts(
                     data.parts,
@@ -548,7 +489,7 @@ pub fn spawn(
         // The level places crates at whatever height, so they sink into the ground; pull them
         // toward the camera so the ground does not cut them.
         let crate_base;
-        let base = if matches!(by_instance.get(&n), Some(Hazard::Crate(_))) {
+        let base = if matches!(by_instance.get(&n), Some(Slot::Crate(_))) {
             crate_base = StandardMaterial {
                 depth_bias: CRATE_DEPTH_BIAS,
                 ..base.clone()
