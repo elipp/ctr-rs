@@ -31,33 +31,83 @@ pub enum Action {
     DebugSetWumpa(u8),
 }
 
+/// The first word of `text` and what follows it.
+fn word(text: &str) -> (&str, &str) {
+    let text = text.trim();
+    text.split_once(char::is_whitespace)
+        .map_or((text, ""), |(w, rest)| (w, rest.trim()))
+}
+
+const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
+const RACE_USAGE: &str = "Usage: /race start | restart";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 11>";
+
 impl Action {
-    /// The action a line without its `/` asks for, or what is wrong with it.
+    /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
+    /// and a subcommand (`/lobby join <address>`), which may have subcommands of its own
+    /// (`/debug set wumpa 10`).
     fn parse(line: &str) -> Result<Action, String> {
-        let (name, argument) = line.split_once(' ').unwrap_or((line, ""));
+        let (name, rest) = word(line);
         match name {
-            "create-lobby" => Ok(Action::CreateLobby),
-            "join-lobby" => argument
-                .trim()
+            "lobby" => Action::lobby(rest),
+            "race" => Action::race(rest),
+            "debug" => Action::debug(rest),
+            _ => Err(format!("Unknown command: /{name}")),
+        }
+    }
+
+    fn lobby(line: &str) -> Result<Action, String> {
+        let (sub, rest) = word(line);
+        match sub {
+            "create" => Ok(Action::CreateLobby),
+            "join" => rest
                 .parse()
                 .map(Action::JoinLobby)
                 .map_err(|e| format!("Not a lobby address: {e}")),
-            "close-lobby" => Ok(Action::CloseLobby),
-            "start-race" => Ok(Action::StartRace),
-            "restart-race" => Ok(Action::RestartRace),
-            "debug-set-wumpa" => argument
-                .trim()
-                .parse::<i64>()
-                .map(|n| Action::DebugSetWumpa(n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8))
-                .map_err(|_| "Usage: /debug-set-wumpa <number>".to_string()),
-            "debug-set-weapon" => argument
-                .trim()
-                .parse()
-                .ok()
-                .filter(|&n| n <= 11)
-                .map(Action::DebugAddWeapon)
-                .ok_or_else(|| "Usage: /debug-set-weapon <0 to 11>".to_string()),
-            _ => Err(format!("Unknown command: /{name}")),
+            "close" => Ok(Action::CloseLobby),
+            "" => Err(LOBBY_USAGE.into()),
+            _ => Err(format!("Unknown command: /lobby {sub}\n{LOBBY_USAGE}")),
+        }
+    }
+
+    fn race(line: &str) -> Result<Action, String> {
+        let (sub, _) = word(line);
+        match sub {
+            "start" => Ok(Action::StartRace),
+            "restart" => Ok(Action::RestartRace),
+            "" => Err(RACE_USAGE.into()),
+            _ => Err(format!("Unknown command: /race {sub}\n{RACE_USAGE}")),
+        }
+    }
+
+    fn debug(line: &str) -> Result<Action, String> {
+        let (sub, rest) = word(line);
+        match sub {
+            "set" => {
+                let (what, value) = word(rest);
+                match what {
+                    "wumpa" => {
+                        value
+                            .parse::<i64>()
+                            .map(|n| {
+                                Action::DebugSetWumpa(
+                                    n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8
+                                )
+                            })
+                            .map_err(|_| "Usage: /debug set wumpa <number>".to_string())
+                    }
+                    "weapon" => value
+                        .parse()
+                        .ok()
+                        .filter(|&n| n <= 11)
+                        .map(Action::DebugAddWeapon)
+                        .ok_or_else(|| "Usage: /debug set weapon <0 to 11>".to_string()),
+                    "" => Err(DEBUG_USAGE.into()),
+                    _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
+                }
+            }
+            "" => Err(DEBUG_USAGE.into()),
+            _ => Err(format!("Unknown command: /debug {sub}\n{DEBUG_USAGE}")),
         }
     }
 }
@@ -309,5 +359,54 @@ fn show(
                 GlobalZIndex(i32::MAX),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commands_have_subcommands() {
+        assert!(matches!(
+            Action::parse("lobby create"),
+            Ok(Action::CreateLobby)
+        ));
+        assert!(matches!(
+            Action::parse("lobby close"),
+            Ok(Action::CloseLobby)
+        ));
+        assert!(matches!(Action::parse("race start"), Ok(Action::StartRace)));
+        assert!(matches!(
+            Action::parse("race restart"),
+            Ok(Action::RestartRace)
+        ));
+        assert!(matches!(
+            Action::parse("debug set wumpa 10"),
+            Ok(Action::DebugSetWumpa(10))
+        ));
+        // Clamped to what a kart holds.
+        assert!(matches!(
+            Action::parse("debug  set   wumpa 99"),
+            Ok(Action::DebugSetWumpa(10))
+        ));
+        assert!(matches!(
+            Action::parse("debug set weapon 4"),
+            Ok(Action::DebugAddWeapon(4))
+        ));
+    }
+
+    #[test]
+    fn a_missing_or_wrong_part_says_what_there_is() {
+        let error = |line| Action::parse(line).unwrap_err();
+        assert!(error("lobby").starts_with("Usage: /lobby"));
+        assert!(error("lobby fly").contains("Unknown command: /lobby fly"));
+        assert!(error("debug").starts_with("Usage: /debug"));
+        assert!(error("debug set").starts_with("Usage: /debug"));
+        assert!(error("debug set teapot 3").contains("/debug set teapot"));
+        assert!(error("debug set weapon 12").contains("0 to 11"));
+        assert!(error("debug set wumpa x").contains("<number>"));
+        assert!(error("join-lobby abc").contains("Unknown command: /join-lobby"));
+        assert!(error("lobby join nonsense").starts_with("Not a lobby address"));
     }
 }
