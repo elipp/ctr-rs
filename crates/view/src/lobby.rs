@@ -4,6 +4,7 @@
 //!
 //! * L or `/lobby create`: open a lobby (L again, or `/lobby close`, to close it)
 //! * `/lobby join <address>`: join the lobby at an address
+//! * `/cache purge`: delete the maps other players sent us (`assets/.cache/maps`)
 //! * G or `/race start`: start the race, once the others have joined (the host only)
 //! * F9 or `/race restart`: start the race in progress over (the host only)
 //!
@@ -15,6 +16,7 @@ use bevy::prelude::*;
 use net::{Event, Pad, Session, Ticket};
 
 use crate::command::Action;
+use crate::maps;
 use crate::toast::Toast;
 
 /// A race that has started.
@@ -27,6 +29,8 @@ pub struct Online {
     pub names: Vec<String>,
     /// The `LevelId` it is on, which the viewer shows before anything is played.
     pub track: u32,
+    /// The hash of the contents of the map, if it is a map (0 for the game's tracks).
+    pub hash: u64,
     /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
     /// the pads).
     pub inbox: Vec<(usize, u32, Vec<Pad>)>,
@@ -102,6 +106,8 @@ pub struct Lobby {
     /// what the players are told.
     roster: Vec<(String, u8)>,
     roster_seen: bool,
+    /// The map the race is on that we are waiting for the host to send.
+    fetching: Option<u32>,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
     pub online: Option<Online>,
@@ -125,7 +131,7 @@ impl Lobby {
     fn count_down(&mut self, then: Then, now: f32) {
         let text = match then {
             Then::Start(_) => "Race starts in",
-            Then::Restart(_) => "Race restarts in",
+            Then::Restart(..) => "Race restarts in",
         };
         self.announce(format!("{text} {COUNTDOWN_SECONDS}"));
         self.countdown = Some(Countdown {
@@ -137,11 +143,7 @@ impl Lobby {
 
     /// Leaves the lobby, ours or another's, and the race in it.
     pub fn close(&mut self) {
-        self.session = None;
-        self.countdown = None;
-        self.online = None;
-        self.roster.clear();
-        self.roster_seen = false;
+        *self = Lobby::default();
     }
 
     /// Joins the lobby at `ticket`.
@@ -182,9 +184,27 @@ impl Lobby {
     }
 
     /// Starts the race over on `track` (the host only).
-    pub fn restart(&self, track: u32) {
+    pub fn restart(&self, track: u32, hash: u64) {
         if let Some(session) = &self.session {
-            session.restart(track);
+            self.provide(session, track);
+            session.restart(track, hash);
+        }
+    }
+
+    /// Starts the race on `track` (the host only).
+    fn start(&self, track: u32) {
+        if let Some(session) = &self.session {
+            self.provide(session, track);
+            session.start(track, maps::file(track).map_or(0, |(hash, _)| hash));
+        }
+    }
+
+    /// Makes the map `track` available to the players who lack it, if it is one.
+    fn provide(&self, session: &Session, track: u32) {
+        if map::is_map_id(track)
+            && let Some((hash, bytes)) = maps::file(track)
+        {
+            session.provide(track, hash, std::sync::Arc::new(bytes));
         }
     }
 
@@ -234,6 +254,7 @@ fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "Close the lobby first (/lobby close)"
         }
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
+        Action::PurgeCache if lobby.online.is_some() => "Not during a race",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -278,11 +299,23 @@ fn run(
                 lobby.count_down(Then::Start(track.1.0), now);
                 continue;
             }
+            Action::PurgeCache => match maps::purge() {
+                Ok(0) => "The cache is empty",
+                Ok(n) => {
+                    println!("deleted {n} cached map(s)");
+                    toasts.write(Toast::new(format!("Deleted {n} cached map(s)"), 2500));
+                    continue;
+                }
+                Err(why) => {
+                    toasts.write(Toast::new(why, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    continue;
+                }
+            },
             // (Not the lobby's.)
             Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_) => continue,
             Action::RestartRace => {
                 if let Some(net) = &lobby.online {
-                    let then = Then::Restart(net.track);
+                    let then = Then::Restart(net.track, net.hash);
                     lobby.count_down(then, now);
                 }
                 continue;
@@ -296,7 +329,10 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     let Some(session) = &lobby.session else {
         return;
     };
-    let mut failed = false;
+    let mut failed = None;
+    let mut wanted_map = None;
+    let mut got_map = None;
+    let mut map_failed = None;
     let mut roster = None;
     let mut started = None;
     let mut go = false;
@@ -334,11 +370,17 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 characters,
                 players,
                 track,
+                hash,
             } => {
                 println!(
-                    "race started: you are player {slot} of {}, characters {characters:?}, track {track}",
+                    "race started: you are player {slot} of {}, characters {characters:?}, track {track:#x}",
                     characters.len()
                 );
+                // The host chose a map we do not have: it sends it, and the race waits.
+                if map::is_map_id(track) && !maps::has(track, hash) && lobby.fetching != Some(track)
+                {
+                    wanted_map = Some((track, hash));
+                }
                 // Whatever came before belongs to the race before this one.
                 pads.clear();
                 sums.clear();
@@ -352,6 +394,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                         .map(|id| id.fmt_short().to_string())
                         .collect(),
                     track,
+                    hash,
                     inbox: Vec::new(),
                     fresh: true,
                     built: false,
@@ -372,14 +415,47 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             } => pads.push((slot, first, p)),
             Event::Lead { slot, ahead } => leads.push((slot, ahead)),
             Event::Checksum { slot, tick, hash } => sums.push((slot, tick, hash)),
+            Event::Blob { track, hash, bytes } => match maps::receive(track, hash, &bytes) {
+                Ok(()) => {
+                    println!("received map {track:#x} ({} bytes)", bytes.len());
+                    got_map = Some(track);
+                }
+                Err(why) => map_failed = Some(format!("Could not use the map sent: {why}")),
+            },
+            Event::BlobMissing { track, .. } => {
+                map_failed = Some(format!("The host cannot send the map {track:#x}"));
+            }
             Event::Failed(why) => {
                 println!("lobby failed: {why}");
-                failed = true;
+                failed = Some(why);
             }
         }
     }
     if started.is_some() {
         lobby.online = started;
+    }
+    if let Some((track, hash)) = wanted_map {
+        if let Some(session) = &lobby.session {
+            session.fetch(track, hash);
+        }
+        lobby.fetching = Some(track);
+        toasts.write(Toast::new("Downloading the map...", 3000));
+    }
+    if let Some(track) = got_map {
+        if lobby.fetching == Some(track) {
+            lobby.fetching = None;
+        }
+        toasts.write(
+            Toast::new(format!("Got the map {}", maps::name(track)), 2500)
+                .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+        );
+    }
+    if let Some(why) = map_failed {
+        // The race cannot start without the map: the others would wait for us for good.
+        println!("{why}");
+        toasts.write(Toast::new(why, 6000).color(Color::srgb(1.0, 0.3, 0.3)));
+        lobby.close();
+        return;
     }
     if let Some((players, you)) = roster {
         let players: Vec<(String, u8)> = players
@@ -442,11 +518,12 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             );
         }
     }
-    if failed {
-        lobby.session = None;
-        lobby.online = None;
-        lobby.roster.clear();
-        lobby.roster_seen = false;
+    if let Some(why) = failed {
+        // Back to where we started: no lobby, no race.
+        lobby.close();
+        toasts.write(
+            Toast::new(format!("Left the lobby: {why}"), 5000).color(Color::srgb(1.0, 0.3, 0.3)),
+        );
     }
 }
 
@@ -486,8 +563,8 @@ const COUNTDOWN_SECONDS: u32 = 5;
 enum Then {
     /// The first race of the lobby, on this track.
     Start(u32),
-    /// The same players again, on this track.
-    Restart(u32),
+    /// The same players again, on this track (and the hash of its contents, see [`Online::hash`]).
+    Restart(u32, u64),
 }
 
 /// The countdown of a start or a restart: the seconds left, and when the last one was announced.
@@ -514,11 +591,9 @@ fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
         if c.left == 0 {
             match c.then {
                 Then::Start(track) => {
-                    if let Some(session) = &lobby.session {
-                        session.start(track);
-                    }
+                    lobby.start(track);
                 }
-                Then::Restart(track) => lobby.restart(track),
+                Then::Restart(track, hash) => lobby.restart(track, hash),
             }
             return;
         }

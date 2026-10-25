@@ -70,12 +70,14 @@ pub enum Message {
     Hello { character: u8, seq: u32 },
     /// Reliable, host to each client: a race is about to start. `slot` is the client's player
     /// among the players; `characters` is the character of each slot, and `track` the `LevelId`
-    /// the race is on. `roster` is the endpoint id of each slot (the host is 0), which the
+    /// the race is on, and `hash` the hash of its contents when it is a custom track (0 for the
+    /// game's own), which a client that lacks it asks for with [`Message::Want`]. `roster` is the endpoint id of each slot (the host is 0), which the
     /// clients connect to each other by.
     Start {
         slot: u8,
         characters: Vec<u8>,
         track: u32,
+        hash: u64,
         roster: Vec<[u8; 32]>,
     },
     /// Reliable, client to host: connected to every other player, with the level up. Once the
@@ -87,7 +89,17 @@ pub enum Message {
     Inputs(Inputs),
     /// Reliable, host to each client: the race starts again, on `track`. The same players, on
     /// the same connections; `epoch` counts the races and tells their packets apart.
-    Restart { epoch: u32, track: u32 },
+    Restart { epoch: u32, track: u32, hash: u64 },
+    /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
+    Want { track: u32, hash: u64 },
+    /// Reliable, host to client: the custom track asked for, as the bytes it was provided as.
+    Blob {
+        track: u32,
+        hash: u64,
+        bytes: Vec<u8>,
+    },
+    /// Reliable, host to client: the host has no such track to send.
+    NoBlob { track: u32, hash: u64 },
     /// Reliable, host to each client: who is in the lobby and what each drives, the host first.
     /// It comes whenever that changes, in full, so a client that joins late catches up.
     Lobby { players: Vec<([u8; 32], u8)> },
@@ -249,11 +261,29 @@ mod tests {
                 slot: 2,
                 characters: vec![0, 5, 15],
                 track: 4,
+                hash: 0,
                 roster: vec![[1; 32], [2; 32], [3; 32]],
             },
             Message::Ready,
             Message::Go,
-            Message::Restart { epoch: 2, track: 7 },
+            Message::Restart {
+                epoch: 2,
+                track: 7,
+                hash: 0xfeed,
+            },
+            Message::Want {
+                track: 0x8000_0001,
+                hash: 77,
+            },
+            Message::Blob {
+                track: 0x8000_0001,
+                hash: 77,
+                bytes: vec![9; 5],
+            },
+            Message::NoBlob {
+                track: 0x8000_0001,
+                hash: 77,
+            },
             Message::Lobby {
                 players: vec![([1; 32], 4), ([2; 32], 15)],
             },

@@ -17,8 +17,8 @@ pub use wire::{Pad, Tick};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use bytes::Bytes;
@@ -30,7 +30,11 @@ use tokio::sync::oneshot;
 use crate::wire::{InputReceiver, InputSender, Message};
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/2";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/3";
+
+/// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
+/// not read.
+pub const MAX_BLOB: usize = 32 << 20;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -110,14 +114,27 @@ pub enum Event {
     /// A race is about to start. `slot` is ours among the players, and `characters` is the
     /// character each slot drives (so its length is the number of players), and `players` is the
     /// endpoint of each slot (the host is 0). The race is on the
-    /// level `track` (a `LevelId`), which the game has to be showing. Once it is, and the game
-    /// has built the race, [`Session::ready`] says so; [`Event::Go`] then starts it.
+    /// level `track` (a `LevelId`), which the game has to be showing. A custom track comes with
+    /// the `hash` of its contents (0 for the game's own); a game that lacks it asks for it with
+    /// [`Session::fetch`] first. Once the level is up, and the game has built the race,
+    /// [`Session::ready`] says so; [`Event::Go`] then starts it.
     Started {
         slot: usize,
         characters: Vec<u8>,
         players: Vec<EndpointId>,
         track: u32,
+        hash: u64,
     },
+    /// The host sent the custom track asked for with [`Session::fetch`], as the bytes it
+    /// [provided](Session::provide) it as. They are not checked: that the contents hash to `hash`
+    /// is the game's to tell.
+    Blob {
+        track: u32,
+        hash: u64,
+        bytes: Vec<u8>,
+    },
+    /// The host has no custom track `track` with that `hash` to send.
+    BlobMissing { track: u32, hash: u64 },
     /// This is tick 0: the game plays it, and sends its pad for it with [`Session::input`].
     Go,
     /// Pads of the player `slot`, for the ticks from `first` on. They come in order, each once,
@@ -140,13 +157,31 @@ pub enum Event {
 }
 
 enum Command {
-    Start { track: u32 },
-    Restart { track: u32 },
+    Start {
+        track: u32,
+        hash: u64,
+    },
+    Restart {
+        track: u32,
+        hash: u64,
+    },
+    Provide {
+        track: u32,
+        hash: u64,
+        bytes: Arc<Vec<u8>>,
+    },
+    Fetch {
+        track: u32,
+        hash: u64,
+    },
     Announce(String),
     Character(u8),
     Ready,
     Input(Pad),
-    Checksum { tick: Tick, hash: u64 },
+    Checksum {
+        tick: Tick,
+        hash: u64,
+    },
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -164,16 +199,30 @@ impl Session {
     }
 
     /// Starts the race on level `track`, if we host the lobby. Everyone then gets
-    /// [`Event::Started`].
-    pub fn start(&self, track: u32) {
-        let _ = self.commands.send(Command::Start { track });
+    /// [`Event::Started`]. `hash` is that of a custom track's contents (0 for the game's own),
+    /// which has to be [provided](Self::provide) for the players who lack it.
+    pub fn start(&self, track: u32, hash: u64) {
+        let _ = self.commands.send(Command::Start { track, hash });
+    }
+
+    /// Makes the custom track `track` (whose contents hash to `hash`) available to the players
+    /// who ask for it, as `bytes`: what they get in [`Event::Blob`]. Larger than [`MAX_BLOB`] and
+    /// it is not sent.
+    pub fn provide(&self, track: u32, hash: u64, bytes: Arc<Vec<u8>>) {
+        let _ = self.commands.send(Command::Provide { track, hash, bytes });
+    }
+
+    /// Asks the host for the custom track `track` that hashes to `hash`: [`Event::Blob`] brings
+    /// it, or [`Event::BlobMissing`] says it cannot.
+    pub fn fetch(&self, track: u32, hash: u64) {
+        let _ = self.commands.send(Command::Fetch { track, hash });
     }
 
     /// Starts the race again on level `track`, if we host the lobby and a race has been started
     /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
     /// the way it did the first time.
-    pub fn restart(&self, track: u32) {
-        let _ = self.commands.send(Command::Restart { track });
+    pub fn restart(&self, track: u32, hash: u64) {
+        let _ = self.commands.send(Command::Restart { track, hash });
     }
 
     /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host
@@ -209,10 +258,10 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // The thread says goodbye to the peers (which can take a while) on its own: the game
+        // does not wait for it.
         self.stop.take();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread.take();
     }
 }
 
@@ -335,7 +384,7 @@ fn listen(connection: Connection, from: EndpointId, heard: UnboundedSender<(Endp
             let message = tokio::select! {
                 datagram = connection.read_datagram() => datagram.ok().map(|d| Message::from_bytes(&d)),
                 stream = connection.accept_uni() => match stream {
-                    Ok(mut stream) => match stream.read_to_end(1024).await {
+                    Ok(mut stream) => match stream.read_to_end(MAX_BLOB + 1024).await {
                         Ok(bytes) => Some(Message::from_bytes(&bytes)),
                         Err(_) => continue,
                     },
@@ -451,7 +500,10 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
     let mut host_connection: Option<Connection> = None;
     let mut hellos = 0;
     // The track of a start that waits for the Hellos.
-    let mut start_wanted: Option<u32> = None;
+    let mut start_wanted: Option<(u32, u64)> = None;
+    // The custom tracks we can send, and the ones we asked the host for.
+    let mut provided: HashMap<(u32, u64), Arc<Vec<u8>>> = HashMap::new();
+    let mut fetching: HashSet<(u32, u64)> = HashSet::new();
 
     match &role {
         Role::Host => {
@@ -496,8 +548,9 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
     loop {
         tokio::select! {
             _ = &mut io.stop => {
-                for link in links.values() {
-                    link.connection.close(0u32.into(), b"bye");
+                let lobby = guests.iter().map(|g| &g.connection).chain(host_connection.as_ref());
+                for connection in lobby.chain(links.values().map(|l| &l.connection)) {
+                    connection.close(0u32.into(), b"bye");
                 }
                 return Ok(());
             }
@@ -528,22 +581,29 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
             }
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
-                Command::Start { track } => if matches!(role, Role::Host) {
-                    start_wanted = Some(track);
+                Command::Start { track, hash } => if matches!(role, Role::Host) {
+                    start_wanted = Some((track, hash));
+                },
+                Command::Provide { track, hash, bytes } => {
+                    provided.insert((track, hash), bytes);
+                }
+                Command::Fetch { track, hash } => if let Some(connection) = &host_connection {
+                    fetching.insert((track, hash));
+                    send_reliably(connection, &Message::Want { track, hash }).await?;
                 },
                 // The same players again: new links, and everyone ready before tick 0 once more.
-                Command::Restart { track } => if matches!(role, Role::Host)
+                Command::Restart { track, hash } => if matches!(role, Role::Host)
                     && plan.is_some()
                     && let Some((slot, characters, players)) = race_info.clone()
                 {
                     epoch += 1;
                     for guest in &guests {
-                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track }).await;
+                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track, hash }).await;
                     }
                     start_over(&mut links, epoch);
                     (running, game_ready, ready_sent) = (false, false, false);
                     ready_from.clear();
-                    io.event(Event::Started { slot, characters, players, track });
+                    io.event(Event::Started { slot, characters, players, track, hash });
                 },
                 Command::Announce(text) => if matches!(role, Role::Host) {
                     for guest in &guests {
@@ -601,7 +661,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         let you = players.iter().position(|&(id, _)| id == me);
                         io.event(Event::Lobby { players, you });
                     }
-                    Message::Start { slot, characters, track, roster }
+                    Message::Start { slot, characters, track, hash, roster }
                         if plan.is_none() && from == host_id && !matches!(role, Role::Host) =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -620,16 +680,16 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         }
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone() });
-                        io.event(Event::Started { slot, characters, players: roster, track });
+                        io.event(Event::Started { slot, characters, players: roster, track, hash });
                     }
-                    Message::Restart { epoch: new, track }
+                    Message::Restart { epoch: new, track, hash }
                         if plan.is_some() && from == host_id && !matches!(role, Role::Host) =>
                     {
                         if let Some((slot, characters, players)) = race_info.clone() {
                             epoch = new;
                             start_over(&mut links, epoch);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, players, track });
+                            io.event(Event::Started { slot, characters, players, track, hash });
                         }
                     }
                     Message::Announce { text } => {
@@ -678,6 +738,34 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                             io.event(Event::Checksum { slot, tick, hash });
                         }
                     }
+                    // A guest asks for a track the host chose.
+                    Message::Want { track, hash } => if matches!(role, Role::Host)
+                        && let Some(guest) = guests.iter().find(|g| g.id == from)
+                    {
+                        let reply = match provided.get(&(track, hash)) {
+                            Some(bytes) if bytes.len() <= MAX_BLOB => {
+                                Message::Blob { track, hash, bytes: bytes.to_vec() }
+                            }
+                            _ => Message::NoBlob { track, hash },
+                        };
+                        // On a stream of its own, which the loop does not wait for: the
+                        // guest takes its time to read it.
+                        let connection = guest.connection.clone();
+                        tokio::spawn(async move {
+                            let _ = send_reliably(&connection, &reply).await;
+                        });
+                    },
+                    // Only what we asked for, and only from the host.
+                    Message::Blob { track, hash, bytes } => {
+                        if from == host_id && fetching.remove(&(track, hash)) {
+                            io.event(Event::Blob { track, hash, bytes });
+                        }
+                    }
+                    Message::NoBlob { track, hash } => {
+                        if from == host_id && fetching.remove(&(track, hash)) {
+                            io.event(Event::BlobMissing { track, hash });
+                        }
+                    }
                     Message::Snapshot { .. }
                     | Message::Start { .. }
                     | Message::Restart { .. }
@@ -695,7 +783,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                         }
                         // A guest whose host is gone has no lobby.
                         if from == host_id && !matches!(role, Role::Host) {
-                            return Ok(());
+                            return Err("the host closed the lobby".into());
                         }
                     }
                 }
@@ -708,7 +796,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
         }
 
         // The host starts the race once every guest has said what it drives.
-        if let Some(track) =
+        if let Some((track, hash)) =
             start_wanted.filter(|_| plan.is_none() && guests.iter().all(|g| g.hello.is_some()))
         {
             start_wanted = None;
@@ -723,6 +811,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     slot: i as u8 + 1,
                     characters: characters.clone(),
                     track,
+                    hash,
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                 };
                 let _ = send_reliably(&guest.connection, &start).await;
@@ -737,6 +826,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                 characters,
                 players: roster,
                 track,
+                hash,
             });
         }
 

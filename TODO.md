@@ -12,7 +12,7 @@
 - the shield bomb's sounds (rolling loop 0x59, explosion 0x4c) and the `numTimesMissileLaunched` stat
 
 ## Maps
-- sending a map to a player who joins a race on one they do not have: the host's `Start { track }` already carries the map's id (`map::Map::id`); a joiner without it should ask for it by id and hash, get the zstd file (`Map::to_bytes`, ~0.6-0.7 MB) in chunks over a reliable stream from the host or a peer that has it, check `Map::hash`, save it to `assets/maps/`, and continue. Today `load_level` stops with "map ... is not in assets/maps"
+- a joiner who lacks the map of a race now gets it from the host (`Session::fetch`/`provide`, checked against `Map::hash`, saved to `assets/.cache/maps/`, which `/cache purge` empties). Not done: asking a peer instead of the host, progress for the download, a size/rate limit on what a host accepts to serve, and the lobby offering a map before the countdown (so the download is not inside the race start)
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
 

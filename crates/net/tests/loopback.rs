@@ -56,7 +56,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
     host.set_character(4);
     first.set_character(9);
     std::thread::sleep(Duration::from_millis(500));
-    host.start(5);
+    host.start(5, 0);
 
     // Everyone hears of the race, and says it is ready.
     let mut slots = [0; 3];
@@ -67,7 +67,9 @@ fn a_host_and_two_peers_race_over_a_mesh() {
                 characters,
                 players,
                 track,
+                hash,
             } => {
+                assert_eq!(hash, 0);
                 assert_eq!(characters, [4, 9, 11]);
                 assert_eq!(players.len(), 3);
                 assert_eq!(track, 5);
@@ -146,4 +148,47 @@ fn a_host_and_two_peers_race_over_a_mesh() {
             (0..3).all(|s| s == me || heard[s] == Some(0xabc0 + s as u64))
         });
     }
+}
+
+#[test]
+fn a_guest_fetches_a_custom_track_from_the_host() {
+    let host = net::host(3);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
+
+    // A track bigger than a datagram, so that it takes a stream of its own.
+    let bytes: Vec<u8> = (0..700_000u32).map(|i| (i * 31 >> 3) as u8).collect();
+    let (track, hash) = (0x8000_1234, 0xabcd_ef01);
+    host.provide(track, hash, std::sync::Arc::new(bytes.clone()));
+
+    guest.fetch(track, hash);
+    wait_for(&guest, "the track", |e| match e {
+        Event::Blob {
+            track: t,
+            hash: h,
+            bytes: got,
+        } => {
+            assert_eq!((t, h), (track, hash));
+            assert!(got == bytes, "the track came through changed");
+            true
+        }
+        _ => false,
+    });
+
+    // A track the host does not have, or has under another hash, is said to be missing.
+    guest.fetch(track, hash + 1);
+    wait_for(
+        &guest,
+        "the refusal",
+        |e| matches!(e, Event::BlobMissing { track: t, hash: h } if t == track && h == hash + 1),
+    );
 }
