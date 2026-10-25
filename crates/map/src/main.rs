@@ -10,8 +10,9 @@ const USAGE: &str = "ctr-map: maps from community patches.
 usage:
   ctr-map import PATCH.xdelta [-o OUT.ctrmap] [--level N] [--disc BIN]
       reads the patch against the USA disc image (CTR_BIN, or assets/ctr-u.bin; --disc picks
-      one), finds the track the patch put its map in (--level N when it changes several
-      different ones), and saves it (default: assets/maps/NAME.ctrmap)
+      one), finds where the patch put its map (a track's slot, or the entries that CTR Editor
+      uses; --level N when it changes several different tracks, --entries LEV,VRAM to name
+      the BIGFILE entries by hand), and saves it (default: assets/maps/NAME.ctrmap)
   ctr-map info MAP.ctrmap
       what a map file holds";
 
@@ -27,6 +28,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         Some("import") => {
             let mut patch = None;
             let (mut out, mut level, mut disc_path) = (None, None, disc());
+            let mut entries = None;
             while let Some(arg) = args.next() {
                 let mut value = |what: &str| args.next().ok_or(format!("{what} needs a value"));
                 match arg.as_str() {
@@ -38,13 +40,22 @@ fn run(args: Vec<String>) -> Result<(), String> {
                                 .map_err(|e| format!("--level: {e}"))?,
                         )
                     }
+                    "--entries" => {
+                        let v = value("--entries")?;
+                        let (lev, vram) = v
+                            .split_once(',')
+                            .ok_or("--entries takes LEV,VRAM (BIGFILE entry numbers)")?;
+                        let num =
+                            |s: &str| s.parse::<usize>().map_err(|e| format!("--entries: {e}"));
+                        entries = Some((num(lev)?, num(vram)?));
+                    }
                     "--disc" => disc_path = PathBuf::from(value("--disc")?),
                     _ if patch.is_none() => patch = Some(PathBuf::from(arg)),
                     _ => return Err(format!("what is {arg}?")),
                 }
             }
             let patch = patch.ok_or("import needs a patch")?;
-            let done = map::import::import(&disc_path, &patch, level)
+            let done = map::import::import(&disc_path, &patch, level, entries)
                 .map_err(|e| format!("{}: {e}", patch.display()))?;
             let out = out.unwrap_or_else(|| {
                 PathBuf::from("assets/maps").join(format!("{}.ctrmap", done.map.name))
@@ -56,9 +67,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .write(&out)
                 .map_err(|e| format!("{}: {e}", out.display()))?;
             println!(
-                "{}: read from the slot of track {}; the patch changes {} entries of BIGFILE.BIG (tracks {:?})",
+                "{}: read from {}; the patch changes {} entries of BIGFILE.BIG (tracks {:?})",
                 done.map.name,
-                done.from_track,
+                done.source,
                 done.changed.len(),
                 done.tracks
             );
