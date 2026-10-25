@@ -9,8 +9,9 @@
 //!   empty for the boost
 //! * M: use the item in hand (Circle): the mask is longer with 10 wumpa fruit. A bomb or a
 //!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
-//! * Alt + 0 to 9, -, =: (debug) drop what is in hand and roll that item, as the roulette would
-//!   (the item ids; - and = are the triple bomb and missile). Not online, not in a demo
+//! * `/debug-add-weapon <N>`: (debug) drop what is in hand and roll item N (0 to 11), as the
+//!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online, not in
+//!   a demo
 //! * R: back to the starting grid
 //! * F5 / 1: start recording a demo from the grid, again to save it to `demo.ctr`
 //! * F6 / 2: play `demo.ctr` back from the grid (any F5 or R ends it, the kart stays where it is)
@@ -28,6 +29,7 @@ use vehicle::demo::Demo;
 use vehicle::{Driver, Effect, Input, buttons};
 
 use crate::Track;
+use crate::command::Action;
 use crate::kart::{KartMotion, KartSlot};
 use render::mesh::SCALE;
 
@@ -333,6 +335,7 @@ impl Plugin for DrivePlugin {
                     crate::kart::animate,
                     crate::kart::show,
                     chase,
+                    debug_add_weapon,
                     crate::projectile::place,
                     crate::flash::show,
                     hud,
@@ -558,7 +561,6 @@ fn drive_tick(
     mut enter_held: Local<bool>,
     mut paused: Local<bool>,
     mut keys_held: Local<[bool; 4]>,
-    mut item_keys_held: Local<[bool; 12]>,
     mut label: Query<&mut Visibility, With<PausedHud>>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
@@ -607,12 +609,9 @@ fn drive_tick(
     let mut restart = keys.pressed(KeyCode::KeyR) && !online;
     // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
     // a frame can pass without a tick.
-    let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let demo_down = [
-        !online && keys.any_pressed([KeyCode::F5])
-            || !online && !alt && keys.pressed(KeyCode::Digit1),
-        !online && keys.any_pressed([KeyCode::F6])
-            || !online && !alt && keys.pressed(KeyCode::Digit2),
+        !online && keys.any_pressed([KeyCode::F5]) || !online && keys.pressed(KeyCode::Digit1),
+        !online && keys.any_pressed([KeyCode::F6]) || !online && keys.pressed(KeyCode::Digit2),
     ];
     let [record_pressed, play_pressed] = std::array::from_fn(|i| demo_down[i] && !keys_held[i]);
     keys_held[..2].copy_from_slice(&demo_down);
@@ -662,37 +661,6 @@ fn drive_tick(
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
-    }
-
-    // (Debug) Alt and a digit drops what we hold and rolls that item, as the roulette would:
-    // 0 to 9 are the held item ids (5, the spring, turns into a turbo), - and = the triple bomb
-    // and missile. Not in a demo, which is the inputs alone.
-    const ITEM_KEYS: [(KeyCode, u8); 12] = [
-        (KeyCode::Digit0, 0),
-        (KeyCode::Digit1, 1),
-        (KeyCode::Digit2, 2),
-        (KeyCode::Digit3, 3),
-        (KeyCode::Digit4, 4),
-        (KeyCode::Digit5, 5),
-        (KeyCode::Digit6, 6),
-        (KeyCode::Digit7, 7),
-        (KeyCode::Digit8, 8),
-        (KeyCode::Digit9, 9),
-        (KeyCode::Minus, 0xa),
-        (KeyCode::Equal, 0xb),
-    ];
-    // Edges, as with the demo keys: `just_pressed` is cleared every rendered frame.
-    let item_down = ITEM_KEYS.map(|(key, _)| alt && keys.pressed(key));
-    let picked = (0..ITEM_KEYS.len()).find(|&i| item_down[i] && !item_keys_held[i]);
-    item_keys_held.copy_from_slice(&item_down);
-    if let Some(i) = picked
-        && !online
-        && matches!(drive.demo, DemoMode::Off)
-    {
-        let item = ITEM_KEYS[i].1;
-        let own = sim.own;
-        vehicle::item::debug_roll(&mut sim.race.state_mut().karts[own].driver, item);
-        info!("(debug) rolled item {item}");
     }
 
     // F7 and F8 freeze this client for a moment, to see the race put right after a hitch: the
@@ -857,6 +825,31 @@ fn drive_tick(
     each_motion(&sim, &mut motions, |motion, kart| motion.push(kart));
     drive.previous_view = drive.current_view;
     drive.current_view = view_of(&drive.camera);
+}
+
+/// `/debug-add-weapon <N>`: drops what we hold and rolls item `N`, as the roulette would (5, the
+/// spring, turns into a turbo). Not online, and not in a demo, which is the inputs alone.
+fn debug_add_weapon(
+    mut actions: MessageReader<Action>,
+    mut sim: ResMut<crate::props::Sim>,
+    drive: Res<Drive>,
+    lobby: Res<crate::lobby::Lobby>,
+    mut toasts: MessageWriter<Toast>,
+) {
+    for action in actions.read() {
+        let Action::DebugAddWeapon(item) = action else {
+            continue;
+        };
+        if lobby.online.is_some() || !matches!(drive.demo, DemoMode::Off) {
+            toasts.write(
+                Toast::new("Not online or in a demo", 2500).color(Color::srgb(1.0, 0.4, 0.4)),
+            );
+            continue;
+        }
+        let own = sim.own;
+        vehicle::item::debug_roll(&mut sim.race.state_mut().karts[own].driver, *item);
+        toasts.write(Toast::new(format!("(debug) rolled item {item}"), 2000));
+    }
 }
 
 /// Runs `f` on the motion of each kart's drawing, with the kart of the sim that it follows.
