@@ -490,6 +490,20 @@ impl Particle {
         true
     }
 
+    /// The particle `ticks` further on than it is, which may be a fraction of a tick: every
+    /// axis that is set moves on with its velocity and acceleration, so that its position, size
+    /// and colour are what they would be between two ticks. (Its life is not touched.)
+    pub fn ahead(&self, ticks: f32) -> Particle {
+        let mut p = self.clone();
+        for (n, a) in p.axes.iter_mut().enumerate() {
+            if self.axis_flags >> n & 1 != 0 {
+                let moved = a.velocity as f32 * ticks + a.accel as f32 * ticks * (ticks - 1.0) / 2.0;
+                a.start = a.start.wrapping_add(moved.round() as i32);
+            }
+        }
+        p
+    }
+
     /// Where the particle is, in 1/256 game units, and how it moves per tick.
     pub fn position(&self) -> [i32; 3] {
         std::array::from_fn(|a| self.axes[a].start)
@@ -625,6 +639,20 @@ mod tests {
         assert!(
             (per_scale(left, right, 0xa00) / per_scale(n_left, n_right, 1536) - 8.0).abs() < 0.5
         );
+    }
+
+    #[test]
+    fn a_particle_ahead_by_whole_ticks_is_the_one_that_was_updated() {
+        let mut stepped = puff(false);
+        let ahead = stepped.ahead(1.0);
+        stepped.update();
+        assert_eq!(ahead.position(), stepped.position());
+        assert_eq!(ahead.tint(), stepped.tint());
+        assert_eq!(ahead.axes[axis::SCALE_X].start, stepped.axes[axis::SCALE_X].start);
+        // A half tick is between the two.
+        let half = puff(false).ahead(0.5);
+        let (start, end) = (puff(false), stepped);
+        assert!(half.tint() < start.tint() && half.tint() > end.tint());
     }
 
     #[test]

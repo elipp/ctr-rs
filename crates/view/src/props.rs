@@ -601,8 +601,7 @@ pub fn roll(
     let fraction = fixed.overstep_fraction();
     for (rolling, mut transform) in &mut rolling {
         let (from, to) = sim.race.objects.roller_frames(rolling.0);
-        let mut place =
-            |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(p.rot));
+        let place = |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(p.rot));
         let ((from_pos, from_rot), (to_pos, to_rot)) = (place(from), place(to));
         transform.translation = from_pos.lerp(to_pos, fraction);
         transform.rotation = from_rot.slerp(to_rot, fraction);
