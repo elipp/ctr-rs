@@ -29,7 +29,7 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 }
 
 /// One entry of `struct WaterVert`: a level vertex and its colour table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct WaterVertex {
     /// Index into `Level::vertices`.
     pub vertex: usize,
@@ -37,7 +37,7 @@ pub struct WaterVertex {
 }
 
 /// What the game writes into a water vertex on a tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaterColor {
     pub vertex: usize,
     /// Gray vertex colour (`color_hi`, the same value in all three channels).
@@ -46,7 +46,7 @@ pub struct WaterColor {
     pub uv: [u8; 2],
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct Water {
     pub vertices: Vec<WaterVertex>,
     /// First word of the environment map layout: its (u0, v0), added to the vertex UVs.

@@ -13,7 +13,7 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 
 /// `struct TextureLayout` (0xC bytes): one (u, v) per polygon vertex, plus the
 /// CLUT and texture page words the GPU primitive carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextureLayout {
     /// u0v0 = top left, u1v1 = top right, u2v2 = bottom left, u3v3 = bottom right.
     pub uv: [(u8, u8); 4],

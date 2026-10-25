@@ -16,7 +16,8 @@ use std::io;
 /// words (`LOAD_RunPtrMap`). Here the words stay payload-relative, which is
 /// the same thing with a base of 0; use [`DramFile::relocate`] to reproduce
 /// the original patching for a given base.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "DramParts", into = "DramParts")]
 pub struct DramFile {
     /// Payload without the header word and without the pointer map.
     pub data: Vec<u8>,
@@ -25,6 +26,35 @@ pub struct DramFile {
     /// Whether the file had a pointer map at all.
     pub has_pointer_map: bool,
     slot_set: HashSet<u32>,
+}
+
+/// What a [`DramFile`] is saved as: the set of pointer slots is made again when it is read.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DramParts {
+    data: Vec<u8>,
+    pointer_slots: Vec<u32>,
+    has_pointer_map: bool,
+}
+
+impl From<DramParts> for DramFile {
+    fn from(parts: DramParts) -> DramFile {
+        DramFile {
+            slot_set: parts.pointer_slots.iter().copied().collect(),
+            data: parts.data,
+            pointer_slots: parts.pointer_slots,
+            has_pointer_map: parts.has_pointer_map,
+        }
+    }
+}
+
+impl From<DramFile> for DramParts {
+    fn from(file: DramFile) -> DramParts {
+        DramParts {
+            data: file.data,
+            pointer_slots: file.pointer_slots,
+            has_pointer_map: file.has_pointer_map,
+        }
+    }
 }
 
 fn invalid(msg: impl Into<String>) -> io::Error {

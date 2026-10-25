@@ -1,0 +1,16 @@
+[package]
+name = "map"
+version = "0.1.0"
+edition = "2024"
+
+# A map made from a community patch (`ctr-map import`), and its file format.
+[[bin]]
+name = "ctr-map"
+path = "src/main.rs"
+
+[dependencies]
+bitcode = { version = "0.6.9", features = ["serde"] }
+loader = { path = "../loader" }
+serde = { version = "1.0.229", features = ["derive"] }
+xdelta = { path = "../xdelta" }
+zstd = "0.14.3"

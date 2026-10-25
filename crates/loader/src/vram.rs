@@ -11,7 +11,7 @@ const HEADER_SIZE: usize = 0x14;
 const RECT_OFFSET: usize = 0xC;
 
 /// One image to upload, in 16-bit pixels (`rect.w` is in pixels, not bytes).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct VramImage {
     pub x: i16,
     pub y: i16,

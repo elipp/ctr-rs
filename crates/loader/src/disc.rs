@@ -88,10 +88,19 @@ pub type Disc = RawSectorReader<std::io::BufReader<std::fs::File>>;
 
 /// Opens the disc image at `path` and parses the header of `BIGFILE.BIG`.
 pub fn open_bigfile(path: &std::path::Path) -> io::Result<(Disc, crate::bigfile::BigFile)> {
+    open_bigfile_with(|| std::fs::File::open(path).map(std::io::BufReader::new))
+}
+
+/// Opens a disc image that `open` makes (as many times as it is asked: once to find
+/// `BIGFILE.BIG` and once for the reader that is returned), in the raw 2352-byte sectors of a
+/// `.bin`, and parses the header of `BIGFILE.BIG`.
+pub fn open_bigfile_with<R: Read + Seek>(
+    open: impl Fn() -> io::Result<R>,
+) -> io::Result<(RawSectorReader<R>, crate::bigfile::BigFile)> {
     use hadris_iso::read::IsoImage;
 
     let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let open = || RawSectorReader::new(std::io::BufReader::new(std::fs::File::open(path)?));
+    let open = || RawSectorReader::new(open()?);
 
     let image =
         IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
