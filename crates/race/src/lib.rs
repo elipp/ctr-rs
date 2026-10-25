@@ -18,6 +18,7 @@ use vehicle::lap::Lap;
 use vehicle::sim::{Racer, TickResult, spawn};
 use vehicle::sparks::{Landing, Wall};
 use vehicle::{Driver, Effect, Env, Input, actions, kart_state};
+use weapon::Weapons;
 
 /// `driverRank` of a kart that has no place yet.
 const UNSORTED: i16 = -1;
@@ -160,6 +161,10 @@ pub struct Race {
     /// What the objects did in the last tick: where the hazards look for drivers, and the sparks
     /// of the fireballs.
     pub last: instance::Tick,
+    /// The bombs and missiles in flight.
+    pub weapons: Weapons,
+    /// What they did in the last tick: the explosions, for the outside to show.
+    pub last_weapons: weapon::Tick,
     /// When the last bump was heard.
     pub feedback: Feedback,
     /// The ticks played: `gGT->timer`.
@@ -199,6 +204,8 @@ impl Race {
             karts,
             objects,
             last: instance::Tick::default(),
+            weapons: Weapons::default(),
+            last_weapons: weapon::Tick::default(),
             feedback: Feedback::default(),
             tick: 0,
             kart_collisions,
@@ -311,8 +318,42 @@ impl Race {
             })
             .collect();
         let mut effects: Vec<Vec<Effect>> = vec![Vec::new(); self.karts.len()];
-        for ((kart, input), effects) in self.karts.iter_mut().zip(&inputs).zip(&mut effects) {
-            before_tick(&mut kart.driver, input, &self.last, effects);
+        // The karts that asked to fire last tick fire, before any of them moves.
+        let bodies: Vec<weapon::Body> = self
+            .karts
+            .iter()
+            .map(|k| weapon::Body::of(&k.driver))
+            .collect();
+        for (slot, ((kart, input), effects)) in self
+            .karts
+            .iter_mut()
+            .zip(&inputs)
+            .zip(&mut effects)
+            .enumerate()
+        {
+            if let Some(launch) = vehicle::item::shoot_on_circle_press(&mut kart.driver, effects) {
+                let kind = match launch {
+                    vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
+                    vehicle::item::Launch::Missile => weapon::Kind::Missile,
+                };
+                let backward = input.buttons_held & vehicle::buttons::DOWN != 0;
+                let gte = &mut kart.coll.gte;
+                if self
+                    .weapons
+                    .launch(kind, slot, &kart.driver, &bodies, gte, backward)
+                {
+                    vehicle::item::launch_effects(&kart.driver, launch, effects);
+                    kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
+                }
+            }
+        }
+        for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
+            before_tick(
+                &mut kart.driver,
+                &self.last,
+                &mut self.objects.random_number,
+                effects,
+            );
         }
         let results = {
             let mut racers: Vec<Racer> = self
@@ -335,6 +376,30 @@ impl Race {
                 &mut self.feedback,
             )
         };
+        // The bombs and missiles fly, after the karts have moved. A bomb that its kart set off
+        // goes with this tick's flight.
+        for (slot, kart) in self.karts.iter_mut().enumerate() {
+            if std::mem::take(&mut kart.driver.detonate_bomb) {
+                self.weapons.detonate(slot);
+            }
+        }
+        let bodies: Vec<weapon::Body> = self
+            .karts
+            .iter()
+            .map(|k| weapon::Body::of(&k.driver))
+            .collect();
+        self.last_weapons = self.weapons.tick(level, &bodies, env.elapsed_time_ms);
+        for hit in &self.last_weapons.hits {
+            let victim = &mut self.karts[hit.victim].driver;
+            vehicle::pick::new_state(
+                victim,
+                vehicle::pick::damage::BLAST,
+                &mut effects[hit.victim],
+            );
+        }
+        for (slot, kart) in self.karts.iter_mut().enumerate() {
+            kart.driver.bomb_thrown = self.weapons.has_bomb(slot);
+        }
         // The weapon roulettes that crates started run on, and pick.
         for kart in &mut self.karts {
             vehicle::item::tick(&mut kart.driver, &mut self.objects.random_number);
@@ -374,20 +439,12 @@ impl Race {
 /// play every kart the same way.
 fn before_tick(
     driver: &mut Driver,
-    input: &Input,
     objects: &instance::Tick,
+    random_number: &mut i32,
     effects: &mut Vec<Effect>,
 ) {
-    // M (or East on a pad) uses the mask item, once per press. (Not while a mask grab has the
-    // kart: it has the mask already.)
-    if input.buttons_tapped & vehicle::buttons::CIRCLE != 0
-        && !matches!(
-            driver.kart_state,
-            kart_state::MASK_GRABBED | kart_state::ENGINE_REVVING
-        )
-    {
-        vehicle::stuck::shoot_mask(driver, effects);
-    }
+    // A kart that asked to fire a weapon (Circle, M or East on a pad) fires it.
+    vehicle::item::shoot_on_circle_press(driver, effects);
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
     let (_, at) = vehicle::baked::inst_matrix(driver);
@@ -404,6 +461,8 @@ fn before_tick(
             });
         }
     }
+    // A kart that was blasted draws which way its tumble plays, as the init stage does.
+    vehicle::tumble::roll_direction(driver, random_number);
 }
 
 /// What a kart does after the stages of a tick. The sparks and the puffs are for the outside to
@@ -461,7 +520,11 @@ impl Race {
         for kart in &self.karts {
             let _ = write!(hash, "{:?} {:?} {}\n", kart.driver, kart.coll, kart.held);
         }
-        let _ = write!(hash, "{:?}", self.last);
+        let _ = write!(
+            hash,
+            "{:?} {:?} {:?}",
+            self.last, self.weapons, self.last_weapons
+        );
         hash.0
     }
 }

@@ -119,6 +119,7 @@ fn fields(d: &Driver) -> Vec<i64> {
         MatrixArray::WheelieRecover => 3,
         MatrixArray::CrashFall => 4,
         MatrixArray::SquishRecover => 5,
+        MatrixArray::Blasted => 6,
         MatrixArray::Jump(n) => n as i64,
     });
     o.push(d.matrix_index as i64);

@@ -606,6 +606,7 @@ fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
         MatrixArray::WheelieRecover => Some(&WHEELIE_RECOVER),
         MatrixArray::CrashFall => Some(&CRASH_FALL),
         MatrixArray::SquishRecover => Some(&SQUISH_RECOVER),
+        MatrixArray::Blasted => None,
         MatrixArray::Jump(n) => JUMP
             .get(n.checked_sub(JUMP_BASE)? as usize)
             .map(|e| e.as_slice()),
