@@ -335,6 +335,19 @@ impl Race {
                 let kind = match launch {
                     vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
                     vehicle::item::Launch::Missile => weapon::Kind::Missile,
+                    vehicle::item::Launch::Mine => {
+                        let gte = &mut kart.coll.gte;
+                        self.weapons.drop_mine(
+                            slot,
+                            &kart.driver,
+                            level,
+                            &bodies,
+                            gte,
+                            env.elapsed_time_ms,
+                        );
+                        vehicle::item::launch_effects(&kart.driver, launch, effects);
+                        continue;
+                    }
                 };
                 let backward = input.buttons_held & vehicle::buttons::DOWN != 0;
                 let gte = &mut kart.coll.gte;
@@ -388,14 +401,15 @@ impl Race {
             .iter()
             .map(|k| weapon::Body::of(&k.driver))
             .collect();
-        self.last_weapons = self.weapons.tick(level, &bodies, env.elapsed_time_ms);
+        self.last_weapons = self.weapons.tick(
+            level,
+            &bodies,
+            env.elapsed_time_ms,
+            &mut self.objects.random_number,
+        );
         for hit in &self.last_weapons.hits {
             let victim = &mut self.karts[hit.victim].driver;
-            vehicle::pick::new_state(
-                victim,
-                vehicle::pick::damage::BLAST,
-                &mut effects[hit.victim],
-            );
+            vehicle::pick::new_state(victim, hit.damage, &mut effects[hit.victim]);
         }
         for (slot, kart) in self.karts.iter_mut().enumerate() {
             kart.driver.bomb_thrown = self.weapons.has_bomb(slot);
@@ -502,9 +516,9 @@ impl Race {
     pub fn checksum(&self) -> u64 {
         use std::fmt::Write;
         let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
-        let _ = write!(
+        let _ = writeln!(
             hash,
-            "{} {} {} {} {} {} {:?} {:?} {:?}\n",
+            "{} {} {} {} {} {} {:?} {:?} {:?}",
             self.tick,
             self.event_ms,
             self.laps,
@@ -516,7 +530,7 @@ impl Race {
             self.objects.ticks()
         );
         for kart in &self.karts {
-            let _ = write!(hash, "{:?} {:?} {}\n", kart.driver, kart.coll, kart.held);
+            let _ = writeln!(hash, "{:?} {:?} {}", kart.driver, kart.coll, kart.held);
         }
         let _ = write!(
             hash,

@@ -96,7 +96,7 @@ impl Water {
                         invalid(format!("water colour table {i} is outside the payload"))
                     })?;
                 let mut frames = [0u16; WATER_FRAMES];
-                for (f, b) in frames.iter_mut().zip(bytes.chunks_exact(2)) {
+                for (f, b) in frames.iter_mut().zip(bytes.as_chunks::<2>().0) {
                     *f = u16::from_le_bytes([b[0], b[1]]);
                 }
                 Ok(WaterVertex {

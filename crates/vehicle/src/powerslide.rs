@@ -419,10 +419,8 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         drift_turn_input,
     );
 
-    if drift_turn_input >= 0 {
-        if current_spin_rate < mips::neg_lo(drift_turn_input) {
-            current_spin_rate = mips::neg_lo(drift_turn_input);
-        }
+    if drift_turn_input >= 0 && current_spin_rate < mips::neg_lo(drift_turn_input) {
+        current_spin_rate = mips::neg_lo(drift_turn_input);
     }
     if drift_turn_input <= 0 && mips::neg_lo(drift_turn_input) < current_spin_rate {
         current_spin_rate = mips::neg_lo(drift_turn_input);
@@ -524,22 +522,20 @@ pub fn phys_angular(d: &mut Driver, gte: &mut Gte, env: &Env) {
         d.turn_wobble_timer = 0;
     }
 
-    let wobble_angle_next;
-    if d.turn_wobble_timer != 0 {
+    let wobble_angle_next = if d.turn_wobble_timer != 0 {
         d.turn_wobble_timer = (d.turn_wobble_timer as u16).wrapping_sub(1) as i16;
-        wobble_angle_next =
-            (d.turn_wobble_angle as u16).wrapping_add(d.turn_wobble_velocity as u16);
+        (d.turn_wobble_angle as u16).wrapping_add(d.turn_wobble_velocity as u16)
     } else {
         d.turn_wobble_velocity = TURN_WOBBLE_RETURN_VELOCITY;
         if 0 < d.turn_wobble_angle {
             d.turn_wobble_velocity = mips::neg_lo(d.turn_wobble_velocity as i32) as i16;
         }
-        wobble_angle_next = interp_by_speed(
+        interp_by_speed(
             d.turn_wobble_angle as i32,
             abs(d.turn_wobble_velocity as i32),
             0,
-        ) as u16;
-    }
+        ) as u16
+    };
     d.turn_wobble_angle = wobble_angle_next as i16;
 
     let amp_turn_state = mips::add_lo(signed_spin_rate, drift_turn_input);

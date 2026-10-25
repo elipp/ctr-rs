@@ -8,21 +8,25 @@
 //! level's surfaces themselves. What a hit does to a kart is the caller's: [`Tick::hits`] says
 //! who was hit by whom.
 //!
+//! The mines (TNT and Nitro crates the kart drops) are in [`mine`]; a weapon that runs into one,
+//! and a burst that reaches one, sets it off.
+//!
 //! Not ported: crates and the temple teeth (a weapon that reaches a crate goes right through it,
-//! and a burst breaks none), the mines and the warpball it would meet, the thrown TNT a missile
-//! would be drawn away by, and the sounds. How the aim differs is in [`aim`].
+//! and a burst breaks none), the warpball it would meet, the thrown TNT a missile would be drawn
+//! away by, and the sounds. How the aim differs is in [`aim`].
 //!
 //! The projectiles keep what the sim needs. Their matrices (`inst->matrix`) are for drawing:
 //! a bomb rolls by [`Projectile::roll`] about the heading `rot_y` on the plane of `normal`, and a
 //! missile faces `rot_y` on that plane.
 
 pub mod aim;
+pub mod mine;
 
 use coll::{Collision, search_flags};
 use gte::Gte;
 use loader::lev::{Level, SVec3, quad_flags};
 use math::mips;
-use vehicle::{Driver, Matrix, kart_state};
+use vehicle::{Driver, Matrix, actions, kart_state};
 
 /// `ACTIVE_MISSILE_LIMIT`: no more than this many bombs and missiles fly at once.
 pub const ACTIVE_LIMIT: usize = 12;
@@ -82,7 +86,11 @@ pub mod flags {
 /// `VEH_PICK_REASON_*`: what a hit was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
+    /// A TNT crate that went off on the head it sat on.
+    Tnt = 0,
     Bomb = 1,
+    /// A Nitro or TNT crate that was dropped.
+    Mine = 2,
     Missile = 3,
 }
 
@@ -112,26 +120,45 @@ impl Kind {
 }
 
 /// What a weapon sees of a kart (by slot): where its model is and what keeps it from being aimed at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Body {
     /// The kart's `instSelf->matrix.t`, in level units.
     pub at: [i32; 3],
+    /// Its `instSelf->matrix`, which a TNT crate on its head follows.
+    pub rot: Matrix,
     /// `posCurr`, 24.8.
     pub pos_curr: [i32; 3],
     /// `KS_MASK_GRABBED`
     pub mask_grabbed: bool,
     /// `invisibleTimer != 0`
     pub invisible: bool,
+    pub kart_state: u8,
+    /// `squishTimer != 0`
+    pub squished: bool,
+    /// `ACTION_JUMP_STARTED`
+    pub jump_started: bool,
+    /// The Aku Aku mask or invincibility absorbs a hit (`VehPickState_NewState` is false for it).
+    pub immune: bool,
+    pub character: u8,
 }
 
 impl Body {
     pub fn of(d: &Driver) -> Body {
+        let inst = vehicle::baked::inst_matrix(d);
         Body {
-            at: vehicle::baked::inst_matrix(d).1,
+            at: inst.1,
+            rot: inst.0,
             pos_curr: [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z],
             mask_grabbed: d.kart_state == kart_state::MASK_GRABBED,
             // (The invisibility item is not ported.)
             invisible: false,
+            kart_state: d.kart_state,
+            squished: d.squish_timer != 0,
+            jump_started: d.actions_flag_set & actions::JUMP_STARTED != 0,
+            immune: d.kart_state == kart_state::MASK_GRABBED
+                || d.actions_flag_set & actions::MASK_WEAPON != 0
+                || d.invincible_timer != 0,
+            character: d.character,
         }
     }
 }
@@ -139,6 +166,9 @@ impl Body {
 /// A bomb or a missile in flight (`struct TrackerWeapon` and the instance it moves).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projectile {
+    /// Which weapon this is for as long as it flies, so that the outside can follow it between
+    /// ticks (the weapons do not move in the list when others end).
+    pub id: u32,
     pub kind: Kind,
     /// `matrix.t`, in level units.
     pub pos: [i32; 3],
@@ -166,6 +196,29 @@ pub struct Projectile {
 }
 
 impl Projectile {
+    /// The rotation of its instance (`inst->matrix`), for drawing. A bomb turns about the way it
+    /// heads as it rolls (`ConvertRotToMatrix` of the heading and the roll). A missile faces its
+    /// heading on the plane of the surface it flies over (`VehPhysForce_RotAxisAngle`).
+    pub fn matrix(&self) -> Matrix {
+        match self.kind {
+            Kind::Bomb => vehicle::rotmat::rot_to_matrix(SVec3 {
+                x: self.roll,
+                y: self.rot_y,
+                z: 0,
+            }),
+            Kind::Missile => {
+                let mut matrix = Matrix::default();
+                vehicle::force::rot_axis_angle(
+                    &mut matrix,
+                    &mut Gte::default(),
+                    self.normal,
+                    self.rot_y as i32,
+                );
+                matrix
+            }
+        }
+    }
+
     fn powered(&self) -> bool {
         self.flags & flags::POWERED_UP != 0
     }
@@ -175,8 +228,11 @@ impl Projectile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
     pub victim: usize,
-    pub attacker: usize,
+    /// None for a hit nobody is to blame for.
+    pub attacker: Option<usize>,
     pub reason: Reason,
+    /// `VEH_PICK_DAMAGE_*`: what the hit does (`vehicle::pick::damage`).
+    pub damage: u8,
 }
 
 /// A weapon that went off, for the outside to show.
@@ -193,12 +249,20 @@ pub struct Explosion {
 pub struct Tick {
     pub hits: Vec<Hit>,
     pub explosions: Vec<Explosion>,
+    /// The mines that went off.
+    pub detonations: Vec<mine::Detonation>,
 }
 
 /// All the weapons in flight.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Weapons {
     projectiles: Vec<Projectile>,
+    mines: Vec<mine::Mine>,
+    /// What happened outside a tick (a mine dropped into something goes off at once), which the
+    /// next one tells.
+    pending: Tick,
+    /// The `id` of the next weapon fired.
+    next_id: u32,
 }
 
 fn shift_velocity(direction: i16, numerator: i32, shift: u32) -> i16 {
@@ -259,6 +323,7 @@ impl Weapons {
         let juiced = driver.num_wumpas >= JUICED;
 
         let mut p = Projectile {
+            id: self.next_id,
             kind,
             pos: at,
             vel: [0; 3],
@@ -297,6 +362,7 @@ impl Weapons {
                 p.vel[2] = shift_velocity(forward_z, MISSILE_VELOCITY, MISSILE_VELOCITY_SHIFT);
             }
         }
+        self.next_id = self.next_id.wrapping_add(1);
         self.projectiles.push(p);
         true
     }
@@ -313,8 +379,22 @@ impl Weapons {
 
     /// One game tick of every weapon, in the order they were fired. `bodies` are the karts as
     /// they are now.
-    pub fn tick(&mut self, level: &Level, bodies: &[Body], elapsed_ms: i32) -> Tick {
-        let mut tick = Tick::default();
+    /// `random_number` is `sdata->randomNumber`.
+    pub fn tick(
+        &mut self,
+        level: &Level,
+        bodies: &[Body],
+        elapsed_ms: i32,
+        random_number: &mut i32,
+    ) -> Tick {
+        let mut tick = std::mem::take(&mut self.pending);
+        // The mines come first (their bucket does).
+        self.tick_mines(&mut mine::Ctx {
+            bodies,
+            elapsed_ms,
+            random_number,
+            tick: &mut tick,
+        });
         let mut coll = Collision::default();
         for i in 0..self.projectiles.len() {
             if self.projectiles[i].dead {
@@ -327,10 +407,14 @@ impl Weapons {
                 level,
                 bodies,
                 &self.projectiles,
+                &self.mines,
                 elapsed_ms,
             );
             for j in step.missiles_hit {
                 self.projectiles[j].dead = true;
+            }
+            for j in step.mines_hit {
+                self.mines[j].set_off(&mut tick);
             }
             if step.explodes {
                 self.burst(i, &p, bodies, &mut tick);
@@ -356,9 +440,15 @@ impl Weapons {
             if victim != p.parent && in_reach(p.pos, body.at, radius_squared) {
                 tick.hits.push(Hit {
                     victim,
-                    attacker: p.parent,
+                    attacker: Some(p.parent),
                     reason: p.kind.reason(),
+                    damage: vehicle::pick::damage::BLAST,
                 });
+            }
+        }
+        for mine in &mut self.mines {
+            if in_reach(p.pos, mine.pos, radius_squared) {
+                mine.set_off(tick);
             }
         }
         for (j, other) in self.projectiles.iter_mut().enumerate() {
@@ -393,6 +483,8 @@ struct Step {
     explodes: bool,
     /// The missiles (indices into the weapons) a bomb ran into, which are destroyed.
     missiles_hit: Vec<usize>,
+    /// The mines (indices into the mines) it ran into, which go off.
+    mines_hit: Vec<usize>,
 }
 
 impl Step {
@@ -400,6 +492,7 @@ impl Step {
         Step {
             explodes: true,
             missiles_hit: Vec::new(),
+            mines_hit: Vec::new(),
         }
     }
 }
@@ -429,6 +522,7 @@ fn fly(
     level: &Level,
     bodies: &[Body],
     all: &[Projectile],
+    mines: &[mine::Mine],
     elapsed_ms: i32,
 ) -> Step {
     p.time_alive = mips::add_lo(p.time_alive, elapsed_ms);
@@ -552,6 +646,22 @@ fn fly(
         return Step::explode();
     }
 
+    // A mine in the way goes off, and so does the weapon.
+    if let Some(hit) = mines.iter().position(|m| {
+        let [dx, dy, dz] = std::array::from_fn(|a| m.pos[a].wrapping_sub(p.pos[a]));
+        let distance = dx
+            .wrapping_mul(dx)
+            .wrapping_add(dz.wrapping_mul(dz))
+            .wrapping_add(dy.wrapping_mul(dy)) as u32;
+        !m.is_dead() && distance < HIT_RADIUS
+    }) {
+        return Step {
+            explodes: true,
+            missiles_hit: Vec::new(),
+            mines_hit: vec![hit],
+        };
+    }
+
     if p.kind == Kind::Bomb {
         // A bomb is stopped by a missile, which goes with it.
         let missile = all.iter().position(|m| {
@@ -568,6 +678,7 @@ fn fly(
             return Step {
                 explodes: true,
                 missiles_hit: vec![missile],
+                mines_hit: Vec::new(),
             };
         }
         if p.flags & flags::DETONATE != 0 {
@@ -578,6 +689,7 @@ fn fly(
     Step {
         explodes: false,
         missiles_hit: Vec::new(),
+        mines_hit: Vec::new(),
     }
 }
 
@@ -601,11 +713,13 @@ mod tests {
             pos_curr: [x << 8, 0, z << 8],
             mask_grabbed: false,
             invisible: false,
+            ..Body::default()
         }
     }
 
     fn weapon(kind: Kind, parent: usize) -> Projectile {
         Projectile {
+            id: 0,
             kind,
             pos: [0, 0, 0],
             vel: [0; 3],
@@ -626,6 +740,7 @@ mod tests {
     fn a_burst_hits_the_karts_in_reach_but_not_the_one_that_fired() {
         let mut weapons = Weapons {
             projectiles: vec![weapon(Kind::Bomb, 0)],
+            ..Weapons::default()
         };
         // The bomb's blast reaches 0x19000 squared: 400 units. Kart 1 is at 300, kart 2 at 500.
         let bodies = [body(0, 0), body(300, 0), body(500, 0)];
@@ -636,8 +751,9 @@ mod tests {
             tick.hits,
             vec![Hit {
                 victim: 1,
-                attacker: 0,
-                reason: Reason::Bomb
+                attacker: Some(0),
+                reason: Reason::Bomb,
+                damage: vehicle::pick::damage::BLAST,
             }]
         );
         assert_eq!(tick.explosions.len(), 1);
@@ -652,6 +768,7 @@ mod tests {
             }
             let mut weapons = Weapons {
                 projectiles: vec![p.clone()],
+                ..Weapons::default()
             };
             let mut tick = Tick::default();
             weapons.burst(0, &p, &[body(0, 0), body(450, 0), body(100, 0)], &mut tick);
@@ -671,6 +788,7 @@ mod tests {
         let bomb = weapon(Kind::Bomb, 0);
         let mut weapons = Weapons {
             projectiles: vec![bomb.clone(), near, far],
+            ..Weapons::default()
         };
         weapons.burst(0, &bomb, &[body(0, 0)], &mut Tick::default());
         assert_eq!(
@@ -701,6 +819,7 @@ mod tests {
     fn firing_is_refused_when_too_many_are_in_flight() {
         let mut weapons = Weapons {
             projectiles: vec![weapon(Kind::Missile, 0); ACTIVE_LIMIT],
+            ..Weapons::default()
         };
         let d = Driver::default();
         assert!(!weapons.launch(Kind::Bomb, 0, &d, &[body(0, 0)], &mut Gte::default(), false));
@@ -736,6 +855,7 @@ mod tests {
     fn a_detonated_bomb_is_marked_and_missiles_are_not() {
         let mut weapons = Weapons {
             projectiles: vec![weapon(Kind::Bomb, 0), weapon(Kind::Missile, 0)],
+            ..Weapons::default()
         };
         weapons.detonate(0);
         assert!(weapons.projectiles[0].flags & flags::DETONATE != 0);

@@ -4,7 +4,10 @@
 //! `VehPhysForce_TranslateMatrix_UpdateInstanceMatrix` puts on the facing matrix,
 //! with an offset of the kart's origin that follows it.
 //!
-//! The blasted tables are not ported: with those arrays the instance matrix is the facing matrix.
+//! The blasted table is made, as in retail, by `Vector_BakeMatrixTable_PrepareBlastedFrames`: the
+//! kart turns a full 0x2000 (two turns) about its length over the tumble, and wobbles.
+
+use std::sync::LazyLock;
 
 use gte::Gte;
 use loader::lev::SVec3;
@@ -598,6 +601,41 @@ const BLEND_FULL: i32 = 0x100;
 /// `VEH_PHYS_FORCE_SQUISH_OFFSET_NORMAL_SCALE`
 const SQUISH_OFFSET_NORMAL_SCALE: i32 = 0x13;
 
+/// `data.matArr06`: the tumble of a blasted kart, 27 ticks of a turn about the kart's length (z)
+/// with a squash, and a lean (x). Its offset is the kart's origin moved so that it turns about its
+/// middle (`Vector_BakeMatrixTable_BakeBlastedOffsets`).
+pub static BLASTED: LazyLock<[Entry; BLASTED_ENTRIES]> = LazyLock::new(|| {
+    std::array::from_fn(|i| {
+        let count = BLASTED_ENTRIES as i32;
+        let angle_full = (i as i32) << 13;
+        let angle_full = angle_full / count;
+        let angle_lean = (i as i32 * 0x3000) / count;
+        let sin_full = math::sin(angle_full as u32);
+        // Division by 4 toward zero.
+        let quarter = (sin_full + if sin_full < 0 { 3 } else { 0 }) >> 2;
+        let mut entry = Entry {
+            offset: [0; 3],
+            rot: [
+                (-math::sin(angle_lean as u32) / 7) as i16,
+                0,
+                angle_full as i16,
+            ],
+            scale: [
+                (quarter + 0x1000) as i16,
+                0x1000,
+                ((sin_full * 6) / 0x28 + 0x1000) as i16,
+            ],
+        };
+        let baked = bake(&mut Gte::default(), &entry);
+        let along = |row: usize| (baked.m[row][1] as i32 * -0x2000) >> 12;
+        entry.offset = [along(0) as i16, (along(1) + 0x2000) as i16, along(2) as i16];
+        entry
+    })
+});
+
+/// How many ticks the tumble's turn has.
+pub const BLASTED_ENTRIES: usize = 0x1b;
+
 /// The entries of an animation, if it is ported.
 fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
     match array {
@@ -606,7 +644,7 @@ fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
         MatrixArray::WheelieRecover => Some(&WHEELIE_RECOVER),
         MatrixArray::CrashFall => Some(&CRASH_FALL),
         MatrixArray::SquishRecover => Some(&SQUISH_RECOVER),
-        MatrixArray::Blasted => None,
+        MatrixArray::Blasted => Some(&BLASTED[..]),
         MatrixArray::Jump(n) => JUMP
             .get(n.checked_sub(JUMP_BASE)? as usize)
             .map(|e| e.as_slice()),
@@ -737,6 +775,18 @@ mod tests {
             m: [[0x1000, 0, 0], [0, 0x1000, 0], [0, 0, 0x1000]],
         };
         d
+    }
+
+    #[test]
+    fn the_tumble_starts_upright_and_turns_two_turns_about_the_length() {
+        let first = BLASTED[0];
+        assert_eq!(first.rot, [0, 0, 0]);
+        assert_eq!(first.scale, [0x1000; 3]);
+        assert_eq!(first.offset, [0, 0, 0]);
+        // At tick 13 of 27 it has turned 13/27 of the two turns (0x2000), and its origin is moved.
+        let later = BLASTED[13];
+        assert_eq!(later.rot[2] as i32, (13 << 13) / 27);
+        assert_ne!(later.offset, [0, 0, 0]);
     }
 
     #[test]

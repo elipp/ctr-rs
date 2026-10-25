@@ -231,7 +231,7 @@ impl Stats {
             collision_weight: META_PHYS[61][c] as i16,
             slope_forward_speed_bonus: META_PHYS[62][c] as i16,
             side_speed_clamp: META_PHYS[63][c] as i16,
-            prototype_key: META_PHYS[64][c] as i32,
+            prototype_key: META_PHYS[64][c],
         }
     }
 }

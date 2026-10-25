@@ -455,7 +455,11 @@ impl Gte {
     /// Matrix element `k` (row-major, 0..9) of the 5-word matrix at control register `base`.
     fn mat(&self, base: usize, k: usize) -> i32 {
         let w = self.c[base + k / 2];
-        if k % 2 == 0 { lo_s(w) } else { hi_s(w) }
+        if k.is_multiple_of(2) {
+            lo_s(w)
+        } else {
+            hi_s(w)
+        }
     }
     /// Input vector `v` (0..3 are V0..V2, [`cmd::V_IR`] is IR1..IR3).
     fn vec(&self, v: usize) -> [i32; 3] {

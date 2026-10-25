@@ -7,8 +7,8 @@
 
 use bevy::prelude::*;
 use render::weapons::{
-    HEIGHT, ICON_IDS, SHINE_IMAGE_HEIGHT, SHINE_IMAGE_WIDTH, SHINE_SCALE, WIDTH, cell, icon_id,
-    shine_image, shine_pulse, weapon_atlas,
+    HEIGHT, SHINE_IMAGE_HEIGHT, SHINE_IMAGE_WIDTH, SHINE_SCALE, WIDTH, cell, icon_id, shine_image,
+    shine_pulse, weapon_atlas,
 };
 use vehicle::item::held;
 
@@ -250,6 +250,7 @@ fn shine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use render::weapons::ICON_IDS;
 
     #[test]
     fn the_shuffle_only_shows_items_that_have_pictures() {

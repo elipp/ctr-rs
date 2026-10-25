@@ -57,6 +57,7 @@ mod tests {
             pos_curr: [x << 8, 0, z << 8],
             mask_grabbed: false,
             invisible: false,
+            ..Body::default()
         }
     }
 

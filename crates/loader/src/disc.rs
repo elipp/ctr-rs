@@ -101,7 +101,7 @@ pub fn open_bigfile(path: &std::path::Path) -> io::Result<(Disc, crate::bigfile:
         .entries()
         .filter_map(Result::ok)
         .find(|e| e.display_name().split(';').next() == Some("BIGFILE.BIG"))
-        .map(|e| e.header().extent.read() as u32)
+        .map(|e| e.header().extent.read())
         .ok_or_else(|| invalid("BIGFILE.BIG not in the root directory".into()))?;
 
     let mut disc = open()?;

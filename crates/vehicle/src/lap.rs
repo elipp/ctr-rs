@@ -141,7 +141,7 @@ pub fn update(d: &mut Driver, level: &Level, laps: u8, event_time: i32) -> Lap {
         } else {
             d.distance_to_finish_checkpoint = after as u32;
             // A kart that finished does not count more laps.
-            if (laps as i32) >= d.lap_index as i32 + 1 {
+            if (laps as i32) > d.lap_index as i32 {
                 lap.time = event_time.wrapping_sub(d.lap_time);
                 d.lap_time = event_time;
                 d.lap_index += 1;

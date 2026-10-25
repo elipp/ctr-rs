@@ -18,6 +18,9 @@
 //! `]` / Page Up and `[` / Page Down switch to the next and the previous level; `.` and `,` to the
 //! next and the previous racer.
 
+// Bevy systems take their parameters and `Query` filters as types, so both lints fire on them.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 mod banner;
 mod bar;
 mod drive;
@@ -30,6 +33,7 @@ mod leaderboard;
 mod lobby;
 mod mask;
 mod probe;
+mod projectile;
 mod props;
 mod remote;
 mod shadow;
@@ -108,6 +112,8 @@ struct Shared {
     crate_explosion: Option<Model>,
     /// The Aku Aku and Uka Uka masks.
     masks: render::mask::Masks,
+    /// The bombs, missiles and their bursts.
+    projectiles: render::projectile::Models,
 }
 
 fn bigfile_path() -> PathBuf {
@@ -223,6 +229,7 @@ fn load_shared() -> Shared {
         crate_explosion: render::explosion::model(&pack)
             .expect("racer pack has the crate explosion"),
         masks: render::mask::models(&pack).expect("racer pack has the masks"),
+        projectiles: render::projectile::models(&pack).expect("racer pack has the weapons"),
     }
 }
 
@@ -369,6 +376,7 @@ fn main() {
     let Shared {
         crate_explosion,
         masks,
+        projectiles,
     } = load_shared();
     let loaded = Track(level, LevelId(track_id));
     let textures = Textures { dram, vram };
@@ -406,6 +414,7 @@ fn main() {
         .insert_resource(textures)
         .insert_resource(explosion::CrateExplosion::new(crate_explosion))
         .insert_resource(mask::MaskModels(Some(masks)))
+        .insert_resource(projectile::ProjectileModels::new(projectiles))
         .insert_resource(options)
         .insert_resource(LevelNumber(track_id))
         .insert_resource(LowColors(low))

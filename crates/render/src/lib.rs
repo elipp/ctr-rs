@@ -7,6 +7,7 @@ pub mod mask;
 pub mod mesh;
 pub mod particles;
 pub mod portraits;
+pub mod projectile;
 pub mod shadow;
 pub mod weapons;
 pub mod wheels;

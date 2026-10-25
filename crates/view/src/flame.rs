@@ -164,7 +164,7 @@ pub fn update(
                 continue;
             };
             if let Some(mut m) = standard.and_then(|h| materials.get_mut(&h.0)) {
-                dim(&mut *m);
+                dim(&mut m);
             }
             if let Some(mut m) = subtract.and_then(|h| subtract_materials.get_mut(&h.0)) {
                 dim(&mut m.base);

@@ -346,7 +346,7 @@ fn read_frame(
                 .data
                 .get(data as usize..data as usize + vertex_count * 3)
                 .ok_or_else(|| invalid("frame vertices are outside the payload"))?;
-            for v in bytes.chunks_exact(3) {
+            for v in bytes.as_chunks::<3>().0 {
                 // Stored x, "y", "z"; the GTE vector is x, z, y.
                 vertices.push([v[0] as i32 + o[0], v[2] as i32 + o[1], v[1] as i32 + o[2]]);
             }

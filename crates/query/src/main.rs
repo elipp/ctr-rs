@@ -40,6 +40,8 @@ commands:
   icons [FIRST [LAST]]                which BIGFILE entries carry icons with global indices
                                       FIRST..=LAST (default 32..=55, the driver portraits),
                                       with each icon's name and texture layout
+  models [ENTRY]                      the models of a pack (default the racer pack): id, name,
+                                      and per LOD the faces, animations and frames
   portraits | weapons                 decodes the HUD pictures the way the viewer does and
                                       counts the texels of each
 
@@ -518,6 +520,36 @@ fn hud_pictures(which: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn pack_models(entry: Option<usize>) -> Result<(), String> {
+    let path = std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
+        });
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let entry = entry.unwrap_or_else(|| BigIndex::ARCADE_1P_PACK.nth(0).get());
+    let file = big.read(&mut disc, entry).map_err(|e| e.to_string())?;
+    let pack = DramFile::parse(&file).map_err(|e| e.to_string())?;
+    for m in loader::model::parse_pack_models(&pack).map_err(|e| e.to_string())? {
+        println!("{:#04x} {:?}", m.id, m.name);
+        for (i, h) in m.headers.iter().enumerate() {
+            let frames: Vec<String> = h
+                .animations
+                .iter()
+                .map(|a| format!("{}:{}", a.name, a.num_frames))
+                .collect();
+            println!(
+                "     lod {i} {:?} flags {:#x} commands {} animations [{}]",
+                h.name,
+                h.flags,
+                h.commands.len(),
+                frames.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
@@ -532,6 +564,9 @@ fn run() -> Result<(), String> {
             return Err("icons takes numbers".into());
         };
         return icon_scan(first..=last);
+    }
+    if command == "models" {
+        return pack_models(args.first().and_then(|a| a.parse().ok()));
     }
     if matches!(command.as_str(), "portraits" | "weapons") {
         return hud_pictures(&command);

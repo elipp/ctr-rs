@@ -111,7 +111,7 @@ impl Turtle {
     /// The `ForcedJumpType` a kart of this `speed_approx` is given, or `None` when it is too slow
     /// to be thrown.
     fn forced_jump(&self, speed_approx: i32) -> Option<u8> {
-        (speed_approx.abs() > MIN_SPEED).then(|| match self.state {
+        (speed_approx.abs() > MIN_SPEED).then_some(match self.state {
             State::FullyDown => forced_jump::LOW,
             State::NotFullyDown => forced_jump::HIGH,
         })

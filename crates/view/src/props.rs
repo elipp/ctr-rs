@@ -367,13 +367,22 @@ pub fn spawn(
                 ),
             }
         }
-        let data = mesh::model_mesh(
+        let mut data = mesh::model_mesh(
             banner.as_ref().map_or(header, |b| &b.header),
             frame,
             vram,
             inst_scale,
         );
 
+        // The camera can be inside a crate or a roller, which then must not be there: they are
+        // culled like the level.
+        let convex = matches!(
+            by_instance.get(&n),
+            Some(Slot::Crate(_) | Slot::Roller(_) | Slot::Fruit(_))
+        );
+        if convex {
+            mesh::wind_outward(&mut data.parts);
+        }
         let mut atlas = Image::new(
             bevy::render::render_resource::Extent3d {
                 width: data.atlas.width as u32,
@@ -390,8 +399,8 @@ pub fn spawn(
             base_color: Color::WHITE,
             base_color_texture: Some(images.add(atlas)),
             unlit: true,
-            cull_mode: None,
-            double_sided: true,
+            cull_mode: convex.then_some(bevy::render::render_resource::Face::Back),
+            double_sided: !convex,
             ..default()
         };
 

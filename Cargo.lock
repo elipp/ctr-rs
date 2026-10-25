@@ -7812,6 +7812,7 @@ dependencies = [
  "race",
  "render",
  "vehicle",
+ "weapon",
 ]
 
 [[package]]

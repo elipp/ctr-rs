@@ -351,13 +351,14 @@ impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(crate::exhaust::Particles::new())
             .add_systems(Startup, (spawn_hud, crate::mask::spawn))
-            .add_systems(FixedUpdate, drive_tick)
+            .add_systems(FixedUpdate, (drive_tick, crate::projectile::tick).chain())
             .add_systems(
                 Update,
                 (
                     crate::kart::animate,
                     crate::kart::show,
                     chase,
+                    crate::projectile::place,
                     hud,
                     wumpa_hud,
                     lap_hud,
@@ -572,6 +573,7 @@ fn drive_tick(
     mut enter_held: Local<bool>,
     mut paused: Local<bool>,
     mut keys_held: Local<[bool; 4]>,
+    mut item_keys_held: Local<[bool; 12]>,
     mut label: Query<&mut Visibility, With<PausedHud>>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
@@ -620,9 +622,12 @@ fn drive_tick(
     let mut restart = keys.pressed(KeyCode::KeyR) && !online;
     // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
     // a frame can pass without a tick.
+    let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let demo_down = [
-        !online && keys.any_pressed([KeyCode::F5, KeyCode::Digit1]),
-        !online && keys.any_pressed([KeyCode::F6, KeyCode::Digit2]),
+        !online && keys.any_pressed([KeyCode::F5])
+            || !online && !alt && keys.pressed(KeyCode::Digit1),
+        !online && keys.any_pressed([KeyCode::F6])
+            || !online && !alt && keys.pressed(KeyCode::Digit2),
     ];
     let [record_pressed, play_pressed] = std::array::from_fn(|i| demo_down[i] && !keys_held[i]);
     keys_held[..2].copy_from_slice(&demo_down);
@@ -674,6 +679,37 @@ fn drive_tick(
         each_motion(&sim, &remotes, &mut motions, |motion, driver| {
             motion.reset(driver)
         });
+    }
+
+    // (Debug) Alt and a digit drops what we hold and rolls that item, as the roulette would:
+    // 0 to 9 are the held item ids (5, the spring, turns into a turbo), - and = the triple bomb
+    // and missile. Not in a demo, which is the inputs alone.
+    const ITEM_KEYS: [(KeyCode, u8); 12] = [
+        (KeyCode::Digit0, 0),
+        (KeyCode::Digit1, 1),
+        (KeyCode::Digit2, 2),
+        (KeyCode::Digit3, 3),
+        (KeyCode::Digit4, 4),
+        (KeyCode::Digit5, 5),
+        (KeyCode::Digit6, 6),
+        (KeyCode::Digit7, 7),
+        (KeyCode::Digit8, 8),
+        (KeyCode::Digit9, 9),
+        (KeyCode::Minus, 0xa),
+        (KeyCode::Equal, 0xb),
+    ];
+    // Edges, as with the demo keys: `just_pressed` is cleared every rendered frame.
+    let item_down = ITEM_KEYS.map(|(key, _)| alt && keys.pressed(key));
+    let picked = (0..ITEM_KEYS.len()).find(|&i| item_down[i] && !item_keys_held[i]);
+    item_keys_held.copy_from_slice(&item_down);
+    if let Some(i) = picked
+        && !online
+        && matches!(drive.demo, DemoMode::Off)
+    {
+        let item = ITEM_KEYS[i].1;
+        let own = sim.own;
+        vehicle::item::debug_roll(&mut sim.race.state_mut().karts[own].driver, item);
+        info!("(debug) rolled item {item}");
     }
 
     // F7 and F8 freeze this client for a moment, to see the race put right after a hitch: the
@@ -792,7 +828,7 @@ fn drive_tick(
     };
     // A beep every second of ticks, higher for each player: the clients' beeps line up when
     // their ticks do.
-    if online && tick % TICKS_PER_BEEP == 0 {
+    if online && tick.is_multiple_of(TICKS_PER_BEEP) {
         let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
         cues.beep(frequency, 100);
     }

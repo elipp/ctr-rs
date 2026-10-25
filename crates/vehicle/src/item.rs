@@ -1,8 +1,8 @@
 //! The weapon a driver holds (`heldItemID`) and the roulette that picks it: a weapon crate starts
 //! the roulette, which runs for [`ROLL_TICKS`] and then settles on an item.
 //!
-//! Firing is ported for the turbo, the mask, and the bomb and the missile (which the `weapon` crate
-//! flies: see [`Launch`]). The rest stay held until they are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
+//! Firing is ported for the turbo, the mask, the bomb and the missile (which the `weapon` crate
+//! flies) and TNT (which it drops): see [`Launch`]. The rest stay held until they are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
 //! place (`MixRNG_Scramble() % 12`), not the item sets by place that retail rolls from.
 
 use crate::fire::{self, turbo_type};
@@ -88,8 +88,8 @@ pub fn tick(d: &mut Driver, random_number: &mut i32) {
     set_held_item(d, random_number);
 }
 
-/// The weapons that can be fired so far. A driver that holds another one presses the fire button
-/// for nothing, so that it does not lose the weapon to a cooldown that fires nothing.
+/// The weapons that can be fired so far. A driver that holds another one throws it away with the
+/// fire button (see [`request_fire`]) instead of losing it to a cooldown that fires nothing.
 pub fn fireable(item: u8) -> bool {
     matches!(
         item,
@@ -99,6 +99,7 @@ pub fn fireable(item: u8) -> bool {
             | held::BOMB_3X
             | held::MISSILE_1X
             | held::MISSILE_3X
+            | held::TNT
     )
 }
 
@@ -107,33 +108,42 @@ pub fn fireable(item: u8) -> bool {
 pub enum Launch {
     Bomb,
     Missile,
+    /// TNT, or Nitro for a driver with 10 wumpa fruit: dropped behind the kart.
+    Mine,
 }
 
 /// `SOUND_BOMB_LAUNCH`, `SOUND_MISSILE_LAUNCH`, `VOICELINE_BOMB_LAUNCH`, `VOICELINE_MISSILE_LAUNCH`,
 /// `VOICELINE_WEAPON_PRIORITY`, `WEAPON_GAMEPAD_RUMBLE_FRAMES` and `_FORCE`
 const BOMB_SOUND: u8 = 0x47;
 const MISSILE_SOUND: u8 = 0x4a;
+/// `SOUND_MINE_DROP`, `VOICELINE_MINE_DROP`
+const MINE_SOUND: u8 = 0x52;
 const BOMB_VOICELINE: u8 = 10;
 const MISSILE_VOICELINE: u8 = 11;
+const MINE_VOICELINE: u8 = 0xf;
 const VOICELINE_PRIORITY: u8 = 0x10;
 const RUMBLE_FRAMES: u8 = 8;
 const RUMBLE_FORCE: u8 = 0x7f;
 
 /// What firing a [`Launch`] makes the driver feel and say, once the weapon is away.
 pub fn launch_effects(d: &Driver, launch: Launch, effects: &mut Vec<Effect>) {
-    effects.push(Effect::ShockFreq {
-        driver_id: d.driver_id,
-        a: RUMBLE_FRAMES,
-        b: 0,
-    });
-    effects.push(Effect::ShockForce {
-        driver_id: d.driver_id,
-        a: RUMBLE_FRAMES,
-        b: RUMBLE_FORCE,
-    });
+    // Dropping a mine does not shake the pad.
+    if launch != Launch::Mine {
+        effects.push(Effect::ShockFreq {
+            driver_id: d.driver_id,
+            a: RUMBLE_FRAMES,
+            b: 0,
+        });
+        effects.push(Effect::ShockForce {
+            driver_id: d.driver_id,
+            a: RUMBLE_FRAMES,
+            b: RUMBLE_FORCE,
+        });
+    }
     let (id, voice) = match launch {
         Launch::Bomb => (BOMB_SOUND, BOMB_VOICELINE),
         Launch::Missile => (MISSILE_SOUND, MISSILE_VOICELINE),
+        Launch::Mine => (MINE_SOUND, MINE_VOICELINE),
     };
     effects.push(Effect::Sound {
         id,
@@ -166,6 +176,16 @@ pub fn request_fire(d: &mut Driver, tapped_fire: bool, actions_flag_set: u32) ->
     if d.bomb_thrown {
         d.bomb_thrown = false;
         d.detonate_bomb = true;
+        return actions_flag_set;
+    }
+    // DIVERGENCE (for testing): a weapon that is not ported yet is thrown away by the button, to
+    // make room for another one. Retail has no such thing.
+    if d.item_roll_timer == 0
+        && !fireable(d.held_item_id)
+        && !matches!(d.held_item_id, held::NONE | held::ROULETTE)
+    {
+        d.held_item_id = held::NONE;
+        d.num_held_items = 0;
         return actions_flag_set;
     }
     let can_fire = d.item_roll_timer == 0
@@ -217,6 +237,7 @@ fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<La
     match weapon {
         held::BOMB_1X | held::BOMB_3X => return Some(Launch::Bomb),
         held::MISSILE_1X | held::MISSILE_3X => return Some(Launch::Missile),
+        held::TNT => return Some(Launch::Mine),
         _ => {}
     }
     match weapon {
@@ -240,9 +261,24 @@ fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<La
     None
 }
 
+/// (Debug) Throws away what the driver holds, roulette and cooldown included, and has the
+/// roulette settle on `item` right away.
+pub fn debug_roll(d: &mut Driver, item: u8) {
+    d.item_roll_timer = 0;
+    d.no_item_timer = 0;
+    d.num_held_items = 0;
+    d.actions_flag_set &= !actions::WEAPON_FIRE_REQUEST;
+    give(d, item);
+}
+
 /// `VehPhysGeneral_SetHeldItem`, as far as a driver without a place goes.
 fn set_held_item(d: &mut Driver, random_number: &mut i32) {
     let item = (math::mix_rng_scramble(random_number) % FALLBACK_ITEM_COUNT) as u8;
+    give(d, item);
+}
+
+/// What the roulette does with the item it picked.
+fn give(d: &mut Driver, item: u8) {
     // The roulette never shows the spring (it turns into a turbo), so it is not given either.
     d.held_item_id = if item == held::SPRING {
         held::TURBO

@@ -239,7 +239,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     "lobby open. To join it, run:\n  cargo run -p view -- --drive --join {ticket}\nPress G to start the race once the others have joined."
                 );
                 toasts.write(
-                    Toast::new(format!("Lobby opened!"), 2000)
+                    Toast::new("Lobby opened!".to_string(), 2000)
                         .color(Color::linear_rgb(0.4, 1.0, 0.4)),
                 );
             }
@@ -504,7 +504,7 @@ fn waiting(
     mut label: Query<&mut Visibility, With<WaitingHud>>,
 ) {
     let waiting = lobby.joined && lobby.session.is_some() && lobby.online.is_none();
-    let on = (time.elapsed_secs() / BLINK_SECONDS) as u32 % 2 == 0;
+    let on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
     for mut visibility in &mut label {
         *visibility = if waiting && on {
             Visibility::Inherited

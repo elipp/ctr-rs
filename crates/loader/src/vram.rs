@@ -99,9 +99,9 @@ impl Vram {
             let dst = &mut self.pixels[(y + row) * VRAM_WIDTH + x..][..w];
             for (px, src) in dst
                 .iter_mut()
-                .zip(img.pixels[row * w * 2..][..w * 2].chunks_exact(2))
+                .zip(img.pixels[row * w * 2..][..w * 2].as_chunks::<2>().0)
             {
-                *px = u16::from_le_bytes(src.try_into().unwrap());
+                *px = u16::from_le_bytes(*src);
             }
         }
         Ok(())
