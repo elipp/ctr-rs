@@ -64,6 +64,8 @@ impl Sim {
         // An online race starts with the ceremony; offline the kart drives off at once.
         if online {
             race.start_ceremony(level);
+        } else {
+            race.laps = race::FREE_DRIVE_LAPS;
         }
         let rollback = Rollback::new(
             race,

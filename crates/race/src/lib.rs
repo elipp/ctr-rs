@@ -152,6 +152,9 @@ const LIGHT_AT_MS: [(i32, Light); 4] = [
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
 
+/// The laps of a free drive, which has no end: more than anyone drives.
+pub const FREE_DRIVE_LAPS: u8 = u8::MAX;
+
 /// A race at some tick.
 #[derive(Clone)]
 pub struct Race {
