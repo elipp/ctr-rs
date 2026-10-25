@@ -1,9 +1,9 @@
 //! `VehPickState_NewState`: what a hit does to the victim. The spin-out, the squish and the burn
 //! start `VehPhysProc_SpinFirst_Init` on the next tick, and the blast `VehStuckProc_Tumble_Init`
-//! (see [`crate::tumble`]). Not ported: the mask grab, the shield, the battle score and the
+//! (see [`crate::tumble`]). A shield takes the hit instead ([`crate::shield`]). Not ported: the mask grab, the battle score and the
 //! attacker's stats.
 
-use crate::{Driver, Effect, MatrixArray, actions, kart_state};
+use crate::{Driver, Effect, MatrixArray, actions, kart_state, shield};
 
 /// `VEH_PICK_DAMAGE_*`
 pub mod damage {
@@ -36,9 +36,10 @@ const RUMBLE_FORCE: u8 = 0x7f;
 /// `VehPickState_NewState` for a hit without an attacker. The result is the game's: whether the
 /// driver was hurt.
 pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool {
+    let driver_id = d.driver_id;
     let voice = |id| Effect::Voiceline {
         id,
-        driver_id: d.driver_id,
+        driver_id,
         priority: VOICELINE_PRIORITY,
     };
 
@@ -47,6 +48,11 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
     }
     // The Aku Aku mask shrugs it off.
     if d.actions_flag_set & actions::MASK_WEAPON != 0 || d.invincible_timer != 0 {
+        effects.push(voice(VOICELINE_VICTIM_LAUGH));
+        return false;
+    }
+    // The shield takes it, whatever it was.
+    if shield::absorb(d) {
         effects.push(voice(VOICELINE_VICTIM_LAUGH));
         return false;
     }

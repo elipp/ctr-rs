@@ -627,3 +627,101 @@ fn a_missile_homes_in_on_a_kart_off_its_line_and_hits_it() {
     assert!(race.karts[1].driver.pending_tumble);
     assert!(race.weapons.projectiles().is_empty());
 }
+
+/// A kart that holds a shield takes the missile that hits it: the shield absorbs the hit and pops,
+/// the kart is not blasted, and it is invincible for a moment after.
+#[test]
+fn a_shield_absorbs_the_missile_that_hits_its_kart_and_pops() {
+    use weapon::{Hit, Reason};
+
+    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 2, |_| {}) else {
+        return;
+    };
+    let [x, _, z] = START;
+    let d = &mut race.karts[1].driver;
+    d.pos_curr.x = (x - 800) << 8;
+    d.pos_curr.z = z << 8;
+    vehicle::shield::shoot_shield(d, &mut Vec::new());
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::MISSILE_1X);
+
+    let mut went_off = false;
+    for tick in 0..600 {
+        race.tick(&level, &fire_pads(2, tick == 0));
+        if !race.last_weapons.explosions.is_empty() {
+            went_off = true;
+            break;
+        }
+    }
+    assert!(went_off, "the missile went off");
+
+    // The hit was the missile's, and the shield took it.
+    assert_eq!(
+        race.last_weapons.hits,
+        vec![Hit {
+            victim: 1,
+            attacker: Some(0),
+            reason: Reason::Missile,
+            damage: vehicle::pick::damage::BLAST,
+        }]
+    );
+    let d = &race.karts[1].driver;
+    assert!(!d.pending_tumble && d.kart_state != kart_state::BLASTED);
+    assert!(d.invincible_timer > 0);
+    assert!(d.shield.is_some_and(|s| !s.holding));
+
+    // The shield pops away, and the kart never tumbles.
+    for _ in 0..30 {
+        race.tick(&level, &fire_pads(2, false));
+    }
+    let d = &race.karts[1].driver;
+    assert!(d.shield.is_none());
+    assert_ne!(d.kart_state, kart_state::BLASTED);
+}
+
+/// A shield is shot with the fire button: it flies straight ahead (it chases no one, and does not
+/// roll), goes off on the kart in its way as an ordinary bomb, and that kart is blasted.
+#[test]
+fn a_shot_shield_flies_straight_and_blasts_the_kart_in_its_way() {
+    use weapon::{Hit, Kind, Reason};
+
+    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 2, |_| {}) else {
+        return;
+    };
+    let [x, _, z] = START;
+    let d = &mut race.karts[1].driver;
+    d.pos_curr.x = (x - 800) << 8;
+    d.pos_curr.z = z << 8;
+    vehicle::shield::shoot_shield(&mut race.karts[0].driver, &mut Vec::new());
+
+    let mut flew = Vec::new();
+    let mut went_off = false;
+    for tick in 0..600 {
+        // The first press shoots the bubble.
+        race.tick(&level, &fire_pads(2, tick == 0));
+        if let Some(p) = race.weapons.projectiles().first() {
+            assert_eq!(p.kind, Kind::Shield);
+            assert!(race.karts[0].driver.shield.is_none());
+            flew.push(p.pos);
+        }
+        if !race.last_weapons.explosions.is_empty() {
+            went_off = true;
+            break;
+        }
+    }
+    assert!(went_off, "the shield bomb went off, it flew {flew:?}");
+    assert!(
+        flew.len() > 3 && flew.iter().all(|p| (p[2] - z).abs() < 60),
+        "{flew:?}"
+    );
+    assert_eq!(
+        race.last_weapons.hits,
+        vec![Hit {
+            victim: 1,
+            attacker: Some(0),
+            reason: Reason::Bomb,
+            damage: vehicle::pick::damage::BLAST,
+        }]
+    );
+    assert_eq!(race.last_weapons.explosions[0].kind, Kind::Shield);
+    assert!(race.karts[1].driver.pending_tumble);
+}

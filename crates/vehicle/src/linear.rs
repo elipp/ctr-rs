@@ -421,6 +421,9 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
 
     // === Weapon ===
     crate::item::count_cooldown(d);
+    if d.invincible_timer != 0 {
+        d.invincible_timer = mips::add_lo(d.invincible_timer, neg_ms).max(0);
+    }
     a = crate::item::request_fire(d, tapped & buttons::CIRCLE != 0, a);
 
     // Tapping L1 or R1 starts a jump, and picks the button a drift is held with.

@@ -5,7 +5,7 @@
 //! crates, which go off in the break-up of a crate (`crate_explosion`, tinted red or green) with a
 //! red or green shockwave (`RB_Blowup_Init`). The potions are the red and green beakers
 //! (`beakerred`, `beakergreen`, which loop their `bubble` animation), which shatter in the same
-//! shockwaves. Every racer's pack has them. Where the weapons are is
+//! shockwaves. The shield bomb is the shield's own model. Every racer's pack has them. Where the weapons are is
 //! `weapon`'s; the entities are `view`'s.
 
 use std::io;
@@ -50,6 +50,9 @@ pub struct Models {
     pub shockwave_green: Model,
     pub beaker_green: Model,
     pub beaker_red: Model,
+    /// The shield bomb: the blue shield's model, and the green one's.
+    pub shield_blue: Model,
+    pub shield_green: Model,
 }
 
 /// The weapons' models of a racer's pack.
@@ -75,6 +78,8 @@ pub fn models(pack: &DramFile) -> io::Result<Models> {
         shockwave_green: take(SHOCKWAVE_GREEN)?,
         beaker_green: take(BEAKER_GREEN)?,
         beaker_red: take(BEAKER_RED)?,
+        shield_blue: take(crate::shield::BLUE)?,
+        shield_green: take(crate::shield::GREEN)?,
     })
 }
 

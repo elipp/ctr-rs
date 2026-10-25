@@ -112,7 +112,7 @@ fn build(
             Camera3d::default(),
             // After the overlay camera, over its picture, with only the depth buffer cleared.
             Camera {
-                order: 2,
+                order: 3,
                 clear_color: ClearColorConfig::None,
                 ..default()
             },

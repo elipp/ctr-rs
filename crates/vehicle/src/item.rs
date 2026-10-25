@@ -1,7 +1,7 @@
 //! The weapon a driver holds (`heldItemID`) and the roulette that picks it: a weapon crate starts
 //! the roulette, which runs for [`ROLL_TICKS`] and then settles on an item.
 //!
-//! Firing is ported for the turbo, the mask, the bomb and the missile (which the `weapon` crate
+//! Firing is ported for the turbo, the mask, the shield, the bomb and the missile (which the `weapon` crate
 //! flies), TNT and the potion (which it drops, or throws): see [`Launch`]. The rest stay held until they are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
 //! place (`MixRNG_Scramble() % 12`), not the item sets by place that retail rolls from.
 
@@ -101,6 +101,7 @@ pub fn fireable(item: u8) -> bool {
             | held::MISSILE_3X
             | held::TNT
             | held::POTION
+            | held::SHIELD
     )
 }
 
@@ -166,7 +167,7 @@ pub fn launch_effects(d: &Driver, launch: Launch, effects: &mut Vec<Effect>) {
 /// request.
 ///
 /// `tapped_fire` is the fire button's tap, which counts only while the kart drives normally.
-/// (The spring, and the bomb and the bubble that are still held after being thrown, are not here.)
+/// (The spring is not here.)
 pub fn request_fire(d: &mut Driver, tapped_fire: bool, actions_flag_set: u32) -> u32 {
     if !(tapped_fire
         && matches!(
@@ -180,6 +181,10 @@ pub fn request_fire(d: &mut Driver, tapped_fire: bool, actions_flag_set: u32) ->
     if d.bomb_thrown {
         d.bomb_thrown = false;
         d.detonate_bomb = true;
+        return actions_flag_set;
+    }
+    // A shield round the kart is shot.
+    if crate::shield::shoot(d) {
         return actions_flag_set;
     }
     // DIVERGENCE (for testing): a weapon that is not ported yet is thrown away by the button, to
@@ -261,6 +266,7 @@ fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<La
             );
         }
         held::MASK => stuck::shoot_mask(d, effects),
+        held::SHIELD => crate::shield::shoot_shield(d, effects),
         _ => {}
     }
     None

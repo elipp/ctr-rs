@@ -40,6 +40,7 @@ mod projectile;
 mod props;
 mod remote;
 mod shadow;
+mod shield;
 mod skid;
 mod sky;
 mod subtract;
@@ -115,6 +116,8 @@ struct Shared {
     crate_explosion: Option<Model>,
     /// The Aku Aku and Uka Uka masks.
     masks: render::mask::Masks,
+    /// The shield bubble.
+    shields: render::shield::Shields,
     /// The bombs, missiles and their bursts.
     projectiles: render::projectile::Models,
 }
@@ -232,6 +235,7 @@ fn load_shared() -> Shared {
         crate_explosion: render::explosion::model(&pack)
             .expect("racer pack has the crate explosion"),
         masks: render::mask::models(&pack).expect("racer pack has the masks"),
+        shields: render::shield::models(&pack).expect("racer pack has the shields"),
         projectiles: render::projectile::models(&pack).expect("racer pack has the weapons"),
     }
 }
@@ -371,6 +375,7 @@ fn main() {
     let Shared {
         crate_explosion,
         masks,
+        shields,
         projectiles,
     } = load_shared();
     let loaded = Track(level, LevelId(track_id));
@@ -417,6 +422,7 @@ fn main() {
         .insert_resource(textures)
         .insert_resource(explosion::CrateExplosion::new(crate_explosion))
         .insert_resource(mask::MaskModels(Some(masks)))
+        .insert_resource(shield::ShieldModels(Some(shields)))
         .insert_resource(projectile::ProjectileModels::new(projectiles))
         .insert_resource(options)
         .insert_resource(LevelNumber(track_id))
@@ -644,6 +650,9 @@ fn restart_sim(
 /// giving them a slot of their own in the ordering table (it has no depth buffer): they are
 /// ordered among themselves by depth, and never hidden by the track.
 const KART_LAYER: usize = 1;
+
+/// The render layer of our own kart's shield, which a camera draws over the kart.
+const SHIELD_LAYER: usize = 4;
 
 /// The cameras that draw over the picture of the main one: the one for [`KART_LAYER`], and the
 /// HUD's (`wumpa_icon`). The systems that follow "the camera" (the wheels' view, the smoke, the
@@ -932,9 +941,22 @@ fn setup(
                     clear_color: ClearColorConfig::None,
                     ..default()
                 },
-                projection,
+                projection.clone(),
                 Transform::default(),
                 RenderLayers::layer(KART_LAYER),
+            ))
+            .with_child((
+                OverlayCamera,
+                Camera3d::default(),
+                // And the shield over the kart, likewise.
+                Camera {
+                    order: 2,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
+                projection,
+                Transform::default(),
+                RenderLayers::layer(SHIELD_LAYER),
             ));
     } else {
         if let Some(skybox) = &level.skybox {
