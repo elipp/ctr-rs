@@ -262,8 +262,8 @@ pub struct Rolling(usize);
 
 /// The orientation of an angle triple, as the matrix `ConvertRotToMatrix` makes of it: its
 /// columns are where the model's axes go (as for the kart).
-pub(crate) fn rotation_of(gte: &mut gte::Gte, rot: loader::lev::SVec3) -> Quat {
-    quat_of(&vehicle::rotmat::convert_rot_to_matrix(gte, rot))
+pub(crate) fn rotation_of(rot: loader::lev::SVec3) -> Quat {
+    quat_of(&vehicle::rotmat::rot_to_matrix(rot))
 }
 
 fn quat_of(matrix: &vehicle::Matrix) -> Quat {
@@ -325,7 +325,6 @@ pub fn spawn(
     let mut turtles = Turtles::default();
     let mut banners = Banners::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
-    let mut gte = gte::Gte::default();
     // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
     let show_letters = std::env::var_os("CTR_LETTERS").is_some();
     for (n, inst) in level
@@ -396,7 +395,7 @@ pub fn spawn(
             ..default()
         };
 
-        let rotation = rotation_of(&mut gte, inst.rot);
+        let rotation = rotation_of(inst.rot);
         let transform =
             Transform::from_translation(Vec3::from(to_world(inst.pos))).with_rotation(rotation);
         let pose = (transform.translation, transform.rotation);
@@ -599,12 +598,11 @@ pub fn roll(
     sim: Res<Sim>,
     fixed: Res<Time<Fixed>>,
 ) {
-    let mut gte = gte::Gte::default();
     let fraction = fixed.overstep_fraction();
     for (rolling, mut transform) in &mut rolling {
         let (from, to) = sim.race.objects.roller_frames(rolling.0);
         let mut place =
-            |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(&mut gte, p.rot));
+            |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(p.rot));
         let ((from_pos, from_rot), (to_pos, to_rot)) = (place(from), place(to));
         transform.translation = from_pos.lerp(to_pos, fraction);
         transform.rotation = from_rot.slerp(to_rot, fraction);

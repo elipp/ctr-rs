@@ -4,7 +4,7 @@
 
 use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
-use vehicle::rotmat::convert_rot_to_matrix;
+use vehicle::rotmat::rot_to_matrix;
 
 use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
 
@@ -125,7 +125,7 @@ impl Minecart {
         }
         self.rot_curr.y = interpolate(self.rot_curr.y, self.rot_desired.y, ROT_SPEED);
         self.rot_curr.x = interpolate(self.rot_curr.x, self.rot_desired.x, ROT_SPEED);
-        self.matrix = convert_rot_to_matrix(&mut gte::Gte::default(), self.rot_curr);
+        self.matrix = rot_to_matrix(self.rot_curr);
 
         Contact {
             pos: self.pos,

@@ -180,14 +180,11 @@ pub struct MaskShown {
 impl MaskHead {
     /// The rotation matrix of a turn of `rot_y` about the vertical (`ConvertRotToMatrix`).
     pub fn rotation(rot_y: i16) -> crate::Matrix {
-        crate::rotmat::convert_rot_to_matrix(
-            &mut gte::Gte::default(),
-            SVec3 {
-                x: 0,
-                y: rot_y,
-                z: 0,
-            },
-        )
+        crate::rotmat::rot_to_matrix(SVec3 {
+            x: 0,
+            y: rot_y,
+            z: 0,
+        })
     }
 }
 

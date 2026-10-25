@@ -693,7 +693,7 @@ mod tests {
         // Others are hit at once, by the flat distance.
         let mut p = weapon(Kind::Missile, 1);
         assert_eq!(collide_with_drivers(&p, &bodies), Some(0));
-        p.pos = [0, 0x20000, 0];
+        p.pos = [0, 0x2000, 0];
         assert_eq!(collide_with_drivers(&p, &bodies), None);
     }
 
