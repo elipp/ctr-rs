@@ -40,6 +40,9 @@ pub struct Fireball {
 pub struct Spark {
     /// Level units.
     pub pos: [i32; 3],
+    /// Where the ball was in height a tick before, in level units: the spark is the end of a
+    /// stretch of the ball's path, which a renderer can fill with more of them.
+    pub prev_y: i32,
     /// 1/256 units a tick.
     pub vel_y: i16,
 }
@@ -79,6 +82,7 @@ impl Fireball {
         let mut step = None;
         if self.pos[1] >= self.rest_y - BELOW_LAVA {
             // Moves with its speed, then gravity pulls it.
+            let prev_y = self.pos[1];
             self.pos[1] += (self.vel_y as i32 * TICK_MS as i32) >> 5;
             self.vel_y = (self.vel_y - GRAVITY).max(TERMINAL_SPEED);
             // The spark goes against the ball's vertical motion.
@@ -87,6 +91,7 @@ impl Fireball {
             step = Some(Step {
                 spark: Spark {
                     pos: self.pos,
+                    prev_y,
                     vel_y: vel_y as i16,
                 },
                 contact: Contact {
@@ -157,6 +162,17 @@ mod tests {
         assert_eq!(top, -1090 - 0x440 + 2100, "{heights:?}");
         assert!(heights.windows(2).take(15).all(|w| w[1] > w[0]));
         assert!(heights.last().unwrap() < &top);
+    }
+
+    #[test]
+    fn a_spark_remembers_where_the_ball_was_a_tick_before() {
+        let mut f = Fireball::new(&def("fireball#0"));
+        f.tick();
+        let mut last = f.pos[1];
+        while let Some(step) = f.tick() {
+            assert_eq!(step.spark.prev_y, last);
+            last = step.spark.pos[1];
+        }
     }
 
     #[test]

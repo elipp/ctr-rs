@@ -64,11 +64,18 @@ use subtract::SubtractMaterial;
 /// `NITROS_OXIDE` in `GAME_CHARACTER_IDS` order.
 const NITROS_OXIDE: u32 = 15;
 
-/// A level's geometry plus what its texture pointers need.
-struct Loaded {
+/// What a level is made of: its geometry, and the textures its pointers need (the level's own
+/// and `shared.vrm`, which the racers' are in).
+struct LevelData {
     level: Level,
     dram: DramFile,
     vram: Vram,
+}
+
+/// What a racer is made of: everything that comes from the character's own files. It can be
+/// loaded again without the level.
+#[derive(Default)]
+struct Character {
     racer: Option<Model>,
     /// The icons of the racer's wheel sprites (`tireAnim`); none for Oxide, who has no wheels.
     wheel_icons: Vec<Icon>,
@@ -80,9 +87,26 @@ struct Loaded {
     tiremark_icon: Option<Icon>,
     /// `turbo` .. `turbo7` of the racer's pack: the frames of the exhaust fire.
     flame_models: Vec<Model>,
-    /// `crate_explosion` of the racer pack: the break-up of a crate.
+}
+
+impl Character {
+    /// Makes this the racer on the grid: the resources the kart is spawned from.
+    fn insert(self, world: &mut World) {
+        world.insert_resource(Racer(self.racer));
+        world.insert_resource(WheelIcons(self.wheel_icons));
+        world.insert_resource(ShadowIcons(self.shadow_icons));
+        world.insert_resource(SmokeIcon(self.smoke_icon));
+        world.insert_resource(TiremarkIcon(self.tiremark_icon));
+        world.insert_resource(FlameModels(self.flame_models));
+    }
+}
+
+/// What every racer's pack holds the same of, loaded once: neither a level nor a character
+/// changes it.
+struct Shared {
+    /// `crate_explosion`: the break-up of a crate.
     crate_explosion: Option<Model>,
-    /// The Aku Aku and Uka Uka masks of the racer pack.
+    /// The Aku Aku and Uka Uka masks.
     masks: render::mask::Masks,
 }
 
@@ -124,9 +148,9 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
     (model, wheel_icons)
 }
 
-/// The sprite and texture page file shared by every track (`shared.vrm`):
-/// the racers' textures are in it.
-fn load_level(id: u32, racer: Option<u32>) -> Loaded {
+/// A level from the disc, with the texture page file shared by every track (`shared.vrm`): the
+/// racers' textures are in it.
+fn load_level(id: u32) -> LevelData {
     let path = bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut read = |f| {
@@ -146,103 +170,59 @@ fn load_level(id: u32, racer: Option<u32>) -> Loaded {
     for img in parse_vram_file(&shared).expect("parse shared VRAM file") {
         vram.upload(&img).expect("upload shared VRAM image");
     }
-    let racer_character = racer;
-    let racer = racer.map(|character| {
-        let file = big
-            .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character).get())
-            .expect("read racer model");
-        Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model")
-    });
-    let shadow_icons = racer_character.and_then(|character| {
-        let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
-            .expect("read racer pack");
-        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack"))
-            .expect("parse racer pack icons");
-        let find = |index| icons.iter().find(|i| i.global_index == index).cloned();
-        Some([find(0)?, find(1)?])
-    });
-    let tiremark_icon = racer_character.and_then(|character| {
-        let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
-            .expect("read racer pack");
-        let icons = parse_icons(&DramFile::parse(&pack).expect("parse racer pack"))
-            .expect("parse racer pack icons");
-        icons
-            .into_iter()
-            .find(|i| i.global_index == skid::TIREMARK_ICON)
-    });
-    let smoke_icon = racer_character.and_then(|character| {
-        let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
-            .expect("read racer pack");
-        let groups = parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
-            .expect("parse racer pack icons");
-        groups
-            .into_iter()
-            .find(|g| g.group_id == 1)?
-            .icons
-            .into_iter()
-            .next()
-    });
-    let flame_models = racer_character.map_or_else(Vec::new, |character| {
-        let pack = big
-            .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
-            .expect("read racer pack");
-        flame::models(&DramFile::parse(&pack).expect("parse racer pack"))
-            .expect("racer pack has the turbo models")
-    });
-    let crate_explosion = {
-        // Every racer's pack has the same shared models; character 0's will do without a racer.
-        let pack = big
-            .read(
-                &mut disc,
-                BigIndex::ARCADE_1P_PACK
-                    .nth(racer_character.unwrap_or(0))
-                    .get(),
-            )
-            .expect("read racer pack");
-        render::explosion::model(&DramFile::parse(&pack).expect("parse racer pack"))
-            .expect("racer pack has the crate explosion")
+    LevelData { level, dram, vram }
+}
+
+/// A racer from the disc: its model, and what its pack has of the kart's. Nothing for `None`
+/// (no racer).
+fn load_character(character: Option<u32>) -> Character {
+    let Some(character) = character else {
+        return Character::default();
     };
-    let masks = {
-        let pack = big
-            .read(
-                &mut disc,
-                BigIndex::ARCADE_1P_PACK
-                    .nth(racer_character.unwrap_or(0))
-                    .get(),
-            )
-            .expect("read racer pack");
-        render::mask::models(&DramFile::parse(&pack).expect("parse racer pack"))
-            .expect("racer pack has the masks")
-    };
-    let wheel_icons = match racer_character {
-        Some(character) if character != NITROS_OXIDE => {
-            let pack = big
-                .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
-                .expect("read racer pack");
-            parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
-                .expect("parse racer pack icons")
-                .into_iter()
-                .find(|g| g.group_id == 0)
+    let path = bigfile_path();
+    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let file = big
+        .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character).get())
+        .expect("read racer model");
+    let racer =
+        Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model");
+    let pack = big
+        .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
+        .expect("read racer pack");
+    let pack = DramFile::parse(&pack).expect("parse racer pack");
+    let icons = parse_icons(&pack).expect("parse racer pack icons");
+    let groups = parse_groups(&pack).expect("parse racer pack icons");
+    let global = |index| icons.iter().find(|i| i.global_index == index).cloned();
+    let group = |id| groups.iter().find(|g| g.group_id == id);
+    Character {
+        wheel_icons: if character == NITROS_OXIDE {
+            Vec::new()
+        } else {
+            group(0)
                 .expect("racer pack has the tire icon group")
                 .icons
-        }
-        _ => Vec::new(),
-    };
-    Loaded {
-        level,
-        dram,
-        vram,
-        racer,
-        wheel_icons,
-        shadow_icons,
-        smoke_icon,
-        tiremark_icon,
-        flame_models,
-        crate_explosion,
-        masks,
+                .clone()
+        },
+        shadow_icons: global(0).zip(global(1)).map(|(a, b)| [a, b]),
+        smoke_icon: group(1).and_then(|g| g.icons.first().cloned()),
+        tiremark_icon: global(skid::TIREMARK_ICON),
+        flame_models: flame::models(&pack).expect("racer pack has the turbo models"),
+        racer: Some(racer),
+    }
+}
+
+/// What the racers' packs share. (Character 0's pack will do.)
+fn load_shared() -> Shared {
+    let path = bigfile_path();
+    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let pack = big
+        .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(0).get())
+        .expect("read racer pack");
+    let pack = DramFile::parse(&pack).expect("parse racer pack");
+    Shared {
+        crate_explosion: render::explosion::model(&pack)
+            .expect("racer pack has the crate explosion"),
+        masks: render::mask::models(&pack).expect("racer pack has the masks"),
     }
 }
 
@@ -384,22 +364,15 @@ fn main() {
 
     let character = racer.unwrap_or(0) as usize;
     let options = Options { racer, driving };
-    let Loaded {
-        level,
-        dram,
-        vram,
-        racer,
-        wheel_icons,
-        shadow_icons,
-        smoke_icon,
-        tiremark_icon,
-        flame_models,
+    let LevelData { level, dram, vram } = load_level(track_id);
+    let character_data = load_character(racer);
+    let Shared {
         crate_explosion,
         masks,
-    } = load_level(track_id, racer);
+    } = load_shared();
     let loaded = Track(level, LevelId(track_id));
     let textures = Textures { dram, vram };
-    let drive = driving.then(|| new_drive(&loaded, &racer, character));
+    let drive = driving.then(|| new_drive(&loaded, &character_data.racer, character));
 
     // See the executor below: without a render thread, `CTR_EXECUTOR=multi` keeps the defaults.
     let single_threaded = std::env::var("CTR_EXECUTOR").as_deref() != Ok("multi");
@@ -431,19 +404,13 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
         .insert_resource(loaded)
         .insert_resource(textures)
-        .insert_resource(Racer(racer))
-        .insert_resource(WheelIcons(wheel_icons))
-        .insert_resource(ShadowIcons(shadow_icons))
-        .insert_resource(SmokeIcon(smoke_icon))
-        .insert_resource(TiremarkIcon(tiremark_icon))
-        .insert_resource(FlameModels(flame_models))
         .insert_resource(explosion::CrateExplosion::new(crate_explosion))
         .insert_resource(mask::MaskModels(Some(masks)))
         .insert_resource(options)
         .insert_resource(LevelNumber(track_id))
         .insert_resource(LowColors(low))
         .insert_resource(ShowHidden { show_hidden, cull })
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
         // .add_systems(Last, limit_frame_rate)
         // After the cameras and karts have moved this frame, before their transforms propagate.
@@ -486,8 +453,12 @@ fn main() {
             )
                 .chain(),
         );
+    character_data.insert(app.world_mut());
     let world = app.world_mut();
-    let mut scene_systems = vec![world.register_system(setup)];
+    let mut scene_systems = vec![
+        world.register_system(setup),
+        world.register_system(spawn_kart),
+    ];
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(mask::spawn));
@@ -527,8 +498,9 @@ fn main() {
 }
 
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
-/// the previous racer. It loads right here (the window stands still meanwhile) and builds the scene
-/// from scratch.
+/// the previous racer. A new level loads right here (the window stands still meanwhile) and
+/// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
+/// on the same level.
 fn switch_level(world: &mut World) {
     let keys = world.resource::<ButtonInput<KeyCode>>();
     let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
@@ -551,7 +523,10 @@ fn switch_level(world: &mut World) {
     let mut options = *world.resource::<Options>();
     let current = world.resource::<LevelNumber>().0;
     let wanted = race_track.filter(|&track| track != current);
-    if wanted.is_none() && level_step == 0 && (racer_step == 0 || options.racer.is_none()) {
+    if options.racer.is_none() {
+        racer_step = 0;
+    }
+    if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }
     let levels = (LevelId::TURBO_TRACK.0 - LevelId::DINGO_CANYON.0 + 1) as i32;
@@ -568,61 +543,90 @@ fn switch_level(world: &mut World) {
     {
         lobby.set_character(racer as u8);
     }
-    let Loaded {
-        level,
-        dram,
-        vram,
-        racer,
-        wheel_icons,
-        shadow_icons,
-        smoke_icon,
-        tiremark_icon,
-        flame_models,
-        crate_explosion,
-        masks,
-    } = load_level(id, options.racer);
+    let character = (racer_step != 0).then(|| load_character(options.racer));
 
-    // Everything in the scene has a transform (the 3D parts) or a node (the text); the window
-    // and the gamepads have neither.
-    let scene: Vec<Entity> = world
-        .query_filtered::<Entity, Or<(With<Transform>, With<Node>)>>()
-        .iter(world)
-        .collect();
-    for entity in scene {
-        if let Ok(entity) = world.get_entity_mut(entity) {
-            entity.despawn();
+    if id != current {
+        let LevelData { level, dram, vram } = load_level(id);
+        let scene = world_scene(world);
+        despawn(world, scene);
+        world.insert_resource(Track(level, LevelId(id)));
+        world.insert_resource(Textures { dram, vram });
+        if let Some(character) = character {
+            character.insert(world);
         }
-    }
-
-    world.insert_resource(Track(level, LevelId(id)));
-    world.insert_resource(Textures { dram, vram });
-    if options.driving {
-        let drive = new_drive(
-            world.resource::<Track>(),
-            &racer,
-            options.racer.unwrap_or(0) as usize,
-        );
-        world.insert_resource(drive);
-        world.insert_resource(exhaust::Particles::new());
-    }
-    world.insert_resource(Racer(racer));
-    world.insert_resource(WheelIcons(wheel_icons));
-    world.insert_resource(ShadowIcons(shadow_icons));
-    world.insert_resource(SmokeIcon(smoke_icon));
-    world.insert_resource(TiremarkIcon(tiremark_icon));
-    world.insert_resource(FlameModels(flame_models));
-    world.insert_resource(explosion::CrateExplosion::new(crate_explosion));
-    world.insert_resource(mask::MaskModels(Some(masks)));
-    world.insert_resource(LevelNumber(id));
-
-    for system in world.resource::<SceneSystems>().0.clone() {
-        world.run_system(system).expect("scene system runs");
+        world.insert_resource(LevelNumber(id));
+        restart_drive(world, options);
+        for system in world.resource::<SceneSystems>().0.clone() {
+            world.run_system(system).expect("scene system runs");
+        }
+    } else if let Some(character) = character {
+        // Only the kart goes: the level stays, and the race starts again with the new racer.
+        let kart = world
+            .query_filtered::<Entity, With<KartScene>>()
+            .iter(world)
+            .collect();
+        despawn(world, kart);
+        character.insert(world);
+        restart_drive(world, options);
+        if options.driving {
+            world
+                .run_system_cached(restart_sim)
+                .expect("restart system runs");
+        }
+        spawn_kart(world);
     }
     for mut window in world.query::<&mut Window>().iter_mut(world) {
         window.title = match options.racer {
             Some(racer) => format!("ctr-rs view: level {id}, {}", CHARACTERS[racer as usize]),
             None => format!("ctr-rs view: level {id}"),
         };
+    }
+}
+
+/// Everything in the scene has a transform (the 3D parts) or a node (the text); the window and
+/// the gamepads have neither.
+fn world_scene(world: &mut World) -> Vec<Entity> {
+    world
+        .query_filtered::<Entity, Or<(With<Transform>, With<Node>)>>()
+        .iter(world)
+        .collect()
+}
+
+fn despawn(world: &mut World, entities: Vec<Entity>) {
+    for entity in entities {
+        if let Ok(entity) = world.get_entity_mut(entity) {
+            entity.despawn();
+        }
+    }
+}
+
+/// The kart on the grid of the level shown, and what it is driven with, when driving.
+fn restart_drive(world: &mut World, options: Options) {
+    if options.driving {
+        let drive = new_drive(
+            world.resource::<Track>(),
+            &world.resource::<Racer>().0,
+            options.racer.unwrap_or(0) as usize,
+        );
+        world.insert_resource(drive);
+        world.insert_resource(exhaust::Particles::new());
+    }
+}
+
+/// A new `Sim` of the level shown, with the karts on the grid. Its objects start again, and the
+/// sparks of the fireballs that were left are gone.
+fn restart_sim(
+    mut commands: Commands,
+    track: Res<Track>,
+    textures: Res<Textures>,
+    driving: Option<Res<drive::Drive>>,
+    fire: Option<ResMut<fire::Fire>>,
+) {
+    let objects = instance::Objects::new(&track.0, &textures.dram);
+    let specs: Vec<race::KartSpec> = driving.iter().map(|d| d.spec()).collect();
+    commands.insert_resource(props::Sim::new(&track.0, objects, &specs));
+    if let Some(mut fire) = fire {
+        fire.clear();
     }
 }
 
@@ -736,12 +740,6 @@ fn setup(
     mut commands: Commands,
     track: Res<Track>,
     textures: Res<Textures>,
-    racer: Res<Racer>,
-    wheel_icons: Res<WheelIcons>,
-    shadow_icons: Res<ShadowIcons>,
-    smoke_icon: Res<SmokeIcon>,
-    tiremark_icon: Res<TiremarkIcon>,
-    flame_models: Res<FlameModels>,
     mut images: ResMut<Assets<Image>>,
     low: Res<LowColors>,
     show_hidden: Res<ShowHidden>,
@@ -879,70 +877,7 @@ fn setup(
     let specs: Vec<race::KartSpec> = driving.iter().map(|d| d.spec()).collect();
     let sim = props::Sim::new(level, objects, &specs);
 
-    if let Some(model) = &racer.0 {
-        let kart = spawn_racer(
-            model,
-            level.driver_spawns[0],
-            driving
-                .as_ref()
-                .map(|_| kart::KartMotion::new(sim.driver())),
-            &textures.vram,
-            &wheel_icons.0,
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
-        );
-        if let Some(kart) = kart {
-            flame::spawn(
-                &mut commands,
-                &mut images,
-                &mut meshes,
-                &mut materials,
-                &mut subtract_materials,
-                &flame_models.0,
-                &textures.vram,
-                kart,
-            );
-        }
-    }
     commands.insert_resource(sim);
-
-    if let (Some(icons), true) = (&shadow_icons.0, driving.is_some()) {
-        shadow::spawn(
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut subtract_materials,
-            [&icons[0], &icons[1]],
-            &textures.vram,
-        );
-    }
-
-    if let (Some(icon), true) = (&tiremark_icon.0, driving.is_some()) {
-        skid::spawn(
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
-            icon,
-            &textures.vram,
-        );
-    }
-
-    if let (Some(icon), true) = (&smoke_icon.0, driving.is_some()) {
-        exhaust::spawn(
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
-            icon,
-            &textures.vram,
-        );
-    }
 
     // The sky camera clears the picture; the main camera draws over it.
     let sky_clear = if level.skybox.is_some() {
@@ -1016,6 +951,108 @@ fn setup(
                 speed: 10.0,
             },
         ));
+    }
+}
+
+/// Marks what belongs to the kart on the grid, to despawn it for another racer (and not the level).
+#[derive(Component)]
+struct KartScene;
+
+/// Spawns the kart and what goes with it (its flames, shadow, skid marks and exhaust), and marks
+/// it all as [`KartScene`]. Those spawn each into their own entities, so the scene entities
+/// that are new after they ran are the kart's.
+fn spawn_kart(world: &mut World) {
+    let before: std::collections::HashSet<Entity> = world_scene(world).into_iter().collect();
+    world
+        .run_system_cached(spawn_kart_parts)
+        .expect("kart system runs");
+    // (Only the scene: resources and registered systems are entities too, and must stay.)
+    for entity in world_scene(world) {
+        if !before.contains(&entity) {
+            world.entity_mut(entity).insert(KartScene);
+        }
+    }
+}
+
+fn spawn_kart_parts(
+    mut commands: Commands,
+    track: Res<Track>,
+    textures: Res<Textures>,
+    sim: Res<props::Sim>,
+    racer: Res<Racer>,
+    wheel_icons: Res<WheelIcons>,
+    shadow_icons: Res<ShadowIcons>,
+    smoke_icon: Res<SmokeIcon>,
+    tiremark_icon: Res<TiremarkIcon>,
+    flame_models: Res<FlameModels>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+    driving: Option<Res<drive::Drive>>,
+) {
+    let level = &track.0;
+    if let Some(model) = &racer.0 {
+        let kart = spawn_racer(
+            model,
+            level.driver_spawns[0],
+            driving
+                .as_ref()
+                .map(|_| kart::KartMotion::new(sim.driver())),
+            &textures.vram,
+            &wheel_icons.0,
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+        );
+        if let Some(kart) = kart {
+            flame::spawn(
+                &mut commands,
+                &mut images,
+                &mut meshes,
+                &mut materials,
+                &mut subtract_materials,
+                &flame_models.0,
+                &textures.vram,
+                kart,
+            );
+        }
+    }
+    if let (Some(icons), true) = (&shadow_icons.0, driving.is_some()) {
+        shadow::spawn(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut subtract_materials,
+            [&icons[0], &icons[1]],
+            &textures.vram,
+        );
+    }
+
+    if let (Some(icon), true) = (&tiremark_icon.0, driving.is_some()) {
+        skid::spawn(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+            icon,
+            &textures.vram,
+        );
+    }
+
+    if let (Some(icon), true) = (&smoke_icon.0, driving.is_some()) {
+        exhaust::spawn(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+            icon,
+            &textures.vram,
+        );
     }
 }
 
