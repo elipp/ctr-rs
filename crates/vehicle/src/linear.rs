@@ -419,6 +419,10 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     let cross = held & buttons::CROSS != 0;
     let square = held & buttons::SQUARE != 0;
 
+    // === Weapon ===
+    crate::item::count_cooldown(d);
+    a = crate::item::request_fire(d, tapped & buttons::CIRCLE != 0, a);
+
     // Tapping L1 or R1 starts a jump, and picks the button a drift is held with.
     let jump_taps = tapped & JUMP_BUTTON_MASK;
     if jump_taps != 0 && d.kart_state != kart_state::DRIFTING {

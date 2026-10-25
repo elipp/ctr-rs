@@ -269,6 +269,27 @@ pub fn vector_normalize(v: &mut SVec3) -> i32 {
     length
 }
 
+/// `RB_Hazard_InterpolateValue` for 32 ms ticks: `current` moves `speed` angle units (4096 is a
+/// turn) towards `desired` the short way, and lands on it when it is closer than that. Like the
+/// game it compares the raw values and returns a normalised angle whenever they differ.
+pub fn interpolate(current: i16, desired: i16, speed: i32) -> i16 {
+    if current == desired {
+        return current;
+    }
+    let mut diff = (desired as i32 - current as i32) & 0xfff;
+    if diff > 0x7ff {
+        diff -= 0x1000;
+    }
+    let result = if diff.abs() < speed {
+        desired as i32
+    } else if diff > 0 {
+        current as i32 + speed
+    } else {
+        current as i32 - speed
+    };
+    (result & 0xfff) as i16
+}
+
 #[cfg(test)]
 mod rng_tests {
     use super::*;

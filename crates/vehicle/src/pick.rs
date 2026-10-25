@@ -1,6 +1,7 @@
 //! `VehPickState_NewState`: what a hit does to the victim. The spin-out, the squish and the burn
-//! start `VehPhysProc_SpinFirst_Init` on the next tick. Not ported: the blast (the tumble), the
-//! mask grab, the shield and the invincibility, the battle score and the attacker's stats.
+//! start `VehPhysProc_SpinFirst_Init` on the next tick, and the blast `VehStuckProc_Tumble_Init`
+//! (see [`crate::tumble`]). Not ported: the mask grab, the shield, the battle score and the
+//! attacker's stats.
 
 use crate::{Driver, Effect, MatrixArray, actions, kart_state};
 
@@ -20,6 +21,7 @@ const VOICELINE_SQUISH: u8 = 4;
 const VOICELINE_PRIORITY: u8 = 0x10;
 
 const SPIN_NO_INPUT_TIMER: i16 = 0x3c0;
+const BLAST_NO_INPUT_TIMER: i16 = 0x960;
 const SQUISH_NO_INPUT_TIMER: i16 = 0xf0;
 const SQUISH_TIMER: i16 = 0xf00;
 const BURN_NO_INPUT_TIMER: i16 = 0x780;
@@ -44,15 +46,27 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
         return false;
     }
     // The Aku Aku mask shrugs it off.
-    if d.actions_flag_set & actions::MASK_WEAPON != 0 {
+    if d.actions_flag_set & actions::MASK_WEAPON != 0 || d.invincible_timer != 0 {
         effects.push(voice(VOICELINE_VICTIM_LAUGH));
         return false;
     }
 
     let spin_out = match damage {
         damage::NONE => return true,
-        // The tumble is not ported.
-        damage::BLAST | damage::MASK_GRAB => return false,
+        damage::MASK_GRAB => return false,
+        // A kart that tumbles, or is about to, is not blasted again.
+        damage::BLAST => {
+            if d.kart_state == kart_state::BLASTED || d.pending_tumble {
+                return false;
+            }
+            d.no_input_timer = BLAST_NO_INPUT_TIMER;
+            d.squish_timer = 0;
+            d.pending_tumble = true;
+            d.pending_spin = false;
+            d.init_pending = false;
+            effects.push(voice(VOICELINE_COMMON_DAMAGE));
+            false
+        }
         damage::SQUISH => {
             if d.kart_state != kart_state::SPINNING {
                 effects.push(Effect::Sound {
@@ -85,6 +99,7 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
     };
     if spin_out {
         d.pending_spin = true;
+        d.pending_tumble = false;
         d.init_pending = true;
     }
 
@@ -133,6 +148,33 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::ShockForce { .. }))
         );
+    }
+
+    #[test]
+    fn a_blast_starts_the_tumble_next_tick_and_only_once() {
+        let mut d = driving();
+        d.squish_timer = 9;
+        let mut effects = Vec::new();
+        assert!(new_state(&mut d, damage::BLAST, &mut effects));
+        assert!(d.pending_tumble && !d.pending_spin);
+        assert_eq!(
+            (d.no_input_timer, d.squish_timer),
+            (BLAST_NO_INPUT_TIMER, 0)
+        );
+        // Hit again before the tumble starts, and while it goes on.
+        assert!(!new_state(&mut d, damage::BLAST, &mut effects));
+        d.pending_tumble = false;
+        d.kart_state = kart_state::BLASTED;
+        assert!(!new_state(&mut d, damage::BLAST, &mut effects));
+    }
+
+    #[test]
+    fn a_spin_replaces_a_blast_that_has_not_started() {
+        let mut d = driving();
+        let mut effects = Vec::new();
+        new_state(&mut d, damage::BLAST, &mut effects);
+        new_state(&mut d, damage::SPIN, &mut effects);
+        assert!(d.pending_spin && !d.pending_tumble);
     }
 
     #[test]

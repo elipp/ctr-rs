@@ -26,7 +26,7 @@ use crate::stats::{CHARACTER_ENGINES, Stats};
 use crate::stuck;
 use crate::terrain::terrain_type;
 use crate::{Driver, Effect, Env, Input, PhysState, actions, kart_state, rain_cloud};
-use crate::{powerslide, spin};
+use crate::{powerslide, spin, tumble};
 
 const V_SHIFT_START_GUARD_TIMER: i16 = 0x60;
 const V_SHIFT_WINDOW_TIMER: i16 = 0x280;
@@ -213,7 +213,8 @@ fn init_stage(d: &mut Driver) {
         PhysState::PowerSlide
         | PhysState::SpinFirst
         | PhysState::MaskGrab
-        | PhysState::RevEngine => d.init_pending = false,
+        | PhysState::RevEngine
+        | PhysState::Tumble => d.init_pending = false,
         _ => driving_init(d),
     }
 }
@@ -256,6 +257,7 @@ fn update(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<Effect>) {
         PhysState::SlamWall | PhysState::SpinStop => {}
         // These start with their own updates, which have more to work with: see `tick_with`.
         PhysState::MaskGrab | PhysState::RevEngine => {}
+        PhysState::Tumble => tumble::update(d),
         PhysState::PowerSlide => powerslide::update(d, input, env, effects),
         PhysState::SpinFirst => spin::first_update(d),
         PhysState::SpinLast => spin::last_update(d),
@@ -445,6 +447,11 @@ fn tick_to_coll_moved(
     let mut respawned = false;
 
     // DRIVER_FUNC_INIT
+    if d.pending_tumble {
+        // (Its update runs this tick, unlike the spin-out's.)
+        d.pending_tumble = false;
+        tumble::init(d, effects);
+    }
     if d.pending_spin {
         // `SpinFirst_Init` also clears the update procedure, so there is none this tick.
         d.pending_spin = false;
@@ -467,6 +474,7 @@ fn tick_to_coll_moved(
     match d.phys_state {
         PhysState::SpinFirst => spin::first_before_phys_linear(d, env),
         PhysState::RevEngine => stuck::rev_engine_before_phys_linear(d, env),
+        PhysState::Tumble => tumble::before_phys_linear(d, env),
         _ => {}
     }
     phys_linear(d, env, input, effects);
@@ -481,6 +489,7 @@ fn tick_to_coll_moved(
         PhysState::SpinStop => spin::stop_after_phys_linear(d),
         PhysState::MaskGrab => stuck::mask_grab_after_phys_linear(d),
         PhysState::RevEngine => stuck::rev_engine_after_phys_linear(d),
+        PhysState::Tumble => tumble::after_phys_linear(d),
         PhysState::Driving | PhysState::FreezeVShift => {}
     }
 
@@ -494,6 +503,7 @@ fn tick_to_coll_moved(
         PhysState::Driving | PhysState::FreezeVShift | PhysState::MaskGrab => {
             phys_angular(d, &mut coll.gte, env)
         }
+        PhysState::Tumble => tumble::phys_angular(d, &mut coll.gte, env),
         PhysState::RevEngine => {}
     }
 
@@ -575,6 +585,7 @@ fn tick_from_coll_fixed(
         PhysState::SpinStop => spin::stop_animate(d),
         PhysState::MaskGrab => stuck::mask_grab_animate(d, env),
         PhysState::RevEngine => stuck::rev_engine_animate(d, env, effects),
+        PhysState::Tumble => tumble::animate(d),
     }
 
     // The HUD's jump meter, which gives the hang-time turbo, runs after the drivers' tick.

@@ -6282,7 +6282,9 @@ dependencies = [
  "hadris-iso",
  "instance",
  "loader",
+ "math",
  "vehicle",
+ "weapon",
 ]
 
 [[package]]
@@ -8032,6 +8034,17 @@ checksum = "5eba2ec791141b0bf4db542f6b038a8f9310cee33e076cb181245780b09a24ff"
 dependencies = [
  "cfg-if",
  "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "weapon"
+version = "0.1.0"
+dependencies = [
+ "coll",
+ "gte",
+ "loader",
+ "math",
+ "vehicle",
 ]
 
 [[package]]

@@ -45,6 +45,7 @@ pub mod spin;
 pub mod stats;
 pub mod stuck;
 pub mod terrain;
+pub mod tumble;
 pub mod turbo;
 pub mod wumpa;
 
@@ -99,6 +100,7 @@ pub mod buttons {
     pub const CROSS: u32 = 0x10;
     pub const SQUARE: u32 = 0x20;
     pub const CIRCLE: u32 = 0x40;
+    pub const DOWN: u32 = 0x2;
     pub const R1: u32 = 0x400;
     pub const L1: u32 = 0x800;
 }
@@ -238,6 +240,8 @@ pub enum MatrixArray {
     CrashFall,
     /// `BAKED_GTE_MATRIX_SQUISH_RECOVER`: the kart bounces back up after a squish.
     SquishRecover,
+    /// `BAKED_GTE_MATRIX_BLASTED`: the tumble of a blasted kart.
+    Blasted,
     /// `BAKED_GTE_MATRIX_JUMP_BASE + n`: the airborne pose of a character.
     Jump(u8),
 }
@@ -265,6 +269,8 @@ pub enum PhysState {
     /// `VehStuckProc_RevEngine_*`: held still (or lowered by the mask) while the
     /// engine revs, until the kart may drive.
     RevEngine,
+    /// `VehStuckProc_Tumble_*`: blasted by a bomb or a missile, tumbling.
+    Tumble,
 }
 
 /// Something the original does that is not simulation: for the presentation
@@ -420,6 +426,10 @@ pub struct Driver {
     pub no_item_timer: i16,
     /// `numTimesHitWeaponBox`
     pub num_times_hit_weapon_box: u8,
+    /// A bomb the driver threw is in flight (`instBombThrow != NULL`): the fire button sets it off.
+    pub bomb_thrown: bool,
+    /// The driver pressed the fire button for that bomb to go off, which the weapons do next.
+    pub detonate_bomb: bool,
     pub hazard_timer: i16,
     /// `RainCloudEffect`; `rain_cloud::NONE` when there is no cloud.
     pub rain_cloud_effect: u8,
@@ -525,6 +535,8 @@ pub struct Driver {
     /// Set when the original sets `funcPtrs[DRIVER_FUNC_INIT]` to `VehPhysProc_SpinFirst_Init`
     /// (`VehPickState_NewState`): the next tick starts by spinning out.
     pub pending_spin: bool,
+    /// Likewise for `VehStuckProc_Tumble_Init` (a blast).
+    pub pending_tumble: bool,
     /// The Aku Aku / Uka Uka mask thread that is a child of the driver's thread, if any.
     pub mask: Option<stuck::MaskHead>,
     /// `KartStates.MaskGrab` (a view of the same union as the drifting and spinning ones).

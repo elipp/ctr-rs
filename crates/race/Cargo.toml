@@ -7,7 +7,9 @@ edition = "2024"
 coll = { path = "../coll" }
 instance = { path = "../instance" }
 loader = { path = "../loader" }
+math = { path = "../math" }
 vehicle = { path = "../vehicle" }
+weapon = { path = "../weapon" }
 
 [dev-dependencies]
 hadris-iso = "2.5.0"

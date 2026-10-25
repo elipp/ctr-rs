@@ -85,6 +85,7 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
             // The C driver stubs the mask grab out (`Env::respawns` is off).
             PhysState::MaskGrab | PhysState::RevEngine =>
                 unreachable!("the oracle's drivers do not respawn"),
+            PhysState::Tumble => unreachable!("the oracle's drivers are not blasted"),
         }
     );
     push!("init_pending", d.init_pending);
@@ -158,6 +159,7 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
             MatrixArray::WheelieRecover => 3,
             MatrixArray::CrashFall => 4,
             MatrixArray::SquishRecover => 5,
+            MatrixArray::Blasted => 6,
             MatrixArray::Jump(n) => n,
         }
     );
