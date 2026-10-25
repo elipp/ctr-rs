@@ -278,6 +278,8 @@ fn run(
                 lobby.count_down(Then::Start(track.1.0), now);
                 continue;
             }
+            // (Not the lobby's.)
+            Action::DebugAddWeapon(_) => continue,
             Action::RestartRace => {
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart(net.track);

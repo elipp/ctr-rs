@@ -25,6 +25,8 @@ pub enum Action {
     CloseLobby,
     StartRace,
     RestartRace,
+    /// (Debug) Roll that item into our hand: 0 to 11.
+    DebugAddWeapon(u8),
 }
 
 impl Action {
@@ -41,6 +43,13 @@ impl Action {
             "close-lobby" => Ok(Action::CloseLobby),
             "start-race" => Ok(Action::StartRace),
             "restart-race" => Ok(Action::RestartRace),
+            "debug-add-weapon" => argument
+                .trim()
+                .parse()
+                .ok()
+                .filter(|&n| n <= 11)
+                .map(Action::DebugAddWeapon)
+                .ok_or_else(|| "Usage: /debug-add-weapon <0 to 11>".to_string()),
             _ => Err(format!("Unknown command: /{name}")),
         }
     }
