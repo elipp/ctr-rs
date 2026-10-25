@@ -5,6 +5,8 @@
 //! While it is open it takes the keyboard: the keys are cleared from the game's input every frame,
 //! so that typing does not drive the kart.
 
+use std::collections::VecDeque;
+
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -49,6 +51,9 @@ const FONT_SIZE: f32 = 20.0;
 /// The seconds a cursor stays on, and off.
 const BLINK_SECONDS: f32 = 0.5;
 
+/// How many sent lines the history keeps.
+const HISTORY: usize = 100;
+
 /// What has been typed so far, if the line is open.
 #[derive(Resource, Default)]
 struct CommandLine {
@@ -56,6 +61,59 @@ struct CommandLine {
     text: String,
     /// Return was pressed: `submit` sends the line.
     entered: bool,
+    /// The lines sent before, the latest last.
+    history: VecDeque<String>,
+    /// The line of `history` that the text is, while the arrows are browsing it.
+    browsing: Option<usize>,
+    /// What was typed before the browsing started: the newest option after the history's.
+    draft: String,
+}
+
+impl CommandLine {
+    /// Up: the line sent before the one shown.
+    fn older(&mut self) {
+        let index = match self.browsing {
+            Some(0) => return,
+            Some(i) => i - 1,
+            None if self.history.is_empty() => return,
+            None => {
+                self.draft = std::mem::take(&mut self.text);
+                self.history.len() - 1
+            }
+        };
+        self.browsing = Some(index);
+        self.text = self.history[index].clone();
+    }
+
+    /// Down: the line sent after the one shown, and past the last, what was being typed.
+    fn newer(&mut self) {
+        let Some(i) = self.browsing else { return };
+        if i + 1 < self.history.len() {
+            self.browsing = Some(i + 1);
+            self.text = self.history[i + 1].clone();
+        } else {
+            self.browsing = None;
+            self.text = std::mem::take(&mut self.draft);
+        }
+    }
+
+    /// Typing edits what is shown, which is the text from then on.
+    fn edit(&mut self, f: impl FnOnce(&mut String)) {
+        self.browsing = None;
+        f(&mut self.text);
+    }
+
+    /// Keeps the line that was sent, unless it is the same as the last.
+    fn remember(&mut self, sent: &str) {
+        self.browsing = None;
+        self.draft.clear();
+        if self.history.back().is_none_or(|last| last != sent) {
+            if self.history.len() == HISTORY {
+                self.history.pop_front();
+            }
+            self.history.push_back(sent.to_string());
+        }
+    }
 }
 
 #[derive(Component)]
@@ -98,28 +156,27 @@ fn capture(
             Key::Escape => {
                 line.open = false;
                 line.text.clear();
+                line.browsing = None;
+                line.draft.clear();
             }
-            // A named key, so it is not matched as typed text.
-            Key::Space => line.text.push(' '),
-            Key::Backspace => {
-                line.text.pop();
-            }
+            Key::ArrowUp => line.older(),
+            Key::ArrowDown => line.newer(),
+            Key::Backspace => line.edit(|t| {
+                t.pop();
+            }),
             _ if command => {
                 if event.key_code == KeyCode::KeyV {
                     match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
-                        Ok(text) => line
-                            .text
-                            .extend(text.chars().filter(|c| !c.is_whitespace())),
+                        Ok(text) => {
+                            line.edit(|t| t.extend(text.chars().filter(|c| !c.is_control())))
+                        }
                         Err(e) => error!("could not read the clipboard: {e}"),
                     }
                 }
             }
             _ => {
                 if let Some(text) = &event.text {
-                    line.text.extend(
-                        text.chars()
-                            .filter(|c| !c.is_control() && !c.is_whitespace()),
-                    );
+                    line.edit(|t| t.extend(text.chars().filter(|c| !c.is_control())));
                 }
             }
         }
@@ -170,6 +227,7 @@ fn submit(
     if text.is_empty() {
         return;
     }
+    line.remember(&text);
     let Some(command) = text.strip_prefix('/') else {
         chat(&text, &mut toasts);
         return;
