@@ -64,7 +64,7 @@ impl CameraDc {
         let eye_points = FlyIn::EYE_POINTS as i32;
         let target_points = FlyIn::TARGET_POINTS as i32;
         let count = target_points.max(eye_points);
-        let index = (count * frame_ratio >> 12) as i16 as i32;
+        let index = ((count * frame_ratio) >> 12) as i16 as i32;
         let (eye_index, eye_ratio) = if index < eye_points - 1 {
             (index, frame_ratio)
         } else {
@@ -77,9 +77,9 @@ impl CameraDc {
         };
         let along = |path: &[SVec3], at: i32, ratio: i32, drop: i32| -> [i32; 3] {
             let (a, b) = (path[at as usize], path[at as usize + 1]);
-            let ratio = count * ratio & 0xfff;
+            let ratio = (count * ratio) & 0xfff;
             let lerp = |a: i16, b: i16| {
-                (a as i32 + ((b as i32 - a as i32) * ratio >> 12) as i16 as i32) as i16 as i32
+                (a as i32 + (((b as i32 - a as i32) * ratio) >> 12) as i16 as i32) as i16 as i32
             };
             [lerp(a.x, b.x), lerp(a.y, b.y) - drop, lerp(a.z, b.z)]
         };
@@ -110,7 +110,7 @@ impl CameraDc {
                 let sum: i64 = (0..3)
                     .map(|col| matrix.m[row][col] as i64 * v[col] as i64)
                     .sum();
-                (((origin[row] as i64) << 12) + sum >> 12) as i32
+                ((((origin[row] as i64) << 12) + sum) >> 12) as i32
             })
         };
         let pos = rot_trans(eye).map(|c| c as i16);
@@ -149,14 +149,14 @@ impl CameraDc {
         let blend = self.transition_blend as i32;
         let (end_pos, end_rot) = (self.pb_pos, self.pb_rot);
         let step = |start: i16, end: i16| {
-            (start as i32 + ((end as i32 - start as i32) * blend >> 12) as i16 as i32) as i16
+            (start as i32 + (((end as i32 - start as i32) * blend) >> 12) as i16 as i32) as i16
         };
         let turn = |start: i16, end: i16| {
             let mut delta = (end as i32 - start as i32) & 0xfff;
             if delta > 0x7ff {
                 delta -= 0x1000;
             }
-            ((start as i32 + (delta * blend >> 12) as i16 as i32) & 0xfff) as i16
+            ((start as i32 + ((delta * blend) >> 12) as i16 as i32) & 0xfff) as i16
         };
         self.pb_pos = SVec3 {
             x: step(pos.x, end_pos.x),

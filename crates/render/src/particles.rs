@@ -360,10 +360,10 @@ impl Particle {
                     let mut value = |base_flag, random_flag, i: usize| {
                         let mut v = 0i32;
                         if flags & base_flag != 0 {
-                            v = base[i] as i32;
+                            v = base[i];
                         }
                         if flags & random_flag != 0 {
-                            v = v.wrapping_add(rng.mix(random[i] as i32));
+                            v = v.wrapping_add(rng.mix(random[i]));
                         }
                         v
                     };
@@ -388,8 +388,8 @@ impl Particle {
     /// (1/256 units a tick).
     pub fn fireball(position: [i32; 3], velocity_y: i16, rng: &mut Rng) -> Particle {
         let mut p = Particle::new(&FIREBALL, rng);
-        for a in 0..3 {
-            p.axes[a].start += position[a] * 0x100;
+        for (axis, pos) in p.axes.iter_mut().zip(position) {
+            axis.start += pos * 0x100;
         }
         p.axes[axis::POS_Y].velocity = velocity_y;
         p
@@ -497,7 +497,8 @@ impl Particle {
         let mut p = self.clone();
         for (n, a) in p.axes.iter_mut().enumerate() {
             if self.axis_flags >> n & 1 != 0 {
-                let moved = a.velocity as f32 * ticks + a.accel as f32 * ticks * (ticks - 1.0) / 2.0;
+                let moved =
+                    a.velocity as f32 * ticks + a.accel as f32 * ticks * (ticks - 1.0) / 2.0;
                 a.start = a.start.wrapping_add(moved.round() as i32);
             }
         }
@@ -648,7 +649,10 @@ mod tests {
         stepped.update();
         assert_eq!(ahead.position(), stepped.position());
         assert_eq!(ahead.tint(), stepped.tint());
-        assert_eq!(ahead.axes[axis::SCALE_X].start, stepped.axes[axis::SCALE_X].start);
+        assert_eq!(
+            ahead.axes[axis::SCALE_X].start,
+            stepped.axes[axis::SCALE_X].start
+        );
         // A half tick is between the two.
         let half = puff(false).ahead(0.5);
         let (start, end) = (puff(false), stepped);

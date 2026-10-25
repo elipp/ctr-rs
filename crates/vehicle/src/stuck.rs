@@ -659,10 +659,10 @@ pub fn rev_engine_update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
         return;
     }
 
-    if d.rev.bool_mask_grab {
-        if let Some(mask) = &mut d.mask {
-            mask.duration = 0;
-        }
+    if d.rev.bool_mask_grab
+        && let Some(mask) = &mut d.mask
+    {
+        mask.duration = 0;
     }
 
     let accel = d.stats.accel_speed_class_stat as i32;

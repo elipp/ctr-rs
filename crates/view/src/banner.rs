@@ -69,7 +69,7 @@ impl Banner {
         for (i, grey) in ring.iter_mut().enumerate() {
             let sine = math::sin((i * 128) as u32);
             let value = ((sine >> 6) + 0x80) as u32 & 0xff;
-            *grey = header.colors[i] & 0xff00_0000 | value * 0x01_0101;
+            *grey = header.colors[i] & 0xff00_0000 | (value * 0x01_0101);
         }
         header.colors[..RING].copy_from_slice(&ring);
         Some(Banner {
@@ -103,9 +103,9 @@ impl Banner {
             let wave = grey - 0x80;
             // The outer quarters taper toward the ends; the middle keeps all of it.
             let scaled = if x < 0x40 {
-                wave * (x * 4) >> 8
+                (wave * (x * 4)) >> 8
             } else if x > 0xc0 {
-                wave * ((0x100 - x) * 4) >> 8
+                (wave * ((0x100 - x) * 4)) >> 8
             } else {
                 wave
             };

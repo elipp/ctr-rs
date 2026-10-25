@@ -65,8 +65,8 @@ impl DramFile {
             .ok_or_else(|| invalid("DRAM pointer map runs past end of file"))?;
 
         let mut pointer_slots = Vec::with_capacity(slots.len() / 4);
-        for raw in slots.chunks_exact(4) {
-            let slot = i32::from_le_bytes(raw.try_into().unwrap()) as u32 & !3;
+        for raw in slots.as_chunks::<4>().0 {
+            let slot = i32::from_le_bytes(*raw) as u32 & !3;
             if slot as usize + 4 > map_offset {
                 return Err(invalid(format!(
                     "pointer slot {slot:#x} is outside the payload"

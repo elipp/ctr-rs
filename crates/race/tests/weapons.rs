@@ -119,8 +119,9 @@ fn a_kart_the_bomb_lands_on_is_blasted_and_tumbles_back_to_driving() {
         race.last_weapons.hits,
         vec![weapon::Hit {
             victim: 1,
-            attacker: 0,
-            reason: weapon::Reason::Bomb
+            attacker: Some(0),
+            reason: weapon::Reason::Bomb,
+            damage: vehicle::pick::damage::BLAST,
         }]
     );
     assert!(race.karts[1].driver.pending_tumble);

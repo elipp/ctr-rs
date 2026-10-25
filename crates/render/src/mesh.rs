@@ -137,6 +137,40 @@ pub struct MeshPart {
     pub indices: Vec<u32>,
 }
 
+/// Winds every triangle of `parts` to face away from the middle of their bounding box, for a
+/// convex model (a crate, a roller) to be drawn with back faces culled: the triangles of a model
+/// come in no fixed winding (the game decides per frame, with `NCLIP`), so a camera inside the
+/// model sees none of it.
+pub fn wind_outward(parts: &mut [MeshPart; PARTS]) {
+    let mut low = [f32::MAX; 3];
+    let mut high = [f32::MIN; 3];
+    for p in parts.iter().flat_map(|p| p.positions.iter()) {
+        for a in 0..3 {
+            low[a] = low[a].min(p[a]);
+            high[a] = high[a].max(p[a]);
+        }
+    }
+    let middle: [f32; 3] = std::array::from_fn(|a| (low[a] + high[a]) / 2.0);
+    for part in parts {
+        for tri in part.indices.as_chunks_mut::<3>().0 {
+            let [a, b, c] = [0, 1, 2].map(|i| part.positions[tri[i] as usize]);
+            let edge = |p: [f32; 3], q: [f32; 3]| std::array::from_fn::<f32, 3, _>(|i| q[i] - p[i]);
+            let (u, v) = (edge(a, b), edge(a, c));
+            let normal = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let out: f32 = (0..3)
+                .map(|i| normal[i] * ((a[i] + b[i] + c[i]) / 3.0 - middle[i]))
+                .sum();
+            if out < 0.0 {
+                tri.swap(1, 2);
+            }
+        }
+    }
+}
+
 /// An animated texture and, for every frame, the layout's four UVs (in layout
 /// order: the face's own [`AnimatedFace::uv_order`] says which goes where).
 pub struct Animation {
@@ -385,7 +419,11 @@ pub fn level_mesh(
             continue;
         } else {
             // Face 3 lies entirely in the second half of the patch.
-            for face in 0..if is_quad { 4 } else { 3 } {
+            for (face, &order) in face_order
+                .iter()
+                .enumerate()
+                .take(if is_quad { 4 } else { 3 })
+            {
                 let ptr = quad.texture_mid[face];
                 // The sharpest layout of the group: nothing here depends on the camera.
                 let texture = resolve_texture(dram, ptr).ok().flatten().map(|g| *g.best());
@@ -403,7 +441,7 @@ pub fn level_mesh(
                         slots,
                         uv_order,
                         face_back_to_front(mode).unwrap_or(false),
-                        face_order[face],
+                        order,
                     ));
                 }
             }

@@ -335,10 +335,10 @@ pub fn on_gravity(
             } else {
                 None
             };
-            if let Some(min_forward) = min_forward {
-                if forward < min_forward {
-                    forward = min_forward;
-                }
+            if let Some(min_forward) = min_forward
+                && forward < min_forward
+            {
+                forward = min_forward;
             }
         }
 
@@ -427,15 +427,14 @@ pub fn on_apply_forces(
     let mut velocity = d.velocity;
     convert_speed_to_vec(d, &mut velocity);
 
-    if let Some(under) = d.under_driver {
-        if level.quad_blocks[under as usize].terrain_type == terrain_type::MUD
-            && d.pos_curr.y > MAX_MUD_SINK_Y_LEVEL
-        {
-            // Sink slower as you approach the mud's bottom.
-            let sink_speed = mips::sub_lo(MAX_MUD_SINK_Y_LEVEL, d.pos_curr.y);
-            if velocity.y < sink_speed {
-                velocity.y = sink_speed;
-            }
+    if let Some(under) = d.under_driver
+        && level.quad_blocks[under as usize].terrain_type == terrain_type::MUD
+        && d.pos_curr.y > MAX_MUD_SINK_Y_LEVEL
+    {
+        // Sink slower as you approach the mud's bottom.
+        let sink_speed = mips::sub_lo(MAX_MUD_SINK_Y_LEVEL, d.pos_curr.y);
+        if velocity.y < sink_speed {
+            velocity.y = sink_speed;
         }
     }
 

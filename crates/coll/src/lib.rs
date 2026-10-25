@@ -1081,12 +1081,11 @@ impl Collision {
             return;
         }
 
-        let used_segment_projection;
-        if plane_near >= 0 {
+        let used_segment_projection = if plane_near >= 0 {
             gte.mtc2(plane_near as u32, data::IR0);
             let n = sps.candidate.plane.normal;
             load_ir(gte, n.x as i32, n.y as i32, n.z as i32);
-            used_segment_projection = false;
+            false
         } else {
             load_ir(
                 gte,
@@ -1099,8 +1098,8 @@ impl Collision {
                 mips::sub_lo(plane_far, plane_near),
             );
             gte.mtc2(fraction as u32, data::IR0);
-            used_segment_projection = true;
-        }
+            true
+        };
         gte.cop2(GPF_SF1);
         let hit = [
             gte.mfc2(data::MAC1) as i32,

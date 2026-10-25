@@ -606,7 +606,7 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     {
                         let roster: Vec<EndpointId> = roster
                             .iter()
-                            .map(|bytes| EndpointId::from_bytes(bytes))
+                            .map(EndpointId::from_bytes)
                             .collect::<Result<_, _>>()?;
                         let slot = slot as usize;
                         // The host is connected already.

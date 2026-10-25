@@ -379,7 +379,7 @@ impl Level {
                 for (k, v) in tri.iter_mut().enumerate() {
                     let offset = p.u16(at + k * 2)? as usize;
                     let index = offset / SKY_VERTEX_SIZE;
-                    if offset % SKY_VERTEX_SIZE != 0 || index >= num_vertex {
+                    if !offset.is_multiple_of(SKY_VERTEX_SIZE) || index >= num_vertex {
                         return Err(invalid(format!("skybox face vertex offset {offset:#x}")));
                     }
                     *v = index as u16;
@@ -618,7 +618,7 @@ impl Level {
                 BspKind::Leaf {
                     quad_blocks: first..first + num,
                     hitboxes: Self::parse_hitboxes(
-                        &p,
+                        p,
                         p.u32(at + 0x14)? as usize,
                         instances_at,
                         num_instances,

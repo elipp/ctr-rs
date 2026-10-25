@@ -119,6 +119,12 @@ impl<S: Simulation> Rollback<S> {
         &self.now
     }
 
+    /// The simulation to change by hand, for debugging. The change is not in the snapshots, so a
+    /// replay would undo it: only for a race that has no pads to wait for.
+    pub fn state_mut(&mut self) -> &mut S {
+        &mut self.now
+    }
+
     /// The ticks played.
     pub fn tick(&self) -> u32 {
         self.played
@@ -243,7 +249,7 @@ impl<S: Simulation> Rollback<S> {
         // A tick with every pad in, after ones that are final, can never be put right: it is
         // final at once and keeps nothing.
         if self.snapshots.is_empty() && self.all_known(self.played) {
-            if self.every != 0 && self.played % self.every == 0 {
+            if self.every != 0 && self.played.is_multiple_of(self.every) {
                 self.sums.push((self.played, self.now.checksum()));
             }
             let output = self.now.step(cx, &pads);
@@ -265,7 +271,7 @@ impl<S: Simulation> Rollback<S> {
     fn trim(&mut self) {
         let settled = self.settled();
         while self.base < settled {
-            if self.every != 0 && self.base % self.every == 0 {
+            if self.every != 0 && self.base.is_multiple_of(self.every) {
                 self.sums.push((self.base, self.snapshots[0].checksum()));
             }
             self.snapshots.pop_front();

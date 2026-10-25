@@ -23,3 +23,4 @@ gte = { path = "../gte" }
 net = { path = "../net" }
 race = { path = "../race" }
 math = { path = "../math" }
+weapon = { path = "../weapon" }
