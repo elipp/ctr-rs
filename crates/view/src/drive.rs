@@ -350,8 +350,12 @@ pub struct DrivePlugin;
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(crate::exhaust::Particles::new())
+            .init_resource::<crate::flash::Flash>()
             .add_systems(Startup, (spawn_hud, crate::mask::spawn))
-            .add_systems(FixedUpdate, (drive_tick, crate::projectile::tick).chain())
+            .add_systems(
+                FixedUpdate,
+                (drive_tick, crate::projectile::tick, crate::flash::step).chain(),
+            )
             .add_systems(
                 Update,
                 (
@@ -359,6 +363,7 @@ impl Plugin for DrivePlugin {
                     crate::kart::show,
                     chase,
                     crate::projectile::place,
+                    crate::flash::show,
                     hud,
                     wumpa_hud,
                     lap_hud,
