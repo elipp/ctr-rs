@@ -12,5 +12,6 @@ pub mod projectile;
 pub mod rain;
 pub mod shadow;
 pub mod shield;
+pub mod tracker;
 pub mod weapons;
 pub mod wheels;

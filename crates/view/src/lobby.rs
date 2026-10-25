@@ -95,7 +95,7 @@ impl Online {
 #[derive(Resource, Default)]
 pub struct Lobby {
     session: Option<Session>,
-    /// We joined someone else's lobby (`/lobby join`) instead of opening one: the host starts the race.
+    /// We joined someone else's lobby (`/lobby join`) instead of creating one: the host starts the race.
     joined: bool,
     /// Who is in the lobby and the character each drives (the short key and the character), as
     /// the last [`Event::Lobby`] said, and whether there has been one: what changes in the next is
@@ -108,7 +108,7 @@ pub struct Lobby {
 }
 
 impl Lobby {
-    /// Whether we are in a lobby (ours or another's), or opening one.
+    /// Whether we are in a lobby (ours or another's), or creating one.
     pub fn is_open(&self) -> bool {
         self.session.is_some()
     }
@@ -264,7 +264,7 @@ fn run(
         let say = match action {
             Action::CreateLobby => {
                 lobby.host(drive.character as u8);
-                "Opening lobby..."
+                "Creating lobby..."
             }
             Action::JoinLobby(ticket) => {
                 lobby.join(ticket.clone(), drive.character as u8);
@@ -310,7 +310,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nPress G to start the race once the others have joined."
                 );
                 toasts.write(
-                    Toast::new("Lobby opened!".to_string(), 2000)
+                    Toast::new("Lobby created!".to_string(), 2000)
                         .color(Color::linear_rgb(0.4, 1.0, 0.4)),
                 );
             }
