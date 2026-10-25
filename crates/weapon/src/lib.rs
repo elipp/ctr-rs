@@ -251,6 +251,8 @@ pub struct Tick {
     pub explosions: Vec<Explosion>,
     /// The mines that went off.
     pub detonations: Vec<mine::Detonation>,
+    /// The karts a crate's blast went off on, whose screens flash white (`RB_Burst_CollThread`).
+    pub flashes: Vec<usize>,
 }
 
 /// All the weapons in flight.

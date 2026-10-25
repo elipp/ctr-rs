@@ -28,6 +28,7 @@ mod exhaust;
 mod explosion;
 mod fire;
 mod flame;
+mod flash;
 mod kart;
 mod leaderboard;
 mod lobby;
