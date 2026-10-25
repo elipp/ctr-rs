@@ -154,10 +154,6 @@ struct TurboBar;
 #[derive(Component)]
 struct ReservesHud;
 
-/// The frame rate and the time a frame takes.
-#[derive(Component)]
-struct FpsHud;
-
 /// The "[paused]" label.
 #[derive(Component)]
 struct PausedHud;
@@ -345,7 +341,6 @@ impl Plugin for DrivePlugin {
                     wumpa_bar,
                     turbo_bar,
                     reserves_hud,
-                    fps_hud,
                     crate::bar::update,
                 )
                     .chain(),
@@ -371,15 +366,14 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         LapHud,
         Text::new(""),
-        TextLayout::justify(Justify::Right),
         TextFont {
             font_size: 24.0.into(),
             ..default()
         },
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(54.0),
-            right: Val::Px(20.0),
+            top: Val::Px(8.0),
+            left: Val::Px(8.0),
             ..default()
         },
     ));
@@ -423,16 +417,6 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             position_type: PositionType::Absolute,
             bottom: Val::Px(8.0),
             right: Val::Px(20.0),
-            ..default()
-        },
-    ));
-    commands.spawn((
-        FpsHud,
-        Text::new(""),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            left: Val::Px(8.0),
             ..default()
         },
     ));
@@ -927,8 +911,20 @@ fn place(rank: i16) -> String {
 }
 
 /// Our lap out of the race's, the place when there are others, and the time of the lap being
-/// driven and of the ones before it.
-fn lap_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<LapHud>>) {
+/// driven and of the ones before it. Nothing while no race is on: driving alone is a free drive.
+fn lap_hud(
+    sim: Res<crate::props::Sim>,
+    lobby: Res<crate::lobby::Lobby>,
+    mut text: Query<&mut Text, With<LapHud>>,
+) {
+    if lobby.online.is_none() {
+        for mut text in &mut text {
+            if !text.0.is_empty() {
+                text.0.clear();
+            }
+        }
+        return;
+    }
     let race = &*sim.race;
     let driver = sim.driver();
     let laps = race.laps;
@@ -948,20 +944,6 @@ fn lap_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<LapHud>>
     }
     for mut text in &mut text {
         text.0 = lines.join("\n");
-    }
-}
-
-/// Frames per second and milliseconds per frame, smoothed over the last few frames.
-fn fps_hud(diagnostics: Res<DiagnosticsStore>, mut text: Query<&mut Text, With<FpsHud>>) {
-    let read = |path| diagnostics.get(path).and_then(|d| d.smoothed());
-    let (Some(fps), Some(ms)) = (
-        read(&FrameTimeDiagnosticsPlugin::FPS),
-        read(&FrameTimeDiagnosticsPlugin::FRAME_TIME),
-    ) else {
-        return;
-    };
-    for mut text in &mut text {
-        text.0 = format!("{fps:5.1} fps  {ms:5.2} ms");
     }
 }
 
@@ -999,12 +981,26 @@ fn reserves_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<Res
     }
 }
 
-fn hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<Hud>>) {
+/// The bottom-left lines: the frame rate and the time a frame takes (smoothed over the last few
+/// frames), then where the kart is and what it does.
+fn hud(
+    sim: Res<crate::props::Sim>,
+    diagnostics: Res<DiagnosticsStore>,
+    mut text: Query<&mut Text, With<Hud>>,
+) {
     let d = sim.driver();
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
+    let read = |path| diagnostics.get(path).and_then(|d| d.smoothed());
+    let fps = match (
+        read(&FrameTimeDiagnosticsPlugin::FPS),
+        read(&FrameTimeDiagnosticsPlugin::FRAME_TIME),
+    ) {
+        (Some(fps), Some(ms)) => format!("{fps:5.1} fps  {ms:5.2} ms"),
+        _ => String::new(),
+    };
     for mut text in &mut text {
         text.0 = format!(
-            "pos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}",
+            "{fps}\npos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}",
             d.pos_curr.x >> 8,
             d.pos_curr.y >> 8,
             d.pos_curr.z >> 8,
