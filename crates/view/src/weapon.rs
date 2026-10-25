@@ -1,4 +1,4 @@
-//! The weapon the driver holds, at the top left of the screen (`UI_Weapon_DrawSelf`). While the
+//! The weapon the driver holds, at the top middle of the screen (`UI_Weapon_DrawSelf`). While the
 //! roulette runs it shuffles through the weapons, a new one every other tick, and then shows
 //! the one the sim settled on, with the number of shots when there are several.
 //!
@@ -38,14 +38,28 @@ struct Quantity;
 /// How much larger than the PlayStation's pixels the icon is drawn.
 const SCALE: f32 = 1.5;
 
-/// Where the weapon icon's top left is.
-const WEAPON_LEFT: f32 = 40.0;
-const WEAPON_TOP: f32 = 48.0;
+/// How much taller than wide a retail pixel of the HUD is, which makes the icon (48 by 32 texels)
+/// come out a little taller than wide. Measured, not derived: the bomb icon's frame is 133 by 139
+/// pixels in a retail screenshot, and 132 by 93 here at the same width with square pixels, so
+/// the height needs 1.48 times more. (A 512 by 256 picture shown at 4:3 would give 1.5, and the
+/// 3D view's 216 lines `exhaust::SCREEN_PIXEL_ASPECT`'s 1.78: the HUD is not drawn in that.)
+const HUD_PIXEL_ASPECT: f32 = 1.5;
+
+/// Where the weapon icon's top is: retail's slot is at `y` 5 (and, like the size, stretched by the
+/// pixel's shape). It is centered across the screen, as retail's is (the slot's `x` of 232 and the
+/// icon's 48 texels make 256, the middle of 512).
+const WEAPON_TOP: f32 = 5.0 * SCALE * HUD_PIXEL_ASPECT;
+
+/// The icon's size on screen.
+const WEAPON_SIZE: Vec2 = Vec2::new(
+    WIDTH as f32 * SCALE,
+    HEIGHT as f32 * SCALE * HUD_PIXEL_ASPECT,
+);
 
 /// The glow's size on screen: the mirrored picture, shrunk as the game does.
 const SHINE_SIZE: Vec2 = Vec2::new(
     SHINE_IMAGE_WIDTH as f32 * SHINE_SCALE * SCALE,
-    SHINE_IMAGE_HEIGHT as f32 * SHINE_SCALE * SCALE,
+    SHINE_IMAGE_HEIGHT as f32 * SHINE_SCALE * SCALE * HUD_PIXEL_ASPECT,
 );
 
 /// `wumpaShineTheta`'s step: retail adds it each time it draws a glow, so a frame with two
@@ -113,14 +127,16 @@ fn show(
         let root = commands
             .spawn((
                 WeaponHud,
-                ImageNode::new(atlas),
+                // Stretch: `Auto` would keep the picture's own proportions inside the node.
+                ImageNode::new(atlas).with_mode(NodeImageMode::Stretch),
                 Visibility::Hidden,
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(WEAPON_LEFT),
+                    left: Val::Percent(50.0),
+                    margin: UiRect::left(Val::Px(-WEAPON_SIZE.x / 2.0)),
                     top: Val::Px(WEAPON_TOP),
-                    width: Val::Px(WIDTH as f32 * SCALE),
-                    height: Val::Px(HEIGHT as f32 * SCALE),
+                    width: Val::Px(WEAPON_SIZE.x),
+                    height: Val::Px(WEAPON_SIZE.y),
                     ..default()
                 },
                 Pickable::IGNORE,
@@ -152,7 +168,12 @@ fn show(
         item => Some(icon_id(item, driver.num_wumpas >= JUICED, driver.character)),
     };
     let cell = shown.and_then(cell);
-    *visibility = if cell.is_some() {
+    // After a use the icon strobes, gone every other tick (and its count with it) until the
+    // cooldown is over.
+    let strobed = driver.held_item_id != held::ROULETTE
+        && driver.no_item_timer != 0
+        && sim.race.tick.is_multiple_of(2);
+    *visibility = if cell.is_some() && !strobed {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -192,7 +213,7 @@ fn shine(
         let glow = |shine: Shine, node: Node| {
             (
                 shine,
-                ImageNode::new(icons.shine.clone()),
+                ImageNode::new(icons.shine.clone()).with_mode(NodeImageMode::Stretch),
                 Visibility::Hidden,
                 node,
                 // Behind the counter and the weapon.
@@ -209,8 +230,9 @@ fn shine(
         commands.spawn(glow(
             Shine::Weapon,
             size(Node {
-                left: Val::Px(WEAPON_LEFT + WIDTH as f32 * SCALE / 2.0 - SHINE_SIZE.x / 2.0),
-                top: Val::Px(WEAPON_TOP + HEIGHT as f32 * SCALE / 2.0 - SHINE_SIZE.y / 2.0),
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-SHINE_SIZE.x / 2.0)),
+                top: Val::Px(WEAPON_TOP + WEAPON_SIZE.y / 2.0 - SHINE_SIZE.y / 2.0),
                 ..default()
             }),
         ));
