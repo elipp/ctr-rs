@@ -88,7 +88,7 @@ struct Hud;
 
 /// The wumpa counter.
 #[derive(Component)]
-struct WumpaHud;
+pub(crate) struct WumpaHud;
 
 /// The lap, the place and the lap times.
 #[derive(Component)]
