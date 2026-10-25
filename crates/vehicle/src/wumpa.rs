@@ -5,7 +5,7 @@
 use crate::{Driver, Effect, actions};
 
 /// `DRIVER_WUMPA_MAX_COUNT`, and `DRIVER_WUMPA_JUICED_COUNT`: a full count is a juiced up kart.
-const MAX_COUNT: i32 = 10;
+pub const MAX_COUNT: i32 = 10;
 const JUICED_COUNT: i32 = 10;
 /// The ticks a fruit takes to fly to the counter: `PickupWumpaHUD.cooldown` of a pickup, and
 /// what the next one waits.

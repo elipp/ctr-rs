@@ -27,6 +27,8 @@ pub enum Action {
     RestartRace,
     /// (Debug) Roll that item into our hand: 0 to 11.
     DebugAddWeapon(u8),
+    /// (Debug) Set our wumpa count, clamped to what a kart can hold.
+    DebugSetWumpa(u8),
 }
 
 impl Action {
@@ -43,6 +45,11 @@ impl Action {
             "close-lobby" => Ok(Action::CloseLobby),
             "start-race" => Ok(Action::StartRace),
             "restart-race" => Ok(Action::RestartRace),
+            "debug-set-wumpa" => argument
+                .trim()
+                .parse::<i64>()
+                .map(|n| Action::DebugSetWumpa(n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8))
+                .map_err(|_| "Usage: /debug-set-wumpa <number>".to_string()),
             "debug-add-weapon" => argument
                 .trim()
                 .parse()

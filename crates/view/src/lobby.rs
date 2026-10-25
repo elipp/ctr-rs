@@ -279,7 +279,7 @@ fn run(
                 continue;
             }
             // (Not the lobby's.)
-            Action::DebugAddWeapon(_) => continue,
+            Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_) => continue,
             Action::RestartRace => {
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart(net.track);
