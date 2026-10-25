@@ -443,8 +443,6 @@ fn before_tick(
     random_number: &mut i32,
     effects: &mut Vec<Effect>,
 ) {
-    // A kart that asked to fire a weapon (Circle, M or East on a pad) fires it.
-    vehicle::item::shoot_on_circle_press(driver, effects);
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
     let (_, at) = vehicle::baked::inst_matrix(driver);
