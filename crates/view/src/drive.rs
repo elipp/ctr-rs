@@ -9,6 +9,7 @@
 //!   empty for the boost
 //! * M: use the item in hand (Circle): the mask is longer with 10 wumpa fruit. A bomb or a
 //!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
+//! * `/debug-set-wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
 //! * `/debug-add-weapon <N>`: (debug) drop what is in hand and roll item N (0 to 11), as the
 //!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online, not in
 //!   a demo
@@ -335,7 +336,7 @@ impl Plugin for DrivePlugin {
                     crate::kart::animate,
                     crate::kart::show,
                     chase,
-                    debug_add_weapon,
+                    debug_actions,
                     crate::projectile::place,
                     crate::flash::show,
                     hud,
@@ -481,14 +482,14 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
         .unwrap_or(Vec2::ZERO);
 
     let mut held = 0;
-    if down(&[KeyCode::KeyW, KeyCode::ArrowUp]) || pad_down(&[GamepadButton::South]) {
+    if down(&[KeyCode::ArrowUp]) || pad_down(&[GamepadButton::South]) {
         held |= buttons::CROSS;
     }
     // Square brakes. Reversing is the stick (or D-pad) pulled down (`stickLY`, see
     // `gas_and_brake`): alone, it reverses when the gas is not held, and with Square it
     // brakes into reverse. On the D-pad it leaves Square alone, so it does not end a
     // powerslide. The keyboard's S and Down are both, like Square plus Down on a pad.
-    let key_reverse = down(&[KeyCode::KeyS, KeyCode::ArrowDown]);
+    let key_reverse = down(&[KeyCode::ArrowDown]);
     if key_reverse || pad_down(&[GamepadButton::West]) {
         held |= buttons::SQUARE;
     }
@@ -512,12 +513,11 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
         held |= buttons::L1;
     }
     // The mask item is Circle, so a demo has it.
-    if down(&[KeyCode::KeyV]) || pad_down(&[GamepadButton::East]) {
+    if down(&[KeyCode::KeyD]) || pad_down(&[GamepadButton::East]) {
         held |= buttons::CIRCLE;
     }
-    let left = down(&[KeyCode::KeyA, KeyCode::ArrowLeft]) || pad_down(&[GamepadButton::DPadLeft]);
-    let right =
-        down(&[KeyCode::KeyD, KeyCode::ArrowRight]) || pad_down(&[GamepadButton::DPadRight]);
+    let left = down(&[KeyCode::ArrowLeft]) || pad_down(&[GamepadButton::DPadLeft]);
+    let right = down(&[KeyCode::ArrowRight]) || pad_down(&[GamepadButton::DPadRight]);
     // Sticks: 0 is left, 0x80 the middle, 0xff right (and back for LY).
     let axis = |v: f32| (0x80 as f32 + v * 127.0).round().clamp(0.0, 255.0) as u8;
     let stick_lx = match (left, right) {
@@ -827,9 +827,10 @@ fn drive_tick(
     drive.current_view = view_of(&drive.camera);
 }
 
-/// `/debug-add-weapon <N>`: drops what we hold and rolls item `N`, as the roulette would (5, the
-/// spring, turns into a turbo). Not online, and not in a demo, which is the inputs alone.
-fn debug_add_weapon(
+/// The debug commands that change our kart: `/debug-add-weapon <N>` drops what we hold and rolls
+/// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug-set-wumpa <N>`
+/// sets the wumpa count. Not online, and not in a demo, which is the inputs alone.
+fn debug_actions(
     mut actions: MessageReader<Action>,
     mut sim: ResMut<crate::props::Sim>,
     drive: Res<Drive>,
@@ -837,9 +838,9 @@ fn debug_add_weapon(
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
-        let Action::DebugAddWeapon(item) = action else {
+        if !matches!(action, Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_)) {
             continue;
-        };
+        }
         if lobby.online.is_some() || !matches!(drive.demo, DemoMode::Off) {
             toasts.write(
                 Toast::new("Not online or in a demo", 2500).color(Color::srgb(1.0, 0.4, 0.4)),
@@ -847,8 +848,19 @@ fn debug_add_weapon(
             continue;
         }
         let own = sim.own;
-        vehicle::item::debug_roll(&mut sim.race.state_mut().karts[own].driver, *item);
-        toasts.write(Toast::new(format!("(debug) rolled item {item}"), 2000));
+        let driver = &mut sim.race.state_mut().karts[own].driver;
+        let said = match *action {
+            Action::DebugAddWeapon(item) => {
+                vehicle::item::debug_roll(driver, item);
+                format!("(debug) rolled item {item}")
+            }
+            Action::DebugSetWumpa(count) => {
+                driver.num_wumpas = count as i8;
+                format!("(debug) wumpa set to {count}")
+            }
+            _ => continue,
+        };
+        toasts.write(Toast::new(said, 2000));
     }
 }
 
