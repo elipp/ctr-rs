@@ -112,6 +112,10 @@ const BRIGHT: [f32; 3] = [0x7f as f32, 0x7f as f32, 0.0];
 const MID: [f32; 3] = [0x7f as f32, 0x32 as f32, 0.0];
 const DARK: [f32; 3] = [0x21 as f32, 0x10 as f32, 0.0];
 
+/// How much the glow's brightness is multiplied for its alpha: in the game it is added on a dark
+/// HUD and is nearly opaque, which an alpha of the brightness alone makes too faint.
+const OPACITY_GAIN: f32 = 3.0;
+
 /// The glow of a juiced-up driver, as `UI_WeaponBG_DrawShine` draws it: the icon's four mirrored
 /// copies, [`SHINE_IMAGE_WIDTH`] by [`SHINE_IMAGE_HEIGHT`] texels, shaded from dark at the outer corners to bright in the middle (the
 /// picture is Gouraud shaded by the quad's four colours).
@@ -159,7 +163,10 @@ pub fn shine_image(icons: &[Icon], vram: &Vram) -> Atlas {
             for c in 0..3 {
                 out[c] = (light[c] / strength * 255.0).round() as u8;
             }
-            out[3] = (strength * 255.0).round() as u8;
+            out[3] = (strength * OPACITY_GAIN)
+                .min(1.0)
+                .mul_add(255.0, 0.0)
+                .round() as u8;
         }
     }
     Atlas {

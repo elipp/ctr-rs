@@ -2,7 +2,7 @@
 //! roulette runs it shuffles through the weapons, a new one every other tick, and then shows
 //! the one the sim settled on, with the number of shots when there are several.
 //!
-//! A driver with 10 wumpa fruit is juiced up: a glow pulses behind the fruit counter and, when
+//! A driver with 10 wumpa fruit is juiced up: a glow pulses behind the wumpa fruit (not the count) and, when
 //! there is a weapon, behind the weapon (`UI_Weapon_DrawBG`).
 
 use bevy::prelude::*;
@@ -35,8 +35,14 @@ struct WeaponHud;
 #[derive(Component)]
 struct Quantity;
 
-/// How much larger than the PlayStation's pixels the icon is drawn.
+/// How much larger than the PlayStation's pixels the HUD is drawn.
 const SCALE: f32 = 1.5;
+
+/// How much larger than that the weapon (its icon and its glow) is drawn, and how far lower than
+/// retail's slot it is, in pixels.
+const WEAPON_ZOOM: f32 = 1.2;
+const WEAPON_LOWER: f32 = 10.0;
+const WEAPON_SCALE: f32 = SCALE * WEAPON_ZOOM;
 
 /// How much taller than wide a retail pixel of the HUD is, which makes the icon (48 by 32 texels)
 /// come out a little taller than wide. Measured, not derived: the bomb icon's frame is 133 by 139
@@ -48,27 +54,37 @@ const HUD_PIXEL_ASPECT: f32 = 1.5;
 /// Where the weapon icon's top is: retail's slot is at `y` 5 (and, like the size, stretched by the
 /// pixel's shape). It is centered across the screen, as retail's is (the slot's `x` of 232 and the
 /// icon's 48 texels make 256, the middle of 512).
-const WEAPON_TOP: f32 = 5.0 * SCALE * HUD_PIXEL_ASPECT;
+const WEAPON_TOP: f32 = 5.0 * WEAPON_SCALE * HUD_PIXEL_ASPECT + WEAPON_LOWER;
 
 /// The icon's size on screen.
 const WEAPON_SIZE: Vec2 = Vec2::new(
-    WIDTH as f32 * SCALE,
-    HEIGHT as f32 * SCALE * HUD_PIXEL_ASPECT,
+    WIDTH as f32 * WEAPON_SCALE,
+    HEIGHT as f32 * WEAPON_SCALE * HUD_PIXEL_ASPECT,
 );
 
-/// The glow's size on screen: the mirrored picture, shrunk as the game does.
-const SHINE_SIZE: Vec2 = Vec2::new(
-    SHINE_IMAGE_WIDTH as f32 * SHINE_SCALE * SCALE,
-    SHINE_IMAGE_HEIGHT as f32 * SHINE_SCALE * SCALE * HUD_PIXEL_ASPECT,
-);
+/// The glow's size on screen at a HUD scale: the mirrored picture, shrunk as the game does.
+const fn shine_at(scale: f32) -> Vec2 {
+    Vec2::new(
+        SHINE_IMAGE_WIDTH as f32 * SHINE_SCALE * scale,
+        SHINE_IMAGE_HEIGHT as f32 * SHINE_SCALE * scale * HUD_PIXEL_ASPECT,
+    )
+}
+
+/// How much smaller the wumpa fruit's glow is than the HUD's glow at the plain scale.
+const WUMPA_SHINE_SCALE: f32 = 0.5;
+
+/// The glow's size on screen, for the weapon or the fruit.
+fn shine_size(shine: &Shine) -> Vec2 {
+    match shine {
+        Shine::Weapon => shine_at(WEAPON_SCALE),
+        Shine::Wumpa => shine_at(SCALE) * WUMPA_SHINE_SCALE,
+    }
+}
 
 /// `wumpaShineTheta`'s step: retail adds it each time it draws a glow, so a frame with two
 /// glows turns it twice as far. The game has 30 frames a second.
 const THETA_STEP: f32 = 0x100 as f32;
 const FRAMES_PER_SECOND: f32 = 30.0;
-
-/// The middle of the wumpa counter, the fruit and the count, from the top right corner of the screen.
-const WUMPA_CENTER: Vec2 = Vec2::new(79.0, 32.0);
 
 /// `UI_WEAPON_ROULETTE_RACING_COUNT`: the roulette shuffles through the first twelve items.
 const ROULETTE_ITEMS: u32 = 12;
@@ -203,7 +219,16 @@ fn shine(
     sim: Res<crate::props::Sim>,
     time: Res<Time<Real>>,
     icons: Option<Res<WeaponIcons>>,
-    mut glows: Query<(&Shine, &mut ImageNode, &mut Visibility)>,
+    mut glows: Query<(
+        Entity,
+        &Shine,
+        &mut ImageNode,
+        &mut Visibility,
+        &mut Node,
+        Option<&UiTargetCamera>,
+    )>,
+    counter: Query<(&ComputedNode, &Text), With<crate::drive::WumpaHud>>,
+    cameras: Query<(Entity, &Camera), With<Camera3d>>,
 ) {
     // The weapon's own system makes the pictures, on its first frame.
     let Some(icons) = icons else {
@@ -221,28 +246,37 @@ fn shine(
                 Pickable::IGNORE,
             )
         };
-        let size = |node: Node| Node {
+        let size = |shine: &Shine, node: Node| Node {
             position_type: PositionType::Absolute,
-            width: Val::Px(SHINE_SIZE.x),
-            height: Val::Px(SHINE_SIZE.y),
+            width: Val::Px(shine_size(shine).x),
+            height: Val::Px(shine_size(shine).y),
             ..node
         };
+        let weapon = shine_size(&Shine::Weapon);
         commands.spawn(glow(
             Shine::Weapon,
-            size(Node {
-                left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-SHINE_SIZE.x / 2.0)),
-                top: Val::Px(WEAPON_TOP + WEAPON_SIZE.y / 2.0 - SHINE_SIZE.y / 2.0),
-                ..default()
-            }),
+            size(
+                &Shine::Weapon,
+                Node {
+                    left: Val::Percent(50.0),
+                    margin: UiRect::left(Val::Px(-weapon.x / 2.0)),
+                    top: Val::Px(WEAPON_TOP + WEAPON_SIZE.y / 2.0 - weapon.y / 2.0),
+                    ..default()
+                },
+            ),
         ));
+        let wumpa = shine_size(&Shine::Wumpa);
         commands.spawn(glow(
             Shine::Wumpa,
-            size(Node {
-                right: Val::Px(WUMPA_CENTER.x - SHINE_SIZE.x / 2.0),
-                top: Val::Px(WUMPA_CENTER.y - SHINE_SIZE.y / 2.0),
-                ..default()
-            }),
+            size(
+                &Shine::Wumpa,
+                Node {
+                    // (Behind the fruit; `right` follows it in the system below.)
+                    right: Val::Px(crate::wumpa_icon::CENTER.x - wumpa.x / 2.0),
+                    top: Val::Px(crate::wumpa_icon::CENTER.y - wumpa.y / 2.0),
+                    ..default()
+                },
+            ),
         ));
         return;
     }
@@ -255,7 +289,23 @@ fn shine(
         time.elapsed_secs() * FRAMES_PER_SECOND * THETA_STEP * if armed { 2.0 } else { 1.0 };
     // 1 to 2 over the colours at their dimmest, which the picture is made at.
     let pulse = shine_pulse(theta as u32) / 2.0;
-    for (shine, mut image, mut visibility) in &mut glows {
+    let growth = counter
+        .single()
+        .map_or(0.0, |(node, text)| crate::wumpa_icon::growth(node, text));
+    // The UI is drawn by the camera of the highest order, which is the fruit's own: the glows
+    // would be drawn over the fruit and blend with it. They are drawn by the main camera instead,
+    // under the cameras that draw the fruit (and the kart).
+    let main = cameras.iter().find(|(_, c)| c.order == 0).map(|(e, _)| e);
+    for (entity, shine, mut image, mut visibility, mut node, target) in &mut glows {
+        if let Some(main) = main
+            && target.is_none_or(|t| t.0 != main)
+        {
+            commands.entity(entity).insert(UiTargetCamera(main));
+        }
+        if matches!(shine, Shine::Wumpa) {
+            // The glow is behind the fruit only, not the count: it goes where the fruit does.
+            node.right = Val::Px(crate::wumpa_icon::CENTER.x + growth - shine_size(shine).x / 2.0);
+        }
         let up = match shine {
             Shine::Weapon => armed,
             Shine::Wumpa => juiced,
@@ -265,7 +315,8 @@ fn shine(
         } else {
             Visibility::Hidden
         };
-        image.color = Color::srgba(1.0, 1.0, 1.0, pulse);
+        // The pulse is the glow's brightness; its alpha is the picture's.
+        image.color = Color::srgb(pulse, pulse, pulse);
     }
 }
 
