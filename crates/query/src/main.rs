@@ -585,6 +585,27 @@ fn pack_models(entry: Option<usize>) -> Result<(), String> {
                 h.commands.len(),
                 frames.join(", ")
             );
+            // The extent of the first frame, in model units and scaled by the header's.
+            let frame = h
+                .static_frame
+                .as_ref()
+                .or(h.animations.first().and_then(|a| a.frames.first()));
+            if let Some(f) = frame.filter(|f| !f.vertices.is_empty()) {
+                let (mut lo, mut hi) = ([i32::MAX; 3], [i32::MIN; 3]);
+                for v in &f.vertices {
+                    for a in 0..3 {
+                        lo[a] = lo[a].min(v[a]);
+                        hi[a] = hi[a].max(v[a]);
+                    }
+                }
+                let scaled: Vec<String> = (0..3)
+                    .map(|a| {
+                        let k = h.scale[a] as f32 / 4096.0;
+                        format!("{:.0}..{:.0}", lo[a] as f32 * k, hi[a] as f32 * k)
+                    })
+                    .collect();
+                println!("          scale {:?} extent {}", h.scale, scaled.join(" "));
+            }
         }
     }
     Ok(())

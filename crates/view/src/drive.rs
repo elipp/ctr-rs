@@ -10,9 +10,11 @@
 //! * M: use the item in hand (Circle): the mask is longer with 10 wumpa fruit. A bomb or a
 //!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
 //! * `/debug-set-wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
-//! * `/debug-add-weapon <N>`: (debug) drop what is in hand and roll item N (0 to 11), as the
+//! * `/debug-set-weapon <N>`: (debug) drop what is in hand and roll item N (0 to 11), as the
 //!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online, not in
 //!   a demo
+//! * Left mouse button held and mouse moves: turn the camera around the kart; scroll wheel:
+//!   closer or farther; double click or Home: back to the default view
 //! * R: back to the starting grid
 //! * F5 / 1: start recording a demo from the grid, again to save it to `demo.ctr`
 //! * F6 / 2: play `demo.ctr` back from the grid (any F5 or R ends it, the kart stays where it is)
@@ -23,6 +25,7 @@
 
 use crate::toast::Toast;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use race::rollback::Step;
 use race::{KartSpec, Pad};
@@ -812,7 +815,7 @@ fn drive_tick(
     drive.current_view = view_of(&drive.camera);
 }
 
-/// The debug commands that change our kart: `/debug-add-weapon <N>` drops what we hold and rolls
+/// The debug commands that change our kart: `/debug-set-weapon <N>` drops what we hold and rolls
 /// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug-set-wumpa <N>`
 /// sets the wumpa count. Not online, and not in a demo, which is the inputs alone.
 fn debug_actions(
@@ -866,16 +869,93 @@ fn each_motion(
     }
 }
 
-/// The camera of the sim, between the last two ticks.
+/// How far the camera turns per pixel the mouse moves, in radians.
+const ORBIT_SPEED: f32 = 0.004;
+
+/// How far up or down the camera may be orbited from where the sim puts it, in radians.
+const ORBIT_PITCH_MAX: f32 = 1.2;
+
+/// The longest time between the two clicks of a double click, in seconds.
+const DOUBLE_CLICK_SECS: f32 = 0.35;
+
+/// How much the camera's distance from the kart changes per scroll line, as a factor, and the
+/// nearest and farthest it can be, as factors of the distance the sim gives it.
+const ZOOM_PER_LINE: f32 = 0.9;
+const ZOOM_RANGE: (f32, f32) = (0.3, 5.0);
+
+/// How the player has turned and pulled the camera away from the sim's.
+struct Orbit {
+    /// Yaw and pitch, in radians.
+    angles: Vec2,
+    /// The distance from the kart, as a factor.
+    zoom: f32,
+    /// When the left button last went down, in seconds of the app's time.
+    last_click: f32,
+}
+
+impl Default for Orbit {
+    fn default() -> Orbit {
+        Orbit {
+            angles: Vec2::ZERO,
+            zoom: 1.0,
+            last_click: f32::NEG_INFINITY,
+        }
+    }
+}
+
+/// The camera of the sim, between the last two ticks, turned around the kart as the mouse drags
+/// it (left button held and move) and pulled away or closer by the scroll wheel. A double click
+/// or Home puts it back. This is the view only, the sim's camera (and the rollback) do not know
+/// of it.
 fn chase(
     drive: Res<Drive>,
     fixed: Res<Time<Fixed>>,
+    time: Res<Time<Real>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
+    mut orbit: Local<Orbit>,
+    karts: Query<&Transform, (With<Kart>, Without<ChaseCamera>)>,
     mut cameras: Query<&mut Transform, With<ChaseCamera>>,
 ) {
+    let now = time.elapsed_secs();
+    if buttons.just_pressed(MouseButton::Left) {
+        if now - orbit.last_click <= DOUBLE_CLICK_SECS {
+            *orbit = Orbit::default();
+        } else {
+            orbit.last_click = now;
+        }
+    }
+    if buttons.pressed(MouseButton::Left) {
+        orbit.angles.x -= motion.delta.x * ORBIT_SPEED;
+        orbit.angles.y = (orbit.angles.y - motion.delta.y * ORBIT_SPEED)
+            .clamp(-ORBIT_PITCH_MAX, ORBIT_PITCH_MAX);
+    }
+    if keys.just_pressed(KeyCode::Home) {
+        *orbit = Orbit::default();
+    }
+    let lines = match scroll.unit {
+        MouseScrollUnit::Line => -scroll.delta.y,
+        MouseScrollUnit::Pixel => -scroll.delta.y / 40.0,
+    };
+    if lines != 0.0 {
+        orbit.zoom = (orbit.zoom * ZOOM_PER_LINE.powf(lines)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+    }
     let t = fixed.overstep_fraction();
     let (a, b) = (drive.previous_view, drive.current_view);
-    let eye = a.eye.lerp(b.eye, t);
-    let target = a.target.lerp(b.target, t);
+    let mut eye = a.eye.lerp(b.eye, t);
+    let mut target = a.target.lerp(b.target, t);
+    if (orbit.angles != Vec2::ZERO || orbit.zoom != 1.0)
+        && let Ok(kart) = karts.single()
+    {
+        let pivot = kart.translation;
+        let right = (target - eye).cross(Vec3::Y).normalize_or_zero();
+        let turn = Quat::from_axis_angle(Vec3::Y, orbit.angles.x)
+            * Quat::from_axis_angle(right, orbit.angles.y);
+        eye = pivot + turn * (eye - pivot) * orbit.zoom;
+        target = pivot + turn * (target - pivot);
+    }
     // The roll's sign (which way the horizon tilts) is a guess.
     let roll = (a.roll + (b.roll - a.roll) * t) * std::f32::consts::TAU;
     for mut transform in &mut cameras {

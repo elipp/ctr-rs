@@ -20,10 +20,16 @@ use render::mesh;
 use render::shield::Shields;
 use vehicle::shield::Shield;
 
+use crate::DEPTH_BIAS_PER_ORDER;
 use crate::drive::{ChaseCamera, animation_pose, rotation_of};
 use crate::kart::{Attached, KartMotion, KartSlot};
 use crate::spawn_parts;
 use crate::subtract::SubtractMaterial;
+
+/// How deep the highlight's model is next to the bubble's (`ctr-query models`: the bubble is a
+/// dome 117 deep, the highlight a strip of a sphere 160 deep), which makes it stand out of the
+/// bubble towards the camera. It is flattened by this to lie on the dome.
+const HIGHLIGHT_FLATTEN: f32 = 117.0 / 160.0;
 
 /// `alphaScale` at which the bubble is gone.
 const ALPHA_GONE: f32 = 0x1000 as f32;
@@ -113,7 +119,16 @@ fn spawn_part(
         RenderAssetUsages::RENDER_WORLD,
     );
     atlas.sampler = ImageSampler::nearest();
+    // The layers are the same sphere, so they fight over the depth buffer (the coloured one
+    // flickers away): the dark one is farthest back. The coloured one and the highlight stand
+    // together over it, as they did before, so that the highlight is not pulled in front of the
+    // bubble (the bias also sorts the blended parts).
+    let order = match which {
+        Layer::Dark => 0,
+        Layer::Blue | Layer::Green | Layer::Highlight => 3,
+    };
     let base = StandardMaterial {
+        depth_bias: order as f32 * DEPTH_BIAS_PER_ORDER,
         base_color: Color::WHITE,
         base_color_texture: Some(images.add(atlas)),
         unlit: true,
@@ -157,10 +172,14 @@ pub fn update(
         &mut Visibility,
         &Children,
     )>,
-    parts: Query<(
-        Option<&MeshMaterial3d<StandardMaterial>>,
-        Option<&MeshMaterial3d<SubtractMaterial>>,
-    )>,
+    mut parts: Query<
+        (
+            Option<&MeshMaterial3d<StandardMaterial>>,
+            Option<&MeshMaterial3d<SubtractMaterial>>,
+            &mut Transform,
+        ),
+        (Without<ShieldPart>, Without<ChaseCamera>),
+    >,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
@@ -194,25 +213,39 @@ pub fn update(
         };
         let (round, along) = (round as f32 / 4096.0, along as f32 / 4096.0);
         transform.translation = motion.pose(t).translation;
-        transform.rotation = if part.layer == Layer::Highlight {
-            camera * rotation_of(&vehicle::stuck::MaskHead::rotation(shield.highlight_rot_y))
+        transform.rotation = camera;
+        // The highlight turns about the bubble in its parts, under the flattening of its group
+        // (which is in the camera's axes, as the dome is).
+        let (depth, turn) = if part.layer == Layer::Highlight {
+            (
+                HIGHLIGHT_FLATTEN,
+                rotation_of(&vehicle::stuck::MaskHead::rotation(shield.highlight_rot_y)),
+            )
         } else {
-            camera
+            (1.0, Quat::IDENTITY)
         };
-        transform.scale = Vec3::new(round, along, round);
+        transform.scale = Vec3::new(round, along, round * depth);
+        for child in children {
+            if let Ok((_, _, mut t)) = parts.get_mut(*child) {
+                t.rotation = turn;
+            }
+        }
         *visibility = Visibility::Inherited;
 
         // It fades with the bubble: in the colour, and in the alpha of the blended parts.
         if part.alpha != shield.alpha_scale {
             part.alpha = shield.alpha_scale;
-            let fade = (1.0 - part.alpha as f32 / ALPHA_GONE).clamp(0.0, 1.0);
+            // (The root of it keeps the ends, solid and gone, and makes the rest more opaque.)
+            let fade = (1.0 - part.alpha as f32 / ALPHA_GONE)
+                .clamp(0.0, 1.0)
+                .sqrt();
             let dim = |m: &mut StandardMaterial| {
                 let masked = matches!(m.alpha_mode, AlphaMode::Mask(_));
                 m.base_color =
                     Color::linear_rgba(fade, fade, fade, if masked { 1.0 } else { fade });
             };
             for child in children {
-                let Ok((standard, subtract)) = parts.get(*child) else {
+                let Ok((standard, subtract, _)) = parts.get(*child) else {
                     continue;
                 };
                 if let Some(mut m) = standard.and_then(|h| materials.get_mut(&h.0)) {
