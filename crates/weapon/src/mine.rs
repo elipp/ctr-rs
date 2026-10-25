@@ -410,6 +410,31 @@ impl Weapons {
         mine.pooled = true;
     }
 
+    /// A mine lying on the ground at `pos`, as if kart `parent` had dropped it there and it had
+    /// grown to full size (for the debug commands and the tests).
+    pub fn place_mine(&mut self, kind: MineKind, pos: [i32; 3], parent: usize) {
+        let mut mine = Mine {
+            id: self.next_id,
+            kind,
+            pos,
+            rot: Matrix::default(),
+            scale_xz: FULL_SCALE,
+            scale_y: FULL_SCALE,
+            vel: [0; 3],
+            parent,
+            state: State::Ground,
+            cooldown: 0,
+            parent_safety: 0,
+            stop_fall_y: pos[1],
+            pooled: false,
+            overflowed: false,
+            dead: false,
+        };
+        self.next_id = self.next_id.wrapping_add(1);
+        self.add_to_pool(&mut mine);
+        self.mines.push(mine);
+    }
+
     /// One game tick of every mine, in the order they were dropped.
     pub(crate) fn tick_mines(&mut self, c: &mut Ctx) {
         for i in 0..self.mines.len() {

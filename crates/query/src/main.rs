@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
-use loader::lev::{InstDef, Level, QuadBlock, SVec3, quad_flags};
+use loader::lev::{BspKind, InstDef, Level, QuadBlock, SVec3, quad_flags};
 use loader::level::LevelId;
 use loader::texture::{FaceMode, face_polygon, resolve_texture};
 
@@ -438,7 +438,47 @@ fn instances(l: &Loaded, name: Option<&str>, at: Option<[i32; 3]>, within: i32) 
     println!("{} instances", hits.len());
     for i in hits {
         println!("  {}", inst_line(i, &l.level.instances[i]));
+        for line in hitbox_lines(&l.level, i) {
+            println!("      {line}");
+        }
     }
+}
+
+/// `BSP_HITBOX_CLASS_TOUCH`: a hitbox of this class is only recorded, with no collision response.
+const CLASS_TOUCH: u8 = 4;
+
+/// The hitboxes of an instance: one line each, with the number of BSP leaves that list it.
+fn hitbox_lines(level: &Level, instance: usize) -> Vec<String> {
+    let mut found: Vec<(&loader::lev::BspHitbox, usize)> = Vec::new();
+    for node in &level.bsp {
+        let BspKind::Leaf { hitboxes, .. } = &node.kind else {
+            continue;
+        };
+        for h in hitboxes.iter().filter(|h| h.instance == Some(instance)) {
+            match found.iter_mut().find(|(f, _)| f.offset == h.offset) {
+                Some((_, leaves)) => *leaves += 1,
+                None => found.push((h, 1)),
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(h, leaves)| {
+            format!(
+                "hitbox flag {:#04x} class {}{} id {} center {} radius {} in {leaves} leaves",
+                h.flag & 0xff,
+                h.class(),
+                if h.class() == CLASS_TOUCH {
+                    " (touch: recorded, no bump)"
+                } else {
+                    ""
+                },
+                h.id,
+                p(h.center),
+                h.radius
+            )
+        })
+        .collect()
 }
 
 fn icon_scan(range: std::ops::RangeInclusive<i32>) -> Result<(), String> {

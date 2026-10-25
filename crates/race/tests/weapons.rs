@@ -432,3 +432,75 @@ fn a_bomb_breaks_a_wumpa_crate_on_its_way_and_sets_off_the_bottle_it_reaches() {
     let gained = race.karts[0].driver.num_wumpas - wumpas_before;
     assert!((5..=8).contains(&gained), "{gained} wumpa fruit");
 }
+
+/// Five Nitro crates side by side on the missile's way, and a sixth far past them: the missile
+/// goes off at the first, and its burst sets off the ones inside it. Nitro crates do not chain
+/// (a crate that is hit gets a plain explosion with no blast), so the far one lies on.
+#[test]
+fn a_missile_sets_off_the_nitro_crates_within_its_burst_and_no_others() {
+    use weapon::mine::MineKind;
+
+    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 1, |_| {}) else {
+        return;
+    };
+    // The first grid spot faces -x. The crates lie on the ground on its line, 600 units ahead,
+    // 6 apart (the burst reaches 128, and the missile goes off up to 96 before the first).
+    let [start_x, ground_y, start_z] = [1679, 1, -10665];
+    let row: Vec<i32> = (0..5).map(|i| start_x - 600 - 6 * i).collect();
+    let far = start_x - 1000;
+    for &x in &row {
+        race.weapons
+            .place_mine(MineKind::Nitro, [x, ground_y, start_z], 0);
+    }
+    race.weapons
+        .place_mine(MineKind::Nitro, [far, ground_y, start_z], 0);
+
+    // `/debug-add-weapon 2`: a missile, fired on tick 0.
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::MISSILE_1X);
+    let pad = |fire: bool| -> Vec<Pad> {
+        vec![Pad {
+            held: if fire { buttons::CIRCLE } else { 0 },
+            ..Pad::default()
+        }]
+    };
+    let mut went_off = Vec::new();
+    let mut burst = None;
+    for tick in 0..600 {
+        race.tick(&level, &pad(tick == 0));
+        went_off.extend(
+            race.last_weapons
+                .detonations
+                .iter()
+                .map(|d| (d.kind, d.pos[0], d.blowup)),
+        );
+        if let [blast] = race.last_weapons.explosions.as_slice() {
+            burst = Some(blast.pos);
+            break;
+        }
+    }
+    let burst = burst.expect("the missile went off");
+    assert!(
+        burst[0] > row[0] - 10 && burst[0] <= row[0] + 96,
+        "the missile went off at the first crate: {burst:?}, crates at {row:?}"
+    );
+
+    // All five went off, each with a plain explosion (no blast of its own), and the far one did
+    // not.
+    let mut gone: Vec<i32> = went_off.iter().map(|&(_, x, _)| x).collect();
+    gone.sort_unstable();
+    let mut expected = row.clone();
+    expected.sort_unstable();
+    assert_eq!(gone, expected, "went off: {went_off:?}");
+    assert!(
+        went_off
+            .iter()
+            .all(|&(kind, _, blowup)| kind == MineKind::Nitro && !blowup)
+    );
+
+    // (The next tick sweeps the dead away.)
+    race.tick(&level, &pad(false));
+    let left: Vec<i32> = race.weapons.mines().iter().map(|m| m.pos[0]).collect();
+    assert_eq!(left, vec![far]);
+    assert!(race.weapons.projectiles().is_empty());
+    assert!(race.last_weapons.hits.is_empty());
+}
