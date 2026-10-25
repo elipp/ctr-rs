@@ -775,15 +775,15 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     io.event(Event::PeerLeft(from));
                     links.remove(&from);
                     unclaimed.retain(|c| c.remote_id() != from);
+                    // A guest whose host is gone has no lobby, nor a race: the host runs both.
+                    if from == host_id && !matches!(role, Role::Host) {
+                        return Err("the host closed the lobby".into());
+                    }
                     if plan.is_none() {
                         let had = guests.len();
                         guests.retain(|g| g.id != from);
                         if guests.len() != had {
                             tell_lobby(me, character, &guests, &io).await;
-                        }
-                        // A guest whose host is gone has no lobby.
-                        if from == host_id && !matches!(role, Role::Host) {
-                            return Err("the host closed the lobby".into());
                         }
                     }
                 }

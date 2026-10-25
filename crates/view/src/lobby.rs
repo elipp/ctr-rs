@@ -216,6 +216,28 @@ impl Lobby {
     }
 }
 
+/// Puts `text` on the system clipboard. It is done on a thread of its own: on Linux the clipboard's
+/// owner has to stay up to serve the paste (until something else is copied), and a failure is only
+/// reported on the console.
+fn copy_to_clipboard(text: String) {
+    std::thread::spawn(move || {
+        let result = arboard::Clipboard::new().and_then(|mut clipboard| {
+            #[cfg(target_os = "linux")]
+            {
+                use arboard::SetExtLinux;
+                clipboard.set().wait().text(text)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                clipboard.set_text(text)
+            }
+        });
+        if let Err(e) = result {
+            eprintln!("could not copy to the clipboard: {e}");
+        }
+    });
+}
+
 /// How much of a new reading of the clocks' difference is taken in (they come 30 times a second
 /// from each player).
 const LEAD_SMOOTHING: f32 = 0.1;
@@ -345,8 +367,9 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 println!(
                     "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nPress G to start the race once the others have joined."
                 );
+                copy_to_clipboard(format!("/lobby join {ticket}"));
                 toasts.write(
-                    Toast::new("Lobby created!".to_string(), 2000)
+                    Toast::new("Lobby created! Join command copied".to_string(), 3000)
                         .color(Color::linear_rgb(0.4, 1.0, 0.4)),
                 );
             }

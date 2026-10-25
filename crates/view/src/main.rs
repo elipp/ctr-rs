@@ -545,6 +545,10 @@ fn main() {
     app.run();
 }
 
+/// The level that was shown when an online race moved the viewer to its own.
+#[derive(Resource, Default)]
+struct LevelBeforeRace(Option<u32>);
+
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
 /// the previous racer. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
@@ -569,12 +573,28 @@ fn switch_level(world: &mut World) {
     let missing =
         race_track.is_some_and(|(track, hash)| map::is_map_id(track) && !maps::has(track, hash));
     let race_track = race_track.map(|(track, _)| track);
+    // The level shown before the race took the viewer to its own: back to it when the race is
+    // over (the lobby closed, or failed).
+    let mut before = world
+        .remove_resource::<LevelBeforeRace>()
+        .unwrap_or_default();
+    let mut back = None;
+    match race_track {
+        Some(track) if track != world.resource::<LevelNumber>().0 => {
+            before.0.get_or_insert(world.resource::<LevelNumber>().0);
+        }
+        Some(_) => {}
+        None => back = before.0.take(),
+    }
+    world.insert_resource(before);
     if race_track.is_some() {
         (level_step, racer_step) = (0, 0);
     }
     let mut options = *world.resource::<Options>();
     let current = world.resource::<LevelNumber>().0;
-    let wanted = race_track.filter(|&track| track != current && !missing);
+    let wanted = race_track
+        .filter(|&track| track != current && !missing)
+        .or(back.filter(|&track| track != current));
     if options.racer.is_none() {
         racer_step = 0;
     }
