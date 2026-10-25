@@ -1,5 +1,5 @@
-//! The tire marks on the ground as Bevy meshes. Where the tires left them is
-//! `vehicle::skid`; this lays the segments out and fades them as
+//! The tire marks on the ground as Bevy meshes, of every kart of the race. Where the tires left
+//! them is `vehicle::skid`; this lays the segments out and fades them as
 //! `VehGroundSkids_Main` does.
 
 use bevy::asset::RenderAssetUsages;
@@ -12,6 +12,7 @@ use render::mesh::SCALE;
 use vehicle::skid::{fade_anchor, intensity, segments};
 
 use crate::exhaust::icon_image;
+use crate::kart::{Attached, KartSlot};
 use crate::subtract::{self, SubtractMaterial};
 
 /// `VEH_GROUND_SKIDS_ICON_TIREMARK`: the icon's global index.
@@ -35,13 +36,15 @@ const LIGHT_GAIN: f32 = 0.25;
 /// (`screen_offset_y`) and the marks bounce with it, so they would dip under the ground.
 const LIFT: f32 = 4.0;
 
-/// A mesh of marks of one kind.
+/// A mesh of the marks of one kart, of one kind.
 #[derive(Component)]
 pub struct Marks {
     /// Terrain that forces marks makes light ones (the tpage's quarter-add blend), others dark.
     light: bool,
 }
 
+/// Makes the pair of meshes that draw the marks of `kart`, with the tire mark's picture. The
+/// marks are laid out by `update`.
 pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -50,30 +53,10 @@ pub fn spawn(
     subtract_materials: &mut Assets<SubtractMaterial>,
     icon: &Icon,
     vram: &Vram,
+    kart: Entity,
 ) {
     let (image, _, _) = icon_image(icon, vram);
     let image = images.add(image);
-    let mut mesh = || {
-        let mut mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * MAX_QUADS]);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * MAX_QUADS]);
-        // Across the mark first, then along it, as the layout's corners go.
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_UV_0,
-            (0..MAX_QUADS)
-                .flat_map(|_| [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
-                .collect::<Vec<_>>(),
-        );
-        mesh.insert_indices(Indices::U32(
-            (0..MAX_QUADS as u32)
-                .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
-                .collect(),
-        ));
-        meshes.add(mesh)
-    };
     let base = |alpha_mode| StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: Some(image.clone()),
@@ -85,28 +68,53 @@ pub fn spawn(
         depth_bias: 400.0,
         ..default()
     };
+    let dark = subtract_materials.add(SubtractMaterial {
+        base: base(AlphaMode::Blend),
+        extension: subtract::Subtract {},
+    });
+    let light = materials.add(base(AlphaMode::Add));
+    let placed = (Attached(kart), Transform::default(), NoFrustumCulling);
     commands.spawn((
         Marks { light: false },
-        Mesh3d(mesh()),
-        MeshMaterial3d(subtract_materials.add(SubtractMaterial {
-            base: base(AlphaMode::Blend),
-            extension: subtract::Subtract {},
-        })),
-        Transform::default(),
-        NoFrustumCulling,
+        Mesh3d(new_mesh(meshes)),
+        MeshMaterial3d(dark),
+        placed.clone(),
     ));
     commands.spawn((
         Marks { light: true },
-        Mesh3d(mesh()),
-        MeshMaterial3d(materials.add(base(AlphaMode::Add))),
-        Transform::default(),
-        NoFrustumCulling,
+        Mesh3d(new_mesh(meshes)),
+        MeshMaterial3d(light),
+        placed,
     ));
 }
 
-/// Lays the driver's mark segments out on the ground, as bright as their age and distance say.
+/// An empty mesh with room for [`MAX_QUADS`] segments.
+fn new_mesh(meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * MAX_QUADS]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * MAX_QUADS]);
+    // Across the mark first, then along it, as the layout's corners go.
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        (0..MAX_QUADS)
+            .flat_map(|_| [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_indices(Indices::U32(
+        (0..MAX_QUADS as u32)
+            .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
+            .collect(),
+    ));
+    meshes.add(mesh)
+}
+
+/// Lays the karts' mark segments out on the ground, as bright as their age and distance say.
 pub fn update(
-    marks: Query<(&Marks, &Mesh3d)>,
+    marks: Query<(&Marks, &Attached, &Mesh3d)>,
+    karts: Query<&KartSlot>,
     cameras: Query<
         &Transform,
         (
@@ -129,19 +137,30 @@ pub fn update(
     let forward = camera.forward().as_vec3();
     let point = |p: [i16; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
 
-    let d = sim.driver();
-    // The distance of the newest mark sets the brightness of all of them, and
-    // one too far on any axis is not drawn at all.
-    let anchor = point(fade_anchor(d)) - eye;
-    let bright = (anchor.abs().max_element() < CULL_DISTANCE)
-        .then(|| intensity(anchor.dot(forward) as i32))
-        .flatten();
-    let segments = bright.map(|_| segments(d)).unwrap_or_default();
+    // Each kart's marks, as bright as the distance of its newest mark says, and not drawn at all
+    // when that is too far on any axis.
+    let shown: Vec<_> = sim
+        .race
+        .karts
+        .iter()
+        .map(|kart| {
+            let d = &kart.driver;
+            let anchor = point(fade_anchor(d)) - eye;
+            let bright = (anchor.abs().max_element() < CULL_DISTANCE)
+                .then(|| intensity(anchor.dot(forward) as i32))
+                .flatten();
+            let segments = bright.map(|_| segments(d)).unwrap_or_default();
+            (bright, segments)
+        })
+        .collect();
+    let nothing = (None, Vec::new());
 
-    for (kind, mesh) in &marks {
+    for (kind, attached, mesh) in &marks {
         let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
             continue;
         };
+        let slot = karts.get(attached.0).map_or(usize::MAX, |slot| slot.0);
+        let (bright, segments) = shown.get(slot).unwrap_or(&nothing);
         let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
         let mut colors = vec![[0.0f32; 4]; 4 * MAX_QUADS];
         let wanted = segments

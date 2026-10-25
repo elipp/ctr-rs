@@ -10,18 +10,9 @@ use loader::model::Model;
 use race::KartSpec;
 
 use crate::Track;
-use crate::drive::Drive;
-use crate::kart::{self, KartMotion};
+use crate::drive::{Drive, Kart};
+use crate::kart::{KartBuilder, KartSlot};
 use crate::lobby::Lobby;
-use crate::subtract::SubtractMaterial;
-
-/// The entities that draw the other players' karts, by slot. Our own slot has none (the kart we
-/// drive is `drive::Kart`), nor has a slot before the race starts. What they do is the race's,
-/// in `Sim`: these only show it.
-#[derive(Resource, Default)]
-pub struct Remotes {
-    pub entities: Vec<Option<Entity>>,
-}
 
 /// Whether karts bump into each other: on unless `CTR_KART_COLLISIONS=0`. (Retail has them off
 /// online. Every player of a race has to run it the same way.)
@@ -31,17 +22,13 @@ pub fn kart_collisions() -> bool {
 }
 
 /// Puts the karts of the others on the grid when a race starts, and takes them away when it ends.
+/// (Ours is the one with the [`Kart`] marker; the others are every kart that has none.)
 pub fn build(
     mut lobby: ResMut<Lobby>,
-    mut remotes: ResMut<Remotes>,
     track: Res<Track>,
-    textures: Res<crate::Textures>,
     drive: Res<Drive>,
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+    others: Query<Entity, (With<KartSlot>, Without<Kart>)>,
+    mut builder: KartBuilder,
 ) {
     // Not before the level of the race is up.
     let Some(online) = lobby
@@ -50,22 +37,21 @@ pub fn build(
         .filter(|online| !online.built && online.track == track.1.0)
     else {
         if lobby.online.is_none() {
-            for entity in remotes.entities.drain(..).flatten() {
-                commands.entity(entity).try_despawn();
+            for entity in &others {
+                builder.commands.entity(entity).try_despawn();
             }
         }
         return;
     };
     online.built = true;
-    for entity in remotes.entities.drain(..).flatten() {
-        commands.entity(entity).try_despawn();
+    for entity in &others {
+        builder.commands.entity(entity).try_despawn();
     }
     online.specs.clear();
     let mut models: HashMap<usize, (Model, Vec<Icon>)> = HashMap::new();
     for (slot, &character) in online.characters.iter().enumerate() {
         if slot == online.slot {
             online.specs.push(drive.spec());
-            remotes.entities.push(None);
             continue;
         }
         let character = character as usize;
@@ -83,20 +69,13 @@ pub fn build(
         online.specs.push(spec);
         let birth = race::Kart::birth(&track.0, slot, &spec);
         // The first `show` puts it where the sim has it.
-        let entity = kart::spawn(
+        builder.spawn(
             model,
             wheel_icons,
-            &textures.vram,
             Transform::default(),
-            0,
-            Some(KartMotion::new(&birth.driver)),
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
+            false,
+            Some((slot, &birth)),
         );
-        remotes.entities.push(Some(entity));
     }
     // The race is built: the others can start once they are as well.
     lobby.ready();

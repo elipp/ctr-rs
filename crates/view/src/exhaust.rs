@@ -12,9 +12,7 @@ use loader::vram::Vram;
 use render::mesh::SCALE;
 use render::particles::{DrawMode, Particle, Rng, quarter_units_to_world};
 
-use crate::drive::Kart;
-use crate::props::Sim;
-use crate::remote::Remotes;
+use crate::kart::{Attached, KartSlot};
 use crate::subtract::{self, SubtractMaterial};
 
 /// The live particles, each with the slot of the kart it belongs to; they tick with the game.
@@ -80,8 +78,6 @@ const SPARK_WIDTH: f32 = 1.2;
 /// The smoke's sprite size in texels; the picture is the whole texture.
 #[derive(Component)]
 pub struct Smoke {
-    /// Whether this is the smoke of the other players' karts, which is in the world's layer.
-    remote: bool,
     mode: DrawMode,
     width: i32,
     height: i32,
@@ -124,37 +120,15 @@ pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
 /// for it, while the viewer's picture has square pixels, so their height needs the same stretch.
 pub(crate) const SCREEN_PIXEL_ASPECT: f32 = (512.0 * 3.0 / 4.0) / 216.0;
 
-/// Most quads one mesh draws: ours, and the other players' together.
+/// Most quads one mesh draws: those of one kart.
 const MAX_QUADS: usize = 64;
-const MAX_REMOTE_QUADS: usize = 256;
 
-fn max_quads(remote: bool) -> usize {
-    if remote { MAX_REMOTE_QUADS } else { MAX_QUADS }
-}
-
-/// The streaks of the sparks, all in one mesh (`remote`: the other players' karts').
+/// The streaks of the sparks of a kart, all in one mesh.
 #[derive(Component)]
-pub struct SparkLines {
-    remote: bool,
-}
+pub struct SparkLines;
 
-/// Where a kart's particles are anchored: the kart of slot `slot`, as drawn. Ours is the
-/// [`Kart`], the others' are in `remotes`; none while the kart is not up.
-fn anchor(
-    slot: usize,
-    own: usize,
-    kart: &Query<&Transform, With<Kart>>,
-    remotes: &Remotes,
-    transforms: &Query<&Transform, Without<Kart>>,
-) -> Option<Vec3> {
-    if slot == own {
-        kart.iter().next().map(|t| t.translation)
-    } else {
-        let entity = remotes.entities.get(slot).copied().flatten()?;
-        transforms.get(entity).ok().map(|t| t.translation)
-    }
-}
-
+/// The meshes that draw the smoke that adds, the smoke that subtracts and the sparks of `kart`.
+/// The smoke is in the kart's render layer.
 pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -163,34 +137,12 @@ pub fn spawn(
     subtract_materials: &mut Assets<SubtractMaterial>,
     icon: &Icon,
     vram: &Vram,
+    kart: Entity,
+    layer: usize,
 ) {
     let (image, width, height) = icon_image(icon, vram);
     let image = images.add(image);
-    for remote in [false, true] {
-        spawn_set(
-            commands,
-            meshes,
-            materials,
-            subtract_materials,
-            &image,
-            (width, height),
-            remote,
-        );
-    }
-}
-
-/// The meshes of one set: the smoke that adds, the smoke that subtracts and the sparks, for our
-/// kart or for the others'.
-fn spawn_set(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    subtract_materials: &mut Assets<SubtractMaterial>,
-    image: &Handle<Image>,
-    (width, height): (i32, i32),
-    remote: bool,
-) {
-    let quads = max_quads(remote);
+    let quads = MAX_QUADS;
     let mut mesh = || {
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -220,26 +172,25 @@ fn spawn_set(
         alpha_mode,
         ..default()
     };
-    let layer = RenderLayers::layer(if remote { 0 } else { crate::KART_LAYER });
+    let layer = RenderLayers::layer(layer);
     // Sparks start at the ground and the wall and fly into them; retail has no depth buffer to
     // hide them there, so theirs are over the track for the others' karts as well.
     let spark_layer = RenderLayers::layer(crate::KART_LAYER);
     commands.spawn((
         Smoke {
-            remote,
             mode: DrawMode::Add,
             width,
             height,
         },
         Mesh3d(mesh()),
         MeshMaterial3d(materials.add(base(AlphaMode::Add))),
+        Attached(kart),
         Transform::default(),
         layer.clone(),
         NoFrustumCulling,
     ));
     commands.spawn((
         Smoke {
-            remote,
             mode: DrawMode::Subtract,
             width,
             height,
@@ -249,6 +200,7 @@ fn spawn_set(
             base: base(AlphaMode::Blend),
             extension: subtract::Subtract {},
         })),
+        Attached(kart),
         Transform::default(),
         layer.clone(),
         NoFrustumCulling,
@@ -267,7 +219,8 @@ fn spawn_set(
             .collect(),
     ));
     commands.spawn((
-        SparkLines { remote },
+        SparkLines,
+        Attached(kart),
         Mesh3d(meshes.add(spark_mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
@@ -285,21 +238,18 @@ fn spawn_set(
 
 /// Lays the particles out as camera-facing quads, between the last two ticks.
 pub fn update(
-    smoke: Query<(&Smoke, &Mesh3d)>,
-    karts: Query<&Transform, With<Kart>>,
-    transforms: Query<&Transform, Without<Kart>>,
+    smoke: Query<(&Smoke, &Attached, &Mesh3d)>,
+    karts: Query<(&Transform, &KartSlot), Without<Smoke>>,
     cameras: Query<
         &Transform,
         (
             With<Camera3d>,
-            Without<Kart>,
+            Without<KartSlot>,
             Without<crate::OverlayCamera>,
             Without<crate::sky::SkyCamera>,
         ),
     >,
     particles: Res<Particles>,
-    remotes: Res<Remotes>,
-    sim: Res<Sim>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -308,25 +258,24 @@ pub fn update(
     };
     let (right, up) = (camera.rotation * Vec3::X, camera.rotation * Vec3::Y);
     let t = fixed.overstep_fraction();
-    for (smoke, mesh) in &smoke {
+    for (smoke, attached, mesh) in &smoke {
+        let Ok((kart, slot)) = karts.get(attached.0) else {
+            continue;
+        };
+        let kart = kart.translation;
         let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
             continue;
         };
-        let quads = max_quads(smoke.remote);
+        let quads = MAX_QUADS;
         let mut positions = vec![[0.0f32; 3]; 4 * quads];
         let mut colors = vec![[0.0f32; 4]; 4 * quads];
         let wanted = particles
             .list
             .iter()
-            .filter(|(slot, p)| {
-                (*slot != sim.own) == smoke.remote && !p.is_line() && p.draw_mode() == smoke.mode
-            })
+            .filter(|(of, p)| *of == slot.0 && !p.is_line() && p.draw_mode() == smoke.mode)
             .take(quads);
-        for (n, (slot, p)) in wanted.enumerate() {
+        for (n, (_, p)) in wanted.enumerate() {
             let Some(corners) = p.corners(smoke.width, smoke.height) else {
-                continue;
-            };
-            let Some(kart) = anchor(*slot, sim.own, &karts, &remotes, &transforms) else {
                 continue;
             };
             // The offsets are from the kart, in 1/256 game units; a particle is
@@ -351,21 +300,18 @@ pub fn update(
 
 /// Lays the sparks out as streaks facing the camera, from a coloured head to a dark tail.
 pub fn update_sparks(
-    lines: Query<(&SparkLines, &Mesh3d)>,
-    karts: Query<&Transform, With<Kart>>,
-    transforms: Query<&Transform, Without<Kart>>,
+    lines: Query<(&Attached, &Mesh3d), With<SparkLines>>,
+    karts: Query<(&Transform, &KartSlot), Without<SparkLines>>,
     cameras: Query<
         &Transform,
         (
             With<Camera3d>,
-            Without<Kart>,
+            Without<KartSlot>,
             Without<crate::OverlayCamera>,
             Without<crate::sky::SkyCamera>,
         ),
     >,
     particles: Res<Particles>,
-    remotes: Res<Remotes>,
-    sim: Res<Sim>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -373,22 +319,23 @@ pub fn update_sparks(
         return;
     };
     let t = fixed.overstep_fraction();
-    for (lines, mesh) in &lines {
+    for (attached, mesh) in &lines {
+        let Ok((kart, slot)) = karts.get(attached.0) else {
+            continue;
+        };
+        let kart = kart.translation;
         let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
             continue;
         };
-        let quads = max_quads(lines.remote);
+        let quads = MAX_QUADS;
         let mut positions = vec![[0.0f32; 3]; 4 * quads];
         let mut colors = vec![[0.0f32; 4]; 4 * quads];
         let wanted = particles
             .list
             .iter()
-            .filter(|(slot, p)| (*slot != sim.own) == lines.remote && p.is_line())
+            .filter(|(of, p)| *of == slot.0 && p.is_line())
             .take(quads);
-        for (n, (slot, p)) in wanted.enumerate() {
-            let Some(kart) = anchor(*slot, sim.own, &karts, &remotes, &transforms) else {
-                continue;
-            };
+        for (n, (_, p)) in wanted.enumerate() {
             let world = |v: Vec3| v / 256.0 * SCALE;
             let (position, velocity) = (p.position(), p.velocity());
             let head = kart

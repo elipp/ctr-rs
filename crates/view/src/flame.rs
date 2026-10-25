@@ -14,7 +14,7 @@ use loader::vram::Vram;
 use render::mesh::{self, SCALE};
 use vehicle::turbo::{self, ANIM_FRAMES};
 
-use crate::drive::Drive;
+use crate::kart::{KartMotion, KartSlot};
 use crate::subtract::SubtractMaterial;
 
 /// `STATIC_TURBO_EFFECT`: the model id of the first frame.
@@ -55,6 +55,7 @@ pub fn spawn(
     models: &[Model],
     vram: &Vram,
     kart: Entity,
+    layer: usize,
 ) {
     for (frame, model) in models.iter().enumerate() {
         let header = &model.headers[0];
@@ -105,19 +106,19 @@ pub fn spawn(
                 meshes,
                 materials,
                 subtract_materials,
-                crate::KART_LAYER,
+                layer,
             );
         }
     }
 }
 
-/// Shows the frames the turbo is on, at its size, at the pipes, dimmed as it
+/// Shows the frames each kart's turbo is on, at its size, at the pipes, dimmed as it
 /// fades out.
 pub fn update(
-    drive: Res<Drive>,
     sim: Res<crate::props::Sim>,
     fixed: Res<Time<Fixed>>,
-    mut flames: Query<(&Flame, &mut Transform, &mut Visibility, &Children)>,
+    karts: Query<(&KartSlot, &KartMotion)>,
+    mut flames: Query<(&Flame, &ChildOf, &mut Transform, &mut Visibility, &Children)>,
     parts: Query<(
         Option<&MeshMaterial3d<StandardMaterial>>,
         Option<&MeshMaterial3d<SubtractMaterial>>,
@@ -125,20 +126,28 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let driver = sim.driver();
-    let turbo = driver.turbo.filter(|t| !t.hidden);
-    let offsets = turbo::pipe_offsets(
-        [
-            driver.inst_scale_x,
-            driver.inst_scale_y,
-            driver.inst_scale_z,
-        ]
-        .map(i32::from),
-    );
-    // The fire is a child of the kart, whose squash and stretch it must not inherit (the
-    // offsets already have the instance scale in them): undo the kart's scale.
-    let inherited = crate::drive::interpolated(&drive, &fixed).scale.recip();
-    for (flame, mut transform, mut visibility, children) in &mut flames {
+    let t = fixed.overstep_fraction();
+    for (flame, parent, mut transform, mut visibility, children) in &mut flames {
+        let Ok((slot, motion)) = karts.get(parent.parent()) else {
+            continue;
+        };
+        let Some(kart) = sim.race.karts.get(slot.0) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        let driver = &kart.driver;
+        let turbo = driver.turbo.filter(|t| !t.hidden);
+        let offsets = turbo::pipe_offsets(
+            [
+                driver.inst_scale_x,
+                driver.inst_scale_y,
+                driver.inst_scale_z,
+            ]
+            .map(i32::from),
+        );
+        // The fire is a child of the kart, whose squash and stretch it must not inherit (the
+        // offsets already have the instance scale in them): undo the kart's scale.
+        let inherited = motion.pose(t).scale.recip();
         let shown = turbo.filter(|t| t.frames()[flame.pipe] == flame.frame);
         *visibility = if shown.is_some() {
             Visibility::Inherited

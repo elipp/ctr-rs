@@ -1,9 +1,11 @@
-//! The online lobby (`--drive`): L opens one and prints how to join it, `--join <ticket>` joins
-//! one. The host's G starts the race, which is tick 0 for everyone. The connections themselves
+//! The online lobby (`--drive`): L opens one and prints its address, `/join-lobby <address>` (`command.rs`)
+//! joins one. The host's G starts the race, which is tick 0 for everyone. The connections themselves
 //! are `net`'s; this reports what happens to them and hands the race to `drive.rs`.
 //!
-//! * L: open a lobby (again to close it)
-//! * G: start the race, once the others have joined (the host only)
+//! * L or `/create-lobby`: open a lobby (L again, or `/close-lobby`, to close it)
+//! * `/join-lobby <address>`: join the lobby at an address
+//! * G or `/start-race`: start the race, once the others have joined (the host only)
+//! * F9 or `/restart-race`: start the race in progress over (the host only)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -12,6 +14,7 @@
 use bevy::prelude::*;
 use net::{Event, Pad, Session, Ticket};
 
+use crate::command::Action;
 use crate::toast::Toast;
 
 /// A race that has started.
@@ -92,27 +95,62 @@ impl Online {
 #[derive(Resource, Default)]
 pub struct Lobby {
     session: Option<Session>,
-    /// We joined someone else's lobby (`--join`) instead of opening one: the host starts the race.
+    /// We joined someone else's lobby (`/join-lobby`) instead of opening one: the host starts the race.
     joined: bool,
     /// Who is in the lobby and the character each drives (the short key and the character), as
     /// the last [`Event::Lobby`] said, and whether there has been one: what changes in the next is
     /// what the players are told.
     roster: Vec<(String, u8)>,
     roster_seen: bool,
+    /// The start or restart that is counting down.
+    countdown: Option<Countdown>,
     pub online: Option<Online>,
 }
 
 impl Lobby {
-    /// A lobby that is joined from the start, for `--join`.
-    pub fn joining(ticket: Ticket, character: u8) -> Lobby {
+    /// Whether we are in a lobby (ours or another's), or opening one.
+    pub fn is_open(&self) -> bool {
+        self.session.is_some()
+    }
+
+    /// Opens a lobby of our own, for others to join. (They get its address when it is up.)
+    pub fn host(&mut self, character: u8) {
+        self.session = Some(net::host(character));
+        self.joined = false;
+        self.roster.clear();
+        self.roster_seen = false;
+    }
+
+    /// Starts counting `then` down from [`COUNTDOWN_SECONDS`].
+    fn count_down(&mut self, then: Then, now: f32) {
+        let text = match then {
+            Then::Start(_) => "Race starts in",
+            Then::Restart(_) => "Race restarts in",
+        };
+        self.announce(format!("{text} {COUNTDOWN_SECONDS}"));
+        self.countdown = Some(Countdown {
+            then,
+            left: COUNTDOWN_SECONDS,
+            at: now,
+        });
+    }
+
+    /// Leaves the lobby, ours or another's, and the race in it.
+    pub fn close(&mut self) {
+        self.session = None;
+        self.countdown = None;
+        self.online = None;
+        self.roster.clear();
+        self.roster_seen = false;
+    }
+
+    /// Joins the lobby at `ticket`.
+    pub fn join(&mut self, ticket: Ticket, character: u8) {
         println!("joining {ticket}");
-        Lobby {
-            session: Some(net::join(ticket, character)),
-            joined: true,
-            roster: Vec::new(),
-            roster_seen: false,
-            online: None,
-        }
+        self.session = Some(net::join(ticket, character));
+        self.joined = true;
+        self.roster.clear();
+        self.roster_seen = false;
     }
 
     /// We drive another character now, which the others learn before the race starts.
@@ -182,42 +220,73 @@ impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lobby>()
             .add_systems(Startup, spawn_waiting)
-            .init_resource::<crate::remote::Remotes>()
             .add_systems(
                 Update,
-                (
-                    toggle,
-                    countdown,
-                    report,
-                    crate::remote::build,
-                    pace,
-                    waiting,
-                )
-                    .chain(),
+                (run, countdown, report, crate::remote::build, pace, waiting).chain(),
             );
     }
 }
 
-fn toggle(
-    keys: Res<ButtonInput<KeyCode>>,
+/// Why `action` cannot be done now, if it cannot.
+fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
+    Some(match action {
+        Action::CreateLobby | Action::JoinLobby(_) if lobby.is_open() => {
+            "Close the lobby first (/close-lobby)"
+        }
+        Action::CloseLobby if !lobby.is_open() => "No lobby to close",
+        Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::StartRace if lobby.online.is_some() => "The race has started (/restart-race)",
+        Action::RestartRace if lobby.online.is_none() => "No race to restart (/start-race)",
+        Action::StartRace | Action::RestartRace if lobby.countdown.is_some() => {
+            "A countdown is already running"
+        }
+        _ => return None,
+    })
+}
+
+/// Does what the keys and the command line ask (`command.rs`).
+fn run(
+    mut actions: MessageReader<Action>,
     mut lobby: ResMut<Lobby>,
     drive: Res<crate::drive::Drive>,
+    track: Res<crate::Track>,
+    time: Res<Time<Real>>,
     mut toasts: MessageWriter<Toast>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyL) {
-        return;
-    }
-    if lobby.session.take().is_some() {
-        lobby.online = None;
-        lobby.roster.clear();
-        lobby.roster_seen = false;
-        toasts.write(Toast::new("Lobby closed!", 2000));
-    } else {
-        lobby.session = Some(net::host(drive.character as u8));
-        lobby.joined = false;
-        lobby.roster.clear();
-        lobby.roster_seen = false;
-        toasts.write(Toast::new("Opening lobby...", 3000));
+    for action in actions.read() {
+        if let Some(why) = refusal(action, &lobby) {
+            toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            continue;
+        }
+        let now = time.elapsed_secs();
+        let say = match action {
+            Action::CreateLobby => {
+                lobby.host(drive.character as u8);
+                "Opening lobby..."
+            }
+            Action::JoinLobby(ticket) => {
+                lobby.join(ticket.clone(), drive.character as u8);
+                "Joining lobby..."
+            }
+            Action::CloseLobby => {
+                lobby.close();
+                "Lobby closed!"
+            }
+            Action::StartRace => {
+                lobby.count_down(Then::Start(track.1.0), now);
+                continue;
+            }
+            Action::RestartRace => {
+                if let Some(net) = &lobby.online {
+                    let then = Then::Restart(net.track);
+                    lobby.count_down(then, now);
+                }
+                continue;
+            }
+        };
+        toasts.write(Toast::new(say, 2500));
     }
 }
 
@@ -236,7 +305,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         match event {
             Event::Open(ticket) => {
                 println!(
-                    "lobby open. To join it, run:\n  cargo run -p view -- --drive --join {ticket}\nPress G to start the race once the others have joined."
+                    "lobby open. To join it, type this in another viewer:\n  /join-lobby {ticket}\nPress G to start the race once the others have joined."
                 );
                 toasts.write(
                     Toast::new("Lobby opened!".to_string(), 2000)
@@ -426,53 +495,34 @@ struct Countdown {
     at: f32,
 }
 
-/// G starts the race and F9 starts it over (the host only), both after a countdown that everyone
-/// sees. Closing the lobby cancels it.
-fn countdown(
-    keys: Res<ButtonInput<KeyCode>>,
-    lobby: Res<Lobby>,
-    track: Res<crate::Track>,
-    time: Res<Time<Real>>,
-    mut countdown: Local<Option<Countdown>>,
-) {
+/// Counts a start or a restart down, which everyone sees (the host only). Closing the lobby
+/// cancels it.
+fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
     if lobby.joined || lobby.session.is_none() {
-        *countdown = None;
+        lobby.countdown = None;
         return;
     }
     let now = time.elapsed_secs();
-    if countdown.is_none() {
-        let (then, text) = match &lobby.online {
-            None if keys.just_pressed(KeyCode::KeyG) => (Then::Start(track.1.0), "Race starts in"),
-            Some(net) if keys.just_pressed(KeyCode::F9) => {
-                (Then::Restart(net.track), "Race restarts in")
-            }
-            _ => return,
-        };
-        lobby.announce(format!("{text} {COUNTDOWN_SECONDS}"));
-        *countdown = Some(Countdown {
-            then,
-            left: COUNTDOWN_SECONDS,
-            at: now,
-        });
-    }
-    let Some(c) = countdown.as_mut().filter(|c| now - c.at >= 1.0) else {
+    let Some(mut c) = lobby.countdown.take() else {
         return;
     };
-    c.left -= 1;
-    c.at += 1.0;
-    if c.left > 0 {
-        lobby.announce(format!("{}...", c.left));
-        return;
-    }
-    match c.then {
-        Then::Start(track) => {
-            if let Some(session) = &lobby.session {
-                session.start(track);
+    if now - c.at >= 1.0 {
+        c.left -= 1;
+        c.at += 1.0;
+        if c.left == 0 {
+            match c.then {
+                Then::Start(track) => {
+                    if let Some(session) = &lobby.session {
+                        session.start(track);
+                    }
+                }
+                Then::Restart(track) => lobby.restart(track),
             }
+            return;
         }
-        Then::Restart(track) => lobby.restart(track),
+        lobby.announce(format!("{}...", c.left));
     }
-    *countdown = None;
+    lobby.countdown = Some(c);
 }
 
 /// The label for the players who wait for the host.

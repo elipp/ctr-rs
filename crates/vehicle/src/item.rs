@@ -2,7 +2,7 @@
 //! the roulette, which runs for [`ROLL_TICKS`] and then settles on an item.
 //!
 //! Firing is ported for the turbo, the mask, the bomb and the missile (which the `weapon` crate
-//! flies) and TNT (which it drops): see [`Launch`]. The rest stay held until they are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
+//! flies), TNT and the potion (which it drops, or throws): see [`Launch`]. The rest stay held until they are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
 //! place (`MixRNG_Scramble() % 12`), not the item sets by place that retail rolls from.
 
 use crate::fire::{self, turbo_type};
@@ -100,6 +100,7 @@ pub fn fireable(item: u8) -> bool {
             | held::MISSILE_1X
             | held::MISSILE_3X
             | held::TNT
+            | held::POTION
     )
 }
 
@@ -110,6 +111,9 @@ pub enum Launch {
     Missile,
     /// TNT, or Nitro for a driver with 10 wumpa fruit: dropped behind the kart.
     Mine,
+    /// A green beaker, or a red one for a driver with 10 wumpa fruit: dropped, or thrown with
+    /// Up or Down held.
+    Potion,
 }
 
 /// `SOUND_BOMB_LAUNCH`, `SOUND_MISSILE_LAUNCH`, `VOICELINE_BOMB_LAUNCH`, `VOICELINE_MISSILE_LAUNCH`,
@@ -128,7 +132,7 @@ const RUMBLE_FORCE: u8 = 0x7f;
 /// What firing a [`Launch`] makes the driver feel and say, once the weapon is away.
 pub fn launch_effects(d: &Driver, launch: Launch, effects: &mut Vec<Effect>) {
     // Dropping a mine does not shake the pad.
-    if launch != Launch::Mine {
+    if !matches!(launch, Launch::Mine | Launch::Potion) {
         effects.push(Effect::ShockFreq {
             driver_id: d.driver_id,
             a: RUMBLE_FRAMES,
@@ -143,7 +147,7 @@ pub fn launch_effects(d: &Driver, launch: Launch, effects: &mut Vec<Effect>) {
     let (id, voice) = match launch {
         Launch::Bomb => (BOMB_SOUND, BOMB_VOICELINE),
         Launch::Missile => (MISSILE_SOUND, MISSILE_VOICELINE),
-        Launch::Mine => (MINE_SOUND, MINE_VOICELINE),
+        Launch::Mine | Launch::Potion => (MINE_SOUND, MINE_VOICELINE),
     };
     effects.push(Effect::Sound {
         id,
@@ -238,6 +242,7 @@ fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<La
         held::BOMB_1X | held::BOMB_3X => return Some(Launch::Bomb),
         held::MISSILE_1X | held::MISSILE_3X => return Some(Launch::Missile),
         held::TNT => return Some(Launch::Mine),
+        held::POTION => return Some(Launch::Potion),
         _ => {}
     }
     match weapon {

@@ -1,10 +1,11 @@
+This file is for the places where the port _intentionally_ differs from the original: a different choice, a stand-in for something the engine cannot do, a retail quirk that is not reproduced. Something that is not implemented yet is not a divergence; it goes in `TODO.md`, and in the "Not ported" note of the module that would have it.
+
 **Ground shadow (2026-10-20, uncommitted, NOT visually verified):** `vehicle::shadow` (cull + orientation), `render::shadow` (4 quads, atlas of global icons 0/1 `shadow1`/`shadow2`), `view::shadow` (subtractive mesh, `--drive` only). Known differences from `VehGroundShadow_Main`:
 - Camera-distance fade: retail only fades in the "small screen" case (the push buffer's screen-distance value is <= 0x100, which I read as split-screen). One player uses the fixed colour 0x1f1f1f, and so do we. The fade is not ported.
 - Texel blending: every visible texel is subtracted. Retail forces the tpage to subtractive, so only texels with the semi-transparency (STP) bit blend and the rest draw opaque. Not checked whether any shadow texels lack STP.
 - Depth: relies on the 3-unit lift above the ground plus the depth test. On a steep or bumpy surface the flat shadow can dip into the ground. If it flickers or gets cut off, add a material depth bias.
 - Standing kart: the non-driving view (kart on the grid) has no shadow yet.
 - No ordering-table depth bias (`depthBiasNormal` / `depthBiasSecondary`). Bevy's depth test stands in for it.
-
 
 **Exhaust fire (2026-10-20, NOT visually verified):** `vehicle::turbo` (state + `VehTurbo_ThTick`), `fire::increment` lights/restarts it, `view::flame` (8 models `turbo`..`turbo7` from the racer pack, per pipe, second mirrored and 3 frames ahead). Known differences:
 - Depth fade: retail's `DEPTH_FADE` hides the fire when `alphaScale + 2*viewDepth > 0x1000`, and fades vertices near the camera. We hide it when `alphaScale >= 0x800` (a guess at a typical chase distance) and do no vertex fade.
@@ -18,16 +19,19 @@
 - Blend strength: the maths is retail's (dark = background - texel, light = background + texel/4), but Bevy blends in linear light and the PS1 in raw values, so the marks read lighter. `DARK_GAIN` / `LIGHT_GAIN` in `view/src/skid.rs` are tuned by eye.
 - The wheelie now changes which tires skid, as in `VehEmitter_DriverMain`.
 - The strips are at tick resolution; the kart is interpolated between ticks, the marks are not.
-- Only the player's kart (`--drive`) leaves marks.
-
-**Wheelie (2026-10-20, NOT visually verified):** `vehicle::baked` (the authored `matArr01..03` of `data.bakedGteMath`, `VehPhysForce_TranslateMatrix_UpdateMatrixAnimation`, and `inst_matrix` = `UpdateInstanceMatrix`), `vehicle::rotmat` (`ConvertRotToMatrix` moved from `camera`, plus `MatrixRotate`). `view::drive::pose_of` takes the kart's pose from `inst_matrix`. The exhaust pipes, skid mark tires and the flames follow it. Known differences:
-- Only the wheelie tables are ported. For crash fall, squish recovery, blasted and the airborne jump poses `inst_matrix` is still the facing matrix. (`frame.rs` already sets those `matrix_array`s; they just have no tables yet.)
-- The squash/shear of the baked matrix is approximated on the Bevy side: rotation from the (re-orthogonalised) up and forward columns, scale from the column lengths.
-- The squish offset (`squishTimer`) and the instance scale squash/stretch (`inst->scale`) are not ported, as before.
-- The oracle tests (`tick.rs`, `reference.rs`) now see `matrixArray` 1..3 during boosts; they need a run on Linux.
 
 **Wumpa fruit spin and bob (2026-10-23, NOT visually verified):** `view::props::spin_fruit` turns the fruit around their own vertical axis (once per `FRUIT_SPIN_TICKS`, 60) and bobs them up and down (`FRUIT_BOB_HEIGHT` 10 level units each way, `FRUIT_BOB_TICKS` 90, a different phase per fruit). Added on purpose, tuned by eye. Whether retail moves them was not checked, so this may or may not differ from it; the reference (`RB_Fruit_*`) has to be read before anyone calls it a match. Known differences:
 - The speeds, the axis and the height are ours. The angle and the height are functions of the tick (`Objects::ticks`) and the render's place in it, so they are cosmetic: peers agree and none of it is in the sim state.
 - The hitbox does not bob: it stays at the placed position, up to 10 units off the drawn fruit at the top and bottom of a bob. Syncing it would put the height in the sim and make the pickup test follow it.
 - It does not go back while ticks wait (a pause, a stalled network frame), but then it stands still until they go on.
 - The other placed props (bobbing crates) still stand still.
+
+**Screen flash of blasts (2026-10-25, NOT visually verified):** `view::flash` (the fade of `PushBuffer_FadeOneWindow`: `0x1fff` back to `0x1000` by `-0x88` a tick, drawn at `(value - 0x1000) >> 4` of 255), set by `weapon::Tick::flashes` (a kart a crate's blowup, a bomb/missile burst or a beaker reached; `RB_Burst_CollThread`) and by `RB_Burst_DrawAll`'s proximity test of the burst's second frame. Intentional differences:
+- Blend: retail's quad is additive (`tpage 0xe1000a20`), ours is a white UI node laid over the view with an alpha. The same on dark pixels, a little less bright on light ones (white added to 0.5 is 1.0; white laid over at alpha 0.5 is 0.75). Bevy's UI nodes do not blend additively, and a UI material for it was not worth it yet.
+- The proximity test uses the chase camera as of the last rendered frame (the tick runs before the camera moves) and takes `distanceToScreen` as `0x100`, the one-player value, in place of `distanceToScreen_PREV`.
+- Only our own kart's screen flashes: there is one view.
+
+**Potions (2026-10-25, NOT visually verified):** `weapon::mine` (`MineKind::GreenBeaker`/`RedBeaker`: dropped and thrown, `RB_Potion_ThTick_InAir`, the hit of `RB_GenericMine_ThTick`), `vehicle::item` (`Launch::Potion`), `race` (Up/Down pick the throw), `view::projectile` (the `beakergreen`/`beakerred` models, the shatter). Intentional differences:
+- `RB_Potion_ThTick_InAir` goes on after it has shattered a potion and may shatter it again, which is a second, identical shatter on the same tick. We stop at the first.
+- The shatter (`RB_Explosion_InitPotion`) always faces the camera, at half size. In retail the shockwave model faces it only once `RB_Blowup_Init` has set the billboard bit on the shared model header (a crate blowing up earlier in the race), so a potion's shatter may not face it.
+- Keys: Up is E (or the D-pad), Down is S (or the D-pad); W is the gas, so it cannot be Up. Setting Down also makes a bomb's backward shot reachable from the keyboard, which it was not.

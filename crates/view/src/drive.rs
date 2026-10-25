@@ -7,7 +7,10 @@
 //! * Space / Shift: hop (R1), Q / Ctrl: hop (L1). Land while steering hard
 //!   with one still held to drift; tap the other when the meter is nearly
 //!   empty for the boost
-//! * M: use the mask item (longer with 10 wumpa fruit)
+//! * M: use the item in hand (Circle): the mask is longer with 10 wumpa fruit. A bomb or a
+//!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
+//! * Alt + 0 to 9, -, =: (debug) drop what is in hand and roll that item, as the roulette would
+//!   (the item ids; - and = are the triple bomb and missile). Not online, not in a demo
 //! * R: back to the starting grid
 //! * F5 / 1: start recording a demo from the grid, again to save it to `demo.ctr`
 //! * F6 / 2: play `demo.ctr` back from the grid (any F5 or R ends it, the kart stays where it is)
@@ -22,10 +25,10 @@ use bevy::prelude::*;
 use race::rollback::Step;
 use race::{KartSpec, Pad};
 use vehicle::demo::Demo;
-use vehicle::shadow::{GroundShadow, ground_shadow};
 use vehicle::{Driver, Effect, Input, buttons};
 
 use crate::Track;
+use crate::kart::{KartMotion, KartSlot};
 use render::mesh::SCALE;
 
 /// The kart model's entity: its pose is the interpolated pose of the sim.
@@ -175,10 +178,6 @@ pub struct Drive {
     pub(crate) character: usize,
     anim_num_frames: [u16; 8],
     demo: DemoMode,
-    previous: Pose,
-    current: Pose,
-    shadow_previous: Option<GroundShadow>,
-    shadow_current: Option<GroundShadow>,
     camera: camera::CameraDc,
     previous_view: View,
     current_view: View,
@@ -192,7 +191,6 @@ impl Drive {
         character: usize,
         anim_num_frames: [u16; 8],
     ) -> Drive {
-        let pose = pose_of(driver);
         let mut camera = camera::CameraDc::default();
         camera.follow_driver(
             driver,
@@ -210,10 +208,6 @@ impl Drive {
             character,
             anim_num_frames,
             demo: DemoMode::Off,
-            previous: pose,
-            current: pose,
-            shadow_previous: None,
-            shadow_current: None,
         }
     }
 
@@ -223,30 +217,6 @@ impl Drive {
             character: self.character,
             anim_num_frames: self.anim_num_frames,
         }
-    }
-
-    /// The ground shadow between the last two ticks (`t` of the way to the
-    /// latest): its centre, orientation and the height that scales it.
-    pub fn shadow(&self, t: f32) -> Option<(Vec3, Mat3, f32)> {
-        let now = self.shadow_current?;
-        let before = self.shadow_previous.unwrap_or(now);
-        let place = |s: &GroundShadow| Vec3::new(s.x as f32, s.y as f32, s.z as f32) * SCALE;
-        let orient = |s: &GroundShadow| {
-            let column = |c: usize| {
-                Vec3::new(
-                    s.axes.m[0][c] as f32,
-                    s.axes.m[1][c] as f32,
-                    s.axes.m[2][c] as f32,
-                ) / 4096.0
-            };
-            let (up, forward) = (column(1).normalize_or_zero(), column(2).normalize_or_zero());
-            Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
-        };
-        Some((
-            place(&before).lerp(place(&now), t),
-            Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
-            before.height as f32 + (now.height - before.height) as f32 * t,
-        ))
     }
 }
 
@@ -351,14 +321,15 @@ impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(crate::exhaust::Particles::new())
             .init_resource::<crate::flash::Flash>()
-            .add_systems(Startup, (spawn_hud, crate::mask::spawn))
+            .add_systems(Startup, spawn_hud)
             .add_systems(
                 FixedUpdate,
-                (drive_tick, crate::projectile::tick, crate::flash::step).chain(),
+                (drive_tick, crate::flash::step, crate::projectile::tick).chain(),
             )
             .add_systems(
                 Update,
                 (
+                    crate::kart::reap,
                     crate::kart::animate,
                     crate::kart::show,
                     chase,
@@ -518,6 +489,15 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
     if key_reverse || pad_down(&[GamepadButton::West]) {
         held |= buttons::SQUARE;
     }
+    // Up and Down aim a thrown weapon: a bomb or a potion goes backward with Down, a potion
+    // forward with Up, and a potion is dropped with neither. The keyboard's S is Down, as it is
+    // for the brake; W is the gas, so Up is E.
+    if down(&[KeyCode::KeyE]) || pad_down(&[GamepadButton::DPadUp]) {
+        held |= buttons::UP;
+    }
+    if key_reverse || pad_down(&[GamepadButton::DPadDown]) {
+        held |= buttons::DOWN;
+    }
     if down(&[KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ShiftRight])
         || pad_down(&[GamepadButton::RightTrigger, GamepadButton::RightTrigger2])
     {
@@ -529,7 +509,7 @@ fn read_input(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>, previous_held
         held |= buttons::L1;
     }
     // The mask item is Circle, so a demo has it.
-    if down(&[KeyCode::KeyM]) || pad_down(&[GamepadButton::East]) {
+    if down(&[KeyCode::KeyV]) || pad_down(&[GamepadButton::East]) {
         held |= buttons::CIRCLE;
     }
     let left = down(&[KeyCode::KeyA, KeyCode::ArrowLeft]) || pad_down(&[GamepadButton::DPadLeft]);
@@ -582,8 +562,7 @@ fn drive_tick(
     mut label: Query<&mut Visibility, With<PausedHud>>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
-    remotes: Res<crate::remote::Remotes>,
-    mut motions: Query<(&mut crate::kart::KartMotion, Has<Kart>)>,
+    mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
     mut cues: Cues,
 ) {
     let drive = &mut *drive;
@@ -598,8 +577,8 @@ fn drive_tick(
         return;
     }
 
-    // Enter toggles the pause, once per press.
-    let enter_down = keys.pressed(KeyCode::Enter);
+    // P toggles the pause, once per press. (Enter is the command line's.)
+    let enter_down = keys.pressed(KeyCode::KeyP);
     if enter_down && !*enter_held && !online {
         *paused = !*paused;
         for mut visibility in &mut label {
@@ -611,9 +590,10 @@ fn drive_tick(
         }
         if *paused {
             // Nothing moves between ticks now, so the interpolation must not either.
-            drive.previous = drive.current;
             drive.previous_view = drive.current_view;
-            drive.shadow_previous = drive.shadow_current;
+            for (mut motion, _, _) in &mut motions {
+                motion.freeze();
+            }
         }
     }
     *enter_held = enter_down;
@@ -681,9 +661,7 @@ fn drive_tick(
         sim.restart(&track.0, &specs, own, lobby.online.is_some());
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
-        each_motion(&sim, &remotes, &mut motions, |motion, driver| {
-            motion.reset(driver)
-        });
+        each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
 
     // (Debug) Alt and a digit drops what we hold and rolls that item, as the roulette would:
@@ -876,49 +854,25 @@ fn drive_tick(
         drive.camera.fly_in(&track.0, fly_in_frame);
     }
 
-    drive.shadow_previous = drive.shadow_current;
-    drive.shadow_current = ground_shadow(&kart.driver, &mut kart.coll.gte.clone());
-    drive.previous = drive.current;
-    drive.current = pose_of(&kart.driver);
-    each_motion(&sim, &remotes, &mut motions, |motion, driver| {
-        motion.push(driver)
-    });
+    each_motion(&sim, &mut motions, |motion, kart| motion.push(kart));
     drive.previous_view = drive.current_view;
     drive.current_view = view_of(&drive.camera);
 }
 
-/// Runs `f` on the motion of each kart's drawing, with the driver it follows.
+/// Runs `f` on the motion of each kart's drawing, with the kart of the sim that it follows.
+/// (The kart we drive follows our slot, which is another one in each race.)
 fn each_motion(
     sim: &crate::props::Sim,
-    remotes: &crate::remote::Remotes,
-    motions: &mut Query<(&mut crate::kart::KartMotion, Has<Kart>)>,
-    mut f: impl FnMut(&mut crate::kart::KartMotion, &Driver),
+    motions: &mut Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
+    mut f: impl FnMut(&mut KartMotion, &race::Kart),
 ) {
-    for (slot, kart) in sim.race.karts.iter().enumerate() {
-        if slot == sim.own {
-            for (mut motion, ours) in motions.iter_mut() {
-                if ours {
-                    f(&mut motion, &kart.driver);
-                }
-            }
-        } else if let Some(entity) = remotes.entities.get(slot).copied().flatten()
-            && let Ok((mut motion, _)) = motions.get_mut(entity)
-        {
-            f(&mut motion, &kart.driver);
+    for (mut motion, mut slot, ours) in motions.iter_mut() {
+        if ours {
+            slot.0 = sim.own;
         }
-    }
-}
-
-/// The kart between the last two ticks.
-pub(crate) fn interpolated(drive: &Drive, fixed: &Time<Fixed>) -> Pose {
-    let t = fixed.overstep_fraction();
-    Pose {
-        translation: drive
-            .previous
-            .translation
-            .lerp(drive.current.translation, t),
-        rotation: drive.previous.rotation.slerp(drive.current.rotation, t),
-        scale: drive.previous.scale.lerp(drive.current.scale, t),
+        if let Some(kart) = sim.race.karts.get(slot.0) {
+            f(&mut motion, kart);
+        }
     }
 }
 
@@ -1045,7 +999,7 @@ fn hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<Hud>>) {
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     for mut text in &mut text {
         text.0 = format!(
-            "pos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}\nW/S gas/brake, A/D steer, Space/Q hop+drift, M mask, R restart",
+            "pos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}",
             d.pos_curr.x >> 8,
             d.pos_curr.y >> 8,
             d.pos_curr.z >> 8,
