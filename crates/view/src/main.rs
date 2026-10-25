@@ -47,6 +47,7 @@ mod skid;
 mod sky;
 mod subtract;
 mod toast;
+mod tracker;
 mod weapon;
 mod wheels;
 mod wumpa_icon;
@@ -518,6 +519,7 @@ fn main() {
             command::CommandPlugin,
             leaderboard::LeaderboardPlugin,
             weapon::WeaponPlugin,
+            tracker::TrackerPlugin,
             wumpa_icon::WumpaIconPlugin,
             toast::ToastPlugin,
         ));
