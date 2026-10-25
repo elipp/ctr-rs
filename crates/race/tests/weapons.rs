@@ -433,6 +433,41 @@ fn a_bomb_breaks_a_wumpa_crate_on_its_way_and_sets_off_the_bottle_it_reaches() {
     assert!((5..=8).contains(&gained), "{gained} wumpa fruit");
 }
 
+/// The first grid spot of Slide Coliseum, which faces -x, with the ground height there.
+const START: [i32; 3] = [1679, 1, -10665];
+
+/// Slide Coliseum with `players` karts and a row of five Nitro crates on the first kart's line, 600
+/// units ahead and 6 apart (the missile's burst reaches 128, and it goes off up to 96 before the
+/// first), and a sixth 1000 ahead. The first kart holds a missile (`/debug-add-weapon 2`). Returns
+/// the x of each of the five, and of the sixth.
+fn nitro_row(players: usize) -> Option<(Level, Race, Vec<i32>, i32)> {
+    use weapon::mine::MineKind;
+
+    let (level, mut race) = race_on(LevelId::SLIDE_COLISEUM, players, |_| {})?;
+    let [x, y, z] = START;
+    let row: Vec<i32> = (0..5).map(|i| x - 600 - 6 * i).collect();
+    let far = x - 1000;
+    for &x in row.iter().chain([&far]) {
+        race.weapons.place_mine(MineKind::Nitro, [x, y, z], 0);
+    }
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::MISSILE_1X);
+    Some((level, race, row, far))
+}
+
+/// Nobody drives; kart 0 presses the fire button when `fire`.
+fn fire_pads(players: usize, fire: bool) -> Vec<Pad> {
+    (0..players)
+        .map(|slot| Pad {
+            held: if slot == 0 && fire {
+                buttons::CIRCLE
+            } else {
+                0
+            },
+            ..Pad::default()
+        })
+        .collect()
+}
+
 /// Five Nitro crates side by side on the missile's way, and a sixth far past them: the missile
 /// goes off at the first, and its burst sets off the ones inside it. Nitro crates do not chain
 /// (a crate that is hit gets a plain explosion with no blast), so the far one lies on.
@@ -440,33 +475,13 @@ fn a_bomb_breaks_a_wumpa_crate_on_its_way_and_sets_off_the_bottle_it_reaches() {
 fn a_missile_sets_off_the_nitro_crates_within_its_burst_and_no_others() {
     use weapon::mine::MineKind;
 
-    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 1, |_| {}) else {
+    let Some((level, mut race, row, far)) = nitro_row(1) else {
         return;
-    };
-    // The first grid spot faces -x. The crates lie on the ground on its line, 600 units ahead,
-    // 6 apart (the burst reaches 128, and the missile goes off up to 96 before the first).
-    let [start_x, ground_y, start_z] = [1679, 1, -10665];
-    let row: Vec<i32> = (0..5).map(|i| start_x - 600 - 6 * i).collect();
-    let far = start_x - 1000;
-    for &x in &row {
-        race.weapons
-            .place_mine(MineKind::Nitro, [x, ground_y, start_z], 0);
-    }
-    race.weapons
-        .place_mine(MineKind::Nitro, [far, ground_y, start_z], 0);
-
-    // `/debug-add-weapon 2`: a missile, fired on tick 0.
-    vehicle::item::debug_roll(&mut race.karts[0].driver, held::MISSILE_1X);
-    let pad = |fire: bool| -> Vec<Pad> {
-        vec![Pad {
-            held: if fire { buttons::CIRCLE } else { 0 },
-            ..Pad::default()
-        }]
     };
     let mut went_off = Vec::new();
     let mut burst = None;
     for tick in 0..600 {
-        race.tick(&level, &pad(tick == 0));
+        race.tick(&level, &fire_pads(1, tick == 0));
         went_off.extend(
             race.last_weapons
                 .detonations
@@ -498,9 +513,117 @@ fn a_missile_sets_off_the_nitro_crates_within_its_burst_and_no_others() {
     );
 
     // (The next tick sweeps the dead away.)
-    race.tick(&level, &pad(false));
+    race.tick(&level, &fire_pads(1, false));
     let left: Vec<i32> = race.weapons.mines().iter().map(|m| m.pos[0]).collect();
     assert_eq!(left, vec![far]);
     assert!(race.weapons.projectiles().is_empty());
     assert!(race.last_weapons.hits.is_empty());
+}
+
+/// A second kart stands beside the row, inside the missile's burst but out of reach of every
+/// crate itself (120 units), so it is the missile's burst that blasts it and not a crate it touched.
+#[test]
+fn a_kart_beside_the_nitro_crates_is_blasted_by_the_missile_that_sets_them_off() {
+    use weapon::{Hit, Reason};
+
+    // Once to see when and where the missile goes off.
+    let Some((level, mut race, ..)) = nitro_row(2) else {
+        return;
+    };
+    let (burst_tick, burst) = (0..600)
+        .find_map(|tick| {
+            race.tick(&level, &fire_pads(2, tick == 0));
+            race.last_weapons
+                .explosions
+                .first()
+                .map(|blast| (tick, blast.pos))
+        })
+        .expect("the missile went off");
+
+    // Again, with kart 1 put beside the burst on the tick before: 120 units to the side, which is
+    // inside the burst's reach (128) and just out of every crate's (120, `mine::HIT_RADIUS`).
+    let (level, mut race, ..) = nitro_row(2).unwrap();
+    for tick in 0..burst_tick {
+        race.tick(&level, &fire_pads(2, tick == 0));
+    }
+    assert_eq!(race.karts[1].driver.kart_state, kart_state::NORMAL);
+    race.karts[1].driver.pos_curr = math::Vec3 {
+        x: burst[0] << 8,
+        y: burst[1] << 8,
+        z: (burst[2] + 120) << 8,
+    };
+    race.tick(&level, &fire_pads(2, burst_tick == 0));
+
+    // Only the missile hurt it: the kart that fired was out of the burst's reach, and the crates
+    // did not touch the kart.
+    assert_eq!(
+        race.last_weapons.hits,
+        vec![Hit {
+            victim: 1,
+            attacker: Some(0),
+            reason: Reason::Missile,
+            damage: vehicle::pick::damage::BLAST,
+        }],
+        "the burst was at {burst:?}"
+    );
+    assert!(race.karts[1].driver.pending_tumble);
+    race.tick(&level, &fire_pads(2, false));
+    assert_eq!(race.karts[1].driver.kart_state, kart_state::BLASTED);
+}
+
+/// A missile homes in on a kart that is not on its line of fire. Kart 1 stands 800 units ahead and
+/// 150 to the side (inside the aiming cone, and past the missile's 96-unit reach if it flew
+/// straight), and the missile turns to it and hits it directly.
+#[test]
+fn a_missile_homes_in_on_a_kart_off_its_line_and_hits_it() {
+    use weapon::{Body, Hit, Reason};
+
+    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 2, |_| {}) else {
+        return;
+    };
+    let [x, _, z] = START;
+    // (The grid spreads towards -z, so there is road there.)
+    let (target_x, target_z) = (x - 800, z - 150);
+    let d = &mut race.karts[1].driver;
+    d.pos_curr.x = target_x << 8;
+    d.pos_curr.z = target_z << 8;
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::MISSILE_1X);
+
+    let mut flew = Vec::new();
+    let mut burst = None;
+    for tick in 0..600 {
+        race.tick(&level, &fire_pads(2, tick == 0));
+        if let Some(p) = race.weapons.projectiles().first() {
+            flew.push(p.pos);
+        }
+        if let Some(blast) = race.last_weapons.explosions.first() {
+            burst = Some((tick, blast.pos));
+            break;
+        }
+    }
+    let (_, burst) = burst.expect("the missile went off");
+
+    // It left its line to get there: it did not fly straight and blast the kart from the side.
+    let strayed = flew.iter().map(|p| (p[2] - z).abs()).max().unwrap_or(0);
+    assert!(strayed > 100, "the missile flew {flew:?}");
+
+    // It went off on the kart (within a direct hit's reach on the ground plane), and the kart is
+    // the only one hurt.
+    let at = Body::of(&race.karts[1].driver).at;
+    let (dx, dz) = (burst[0] - at[0], burst[2] - at[2]);
+    assert!(
+        dx * dx + dz * dz < 96 * 96,
+        "went off at {burst:?}, the kart is at {at:?}"
+    );
+    assert_eq!(
+        race.last_weapons.hits,
+        vec![Hit {
+            victim: 1,
+            attacker: Some(0),
+            reason: Reason::Missile,
+            damage: vehicle::pick::damage::BLAST,
+        }]
+    );
+    assert!(race.karts[1].driver.pending_tumble);
+    assert!(race.weapons.projectiles().is_empty());
 }
