@@ -302,7 +302,7 @@ fn a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
     let Some((level, mut race)) = race(2) else {
         return;
     };
-    race.karts[0].driver.held_item_id = held::POTION;
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::POTION);
     race.karts[0].driver.num_wumpas = 10;
     let pads = |tick: u32| -> Vec<Pad> {
         (0..2)
@@ -324,7 +324,7 @@ fn a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
         .weapons
         .mines()
         .first()
-        .is_some_and(|m| m.state != State::Ground)
+        .is_none_or(|m| m.state != State::Ground)
     {
         assert!(tick < 120, "the potion lands");
         race.tick(&level, &pads(tick));
