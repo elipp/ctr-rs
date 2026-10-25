@@ -59,10 +59,13 @@ impl Kind {
     }
 }
 
-/// Whether `model` (`Input1.modelID` of a hit) is a bomb or a missile, whose owner is paid for
-/// the crates it breaks. (The shield, which is the others, is not ported.)
+/// Whether `model` (`Input1.modelID` of a hit) is a bomb, a missile or a shield bomb, whose owner
+/// is paid for the crates it breaks.
 fn is_shot(model: i16) -> bool {
-    matches!(model, model_id::BOMB | model_id::ROCKET)
+    matches!(
+        model,
+        model_id::BOMB | model_id::ROCKET | model_id::SHIELD | model_id::SHIELD_GREEN
+    )
 }
 
 /// Whether breaking a weapon crate with `model` gives `driver` the roulette: it does for a
@@ -286,7 +289,12 @@ mod tests {
 
     #[test]
     fn a_bomb_or_missile_that_breaks_a_crate_pays_its_human_owner() {
-        for model in [model_id::BOMB, model_id::ROCKET] {
+        for model in [
+            model_id::BOMB,
+            model_id::ROCKET,
+            model_id::SHIELD,
+            model_id::SHIELD_GREEN,
+        ] {
             let mut rng = math::RANDOM_NUMBER_INIT;
             let mut owner = empty_handed();
             assert_eq!(

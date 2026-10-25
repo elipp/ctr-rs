@@ -594,6 +594,9 @@ fn tick_from_coll_fixed(
     // The mask's own thread.
     stuck::mask_tick(d, env);
 
+    // The shield's.
+    crate::shield::tick(d, env.timer, effects);
+
     TickResult {
         mask_grab,
         respawned,

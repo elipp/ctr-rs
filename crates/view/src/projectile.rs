@@ -36,7 +36,7 @@ use crate::{DEPTH_BIAS_PER_ORDER, KART_LAYER, Textures, spawn_parts};
 #[derive(Resource)]
 pub struct ProjectileModels {
     models: Models,
-    built: Option<[Built; 10]>,
+    built: Option<[Built; 12]>,
 }
 
 impl ProjectileModels {
@@ -68,6 +68,13 @@ const EXPLOSION: usize = 6;
 const SHOCKWAVE_GREEN: usize = 7;
 const BEAKER_GREEN: usize = 8;
 const BEAKER_RED: usize = 9;
+const SHIELD_BLUE: usize = 10;
+const SHIELD_GREEN: usize = 11;
+
+/// A shield bomb's `scale` and `alphaScale` (0x400 each, `RB_ShieldDark_ThTick_Grow`): 0x1000 is
+/// the model's size, and an alpha at which it is gone.
+const SHIELD_BOMB_SCALE: f32 = 0x400 as f32 / 4096.0;
+const SHIELD_BOMB_ALPHA: f32 = 1.0 - 0x400 as f32 / 4096.0;
 
 /// The pose of a model at `frame`; a model with no animation has its one.
 fn pose(header: &ModelHeader, frame: i16) -> Option<Frame> {
@@ -121,6 +128,8 @@ pub struct Body {
     layer: usize,
     /// The frame of the animation, for a model that loops one.
     frame: i16,
+    /// Turned to the camera each frame (the shield bomb).
+    billboard: bool,
     header: ModelHeader,
     parts: [Option<Handle<Mesh>>; PARTS],
     /// Where it was and where it is, at the last two ticks.
@@ -217,6 +226,9 @@ struct Wanted {
     placed: Placed,
     /// The model loops its animation.
     animated: bool,
+    /// Turned to the camera, and tinted.
+    billboard: bool,
+    color: Color,
     /// The render layer: [`KART_LAYER`] for a crate on the head of our kart, so that it is ordered
     /// with the kart by depth instead of being hidden or shown by the track.
     layer: usize,
@@ -228,13 +240,30 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
         model: match p.kind {
             Kind::Bomb => BOMB,
             Kind::Missile => ROCKET,
+            Kind::Shield if p.blue() => SHIELD_BLUE,
+            Kind::Shield => SHIELD_GREEN,
         },
         placed: Placed {
             translation: world(p.pos),
             rotation: rotation_of(&p.matrix()),
-            scale: Vec3::ONE,
+            scale: if p.kind == Kind::Shield {
+                Vec3::splat(SHIELD_BOMB_SCALE)
+            } else {
+                Vec3::ONE
+            },
         },
         animated: p.kind == Kind::Missile,
+        billboard: p.kind == Kind::Shield,
+        color: if p.kind == Kind::Shield {
+            Color::linear_rgba(
+                SHIELD_BOMB_ALPHA,
+                SHIELD_BOMB_ALPHA,
+                SHIELD_BOMB_ALPHA,
+                SHIELD_BOMB_ALPHA,
+            )
+        } else {
+            Color::WHITE
+        },
         layer: 0,
     });
     let mines = sim.race.weapons.mines().iter().map(|m| Wanted {
@@ -252,6 +281,8 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
         },
         // A beaker bubbles where it lies, not in the air.
         animated: m.kind.is_beaker() && m.state == State::Ground,
+        billboard: false,
+        color: Color::WHITE,
         layer: match m.state {
             State::Landing { target, .. } | State::Sitting { target, .. } if target == sim.own => {
                 KART_LAYER
@@ -309,6 +340,8 @@ pub fn tick(
             (&m.shockwave_green, false),
             (&m.beaker_green, false),
             (&m.beaker_red, false),
+            (&m.shield_blue, false),
+            (&m.shield_green, false),
         ]
         .map(|(model, convex)| build(model, convex, &textures, &mut images));
         let Some(built) = built.into_iter().collect::<Option<Vec<_>>>() else {
@@ -447,7 +480,7 @@ pub fn tick(
                 rotation: w.placed.rotation,
                 scale: w.placed.scale,
             },
-            Color::WHITE,
+            w.color,
             0.0,
             &mut commands,
             &mut meshes,
@@ -459,6 +492,7 @@ pub fn tick(
             id: w.id,
             layer: w.layer,
             frame: 0,
+            billboard: w.billboard,
             header: model.header.clone(),
             parts,
             previous: w.placed,
@@ -482,6 +516,11 @@ pub fn place(
         transform.scale = a.scale.lerp(b.scale, t);
     }
     let camera = cameras.single().ok().map(|c| c.rotation);
+    for (body, mut transform) in &mut bodies {
+        if let (true, Some(camera)) = (body.billboard, camera) {
+            transform.rotation = camera;
+        }
+    }
     for (effect, mut transform) in &mut effects {
         transform.rotation = match (effect.facing, camera) {
             (Facing::Fixed(rotation), _) => rotation,

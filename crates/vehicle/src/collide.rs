@@ -5,8 +5,8 @@
 //! The original walks the thread list: the sibling threads of the driver's, the drivers that tick
 //! after it. So each pair is looked at once, by the driver that ticks first, which moves both.
 //! [`Others`] is that list. Only human drivers are ported: there are no bots, so no
-//! `VehPhysCrash_AI` and no `BOTS_*`. The shield bubble's hit in `Attack` is left out too (there
-//! is no shield item).
+//! `VehPhysCrash_AI` and no `BOTS_*`. The shield bubble's hit in `Attack` is left out too (the
+//! bubble does not hurt the kart it bumps).
 
 use math::mips;
 

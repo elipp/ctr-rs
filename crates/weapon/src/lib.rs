@@ -34,6 +34,8 @@ pub const ACTIVE_LIMIT: usize = 12;
 
 /// `TRACKER_PARENT_SAFETY_FRAMES`: how long a weapon passes through the kart that fired it.
 const PARENT_SAFETY_TICKS: i16 = 60;
+/// How long a shield bomb passes through the kart that shot it.
+const SHIELD_PARENT_SAFETY_TICKS: i16 = 10;
 /// `TRACKER_LAUNCH_VELOCITY_NUMERATOR` and `_SHIFT`: a bomb's speed, and a powered-up missile's.
 const LAUNCH_VELOCITY: i32 = 3;
 const LAUNCH_VELOCITY_SHIFT: u32 = 7;
@@ -85,6 +87,8 @@ pub mod flags {
     pub const HIT_TARGET: u16 = 0x10;
     /// The bomb was thrown backwards.
     pub const BOMB_BACKWARD: u16 = 0x20;
+    /// A shield bomb of a juiced (blue) shield. (Retail tells it by the model.)
+    pub const BLUE_SHIELD: u16 = 0x8000;
 }
 
 /// `VEH_PICK_REASON_*`: what a hit was.
@@ -104,20 +108,16 @@ pub enum Reason {
 pub enum Kind {
     Bomb,
     Missile,
+    /// A shot shield bubble (`RB_ShieldDark_ThTick_Grow`'s birth of a `shieldbomb`): it flies like
+    /// a bomb, straight and with no target, does not roll and cannot be set off, and goes off as a
+    /// bomb without the wumpa fruit's power.
+    Shield,
 }
 
 impl Kind {
-    /// The `Input1.modelID` of the weapon's hits.
-    fn model(self) -> i16 {
-        match self {
-            Kind::Bomb => model_id::BOMB,
-            Kind::Missile => model_id::ROCKET,
-        }
-    }
-
     fn reason(self) -> Reason {
         match self {
-            Kind::Bomb => Reason::Bomb,
+            Kind::Bomb | Kind::Shield => Reason::Bomb,
             Kind::Missile => Reason::Missile,
         }
     }
@@ -128,7 +128,7 @@ impl Kind {
         match (self, powered) {
             (Kind::Missile, _) => 0x4000,
             (Kind::Bomb, true) => 0x40000,
-            (Kind::Bomb, false) => 0x19000,
+            (Kind::Bomb | Kind::Shield, _) => 0x19000,
         }
     }
 }
@@ -171,7 +171,8 @@ impl Body {
             jump_started: d.actions_flag_set & actions::JUMP_STARTED != 0,
             immune: d.kart_state == kart_state::MASK_GRABBED
                 || d.actions_flag_set & actions::MASK_WEAPON != 0
-                || d.invincible_timer != 0,
+                || d.invincible_timer != 0
+                || d.shield.is_some_and(|s| s.holding),
             character: d.character,
         }
     }
@@ -220,6 +221,8 @@ impl Projectile {
                 y: self.rot_y,
                 z: 0,
             }),
+            // It keeps the bubble's upright matrix (and is drawn facing the camera).
+            Kind::Shield => vehicle::rotmat::rot_to_matrix(SVec3 { x: 0, y: 0, z: 0 }),
             Kind::Missile => {
                 let mut matrix = Matrix::default();
                 vehicle::force::rot_axis_angle(
@@ -235,6 +238,21 @@ impl Projectile {
 
     fn powered(&self) -> bool {
         self.flags & flags::POWERED_UP != 0
+    }
+
+    /// Whether it is a shield bomb of a blue shield.
+    pub fn blue(&self) -> bool {
+        self.flags & flags::BLUE_SHIELD != 0
+    }
+
+    /// The `Input1.modelID` of the weapon's hits.
+    fn model(&self) -> i16 {
+        match self.kind {
+            Kind::Bomb => model_id::BOMB,
+            Kind::Missile => model_id::ROCKET,
+            Kind::Shield if self.blue() => model_id::SHIELD,
+            Kind::Shield => model_id::SHIELD_GREEN,
+        }
     }
 }
 
@@ -369,6 +387,8 @@ impl Weapons {
             dead: false,
         };
         match kind {
+            // (Shot from the bubble: see `launch_shield`.)
+            Kind::Shield => return false,
             Kind::Bomb => {
                 p.vel[0] = shift_velocity(forward_x, LAUNCH_VELOCITY, LAUNCH_VELOCITY_SHIFT);
                 p.vel[2] = shift_velocity(forward_z, LAUNCH_VELOCITY, LAUNCH_VELOCITY_SHIFT);
@@ -395,6 +415,35 @@ impl Weapons {
         self.next_id = self.next_id.wrapping_add(1);
         self.projectiles.push(p);
         true
+    }
+
+    /// `RB_ShieldDark_ThTick_Grow`'s launch of the shield bomb: the kart `shooter` (`driver`) shot
+    /// its `blue` (juiced) or green shield. It starts at the kart and flies straight ahead at a
+    /// bomb's speed, chasing no one. There is no limit on how many fly.
+    pub fn launch_shield(&mut self, shooter: usize, driver: &Driver, blue: bool) {
+        let (matrix, at) = vehicle::baked::inst_matrix(driver);
+        let flags = if blue { flags::BLUE_SHIELD } else { 0 };
+        self.projectiles.push(Projectile {
+            id: self.next_id,
+            kind: Kind::Shield,
+            pos: at,
+            vel: [
+                shift_velocity(matrix.m[0][2], LAUNCH_VELOCITY, LAUNCH_VELOCITY_SHIFT),
+                0,
+                shift_velocity(matrix.m[2][2], LAUNCH_VELOCITY, LAUNCH_VELOCITY_SHIFT),
+            ],
+            flags,
+            rot_y: driver.angle,
+            roll: 0,
+            normal: driver.axis_angle1_normal_vec,
+            parent: shooter,
+            target: None,
+            parent_safety: SHIELD_PARENT_SAFETY_TICKS,
+            blind: 0,
+            time_alive: 0,
+            dead: false,
+        });
+        self.next_id = self.next_id.wrapping_add(1);
     }
 
     /// The kart in `slot` presses the fire button with a bomb in flight: it goes off at the end of
@@ -471,7 +520,7 @@ impl Weapons {
     ) {
         let radius_squared = p.kind.blast_radius_squared(p.powered());
         if let Some(level) = level {
-            tick.break_crates(level, p.pos, radius_squared, p.kind.model(), p.parent);
+            tick.break_crates(level, p.pos, radius_squared, p.model(), p.parent);
         }
         tick.explosions.push(Explosion {
             kind: p.kind,
@@ -610,7 +659,7 @@ fn fly(
             let delta_z = mips::sub_lo(mips::sra(target.pos_curr[2], 8), p.pos[2]);
             let desired = math::ratan2(delta_x, delta_z) as i16;
             match p.kind {
-                Kind::Bomb => {
+                Kind::Bomb | Kind::Shield => {
                     p.rot_y = math::interpolate(p.rot_y, desired, BOMB_TURN);
                     let (sin, cos) = (math::sin(p.rot_y as u32), math::cos(p.rot_y as u32));
                     p.vel[0] = heading_velocity(sin, LAUNCH_VELOCITY, LAUNCH_VELOCITY_SHIFT);
@@ -687,7 +736,7 @@ fn fly(
         {
             crate_hits.push(CrateHit {
                 instance,
-                model: p.kind.model(),
+                model: p.model(),
                 owner: p.parent,
             });
         }

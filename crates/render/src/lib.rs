@@ -9,5 +9,6 @@ pub mod particles;
 pub mod portraits;
 pub mod projectile;
 pub mod shadow;
+pub mod shield;
 pub mod weapons;
 pub mod wheels;

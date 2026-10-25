@@ -101,6 +101,9 @@ pub mod model_id {
     pub const GREEN_BEAKER: i16 = 0x47;
     /// `DYNAMIC_BOMB`
     pub const BOMB: i16 = 0x3b;
+    /// `DYNAMIC_SHIELD` (the blue shield bomb) and `DYNAMIC_SHIELD_GREEN`
+    pub const SHIELD: i16 = 0x56;
+    pub const SHIELD_GREEN: i16 = 0x5e;
 }
 
 /// `COLL_MOVED_PLAYER_HIT_RADIUS`

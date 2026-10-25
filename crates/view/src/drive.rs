@@ -352,6 +352,7 @@ impl Plugin for DrivePlugin {
                     crate::flame::update,
                     crate::skid::update,
                     crate::mask::update.after(crate::kart::show),
+                    crate::shield::update.after(crate::kart::show).after(chase),
                 ),
             )
             .add_systems(

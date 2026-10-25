@@ -406,6 +406,9 @@ impl Race {
         // The bombs and missiles fly, after the karts have moved. A bomb that its kart set off
         // goes with this tick's flight.
         for (slot, kart) in self.karts.iter_mut().enumerate() {
+            if let Some(blue) = kart.driver.shield_shot.take() {
+                self.weapons.launch_shield(slot, &kart.driver, blue);
+            }
             if std::mem::take(&mut kart.driver.detonate_bomb) {
                 self.weapons.detonate(slot);
             }

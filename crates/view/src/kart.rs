@@ -255,6 +255,7 @@ pub struct KartBuilder<'w, 's> {
     tiremark_icon: Res<'w, crate::TiremarkIcon>,
     flame_models: Res<'w, crate::FlameModels>,
     masks: Res<'w, crate::mask::MaskModels>,
+    shields: Res<'w, crate::shield::ShieldModels>,
 }
 
 impl KartBuilder<'_, '_> {
@@ -346,6 +347,19 @@ impl KartBuilder<'_, '_> {
                 vram,
                 kart,
                 layer,
+                &mut self.commands,
+                &mut self.images,
+                &mut self.meshes,
+                &mut self.materials,
+                &mut self.subtract_materials,
+            );
+        }
+        if let Some(shields) = &self.shields.0 {
+            crate::shield::spawn(
+                shields,
+                vram,
+                kart,
+                if ours { crate::SHIELD_LAYER } else { 0 },
                 &mut self.commands,
                 &mut self.images,
                 &mut self.meshes,

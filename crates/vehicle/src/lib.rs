@@ -38,6 +38,7 @@ pub mod rotmat;
 pub mod scrub;
 pub mod search;
 pub mod shadow;
+pub mod shield;
 pub mod sim;
 pub mod skid;
 pub mod sparks;
@@ -543,6 +544,12 @@ pub struct Driver {
     pub pending_tumble: bool,
     /// The Aku Aku / Uka Uka mask thread that is a child of the driver's thread, if any.
     pub mask: Option<stuck::MaskHead>,
+    /// The shield bubble thread that is a child of the driver's thread, if any (`instBubbleHold`
+    /// while `Shield::holding`).
+    pub shield: Option<shield::Shield>,
+    /// The shield was shot this tick (`SHIELD_FLAG_SHOOT`): the caller launches a shield bomb
+    /// (blue if true) and clears this.
+    pub shield_shot: Option<bool>,
     /// `KartStates.MaskGrab` (a view of the same union as the drifting and spinning ones).
     pub grab: stuck::MaskGrab,
     /// `KartStates.RevEngine`
