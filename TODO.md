@@ -1,5 +1,5 @@
 ## Unimplemented
-- the red beaker's rain cloud (`RB_RainCloud_Init`): a kart hit by one only spins out and flashes
+- the red beaker's rain cloud is simulated (`vehicle::cloud`) and drawn (`STATIC_CLOUD` in `view/src/projectile.rs`, the rain as gizmo lines in `view/src/rain.rs`, positions from `render::rain`), but unchecked in the viewer. Not done: the cloud's sounds, the rain's fade with the cloud's distance to the camera and its additive blend, and clearing the cloud when a plant eats the kart (`VehStuckProc_PlantEaten_Init`; `cloud::dispel` is ready)
 - the particles of a shattering potion (`emSet_PotionShatter`)
 - the Tiger Temple door that a shattering potion opens (`RB_Potion_OnShatter_TeethSearch`, and the open-door check in `RB_Potion_ThTick_InAir`)
 - the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon

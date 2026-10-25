@@ -25,6 +25,9 @@ pub const NITRO: i16 = 0x06;
 pub const CRATE_EXPLOSION: i16 = 0x26;
 pub const SHOCKWAVE_GREEN: i16 = 0x45;
 
+/// `STATIC_CLOUD`: the red beaker's rain cloud, which loops its `billow` animation.
+pub const CLOUD: i16 = 0x42;
+
 /// `STATIC_BEAKER_RED`, `STATIC_BEAKER_GREEN`
 pub const BEAKER_RED: i16 = 0x46;
 pub const BEAKER_GREEN: i16 = 0x47;
@@ -53,6 +56,7 @@ pub struct Models {
     /// The shield bomb: the blue shield's model, and the green one's.
     pub shield_blue: Model,
     pub shield_green: Model,
+    pub cloud: Model,
 }
 
 /// The weapons' models of a racer's pack.
@@ -80,6 +84,7 @@ pub fn models(pack: &DramFile) -> io::Result<Models> {
         beaker_red: take(BEAKER_RED)?,
         shield_blue: take(crate::shield::BLUE)?,
         shield_green: take(crate::shield::GREEN)?,
+        cloud: take(CLOUD)?,
     })
 }
 

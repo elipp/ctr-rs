@@ -317,8 +317,8 @@ pub fn phys_linear(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<E
     }
 
     // === Hazard (blinking after being hit) ===
-    // No rain cloud over the head (the item that makes one is not ported).
-    let rain = rain_cloud::NONE;
+    // The rain cloud over the head, from a red beaker.
+    let rain = crate::cloud::effect(d);
     d.rain_cloud_effect = rain;
     let actions_in = d.actions_flag_set;
     let approx_speed = abs(d.speed_approx as i32);

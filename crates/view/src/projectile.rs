@@ -36,7 +36,7 @@ use crate::{DEPTH_BIAS_PER_ORDER, KART_LAYER, Textures, spawn_parts};
 #[derive(Resource)]
 pub struct ProjectileModels {
     models: Models,
-    built: Option<[Built; 12]>,
+    built: Option<[Built; 13]>,
 }
 
 impl ProjectileModels {
@@ -70,6 +70,7 @@ const BEAKER_GREEN: usize = 8;
 const BEAKER_RED: usize = 9;
 const SHIELD_BLUE: usize = 10;
 const SHIELD_GREEN: usize = 11;
+const CLOUD: usize = 12;
 
 /// A shield bomb's `scale` and `alphaScale` (0x400 each, `RB_ShieldDark_ThTick_Grow`): 0x1000 is
 /// the model's size, and an alpha at which it is gone.
@@ -290,7 +291,33 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
             _ => 0,
         },
     });
-    projectiles.chain(mines).collect()
+    // The red beakers' rain clouds, over the karts they hit (and shrinking away). A cloud is told
+    // from the weapons' ids by the top bit, and from the others by its kart and its birth.
+    let clouds = sim.race.karts.iter().enumerate().flat_map(|(slot, kart)| {
+        let d = &kart.driver;
+        d.cloud
+            .iter()
+            .map(|c| (c, true))
+            .chain(d.fading_clouds.iter().map(|c| (c, false)))
+            .map(move |(c, active)| Wanted {
+                id: 0x8000_0000 | (slot as u32) << 24 | (c.born & 0xff_ffff),
+                model: CLOUD,
+                placed: Placed {
+                    translation: world(c.pos),
+                    rotation: Quat::IDENTITY,
+                    scale: Vec3::new(
+                        c.scale[0].max(0) as f32,
+                        c.scale[1].max(0) as f32,
+                        c.scale[2].max(0) as f32,
+                    ) / 4096.0,
+                },
+                animated: active,
+                billboard: true,
+                color: Color::WHITE,
+                layer: 0,
+            })
+    });
+    projectiles.chain(mines).chain(clouds).collect()
 }
 
 /// One game tick: the weapons the sim has are followed (born, moved, ended), the bursts it made
@@ -342,6 +369,7 @@ pub fn tick(
             (&m.beaker_red, false),
             (&m.shield_blue, false),
             (&m.shield_green, false),
+            (&m.cloud, false),
         ]
         .map(|(model, convex)| build(model, convex, &textures, &mut images));
         let Some(built) = built.into_iter().collect::<Option<Vec<_>>>() else {

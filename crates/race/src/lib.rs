@@ -430,7 +430,18 @@ impl Race {
         }
         for hit in &self.last_weapons.hits {
             let victim = &mut self.karts[hit.victim].driver;
-            vehicle::pick::new_state(victim, hit.damage, &mut effects[hit.victim]);
+            let hurt = vehicle::pick::new_state(victim, hit.damage, &mut effects[hit.victim]);
+            // A red beaker that hurt the kart makes it rain on it.
+            if hurt && hit.rain {
+                vehicle::cloud::init(victim, self.tick, &mut self.objects.random_number);
+            }
+        }
+        for kart in &mut self.karts {
+            vehicle::cloud::tick(
+                &mut kart.driver,
+                env.elapsed_time_ms,
+                &mut self.objects.random_number,
+            );
         }
         for (slot, kart) in self.karts.iter_mut().enumerate() {
             kart.driver.bomb_thrown = self.weapons.has_bomb(slot);
