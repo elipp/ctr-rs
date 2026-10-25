@@ -191,6 +191,7 @@ fn a_kart_the_bomb_lands_on_is_blasted_and_tumbles_back_to_driving() {
             attacker: Some(0),
             reason: weapon::Reason::Bomb,
             damage: vehicle::pick::damage::BLAST,
+            rain: false,
         }]
     );
     assert!(race.karts[1].driver.pending_tumble);
@@ -286,11 +287,71 @@ fn a_potion_thrown_forward_lands_ahead_and_spins_out_the_kart_that_touches_it() 
             // It landed a moment ago.
             reason: weapon::Reason::Potion,
             damage: vehicle::pick::damage::SPIN,
+            rain: false,
         }]
     );
     assert_eq!(race.last_weapons.flashes, [1]);
     assert_eq!(race.last_weapons.detonations.len(), 1);
     assert!(race.weapons.mines().is_empty());
+}
+
+#[test]
+fn a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
+    use weapon::mine::{MineKind, State};
+
+    let Some((level, mut race)) = race(2) else {
+        return;
+    };
+    race.karts[0].driver.held_item_id = held::POTION;
+    race.karts[0].driver.num_wumpas = 10;
+    let pads = |tick: u32| -> Vec<Pad> {
+        (0..2)
+            .map(|slot| Pad {
+                held: buttons::CROSS
+                    | if slot == 0 && tick == 0 {
+                        buttons::CIRCLE
+                    } else {
+                        0
+                    },
+                ..Pad::default()
+            })
+            .collect()
+    };
+    // Dropped (no direction held), it lies where the kart was.
+    race.tick(&level, &pads(0));
+    let mut tick = 1;
+    while race
+        .weapons
+        .mines()
+        .first()
+        .is_some_and(|m| m.state != State::Ground)
+    {
+        assert!(tick < 120, "the potion lands");
+        race.tick(&level, &pads(tick));
+        tick += 1;
+    }
+    let landed = race.weapons.mines()[0].clone();
+    assert_eq!(landed.kind, MineKind::RedBeaker);
+
+    let [x, y, z] = landed.pos;
+    race.karts[1].driver.pos_curr = math::Vec3 {
+        x: x << 8,
+        y: y << 8,
+        z: z << 8,
+    };
+    race.tick(&level, &pads(tick));
+    assert!(race.last_weapons.hits.iter().all(|h| h.rain));
+    let cloud = race.karts[1].driver.cloud.expect("the cloud forms");
+    // Nothing in hand: the cloud slows the kart.
+    assert_eq!(cloud.effect, vehicle::rain_cloud::SLOW);
+    assert!(race.karts[0].driver.cloud.is_none());
+
+    // It lasts 240 ticks and then fades away.
+    for t in 0..260 {
+        race.tick(&level, &pads(tick + 1 + t));
+    }
+    assert!(race.karts[1].driver.cloud.is_none());
+    assert!(race.karts[1].driver.fading_clouds.is_empty());
 }
 
 #[test]
@@ -563,6 +624,7 @@ fn a_kart_beside_the_nitro_crates_is_blasted_by_the_missile_that_sets_them_off()
             attacker: Some(0),
             reason: Reason::Missile,
             damage: vehicle::pick::damage::BLAST,
+            rain: false,
         }],
         "the burst was at {burst:?}"
     );
@@ -622,6 +684,7 @@ fn a_missile_homes_in_on_a_kart_off_its_line_and_hits_it() {
             attacker: Some(0),
             reason: Reason::Missile,
             damage: vehicle::pick::damage::BLAST,
+            rain: false,
         }]
     );
     assert!(race.karts[1].driver.pending_tumble);
@@ -662,6 +725,7 @@ fn a_shield_absorbs_the_missile_that_hits_its_kart_and_pops() {
             attacker: Some(0),
             reason: Reason::Missile,
             damage: vehicle::pick::damage::BLAST,
+            rain: false,
         }]
     );
     let d = &race.karts[1].driver;
@@ -720,6 +784,7 @@ fn a_shot_shield_flies_straight_and_blasts_the_kart_in_its_way() {
             attacker: Some(0),
             reason: Reason::Bomb,
             damage: vehicle::pick::damage::BLAST,
+            rain: false,
         }]
     );
     assert_eq!(race.last_weapons.explosions[0].kind, Kind::Shield);

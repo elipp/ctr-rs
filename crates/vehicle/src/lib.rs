@@ -17,6 +17,7 @@
 pub mod angular;
 pub mod baked;
 pub mod calc;
+pub mod cloud;
 pub mod collide;
 pub mod crash;
 pub mod demo;
@@ -550,6 +551,9 @@ pub struct Driver {
     /// The shield was shot this tick (`SHIELD_FLAG_SHOOT`): the caller launches a shield bomb
     /// (blue if true) and clears this.
     pub shield_shot: Option<bool>,
+    /// The red beaker's rain cloud over the kart (`thCloud`), and the ones that are shrinking away.
+    pub cloud: Option<cloud::Cloud>,
+    pub fading_clouds: Vec<cloud::Cloud>,
     /// `KartStates.MaskGrab` (a view of the same union as the drifting and spinning ones).
     pub grab: stuck::MaskGrab,
     /// `KartStates.RevEngine`

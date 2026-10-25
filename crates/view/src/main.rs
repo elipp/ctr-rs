@@ -38,6 +38,7 @@ mod probe;
 mod projectile;
 
 mod props;
+mod rain;
 mod remote;
 mod shadow;
 mod shield;

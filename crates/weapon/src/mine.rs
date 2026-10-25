@@ -481,6 +481,7 @@ impl Weapons {
                 attacker: Some(m.parent),
                 reason: Reason::Mine,
                 damage,
+                rain: false,
             };
             let carried = !m.kind.is_beaker()
                 && self
@@ -499,6 +500,7 @@ impl Weapons {
                     } else {
                         Reason::Mine
                     },
+                    rain: m.kind == MineKind::RedBeaker,
                     ..hit(pick::damage::SPIN)
                 });
                 c.tick.flashes.push(slot);
@@ -588,6 +590,7 @@ impl Weapons {
                     attacker: Some(m.parent),
                     reason: Reason::Mine,
                     damage: pick::damage::BLAST,
+                    rain: false,
                 });
             }
         }
@@ -712,6 +715,7 @@ impl Weapons {
                 attacker: Some(m.parent),
                 reason: Reason::Tnt,
                 damage: pick::damage::BLAST,
+                rain: false,
             });
             self.blowup(me, m, c);
             self.vanish(m);

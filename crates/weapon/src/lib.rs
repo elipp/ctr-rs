@@ -265,6 +265,8 @@ pub struct Hit {
     pub reason: Reason,
     /// `VEH_PICK_DAMAGE_*`: what the hit does (`vehicle::pick::damage`).
     pub damage: u8,
+    /// A red beaker: if it hurt the kart, a rain cloud forms over it (`RB_RainCloud_Init`).
+    pub rain: bool,
 }
 
 /// A weapon that went off, for the outside to show.
@@ -536,6 +538,7 @@ impl Weapons {
                     attacker: Some(p.parent),
                     reason: p.kind.reason(),
                     damage: vehicle::pick::damage::BLAST,
+                    rain: false,
                 });
             }
         }
@@ -883,6 +886,7 @@ mod tests {
                 attacker: Some(0),
                 reason: Reason::Bomb,
                 damage: vehicle::pick::damage::BLAST,
+                rain: false,
             }]
         );
         assert_eq!(tick.explosions.len(), 1);

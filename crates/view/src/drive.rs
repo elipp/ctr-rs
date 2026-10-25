@@ -337,6 +337,7 @@ impl Plugin for DrivePlugin {
                     chase,
                     debug_actions,
                     crate::projectile::place,
+                    crate::rain::draw,
                     crate::flash::show,
                     hud,
                     wumpa_hud,

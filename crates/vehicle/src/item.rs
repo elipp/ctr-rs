@@ -282,6 +282,11 @@ pub fn debug_roll(d: &mut Driver, item: u8) {
     give(d, item);
 }
 
+/// `VehPhysGeneral_SetHeldItem` for the rain cloud, which picks the weapon when it ends.
+pub fn pick(d: &mut Driver, random_number: &mut i32) {
+    set_held_item(d, random_number);
+}
+
 /// `VehPhysGeneral_SetHeldItem`, as far as a driver without a place goes.
 fn set_held_item(d: &mut Driver, random_number: &mut i32) {
     let item = (math::mix_rng_scramble(random_number) % FALLBACK_ITEM_COUNT) as u8;
