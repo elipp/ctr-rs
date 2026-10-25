@@ -34,6 +34,10 @@ const DEPTH: f32 = 100.0;
 pub const CENTER: Vec2 = Vec2::new(118.0, 32.0);
 const HEIGHT_PIXELS: f32 = 44.0;
 
+/// The counter's fruit from the racer pack, for a level that has no fruit of its own (a map).
+#[derive(Resource)]
+pub struct FruitDisplay(pub Model);
+
 pub struct WumpaIconPlugin;
 
 impl Plugin for WumpaIconPlugin {
@@ -43,11 +47,12 @@ impl Plugin for WumpaIconPlugin {
 }
 
 /// Puts the fruit up on the first frame of a level, which takes the old one away with the
-/// camera. A level without a fruit has none.
+/// camera. The fruit is the level's own, or the pack's if the level has none.
 fn build(
     mut commands: Commands,
     track: Res<Track>,
     textures: Res<Textures>,
+    display: Res<FruitDisplay>,
     icon: Query<(), With<WumpaIcon>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
@@ -61,24 +66,29 @@ fn build(
     if !icon.is_empty() || *none {
         return;
     }
-    let Some(inst) = track.0.instances.iter().find(|i| i.model_name == "fruit") else {
+    let placed = track
+        .0
+        .instances
+        .iter()
+        .find(|i| i.model_name == "fruit")
+        .and_then(|inst| {
+            let (header, frame) = Model::parse_at(&textures.dram, inst.model)
+                .ok()
+                .and_then(|m| m.headers.into_iter().next())
+                .and_then(|h| crate::props::rest_pose(&h).cloned().map(|f| (h, f)))?;
+            let scale = [inst.scale.x, inst.scale.y, inst.scale.z];
+            Some((header, frame, scale, crate::props::rotation_of(inst.rot)))
+        });
+    let fallback = || {
+        let header = display.0.headers.first()?.clone();
+        let frame = crate::props::rest_pose(&header)?.clone();
+        Some((header, frame, [0x1000; 3], Quat::IDENTITY))
+    };
+    let Some((header, frame, scale, rest)) = placed.or_else(fallback) else {
         *none = true;
         return;
     };
-    let Some((header, frame)) = Model::parse_at(&textures.dram, inst.model)
-        .ok()
-        .and_then(|m| m.headers.into_iter().next())
-        .and_then(|h| crate::props::rest_pose(&h).cloned().map(|f| (h, f)))
-    else {
-        *none = true;
-        return;
-    };
-    let data = mesh::model_mesh(
-        &header,
-        &frame,
-        &textures.vram,
-        [inst.scale.x, inst.scale.y, inst.scale.z],
-    );
+    let data = mesh::model_mesh(&header, &frame, &textures.vram, scale);
     let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     for position in data.parts.iter().flat_map(|p| &p.positions) {
         low = low.min(Vec3::from_array(*position));
@@ -128,7 +138,7 @@ fn build(
         .spawn((
             WumpaIcon {
                 diameter: (high - low).max_element(),
-                rest: crate::props::rotation_of(inst.rot),
+                rest,
             },
             Transform::default(),
             Visibility::default(),

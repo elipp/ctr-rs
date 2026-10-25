@@ -29,7 +29,7 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 }
 
 /// One `struct SCVert`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SceneryVertex {
     /// Index into `Level::vertices`.
     pub vertex: usize,
@@ -42,7 +42,7 @@ pub struct SceneryVertex {
 }
 
 /// What the game writes into a vertex on a tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SceneryUpdate {
     pub vertex: usize,
     pub pos: Option<SVec3>,
@@ -50,7 +50,7 @@ pub struct SceneryUpdate {
     pub color: Option<[u8; 4]>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scenery {
     pub vertices: Vec<SceneryVertex>,
 }

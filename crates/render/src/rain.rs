@@ -59,7 +59,8 @@ pub fn streaks(frames: i16, age: u32) -> Vec<[[i32; 3]; 2]> {
             let z0 = z as u32 & 0xff;
             // (z does not scroll: both ends are at the same depth.)
             out.push([point(xy0 & XY_MASK, z0), point(xy1 & XY_MASK, z0)]);
-            (xy, z) = next(&mut state0, &mut state1);
+            // (The game draws the next streak's numbers here too, and drops them.)
+            next(&mut state0, &mut state1);
         }
         (xy, z) = next(&mut state0, &mut state1);
     }

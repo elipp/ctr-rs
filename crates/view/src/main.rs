@@ -33,6 +33,7 @@ mod flash;
 mod kart;
 mod leaderboard;
 mod lobby;
+mod maps;
 mod mask;
 mod probe;
 mod projectile;
@@ -121,6 +122,8 @@ struct Shared {
     shields: render::shield::Shields,
     /// The bombs, missiles and their bursts.
     projectiles: render::projectile::Models,
+    /// The wumpa fruit of the counter, for a level that has none of its own.
+    fruit_display: Model,
 }
 
 fn bigfile_path() -> PathBuf {
@@ -166,6 +169,24 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
 fn load_level(id: u32) -> LevelData {
     let path = bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    // TODO: a player who joins a race on a map they do not have should be sent it (see TODO.md).
+    assert!(
+        !map::is_map_id(id) || maps::get(id).is_some(),
+        "map {id:#x} is not in assets/maps"
+    );
+    if let Some(map) = maps::get(id) {
+        // A map brings its own level and texture pages; the shared ones are the disc's.
+        let mut vram = Vram::default();
+        for img in &map.vram {
+            vram.upload(img).expect("upload VRAM image");
+        }
+        upload_shared(&mut vram, &big, &mut disc);
+        return LevelData {
+            level: map.level.clone(),
+            dram: map.dram.clone(),
+            vram,
+        };
+    }
     let mut read = |f| {
         let index = BigIndex::level(LevelId(id), Lod::OnePlayer, f);
         big.read(&mut disc, index.get())
@@ -177,13 +198,18 @@ fn load_level(id: u32) -> LevelData {
     for img in parse_vram_file(&read(LevFile::Vram)).expect("parse VRAM file") {
         vram.upload(&img).expect("upload VRAM image");
     }
+    upload_shared(&mut vram, &big, &mut disc);
+    LevelData { level, dram, vram }
+}
+
+/// The texture pages that every track shares (`shared.vrm`).
+fn upload_shared(vram: &mut Vram, big: &loader::bigfile::BigFile, disc: &mut loader::disc::Disc) {
     let shared = big
-        .read(&mut disc, BigIndex::SHARED_MPK_VRM.get())
+        .read(disc, BigIndex::SHARED_MPK_VRM.get())
         .expect("read shared VRAM file");
     for img in parse_vram_file(&shared).expect("parse shared VRAM file") {
         vram.upload(&img).expect("upload shared VRAM image");
     }
-    LevelData { level, dram, vram }
 }
 
 /// A racer from the disc: its model, and what its pack has of the kart's. Nothing for `None`
@@ -238,6 +264,7 @@ fn load_shared() -> Shared {
         masks: render::mask::models(&pack).expect("racer pack has the masks"),
         shields: render::shield::models(&pack).expect("racer pack has the shields"),
         projectiles: render::projectile::models(&pack).expect("racer pack has the weapons"),
+        fruit_display: render::fruit::display_model(&pack).expect("racer pack has the fruit"),
     }
 }
 
@@ -339,6 +366,7 @@ struct FlyCamera {
 }
 
 fn main() {
+    maps::load();
     let track_id = 0;
     let mut racer = Some(0);
     let mut low = false;
@@ -378,6 +406,7 @@ fn main() {
         masks,
         shields,
         projectiles,
+        fruit_display,
     } = load_shared();
     let loaded = Track(level, LevelId(track_id));
     let textures = Textures { dram, vram };
@@ -390,10 +419,11 @@ fn main() {
         primary_window: Some(Window {
             title: match options.racer {
                 Some(racer) => format!(
-                    "ctr-rs view: level {track_id}, {}",
+                    "ctr-rs view: {}, {}",
+                    maps::name(track_id),
                     CHARACTERS[racer as usize]
                 ),
-                None => format!("ctr-rs view: level {track_id}"),
+                None => format!("ctr-rs view: {}", maps::name(track_id)),
             },
             // The frame rate is `limit_frame_rate`'s.
             // present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -424,6 +454,7 @@ fn main() {
         .insert_resource(explosion::CrateExplosion::new(crate_explosion))
         .insert_resource(mask::MaskModels(Some(masks)))
         .insert_resource(shield::ShieldModels(Some(shields)))
+        .insert_resource(wumpa_icon::FruitDisplay(fruit_display))
         .insert_resource(projectile::ProjectileModels::new(projectiles))
         .insert_resource(options)
         .insert_resource(LevelNumber(track_id))
@@ -544,10 +575,10 @@ fn switch_level(world: &mut World) {
     if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }
-    let levels = (LevelId::TURBO_TRACK.0 - LevelId::DINGO_CANYON.0 + 1) as i32;
     let id = wanted.unwrap_or_else(|| {
-        ((current as i32 - LevelId::DINGO_CANYON.0 as i32 + level_step).rem_euclid(levels) as u32)
-            + LevelId::DINGO_CANYON.0
+        let cycle = maps::cycle();
+        let at = cycle.iter().position(|&n| n == current).unwrap_or(0) as i32;
+        cycle[(at + level_step).rem_euclid(cycle.len() as i32) as usize]
     });
     options.racer = options
         .racer
@@ -592,8 +623,12 @@ fn switch_level(world: &mut World) {
     }
     for mut window in world.query::<&mut Window>().iter_mut(world) {
         window.title = match options.racer {
-            Some(racer) => format!("ctr-rs view: level {id}, {}", CHARACTERS[racer as usize]),
-            None => format!("ctr-rs view: level {id}"),
+            Some(racer) => format!(
+                "ctr-rs view: {}, {}",
+                maps::name(id),
+                CHARACTERS[racer as usize]
+            ),
+            None => format!("ctr-rs view: {}", maps::name(id)),
         };
     }
 }

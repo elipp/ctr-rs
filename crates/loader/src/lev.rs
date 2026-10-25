@@ -13,20 +13,20 @@ use crate::scenery::Scenery;
 use crate::water::Water;
 
 /// 16-bit fixed-point position, as stored in the file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SVec3 {
     pub x: i16,
     pub y: i16,
     pub z: i16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BoundingBox {
     pub min: SVec3,
     pub max: SVec3,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LevVertex {
     pub pos: SVec3,
     pub flags: u16,
@@ -52,7 +52,7 @@ pub mod quad_flags {
 }
 
 /// A 3x3 patch of vertices (9 indices) that forms four quads (or eight triangles).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct QuadBlock {
     /// Indices into [`Level::vertices`].
     pub vertex_index: [u16; 9],
@@ -78,7 +78,7 @@ pub struct QuadBlock {
 }
 
 /// A reference from a BSP branch to a child node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BspChild {
     None,
     Branch(u16),
@@ -100,7 +100,7 @@ impl BspChild {
 }
 
 /// An instance's hitbox, which the leaves it touches list (`struct BSP` as `data.hitbox`): a sphere.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BspHitbox {
     /// Where the entry is in the file: the game tells hitboxes apart by address.
     pub offset: u32,
@@ -124,7 +124,7 @@ impl BspHitbox {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum BspKind {
     Branch {
         /// Split plane (x, y, z, w) as stored; the exact meaning is still to be worked out.
@@ -139,7 +139,7 @@ pub enum BspKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BspNode {
     pub flag: u16,
     pub id: i16,
@@ -154,14 +154,14 @@ impl BspNode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpawnPoint {
     pub pos: SVec3,
     pub rot: SVec3,
 }
 
 /// A respawn / progress node (`struct CheckpointNode`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckpointNode {
     pub pos: SVec3,
     pub dist_to_finish: u16,
@@ -172,7 +172,7 @@ pub struct CheckpointNode {
 }
 
 /// A skybox vertex (`struct ShortVertex`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkyVertex {
     pub pos: SVec3,
     pub color: [u8; 3],
@@ -181,7 +181,7 @@ pub struct SkyVertex {
 /// The sky dome (`struct Skybox`): gouraud triangles around the camera, split into
 /// 8 segments by heading. The game draws the 4 segments nearest the camera's yaw;
 /// the rest are out of view anyway.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Skybox {
     pub vertices: Vec<SkyVertex>,
     /// Per segment, triangles as indices into [`Skybox::vertices`].
@@ -189,7 +189,7 @@ pub struct Skybox {
 }
 
 /// A point of a recorded path (`struct SpawnPosRot`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PosRot {
     pub pos: SVec3,
     /// Angles, 0x1000 = a full turn.
@@ -197,7 +197,7 @@ pub struct PosRot {
 }
 
 /// A placed model (`struct InstDef`): a mushroom, a crate, the start banner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct InstDef {
     pub name: String,
     /// Payload offset of the `struct Model` (0 = none).
@@ -216,7 +216,7 @@ pub struct InstDef {
 
 /// The start-line fly-in (`ST1_CAMERA_PATH`): the points the camera and what it looks at pass,
 /// one for each frame of the fly-in, in a frame that is set by the start of the grid.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FlyIn {
     /// What the camera looks at (`FlyInData::ptrStart`).
     pub target: Vec<SVec3>,
@@ -230,7 +230,7 @@ impl FlyIn {
     pub const EYE_POINTS: usize = 0x96;
 }
 
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Level {
     pub instances: Vec<InstDef>,
     /// How long each armadillo waits before it first moves (`ptrSpawnType1`'s spawn array), in

@@ -1,0 +1,8 @@
+[package]
+name = "xdelta"
+version = "0.1.0"
+edition = "2024"
+
+# A reader of the disc that an xdelta3 patch (VCDIFF, RFC 3284) makes from another one, without
+# making it: only the windows that are read are decoded.
+[dependencies]

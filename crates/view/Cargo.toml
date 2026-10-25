@@ -25,4 +25,5 @@ net = { path = "../net" }
 race = { path = "../race" }
 math = { path = "../math" }
 weapon = { path = "../weapon" }
+map = { path = "../map" }
 # The system clipboard, for pasting a lobby address.

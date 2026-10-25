@@ -11,6 +11,11 @@
 - the shield bubble's hit on a kart it bumps (`SHIELD_FLAG_CRASH_ATTACK` in `VehPhysCrash_Attack`), and other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 - the shield bomb's sounds (rolling loop 0x59, explosion 0x4c) and the `numTimesMissileLaunched` stat
 
+## Maps
+- sending a map to a player who joins a race on one they do not have: the host's `Start { track }` already carries the map's id (`map::Map::id`); a joiner without it should ask for it by id and hash, get the zstd file (`Map::to_bytes`, ~0.6-0.7 MB) in chunks over a reliable stream from the host or a peer that has it, check `Map::hash`, save it to `assets/maps/`, and continue. Today `load_level` stops with "map ... is not in assets/maps"
+- a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
+- `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
+
 ## Chores
 - remove any hex constants that aren't used as a bitmask; the particular values serve no purpose in the port
 
