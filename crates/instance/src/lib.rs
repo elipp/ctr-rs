@@ -367,7 +367,15 @@ impl Objects {
 /// crates have one so far; the other models give 1, as those without an `LInC` do.
 impl Instances for Objects {
     fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &coll::Scratchpad) -> i32 {
-        let model = sps.input1.model_id;
+        self.hit(instance, driver, sps.input1.model_id)
+    }
+}
+
+impl Objects {
+    /// The `LInC` of the object on `instance` for a hit of `model` (`Input1.modelID`): a driver's
+    /// touch, or the blast of a weapon (`RB_Burst_CollLevInst`), whose owner is `driver`. 1 for an
+    /// instance with no object.
+    pub fn hit(&mut self, instance: usize, driver: &mut Driver, model: i16) -> i32 {
         let mut result = None;
         self.each_object(|e| {
             if e.instance == instance {

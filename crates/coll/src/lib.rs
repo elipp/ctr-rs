@@ -89,6 +89,18 @@ pub mod model_id {
     pub const PLAYER: i16 = 0x18;
     /// `DYNAMIC_ROBOT_CAR`
     pub const ROBOT_CAR: i16 = 0x3f;
+    /// `PU_EXPLOSIVE_CRATE`: the Nitro crate.
+    pub const NITRO_CRATE: i16 = 0x6;
+    /// `STATIC_CRATE_TNT`
+    pub const TNT_CRATE: i16 = 0x27;
+    /// `DYNAMIC_ROCKET`
+    pub const ROCKET: i16 = 0x29;
+    /// `STATIC_BEAKER_RED`
+    pub const RED_BEAKER: i16 = 0x46;
+    /// `STATIC_BEAKER_GREEN`
+    pub const GREEN_BEAKER: i16 = 0x47;
+    /// `DYNAMIC_BOMB`
+    pub const BOMB: i16 = 0x3b;
 }
 
 /// `COLL_MOVED_PLAYER_HIT_RADIUS`

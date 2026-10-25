@@ -7,7 +7,7 @@
 //! is not here.
 
 use coll::model_id;
-use vehicle::{Driver, item, wumpa};
+use vehicle::{Driver, actions, item, wumpa};
 
 use crate::{Context, Instance, Tick, Touch};
 
@@ -59,6 +59,18 @@ impl Kind {
     }
 }
 
+/// Whether `model` (`Input1.modelID` of a hit) is a bomb or a missile, whose owner is paid for
+/// the crates it breaks. (The shield, which is the others, is not ported.)
+fn is_shot(model: i16) -> bool {
+    matches!(model, model_id::BOMB | model_id::ROCKET)
+}
+
+/// Whether breaking a weapon crate with `model` gives `driver` the roulette: it does for a
+/// driver's own touch and, if it is no bot, for the owner of a bomb or missile.
+fn pays(model: i16, driver: &Driver) -> bool {
+    model == model_id::PLAYER || is_shot(model) && driver.actions_flag_set & actions::BOT == 0
+}
+
 /// A crate: `struct Crate` and its instance's scale.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrateBox {
@@ -87,7 +99,8 @@ impl CrateBox {
     }
 
     /// `RB_Crate*_LInC` (with `RB_Crate*_ThCollide`): a driver touched it, with `model`
-    /// (`Input1.modelID`). Breaks it if it is whole; 1 if so, otherwise 0. A touch while it is
+    /// (`Input1.modelID`; `driver` is the owner of a weapon then). Breaks it if it is whole; 1 if
+    /// so, otherwise 0. A touch while it is
     /// gone starts the wait again. `random_number` is `sdata->randomNumber`.
     pub fn linc(&mut self, driver: &mut Driver, model: i16, random_number: &mut i32) -> i32 {
         if !self.thread {
@@ -105,9 +118,9 @@ impl CrateBox {
                 self.pause_cooldown |= self.kind == Kind::Time;
                 match self.kind {
                     Kind::Fruit => self.give_wumpa(driver, model, random_number),
-                    // A bomb, missile or shield that breaks the crate gives its owner the roulette
-                    // in retail; the weapons are not ported, so only a driver's touch counts.
-                    Kind::Weapon if model == model_id::PLAYER => item::start_roulette(driver),
+                    // The roulette goes to a driver, or to the human owner of a bomb or missile
+                    // (`driver` is the owner then); a mine's blast breaks the crate for nothing.
+                    Kind::Weapon if pays(model, driver) => item::start_roulette(driver),
                     _ => {}
                 }
                 return 1;
@@ -120,7 +133,7 @@ impl CrateBox {
     /// 5 to 8 wumpa go into the player's pickup HUD queue (replacing what was in it).
     fn give_wumpa(&self, driver: &mut Driver, model: i16, random_number: &mut i32) {
         let random = math::mix_rng_scramble(random_number);
-        if model == model_id::PLAYER {
+        if model == model_id::PLAYER || is_shot(model) {
             driver.pickup_wumpa_cooldown = wumpa::FLIGHT_TICKS;
             driver.pickup_wumpa_collected = random % 4 + 5;
         }
@@ -163,6 +176,14 @@ mod tests {
     use super::*;
 
     const PLAYER: i16 = model_id::PLAYER;
+
+    /// A driver that holds nothing (`Driver::default()` holds item 0).
+    fn empty_handed() -> Driver {
+        Driver {
+            held_item_id: item::held::NONE,
+            ..Driver::default()
+        }
+    }
 
     fn tick_n(c: &mut CrateBox, n: usize) {
         for _ in 0..n {
@@ -261,6 +282,43 @@ mod tests {
         CrateBox::new(Kind::Fruit).linc(&mut driver, model_id::ROBOT_CAR, &mut rng);
         assert_eq!(driver.pickup_wumpa_collected, 0);
         assert_ne!(rng, math::RANDOM_NUMBER_INIT);
+    }
+
+    #[test]
+    fn a_bomb_or_missile_that_breaks_a_crate_pays_its_human_owner() {
+        for model in [model_id::BOMB, model_id::ROCKET] {
+            let mut rng = math::RANDOM_NUMBER_INIT;
+            let mut owner = empty_handed();
+            assert_eq!(
+                CrateBox::new(Kind::Weapon).linc(&mut owner, model, &mut rng),
+                1
+            );
+            assert_eq!(owner.held_item_id, item::held::ROULETTE);
+
+            let mut owner = empty_handed();
+            CrateBox::new(Kind::Fruit).linc(&mut owner, model, &mut rng);
+            assert!((5..=8).contains(&owner.pickup_wumpa_collected));
+
+            // A bot's weapon breaks the box and gets nothing out of it.
+            let mut bot = empty_handed();
+            bot.actions_flag_set |= actions::BOT;
+            CrateBox::new(Kind::Weapon).linc(&mut bot, model, &mut rng);
+            assert_eq!(bot.held_item_id, item::held::NONE);
+        }
+    }
+
+    #[test]
+    fn a_mines_blast_breaks_a_crate_for_nothing() {
+        let mut rng = math::RANDOM_NUMBER_INIT;
+        let mut owner = empty_handed();
+        for model in [model_id::TNT_CRATE, model_id::NITRO_CRATE] {
+            let mut c = CrateBox::new(Kind::Weapon);
+            assert_eq!(c.linc(&mut owner, model, &mut rng), 1);
+            assert_eq!((c.scale, owner.held_item_id), (0, item::held::NONE));
+            let mut c = CrateBox::new(Kind::Fruit);
+            c.linc(&mut owner, model, &mut rng);
+            assert_eq!(owner.pickup_wumpa_collected, 0);
+        }
     }
 
     #[test]

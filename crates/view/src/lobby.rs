@@ -307,7 +307,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         match event {
             Event::Open(ticket) => {
                 println!(
-                    "lobby open. To join it, type this in another viewer:\n  /join-lobby {ticket}\nPress G to start the race once the others have joined."
+                    "lobby open. To join it, type this in another viewer:\n/join-lobby {ticket}\nPress G to start the race once the others have joined."
                 );
                 toasts.write(
                     Toast::new("Lobby opened!".to_string(), 2000)

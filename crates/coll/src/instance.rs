@@ -13,7 +13,7 @@ use gte::{ctrl, data};
 use loader::lev::{BspHitbox, BspKind, BspNode, Level, SVec3};
 use math::mips;
 
-use crate::{Collision, FRACTION_ONE, MVMVA_R_V0, clip, pack, search_flags};
+use crate::{Collision, FRACTION_ONE, MVMVA_R_V0, clip, pack, search_bsp, search_flags};
 
 /// `BSP_HITBOX_CLASS_TOUCH`: touching it only records the hitbox, with no collision response.
 pub const CLASS_TOUCH: u8 = 4;
@@ -65,6 +65,72 @@ fn overlaps(a: &crate::BoundingBox, b: &loader::lev::BoundingBox) -> bool {
         && b.min.y <= a.max.y
         && a.min.z <= b.max.z
         && b.min.z <= a.max.z
+}
+
+/// `PROC_StartSearch_Self` with `PROC_PerBspLeaf_CheckInstances`: the instances whose hitbox
+/// center is within `radius_squared` of `pos` (a blast's reach; `radius` is its square root, for
+/// the leaves to search), in the order the search meets them. Only hitboxes that are `COLLIDABLE`
+/// count, of instances that are drawn. A hitbox in several leaves is met in each, and so is the
+/// instance; what the caller does to it twice is up to it.
+pub fn instances_in_reach(
+    level: &Level,
+    pos: SVec3,
+    radius: i16,
+    radius_squared: i32,
+) -> Vec<usize> {
+    let around = |at: i16, sign: i16| at.wrapping_add(sign.wrapping_mul(radius));
+    let bounds = crate::BoundingBox {
+        min: SVec3 {
+            x: around(pos.x, -1),
+            y: around(pos.y, -1),
+            z: around(pos.z, -1),
+        },
+        max: SVec3 {
+            x: around(pos.x, 1),
+            y: around(pos.y, 1),
+            z: around(pos.z, 1),
+        },
+    };
+    let mut found = Vec::new();
+    search_bsp(
+        level,
+        &bounds,
+        |found: &mut Vec<usize>, level, leaf| {
+            let BspKind::Leaf { hitboxes, .. } = &leaf.kind else {
+                return;
+            };
+            for hitbox in hitboxes {
+                if hitbox.flag & BspHitbox::COLLIDABLE == 0 {
+                    continue;
+                }
+                let instance = hitbox.instance;
+                if instance.is_some_and(|i| level.instances[i].flags & DRAW_COLLISION_MASK == 0) {
+                    continue;
+                }
+                // Each axis alone must stay small, or the sum is not looked at.
+                let mut dist = 0i32;
+                let mut near = true;
+                for (at, center) in [
+                    (pos.x, hitbox.center.x),
+                    (pos.y, hitbox.center.y),
+                    (pos.z, hitbox.center.z),
+                ] {
+                    let delta = at as i32 - center as i32;
+                    let square = mips::mul_lo(delta, delta);
+                    if square > 0x0fff_ffff {
+                        near = false;
+                        break;
+                    }
+                    dist = mips::add_lo(dist, square);
+                }
+                if let (true, true, Some(instance)) = (near, dist < radius_squared, instance) {
+                    found.push(instance);
+                }
+            }
+        },
+        &mut found,
+    );
+    found
 }
 
 impl Collision {

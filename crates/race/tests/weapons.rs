@@ -7,17 +7,23 @@ mod common;
 use instance::Objects;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::dram::DramFile;
-use loader::lev::Level;
+use loader::lev::{BspKind, Level, SVec3};
 use loader::level::LevelId;
 use race::{KartSpec, Pad, Race};
 use vehicle::item::held;
 use vehicle::{buttons, kart_state};
 
 fn race(players: usize) -> Option<(Level, Race)> {
+    race_on(LevelId::DINGO_CANYON, players, |_| {})
+}
+
+/// A race on `id`, with the level changed by `patch` before the objects are placed.
+fn race_on(id: LevelId, players: usize, patch: impl FnOnce(&mut Level)) -> Option<(Level, Race)> {
     let mut b = common::open_bigfile()?;
-    let idx = BigIndex::level(LevelId::DINGO_CANYON, Lod::OnePlayer, LevFile::Lev);
+    let idx = BigIndex::level(id, Lod::OnePlayer, LevFile::Lev);
     let dram = DramFile::parse(&b.big.read(&mut b.disc, idx.get()).unwrap()).unwrap();
-    let level = Level::parse(&dram).unwrap();
+    let mut level = Level::parse(&dram).unwrap();
+    patch(&mut level);
     let objects = Objects::new(&level, &dram);
     let specs: Vec<KartSpec> = (0..players)
         .map(|slot| KartSpec {
@@ -26,6 +32,69 @@ fn race(players: usize) -> Option<(Level, Race)> {
         })
         .collect();
     Some((level.clone(), Race::new(&level, objects, &specs, false)))
+}
+
+/// Puts a crate of `model_id` (7 is the wumpa crate, 8 the weapon crate) at `pos`, as a copy of
+/// one the level has, hitbox and all, and gives the instance it is.
+fn add_crate(level: &mut Level, model_id: i32, pos: [i16; 3]) -> usize {
+    let model = level
+        .instances
+        .iter()
+        .position(|i| i.model_id == model_id)
+        .expect("the level has a crate of the kind");
+    let hitbox = level
+        .bsp
+        .iter()
+        .flat_map(|node| match &node.kind {
+            BspKind::Leaf { hitboxes, .. } => hitboxes.as_slice(),
+            _ => &[],
+        })
+        .find(|h| h.instance == Some(model))
+        .expect("the weapon crate has a hitbox")
+        .clone();
+
+    let instance = level.instances.len();
+    let mut def = level.instances[model].clone();
+    def.pos = SVec3 {
+        x: pos[0],
+        y: pos[1],
+        z: pos[2],
+    };
+    level.instances.push(def);
+
+    // The same hitbox, moved to the new crate.
+    let shift = [
+        pos[0] - hitbox.center.x,
+        pos[1] - hitbox.center.y,
+        pos[2] - hitbox.center.z,
+    ];
+    let moved = |v: SVec3| SVec3 {
+        x: v.x + shift[0],
+        y: v.y + shift[1],
+        z: v.z + shift[2],
+    };
+    let mut new = hitbox;
+    new.offset = 0xffff_0000;
+    new.instance = Some(instance);
+    new.center = moved(new.center);
+    new.bbox.min = moved(new.bbox.min);
+    new.bbox.max = moved(new.bbox.max);
+    // In each leaf it reaches.
+    for node in &mut level.bsp {
+        let (b, h) = (node.bbox, new.bbox);
+        let overlaps = b.min.x <= h.max.x
+            && h.min.x <= b.max.x
+            && b.min.y <= h.max.y
+            && h.min.y <= b.max.y
+            && b.min.z <= h.max.z
+            && h.min.z <= b.max.z;
+        if let BspKind::Leaf { hitboxes, .. } = &mut node.kind
+            && overlaps
+        {
+            hitboxes.push(new.clone());
+        }
+    }
+    instance
 }
 
 /// Everyone drives straight; kart 0 presses the fire button on the ticks in `presses`.
@@ -222,4 +291,144 @@ fn a_potion_thrown_forward_lands_ahead_and_spins_out_the_kart_that_touches_it() 
     assert_eq!(race.last_weapons.flashes, [1]);
     assert_eq!(race.last_weapons.detonations.len(), 1);
     assert!(race.weapons.mines().is_empty());
+}
+
+#[test]
+fn a_bomb_breaks_the_weapon_crate_it_flies_through_and_the_kart_is_paid() {
+    let mut crate_at = 0;
+    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 1, |level| {
+        crate_at = add_crate(level, 8, [957, 1, -10664]);
+    }) else {
+        return;
+    };
+    let index = race
+        .objects
+        .crates
+        .iter()
+        .position(|c| c.instance == crate_at)
+        .expect("the crate is placed");
+    // `/debug-add-weapon 1`: a bomb, fired on tick 0, and left to fly.
+    race.karts[0].driver.held_item_id = held::BOMB_1X;
+    let start = race.karts[0].driver.pos_curr;
+    let mut flew_to = None;
+    for tick in 0..300 {
+        race.tick(&level, &pads(tick, 1, &[0]));
+        if let Some(p) = race.weapons.projectiles().first() {
+            flew_to = Some(p.pos);
+        }
+        if race.objects.crates[index].sim.breaks != 0 {
+            break;
+        }
+    }
+    assert_eq!(
+        race.objects.crates[index].sim.breaks, 1,
+        "the bomb broke the crate (the kart started at {start:?}, the bomb was last at {flew_to:?})"
+    );
+    // It was the flight that broke it, in the tick the bomb passed it.
+    assert!(
+        race.last_weapons
+            .crate_hits
+            .iter()
+            .any(|h| h.instance == crate_at)
+    );
+}
+
+/// `/debug-add-weapon 4` and a throw forward, then `/debug-add-weapon 1` and a shot: the bomb
+/// flies through a wumpa crate on its way to the green bottle that lies beyond it, and goes off
+/// on the bottle.
+#[test]
+fn a_bomb_breaks_a_wumpa_crate_on_its_way_and_sets_off_the_bottle_it_reaches() {
+    use weapon::mine::{MineKind, State};
+
+    let mut crate_at = 0;
+    let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 1, |level| {
+        crate_at = add_crate(level, 7, [957, 1, -10664]);
+    }) else {
+        return;
+    };
+    let index = race
+        .objects
+        .crates
+        .iter()
+        .position(|c| c.instance == crate_at)
+        .expect("the crate is placed");
+    let wumpas_before = race.karts[0].driver.num_wumpas;
+
+    // The kart stands still. `up` throws a potion forward; `fire` presses the fire button.
+    let pad = |up: bool, fire: bool| -> Vec<Pad> {
+        vec![Pad {
+            held: if up { buttons::UP } else { 0 } | if fire { buttons::CIRCLE } else { 0 },
+            ..Pad::default()
+        }]
+    };
+
+    // The bottle: thrown on tick 0, and left to land.
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::POTION);
+    let mut tick = 0;
+    race.tick(&level, &pad(true, true));
+    while race.weapons.mines().is_empty() || race.weapons.mines()[0].state != State::Ground {
+        tick += 1;
+        assert!(tick < 200, "the bottle lands");
+        race.tick(&level, &pad(true, false));
+    }
+    let bottle = race.weapons.mines()[0].clone();
+    assert_eq!(bottle.kind, MineKind::GreenBeaker);
+    assert!(
+        bottle.pos[0] < 957 - 400,
+        "the bottle lies beyond the crate, at {:?}",
+        bottle.pos
+    );
+    assert_eq!(race.objects.crates[index].sim.breaks, 0);
+
+    // The bomb: rolled, and shot straight ahead.
+    vehicle::item::debug_roll(&mut race.karts[0].driver, held::BOMB_1X);
+    let mut broke = None;
+    let mut went_off = None;
+    for step in 0..600 {
+        tick += 1;
+        race.tick(&level, &pad(false, step == 0));
+        if broke.is_none() && race.objects.crates[index].sim.breaks != 0 {
+            broke = Some(tick);
+        }
+        if !race.last_weapons.explosions.is_empty() {
+            went_off = Some(tick);
+            break;
+        }
+    }
+    let (broke, went_off) = (
+        broke.expect("the bomb broke the crate"),
+        went_off.expect("the bomb went off"),
+    );
+    // It broke the crate on the way (not with its blast), and went off on the bottle.
+    assert!(broke < went_off, "broke on {broke}, went off on {went_off}");
+    assert_eq!(race.objects.crates[index].sim.breaks, 1);
+    // The bomb itself blew up, at the bottle, and does not fly on.
+    let [blast] = race.last_weapons.explosions.as_slice() else {
+        panic!("one blast: {:?}", race.last_weapons.explosions);
+    };
+    assert_eq!(blast.kind, weapon::Kind::Bomb);
+    let (dx, dz) = (blast.pos[0] - bottle.pos[0], blast.pos[2] - bottle.pos[2]);
+    assert!(
+        dx * dx + dz * dz < 96 * 96,
+        "blast at {:?}, bottle at {:?}",
+        blast.pos,
+        bottle.pos
+    );
+    assert!(race.weapons.projectiles().is_empty());
+    let detonations = &race.last_weapons.detonations;
+    assert!(
+        detonations
+            .iter()
+            .any(|d| d.kind == MineKind::GreenBeaker && !d.blowup),
+        "the bottle went off with the bomb: {detonations:?}"
+    );
+
+    // The wumpa fly to the counter, 5 to 8 of them.
+    for _ in 0..80 {
+        race.tick(&level, &pad(false, false));
+    }
+    // (The bottle was swept away by the next tick.)
+    assert!(race.weapons.mines().is_empty());
+    let gained = race.karts[0].driver.num_wumpas - wumpas_before;
+    assert!((5..=8).contains(&gained), "{gained} wumpa fruit");
 }

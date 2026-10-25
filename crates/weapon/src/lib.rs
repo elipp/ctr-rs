@@ -11,8 +11,8 @@
 //! The mines (TNT and Nitro crates the kart drops) are in [`mine`]; a weapon that runs into one,
 //! and a burst that reaches one, sets it off.
 //!
-//! Not ported: crates and the temple teeth (a weapon that reaches a crate goes right through it,
-//! and a burst breaks none), the warpball it would meet, the thrown TNT a missile would be drawn
+//! A weapon breaks the fruit and weapon crates it passes through, and so does its blast
+//! ([`Tick::crate_hits`], for the objects to deal with). Not ported: the temple teeth, the warpball it would meet, the thrown TNT a missile would be drawn
 //! away by, and the sounds. How the aim differs is in [`aim`].
 //!
 //! The projectiles keep what the sim needs. Their matrices (`inst->matrix`) are for drawing:
@@ -22,7 +22,8 @@
 pub mod aim;
 pub mod mine;
 
-use coll::{Collision, search_flags};
+use coll::instance::instances_in_reach;
+use coll::{Collision, model_id, search_flags};
 use gte::Gte;
 use loader::lev::{Level, SVec3, quad_flags};
 use math::mips;
@@ -71,6 +72,9 @@ const WEAPON_REACT: u32 = 0x4;
 /// (`RB_Hazard_CollLevInst`).
 const PICKUP_MODELS: [i32; 3] = [2, 7, 8];
 
+/// The crates a blast breaks: `PU_FRUIT_CRATE` and `PU_RANDOM_CRATE` (not the time crates).
+const CRATE_MODELS: [i32; 2] = [7, 8];
+
 /// `TrackerWeaponFlags`
 pub mod flags {
     /// The kart fired with 10 wumpa fruit.
@@ -103,6 +107,14 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// The `Input1.modelID` of the weapon's hits.
+    fn model(self) -> i16 {
+        match self {
+            Kind::Bomb => model_id::BOMB,
+            Kind::Missile => model_id::ROCKET,
+        }
+    }
+
     fn reason(self) -> Reason {
         match self {
             Kind::Bomb => Reason::Bomb,
@@ -246,6 +258,18 @@ pub struct Explosion {
     pub parent: usize,
 }
 
+/// A crate that a blast reached (`RB_Burst_CollLevInst`): the caller breaks it as a hit of `model`
+/// by the driver `owner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrateHit {
+    /// An index into [`Level::instances`].
+    pub instance: usize,
+    /// `Input1.modelID`: the weapon that blasted.
+    pub model: i16,
+    /// The kart that fired it.
+    pub owner: usize,
+}
+
 /// What one tick of the weapons did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tick {
@@ -253,6 +277,8 @@ pub struct Tick {
     pub explosions: Vec<Explosion>,
     /// The mines that went off.
     pub detonations: Vec<mine::Detonation>,
+    /// The crates the blasts reached, in the order they went off.
+    pub crate_hits: Vec<CrateHit>,
     /// The karts a blast went off on, whose screens flash white (`RB_Burst_CollThread`).
     pub flashes: Vec<usize>,
 }
@@ -415,6 +441,7 @@ impl Weapons {
                 &self.projectiles,
                 &self.mines,
                 elapsed_ms,
+                &mut tick.crate_hits,
             );
             for j in step.missiles_hit {
                 self.projectiles[j].dead = true;
@@ -423,7 +450,7 @@ impl Weapons {
                 self.mines[j].set_off(&mut tick);
             }
             if step.explodes {
-                self.burst(i, &p, bodies, &mut tick);
+                self.burst(i, &p, Some(level), bodies, &mut tick);
                 p.dead = true;
             }
             self.projectiles[i] = p;
@@ -434,8 +461,18 @@ impl Weapons {
 
     /// `RB_Burst_Init`'s damage: the karts within reach of the explosion at `p` are hit (not the
     /// one that fired it), and the missiles there are destroyed with no blast of their own.
-    fn burst(&mut self, me: usize, p: &Projectile, bodies: &[Body], tick: &mut Tick) {
+    fn burst(
+        &mut self,
+        me: usize,
+        p: &Projectile,
+        level: Option<&Level>,
+        bodies: &[Body],
+        tick: &mut Tick,
+    ) {
         let radius_squared = p.kind.blast_radius_squared(p.powered());
+        if let Some(level) = level {
+            tick.break_crates(level, p.pos, radius_squared, p.kind.model(), p.parent);
+        }
         tick.explosions.push(Explosion {
             kind: p.kind,
             powered: p.powered(),
@@ -465,6 +502,31 @@ impl Weapons {
                 && in_reach(p.pos, other.pos, radius_squared)
             {
                 other.dead = true;
+            }
+        }
+    }
+}
+
+impl Tick {
+    /// `RB_Burst_CollLevInst` over the search of a blast at `pos`: the fruit and weapon crates
+    /// within `radius_squared` are broken by it, as a hit of `model` by the kart `owner`.
+    pub(crate) fn break_crates(
+        &mut self,
+        level: &Level,
+        pos: [i32; 3],
+        radius_squared: i32,
+        model: i16,
+        owner: usize,
+    ) {
+        // (The squares are of whole radii: 0x80, 0x140 and 0x200.)
+        let radius = radius_squared.isqrt() as i16;
+        for instance in instances_in_reach(level, svec(pos, 0), radius, radius_squared) {
+            if CRATE_MODELS.contains(&level.instances[instance].model_id) {
+                self.crate_hits.push(CrateHit {
+                    instance,
+                    model,
+                    owner,
+                });
             }
         }
     }
@@ -522,7 +584,7 @@ fn collide_with_drivers(p: &Projectile, bodies: &[Body]) -> Option<usize> {
 }
 
 /// `RB_MovingExplosive_ThTick`, for the weapon `p`: steer, move, and look for what it hits. `all`
-/// are the weapons as they were at the start of the tick.
+/// are the weapons as they were at the start of the tick; the crates it breaks go into `crate_hits`.
 fn fly(
     p: &mut Projectile,
     coll: &mut Collision,
@@ -531,6 +593,7 @@ fn fly(
     all: &[Projectile],
     mines: &[mine::Mine],
     elapsed_ms: i32,
+    crate_hits: &mut Vec<CrateHit>,
 ) -> Step {
     p.time_alive = mips::add_lo(p.time_alive, elapsed_ms);
 
@@ -618,6 +681,16 @@ fn fly(
     }
 
     if coll.sps.did_touch_hitbox != 0 {
+        // The crates it passes through break (`RB_Hazard_CollLevInst`'s `LInC`).
+        if let Some(instance) = coll.sps.bsp_hitbox.and_then(|hit| hit.instance)
+            && CRATE_MODELS.contains(&level.instances[instance].model_id)
+        {
+            crate_hits.push(CrateHit {
+                instance,
+                model: p.kind.model(),
+                owner: p.parent,
+            });
+        }
         if hits_level_instance(level, coll) {
             return Step::explode();
         }
@@ -701,7 +774,7 @@ fn fly(
 }
 
 /// `RB_Hazard_CollLevInst`: whether the instance hitbox the search ended on blows the weapon up.
-/// The pickups let it through (the crates are not broken by it yet); the rest of the level's
+/// The pickups let it through (a crate breaks as it passes, see [`CrateHit`]); the rest of the level's
 /// instances stop it.
 fn hits_level_instance(level: &Level, coll: &Collision) -> bool {
     let Some(instance) = coll.sps.bsp_hitbox.and_then(|hit| hit.instance) else {
@@ -753,7 +826,7 @@ mod tests {
         let bodies = [body(0, 0), body(300, 0), body(500, 0)];
         let mut tick = Tick::default();
         let p = weapons.projectiles[0].clone();
-        weapons.burst(0, &p, &bodies, &mut tick);
+        weapons.burst(0, &p, None, &bodies, &mut tick);
         assert_eq!(
             tick.hits,
             vec![Hit {
@@ -778,7 +851,13 @@ mod tests {
                 ..Weapons::default()
             };
             let mut tick = Tick::default();
-            weapons.burst(0, &p, &[body(0, 0), body(450, 0), body(100, 0)], &mut tick);
+            weapons.burst(
+                0,
+                &p,
+                None,
+                &[body(0, 0), body(450, 0), body(100, 0)],
+                &mut tick,
+            );
             tick.hits.iter().map(|h| h.victim).collect::<Vec<_>>()
         };
         assert_eq!(at(Kind::Bomb, false), vec![2]);
@@ -797,7 +876,7 @@ mod tests {
             projectiles: vec![bomb.clone(), near, far],
             ..Weapons::default()
         };
-        weapons.burst(0, &bomb, &[body(0, 0)], &mut Tick::default());
+        weapons.burst(0, &bomb, None, &[body(0, 0)], &mut Tick::default());
         assert_eq!(
             weapons
                 .projectiles
