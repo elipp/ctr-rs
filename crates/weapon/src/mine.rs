@@ -20,13 +20,13 @@
 //! shattering potion opens, the afterimage that follows a mine dropped at speed, the bots' TNT, a
 //! mine dropped on a crate holding the crate's regrowth back, and the sounds.
 
-use coll::{Collision, search_flags};
+use coll::{Collision, model_id, search_flags};
 use gte::Gte;
 use loader::lev::{Level, SVec3, quad_flags};
 use math::mips;
 use vehicle::{Driver, Matrix, kart_state, pick};
 
-use crate::{Body, Hit, Reason, Tick, WEAPON_REACT, Weapons, in_reach, svec};
+use crate::{Body, CrateHit, Hit, Reason, Tick, WEAPON_REACT, Weapons, in_reach, svec};
 
 /// `RB_MinePool_Capacity`: how many mines lie around (those on a head do not count).
 pub const POOL: usize = 10;
@@ -112,6 +112,16 @@ pub enum MineKind {
 }
 
 impl MineKind {
+    /// The `Input1.modelID` of what its blast, or its drop, hits.
+    pub(crate) fn model(self) -> i16 {
+        match self {
+            MineKind::Tnt => model_id::TNT_CRATE,
+            MineKind::Nitro => model_id::NITRO_CRATE,
+            MineKind::GreenBeaker => model_id::GREEN_BEAKER,
+            MineKind::RedBeaker => model_id::RED_BEAKER,
+        }
+    }
+
     /// A potion, which spins the kart out where the crates blast it.
     pub fn is_beaker(self) -> bool {
         matches!(self, MineKind::GreenBeaker | MineKind::RedBeaker)
@@ -339,6 +349,14 @@ impl Weapons {
                 .and_then(|hit| hit.instance)
                 .map(|i| level.instances[i].model_id);
             destroyed = !matches!(model, Some(7 | 8));
+            if !destroyed && let Some(instance) = coll.sps.bsp_hitbox.and_then(|hit| hit.instance) {
+                // (Retail breaks it, for nobody: a mine's model is no reward.)
+                self.pending.crate_hits.push(CrateHit {
+                    instance,
+                    model: kind.model(),
+                    owner: shooter,
+                });
+            }
             coll.sps.quad_block_coll.search_flags = 0;
             coll.search_quadblocks(level, top, bottom, PROBE_RADIUS);
         }
@@ -533,6 +551,10 @@ impl Weapons {
             MineKind::Nitro => NITRO_BLOWUP_REACH,
             _ => BLOWUP_REACH,
         };
+        if let Some(level) = c.level {
+            c.tick
+                .break_crates(level, m.pos, BLOWUP_REACH, m.kind.model(), m.parent);
+        }
         for (victim, body) in c.bodies.iter().enumerate() {
             if in_reach(m.pos, body.at, reach) {
                 c.tick.flashes.push(victim);
@@ -946,9 +968,15 @@ mod tests {
         let mut weapons = Weapons::default();
         weapons.mines.push(mine(MineKind::Nitro));
         let ticks = run(&mut weapons, &[body(1000, 0), body(10, 0)], 1);
-        assert_eq!(ticks[0].hits.len(), 1);
-        assert_eq!(ticks[0].hits[0].victim, 1);
-        assert_eq!(ticks[0].hits[0].damage, pick::damage::BLAST);
+        // The touch hurts the kart, and so does the blast (the second finds it blasted already).
+        assert_eq!(ticks[0].hits.len(), 2);
+        assert!(ticks[0].hits.iter().all(|h| h.victim == 1));
+        assert!(
+            ticks[0]
+                .hits
+                .iter()
+                .all(|h| h.damage == pick::damage::BLAST)
+        );
         assert!(weapons.mines.is_empty());
     }
 
@@ -975,8 +1003,13 @@ mod tests {
         let mut bodies = [body(1000, 0), body(10, 0)];
         run(&mut weapons, &bodies, 40);
         assert!(matches!(weapons.mines[0].state, State::Sitting { .. }));
+        // (`jumpsRemaining` is 8 or 9 minus the RNG's parity: 7 or 8 jumps stay on.)
+        let State::Sitting { jumps, .. } = weapons.mines[0].state else {
+            panic!("it sits");
+        };
+        assert!((7..=8).contains(&jumps), "{jumps}");
         bodies[1].jump_started = true;
-        run(&mut weapons, &bodies, 9);
+        run(&mut weapons, &bodies, jumps as usize);
         assert!(matches!(weapons.mines[0].state, State::Sitting { .. }));
         run(&mut weapons, &bodies, 1);
         assert!(matches!(weapons.mines[0].state, State::Falling { .. }));
@@ -994,10 +1027,13 @@ mod tests {
         }
         let mut newest = mine(MineKind::Nitro);
         newest.id = 99;
-        newest.pos = [50_000, 0, 0];
+        // (Not 50 000 away: a distance that long wraps negative when squared, as in retail, and counts
+        // as near.)
+        newest.pos = [20_000, 0, 0];
         weapons.add_to_pool(&mut newest);
         weapons.mines.push(newest);
         let ticks = run(&mut weapons, &[body(-9000, 0)], 1);
+        // The oldest one's blast and its own plain explosion.
         assert_eq!(ticks[0].detonations.len(), 2);
         assert_eq!(weapons.mines.len(), POOL);
         assert!(weapons.mines.iter().all(|m| m.id != 0));

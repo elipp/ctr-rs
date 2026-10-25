@@ -151,19 +151,21 @@ fn capture(
     mut line: ResMut<CommandLine>,
     mut events: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut command: Local<bool>,
 ) {
+    // The modifier is followed here: `keys` is wiped below, so it cannot say whether Cmd is held.
+    let mut typed = Vec::new();
+    for event in events.read() {
+        if matches!(event.logical_key, Key::Super | Key::Control) {
+            *command = event.state == ButtonState::Pressed;
+        }
+        typed.push(event.clone());
+    }
     if !line.open {
         // (What was typed before it opened is not for it.)
-        events.clear();
         return;
     }
-    let command = keys.any_pressed([
-        KeyCode::SuperLeft,
-        KeyCode::SuperRight,
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-    ]);
-    for event in events.read() {
+    for event in &typed {
         if event.state != ButtonState::Pressed {
             continue;
         }
@@ -180,7 +182,7 @@ fn capture(
             Key::Backspace => line.edit(|t| {
                 t.pop();
             }),
-            _ if command => {
+            _ if *command => {
                 if event.key_code == KeyCode::KeyV {
                     match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
                         Ok(text) => {

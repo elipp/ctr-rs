@@ -421,6 +421,10 @@ impl Race {
             env.elapsed_time_ms,
             &mut self.objects.random_number,
         );
+        for hit in &self.last_weapons.crate_hits {
+            self.objects
+                .hit(hit.instance, &mut self.karts[hit.owner].driver, hit.model);
+        }
         for hit in &self.last_weapons.hits {
             let victim = &mut self.karts[hit.victim].driver;
             vehicle::pick::new_state(victim, hit.damage, &mut effects[hit.victim]);
