@@ -24,8 +24,8 @@ const TRACKS: u32 = 25;
 /// What an import found, besides the map.
 pub struct Import {
     pub map: Map,
-    /// The track whose slot in `BIGFILE.BIG` the map was read from.
-    pub from_track: u32,
+    /// Where in `BIGFILE.BIG` the map was read from: a track's slot, or the entries a tool put it in.
+    pub source: String,
     /// The entries of `BIGFILE.BIG` that the patch changes or adds.
     pub changed: Vec<usize>,
     /// The tracks whose one-player level file is among them.
@@ -74,11 +74,44 @@ fn same_file<R: Read + Seek>(
     Ok(true)
 }
 
+/// The changed entries that are a level and its textures: the first that parses as a level with
+/// quad blocks, and the one after it (or else any other) that parses as VRAM images.
+fn find_entries<R: Read + Seek>(
+    changed: &[usize],
+    big: &BigFile,
+    disc: &mut R,
+) -> io::Result<Option<(usize, usize)>> {
+    // A level is at least tens of kilobytes; smaller entries are not worth parsing.
+    let big_ones = |i: &&usize| big.entries.get(**i).is_some_and(|e| e.size > 16 * 1024);
+    for &lev in changed.iter().filter(big_ones) {
+        let is_level = DramFile::parse(&big.read(disc, lev)?)
+            .and_then(|d| Level::parse(&d))
+            .is_ok_and(|l| !l.quad_blocks.is_empty());
+        if !is_level {
+            continue;
+        }
+        let mut others = changed.iter().copied().filter(|&i| i != lev);
+        let mut candidates: Vec<usize> = others.by_ref().collect();
+        candidates.sort_by_key(|&i| i != lev + 1);
+        for vram in candidates {
+            if parse_vram_file(&big.read(disc, vram)?).is_ok_and(|v| !v.is_empty()) {
+                return Ok(Some((lev, vram)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// The map that `patch` makes, found on `original` (the path of the USA `.bin`). A patch puts its
 /// track in the slot of one of the game's (or of several, with the same file); `level` names the
 /// one to read it from, and without it the patch has to change one level file or the same one
 /// in all.
-pub fn import(original: &Path, patch: &Path, level: Option<u32>) -> io::Result<Import> {
+pub fn import(
+    original: &Path,
+    patch: &Path,
+    level: Option<u32>,
+    entries: Option<(usize, usize)>,
+) -> io::Result<Import> {
     let name = patch
         .file_stem()
         .map_or_else(|| "map".into(), |s| s.to_string_lossy().into_owned());
@@ -96,10 +129,30 @@ pub fn import(original: &Path, patch: &Path, level: Option<u32>) -> io::Result<I
     let tracks: Vec<u32> = (0..TRACKS)
         .filter(|&id| changed.contains(&one_player(id)))
         .collect();
+    // Some tools do not use a track's slot: the level and its textures are put in other entries
+    // (CTR Editor's "TrackROM" uses two that the game uses for code).
+    let mut entries = entries;
+    if entries.is_none() && level.is_none() && tracks.is_empty() {
+        entries = find_entries(&changed, &new_big, &mut new_disc)?;
+    }
     let replaces = match (level, tracks.as_slice()) {
+        // Entries named by hand: no slot to find.
+        _ if entries.is_some() => level.unwrap_or(0),
         (Some(id), _) => id,
         (None, [id]) => *id,
-        (None, []) => return Err(invalid("the patch changes no track's level file")),
+        (None, []) => {
+            let size = |big: &BigFile, i: usize| big.entries.get(i).map(|e| e.size);
+            let list: Vec<String> = changed
+                .iter()
+                .take(24)
+                .map(|&i| format!("#{i}: {:?} -> {:?}", size(&big, i), size(&new_big, i)))
+                .collect();
+            return Err(invalid(format!(
+                "the patch changes no track's level file; it changes {} entries of BIGFILE.BIG (index: old -> new size): {}",
+                changed.len(),
+                list.join(", ")
+            )));
+        }
         // The same file in several slots (a patch may put its track in more than one): the first.
         (None, many)
             if same_file(
@@ -130,8 +183,12 @@ pub fn import(original: &Path, patch: &Path, level: Option<u32>) -> io::Result<I
     };
 
     let mut read = |file| {
-        let index = BigIndex::level(LevelId(replaces), Lod::OnePlayer, file);
-        new_big.read(&mut new_disc, index.get())
+        let index = match entries {
+            Some((lev, _)) if file == LevFile::Lev => lev,
+            Some((_, vram)) => vram,
+            None => BigIndex::level(LevelId(replaces), Lod::OnePlayer, file).get(),
+        };
+        new_big.read(&mut new_disc, index)
     };
     let dram = DramFile::parse(&read(LevFile::Lev)?)?;
     let level = Level::parse(&dram)?;
@@ -143,7 +200,10 @@ pub fn import(original: &Path, patch: &Path, level: Option<u32>) -> io::Result<I
             dram,
             vram,
         },
-        from_track: replaces,
+        source: match entries {
+            Some((lev, vram)) => format!("entries {lev} (level) and {vram} (VRAM)"),
+            None => format!("the slot of track {replaces}"),
+        },
         changed,
         tracks,
     })
