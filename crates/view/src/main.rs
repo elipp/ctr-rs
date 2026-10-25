@@ -23,6 +23,7 @@
 
 mod banner;
 mod bar;
+mod command;
 mod drive;
 mod exhaust;
 mod explosion;
@@ -35,6 +36,7 @@ mod lobby;
 mod mask;
 mod probe;
 mod projectile;
+
 mod props;
 mod remote;
 mod shadow;
@@ -338,19 +340,11 @@ fn main() {
     let mut show_hidden = false;
     let mut cull = true;
     let mut driving = false;
-    let mut join = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--lo" => low = true,
             "--drive" => driving = true,
-            "--join" => {
-                join = Some(
-                    args.next()
-                        .and_then(|t| t.parse::<net::Ticket>().map_err(|e| eprintln!("{e}")).ok())
-                        .expect("--join takes the ticket a lobby printed"),
-                )
-            }
             "--show-hidden" => show_hidden = true,
             "--no-cull" => cull = false,
             "--no-racer" => racer = None,
@@ -364,7 +358,7 @@ fn main() {
             }
             n => {
                 panic!(
-                    "usage: view [--lo] [--show-hidden] [--no-cull] [--drive [--join TICKET]] [--racer N | --no-racer], got '{n}'"
+                    "usage: view [--lo] [--show-hidden] [--no-cull] [--drive] [--racer N | --no-racer], got '{n}'"
                 )
             }
         }
@@ -409,8 +403,16 @@ fn main() {
     } else {
         plugins
     };
-    app.add_plugins(plugins)
-        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
+    app.add_plugins(plugins);
+    // Bevy's own font has no ä or ö: this one takes its place as the default.
+    app.world_mut()
+        .resource_mut::<Assets<Font>>()
+        .insert(
+            AssetId::default(),
+            Font::from_bytes(include_bytes!("../../../assets/Inconsolata-Regular.ttf").to_vec()),
+        )
+        .expect("the default font can be replaced");
+    app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
         .insert_resource(loaded)
         .insert_resource(textures)
         .insert_resource(explosion::CrateExplosion::new(crate_explosion))
@@ -471,20 +473,16 @@ fn main() {
     ];
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
-        scene_systems.push(app.world_mut().register_system(mask::spawn));
         scene_systems.push(app.world_mut().register_system(lobby::spawn_waiting));
-        let character = drive.character as u8;
         app.insert_resource(drive).add_plugins((
             drive::DrivePlugin,
             lobby::LobbyPlugin,
+            command::CommandPlugin,
             leaderboard::LeaderboardPlugin,
             weapon::WeaponPlugin,
             wumpa_icon::WumpaIconPlugin,
             toast::ToastPlugin,
         ));
-        if let Some(ticket) = join {
-            app.insert_resource(lobby::Lobby::joining(ticket, character));
-        }
     } else {
         scene_systems.push(app.world_mut().register_system(probe::spawn_text));
         app.add_plugins(probe::ProbePlugin).add_systems(Update, fly);
@@ -985,85 +983,23 @@ fn spawn_kart(world: &mut World) {
 }
 
 fn spawn_kart_parts(
-    mut commands: Commands,
     track: Res<Track>,
-    textures: Res<Textures>,
     sim: Res<props::Sim>,
     racer: Res<Racer>,
     wheel_icons: Res<WheelIcons>,
-    shadow_icons: Res<ShadowIcons>,
-    smoke_icon: Res<SmokeIcon>,
-    tiremark_icon: Res<TiremarkIcon>,
-    flame_models: Res<FlameModels>,
-    mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     driving: Option<Res<drive::Drive>>,
+    mut builder: kart::KartBuilder,
 ) {
-    let level = &track.0;
-    if let Some(model) = &racer.0 {
-        let kart = spawn_racer(
-            model,
-            level.driver_spawns[0],
-            driving
-                .as_ref()
-                .map(|_| kart::KartMotion::new(sim.driver())),
-            &textures.vram,
-            &wheel_icons.0,
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
-        );
-        if let Some(kart) = kart {
-            flame::spawn(
-                &mut commands,
-                &mut images,
-                &mut meshes,
-                &mut materials,
-                &mut subtract_materials,
-                &flame_models.0,
-                &textures.vram,
-                kart,
-            );
-        }
-    }
-    if let (Some(icons), true) = (&shadow_icons.0, driving.is_some()) {
-        shadow::spawn(
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut subtract_materials,
-            [&icons[0], &icons[1]],
-            &textures.vram,
-        );
-    }
-
-    if let (Some(icon), true) = (&tiremark_icon.0, driving.is_some()) {
-        skid::spawn(
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
-            icon,
-            &textures.vram,
-        );
-    }
-
-    if let (Some(icon), true) = (&smoke_icon.0, driving.is_some()) {
-        exhaust::spawn(
-            &mut commands,
-            &mut images,
-            &mut meshes,
-            &mut materials,
-            &mut subtract_materials,
-            icon,
-            &textures.vram,
-        );
-    }
+    let Some(model) = &racer.0 else { return };
+    let spawn = track.0.driver_spawns[0];
+    let [x, y, z] = mesh::to_world(spawn.pos);
+    let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;
+    // The model faces along +X; a driver's heading is along +Z. A driven kart is posed by its
+    // sim instead.
+    let placement = Transform::from_xyz(x, y, z)
+        .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
+    let driven = driving.map(|_| (sim.own, sim.kart()));
+    builder.spawn(model, &wheel_icons.0, placement, true, driven);
 }
 
 /// The material of a kart model's parts: its texture atlas, unlit.
@@ -1093,47 +1029,6 @@ pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> S
 /// Racer models face along +X, while a driver's heading (`spawn.rot.y`) points along
 /// +Z: a quarter turn clockwise seen from above (Bevy's +Y is up, so negative).
 const MODEL_FORWARD_YAW: f32 = std::f32::consts::FRAC_PI_2;
-
-/// Puts the model's neutral pose (the middle frame of its first animation,
-/// which is the steering one) at a spawn point. With a `motion` the sim moves the kart from
-/// there (the kart that is returned), and it is drawn over everything in the overlay layer.
-fn spawn_racer(
-    model: &Model,
-    spawn: loader::lev::SpawnPoint,
-    motion: Option<kart::KartMotion>,
-    vram: &Vram,
-    wheel_icons: &[Icon],
-    commands: &mut Commands,
-    images: &mut Assets<Image>,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    subtract_materials: &mut Assets<SubtractMaterial>,
-) -> Option<Entity> {
-    let [x, y, z] = mesh::to_world(spawn.pos);
-    let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;
-    // The model faces along +X; a driver's heading is along +Z. A driven kart is posed by its
-    // sim instead.
-    let placement = Transform::from_xyz(x, y, z)
-        .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
-    let driven = motion.is_some();
-    let kart = kart::spawn(
-        model,
-        wheel_icons,
-        vram,
-        placement,
-        KART_LAYER,
-        motion,
-        commands,
-        images,
-        meshes,
-        materials,
-        subtract_materials,
-    );
-    driven.then(|| {
-        commands.entity(kart).insert(drive::Kart);
-        kart
-    })
-}
 
 /// The game logic and its texture animation run at this rate; rendering may
 /// run at any multiple of it.

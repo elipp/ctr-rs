@@ -1,19 +1,44 @@
-//! A kart on screen. The one being driven and the other players' are the same thing here: a
-//! root entity with the model's parts and wheels, which [`KartMotion`] poses from whatever sim
-//! drives it (`drive.rs` for ours, `remote.rs` for the others).
+//! A kart on screen. The one being driven and the other players' are the same thing here, and
+//! [`KartBuilder::spawn`] is the one place that makes either: a root entity with the model's parts
+//! and wheels, which [`KartMotion`] poses from the sim's kart of its [`KartSlot`], and the
+//! effects that go with it (flames, shadow, tire marks, exhaust, sparks, masks). Those are
+//! entities of their own that follow the kart they are [`Attached`] to, and every system that
+//! draws one reads the kart's slot from there. Where a kart differs is only its render layer.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use loader::icons::Icon;
 use loader::model::{Model, ModelHeader};
 use loader::vram::Vram;
-use render::mesh::{self, PARTS};
-use vehicle::Driver;
+use render::mesh::{self, PARTS, SCALE};
+use vehicle::shadow::{GroundShadow, ground_shadow};
 
-use crate::drive::{Pose, animation_pose, pose_of};
+use crate::drive::{Kart, Pose, animation_pose, pose_of};
 use crate::subtract::SubtractMaterial;
 
+/// The slot in the race of the kart a root entity draws. (Ours follows `Sim::own`.)
+#[derive(Component, Clone, Copy)]
+pub struct KartSlot(pub usize);
+
+/// Ties an effect to the kart entity it belongs to: it is despawned with it (by [`reap`]).
+#[derive(Component, Clone, Copy)]
+pub struct Attached(pub Entity);
+
+/// Despawns the effects of karts that are gone.
+pub fn reap(
+    attached: Query<(Entity, &Attached)>,
+    karts: Query<(), With<KartSlot>>,
+    mut commands: Commands,
+) {
+    for (entity, Attached(kart)) in &attached {
+        if !karts.contains(*kart) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
 /// What the drawing of a kart takes from its sim, pushed once per game tick.
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct KartMotion {
     previous: Pose,
     current: Pose,
@@ -25,6 +50,9 @@ pub struct KartMotion {
     animation: (u8, i16),
     /// The same one tick earlier, to blend from.
     previous_animation: (u8, i16),
+    /// The ground shadow at the last two ticks.
+    shadow_previous: Option<GroundShadow>,
+    shadow_current: Option<GroundShadow>,
 }
 
 /// The furthest apart two ticks' frames of an animation can be and still be blended: an
@@ -33,8 +61,8 @@ pub struct KartMotion {
 const MAX_BLEND_FRAMES: i16 = 4;
 
 impl KartMotion {
-    pub fn new(d: &Driver) -> KartMotion {
-        let pose = pose_of(d);
+    pub fn new(kart: &race::Kart) -> KartMotion {
+        let pose = pose_of(&kart.driver);
         KartMotion {
             previous: pose,
             current: pose,
@@ -42,39 +70,51 @@ impl KartMotion {
             inst_scale: [0; 3],
             animation: (0, 0),
             previous_animation: (0, 0),
+            shadow_previous: None,
+            shadow_current: None,
         }
-        .pushed(d)
+        .pushed(kart)
         .settled()
     }
 
-    fn pushed(mut self, d: &Driver) -> KartMotion {
+    fn pushed(mut self, kart: &race::Kart) -> KartMotion {
+        let d = &kart.driver;
+        self.shadow_current = ground_shadow(d, &mut kart.coll.gte.clone());
         self.wheel_rotation = d.wheel_rotation;
         self.inst_scale = [d.inst_scale_x, d.inst_scale_y, d.inst_scale_z].map(i32::from);
         self.animation = (d.anim_index, d.anim_frame);
         self
     }
 
-    /// No animation to blend from.
+    /// No animation or shadow to blend from.
     fn settled(mut self) -> KartMotion {
         self.previous_animation = self.animation;
+        self.shadow_previous = self.shadow_current;
         self
     }
 
     /// The kart after a tick.
-    pub fn push(&mut self, d: &Driver) {
+    pub fn push(&mut self, kart: &race::Kart) {
         let previous = self.current;
         *self = KartMotion {
             previous,
-            current: pose_of(d),
+            current: pose_of(&kart.driver),
             previous_animation: self.animation,
+            shadow_previous: self.shadow_current,
             ..*self
         }
-        .pushed(d);
+        .pushed(kart);
     }
 
     /// The kart was put somewhere else: it does not travel there.
-    pub fn reset(&mut self, d: &Driver) {
-        *self = KartMotion::new(d);
+    pub fn reset(&mut self, kart: &race::Kart) {
+        *self = KartMotion::new(kart);
+    }
+
+    /// Nothing moves between ticks now (the pause): stay where the last one put the kart.
+    pub fn freeze(&mut self) {
+        self.previous = self.current;
+        *self = self.clone().settled();
     }
 
     /// Between the last two ticks, `t` of the way to the latest.
@@ -88,6 +128,30 @@ impl KartMotion {
 }
 
 impl KartMotion {
+    /// The ground shadow between the last two ticks (`t` of the way to the latest): its centre,
+    /// orientation and the height that scales it.
+    pub fn shadow(&self, t: f32) -> Option<(Vec3, Mat3, f32)> {
+        let now = self.shadow_current?;
+        let before = self.shadow_previous.unwrap_or(now);
+        let place = |s: &GroundShadow| Vec3::new(s.x as f32, s.y as f32, s.z as f32) * SCALE;
+        let orient = |s: &GroundShadow| {
+            let column = |c: usize| {
+                Vec3::new(
+                    s.axes.m[0][c] as f32,
+                    s.axes.m[1][c] as f32,
+                    s.axes.m[2][c] as f32,
+                ) / 4096.0
+            };
+            let (up, forward) = (column(1).normalize_or_zero(), column(2).normalize_or_zero());
+            Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
+        };
+        Some((
+            place(&before).lerp(place(&now), t),
+            Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
+            before.height as f32 + (now.height - before.height) as f32 * t,
+        ))
+    }
+
     /// The frames to show and how far from the first to the second, `t` of the way through the
     /// tick. Frames of different animations, or far apart, are not blended: the latest shows.
     fn blend(&self, t: f32) -> ((u8, i16), (u8, i16), f32) {
@@ -110,9 +174,9 @@ pub struct KartRig {
     shown: Option<((u8, i16), (u8, i16), u32)>,
 }
 
-/// A kart of `model` at `placement`, in render layer `layer`. With a `motion` the sim moves it.
-/// The model faces along +Z, like a driver's heading.
-pub fn spawn(
+/// The model of a kart at `placement`, in render layer `layer`, and its wheels. With a `motion`
+/// the sim moves it. The model faces along +Z, like a driver's heading.
+fn spawn_body(
     model: &Model,
     wheel_icons: &[Icon],
     vram: &Vram,
@@ -175,6 +239,122 @@ pub fn spawn(
         ));
     }
     root
+}
+
+/// Everything that makes a kart: the assets of its pieces and the means to spawn them.
+#[derive(SystemParam)]
+pub struct KartBuilder<'w, 's> {
+    pub commands: Commands<'w, 's>,
+    images: ResMut<'w, Assets<Image>>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    subtract_materials: ResMut<'w, Assets<SubtractMaterial>>,
+    textures: Res<'w, crate::Textures>,
+    shadow_icons: Res<'w, crate::ShadowIcons>,
+    smoke_icon: Res<'w, crate::SmokeIcon>,
+    tiremark_icon: Res<'w, crate::TiremarkIcon>,
+    flame_models: Res<'w, crate::FlameModels>,
+    masks: Res<'w, crate::mask::MaskModels>,
+}
+
+impl KartBuilder<'_, '_> {
+    /// A kart of `model` at `placement`. With a `sim` (the slot it draws and that slot's kart) it
+    /// is driven, and has its effects; without, it is the model alone. Ours and the others' go
+    /// through here alike. `ours` is the one difference: our kart is the [`Kart`], and so it
+    /// is drawn over the track (in [`crate::KART_LAYER`]), while the others' are in the world's
+    /// layer, where the walls hide them.
+    pub fn spawn(
+        &mut self,
+        model: &Model,
+        wheel_icons: &[Icon],
+        placement: Transform,
+        ours: bool,
+        sim: Option<(usize, &race::Kart)>,
+    ) -> Entity {
+        let layer = if ours { crate::KART_LAYER } else { 0 };
+        let vram = &self.textures.vram;
+        let kart = spawn_body(
+            model,
+            wheel_icons,
+            vram,
+            placement,
+            layer,
+            sim.map(|(_, kart)| KartMotion::new(kart)),
+            &mut self.commands,
+            &mut self.images,
+            &mut self.meshes,
+            &mut self.materials,
+            &mut self.subtract_materials,
+        );
+        if ours {
+            self.commands.entity(kart).insert(Kart);
+        }
+        let Some((slot, _)) = sim else {
+            return kart;
+        };
+        self.commands.entity(kart).insert(KartSlot(slot));
+        crate::flame::spawn(
+            &mut self.commands,
+            &mut self.images,
+            &mut self.meshes,
+            &mut self.materials,
+            &mut self.subtract_materials,
+            &self.flame_models.0,
+            vram,
+            kart,
+            layer,
+        );
+        if let Some(icons) = &self.shadow_icons.0 {
+            crate::shadow::spawn(
+                &mut self.commands,
+                &mut self.images,
+                &mut self.meshes,
+                &mut self.subtract_materials,
+                [&icons[0], &icons[1]],
+                vram,
+                kart,
+            );
+        }
+        if let Some(icon) = &self.tiremark_icon.0 {
+            crate::skid::spawn(
+                &mut self.commands,
+                &mut self.images,
+                &mut self.meshes,
+                &mut self.materials,
+                &mut self.subtract_materials,
+                icon,
+                vram,
+                kart,
+            );
+        }
+        if let Some(icon) = &self.smoke_icon.0 {
+            crate::exhaust::spawn(
+                &mut self.commands,
+                &mut self.images,
+                &mut self.meshes,
+                &mut self.materials,
+                &mut self.subtract_materials,
+                icon,
+                vram,
+                kart,
+                layer,
+            );
+        }
+        if let Some(masks) = &self.masks.0 {
+            crate::mask::spawn(
+                masks,
+                vram,
+                kart,
+                layer,
+                &mut self.commands,
+                &mut self.images,
+                &mut self.meshes,
+                &mut self.materials,
+                &mut self.subtract_materials,
+            );
+        }
+        kart
+    }
 }
 
 /// Puts every kart where its sim has it, between the last two ticks.

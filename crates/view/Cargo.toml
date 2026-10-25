@@ -13,6 +13,7 @@ bevy = { version = "0.20.0", features = [
     "dynamic_linking",
     "gamepad",
 ] }
+arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
 coll = { path = "../coll" }
 loader = { path = "../loader" }
 vehicle = { path = "../vehicle" }
@@ -24,3 +25,4 @@ net = { path = "../net" }
 race = { path = "../race" }
 math = { path = "../math" }
 weapon = { path = "../weapon" }
+# The system clipboard, for pasting a lobby address.

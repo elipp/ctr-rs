@@ -1,5 +1,3 @@
 - [ctr-native reference](ctr-native-reference.md) — C reference lives in ./reference/ctr-native
-- [Project scope](project-scope-online-cups.md) — online multiplayer cups, physics-accurate; skip Adventure Mode
 - [Project status and plan](project-status-collision-plan.md) — what's done, decisions, next steps for collision
-- [Target frame rate](target-frame-rate-30hz.md) — 30 Hz tick, multiples of 30 FPS; never tie logic to render frames
 - [C oracles can't run on the Mac](dev-environment-c-oracles.md) — gcc -m32 fails here; user runs oracle tests on Linux

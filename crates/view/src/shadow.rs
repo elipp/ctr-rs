@@ -11,7 +11,7 @@ use loader::icons::Icon;
 use loader::vram::Vram;
 use render::shadow::{GAIN, QUADS, shadow_atlas, shadow_quads};
 
-use crate::drive::Drive;
+use crate::kart::{Attached, KartMotion, KartSlot};
 use crate::subtract::{self, SubtractMaterial};
 
 /// The mesh of four quads, rewritten each frame.
@@ -27,6 +27,7 @@ pub fn spawn(
     materials: &mut Assets<SubtractMaterial>,
     icons: [&Icon; 2],
     vram: &Vram,
+    kart: Entity,
 ) {
     let (atlas, uvs) = shadow_atlas(icons, vram);
     let mut image = Image::new(
@@ -60,6 +61,7 @@ pub fn spawn(
     ));
     commands.spawn((
         Shadow { uvs },
+        Attached(kart),
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(SubtractMaterial {
             base: StandardMaterial {
@@ -79,15 +81,19 @@ pub fn spawn(
     ));
 }
 
-/// Poses the shadow between the last two ticks, or hides it.
+/// Poses the shadows between the last two ticks, or hides them.
 pub fn update(
-    mut shadows: Query<(&Shadow, &Mesh3d, &mut Visibility)>,
-    drive: Res<Drive>,
+    mut shadows: Query<(&Shadow, &Attached, &Mesh3d, &mut Visibility)>,
+    karts: Query<&KartMotion, With<KartSlot>>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let pose = drive.shadow(fixed.overstep_fraction());
-    for (shadow, mesh, mut visibility) in &mut shadows {
+    let t = fixed.overstep_fraction();
+    for (shadow, attached, mesh, mut visibility) in &mut shadows {
+        let pose = karts
+            .get(attached.0)
+            .ok()
+            .and_then(|motion| motion.shadow(t));
         let (Some((center, axes, height)), Some(mut mesh)) = (pose, meshes.get_mut(&mesh.0)) else {
             *visibility = Visibility::Hidden;
             continue;

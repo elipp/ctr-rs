@@ -156,3 +156,70 @@ fn weapons_are_part_of_the_snapshot() {
     }
     assert_eq!(a.checksum(), b.checksum());
 }
+
+#[test]
+fn a_potion_thrown_forward_lands_ahead_and_spins_out_the_kart_that_touches_it() {
+    use weapon::mine::{MineKind, State};
+
+    let Some((level, mut race)) = race(2) else {
+        return;
+    };
+    race.karts[0].driver.held_item_id = held::POTION;
+    // Kart 0 holds Up, which throws a potion forward, and presses the fire button on tick 0.
+    let pads = |tick: u32| -> Vec<Pad> {
+        (0..2)
+            .map(|slot| Pad {
+                held: buttons::CROSS
+                    | if slot == 0 {
+                        buttons::UP | if tick == 0 { buttons::CIRCLE } else { 0 }
+                    } else {
+                        0
+                    },
+                ..Pad::default()
+            })
+            .collect()
+    };
+    race.tick(&level, &pads(0));
+    race.tick(&level, &pads(1));
+    let beaker = &race.weapons.mines()[0];
+    assert_eq!(beaker.kind, MineKind::GreenBeaker);
+    assert_eq!(beaker.state, State::InAir);
+    let thrown_from = beaker.pos;
+
+    let mut tick = 2;
+    while race
+        .weapons
+        .mines()
+        .first()
+        .is_some_and(|m| m.state == State::InAir)
+    {
+        assert!(tick < 120, "the potion lands");
+        race.tick(&level, &pads(tick));
+        tick += 1;
+    }
+    let landed = race.weapons.mines()[0].clone();
+    assert_eq!(landed.state, State::Ground);
+    assert_ne!(landed.pos, thrown_from);
+
+    // Kart 1 is put on it: it spins out, its screen flashes, and the beaker shatters.
+    let [x, y, z] = landed.pos;
+    race.karts[1].driver.pos_curr = math::Vec3 {
+        x: x << 8,
+        y: y << 8,
+        z: z << 8,
+    };
+    race.tick(&level, &pads(tick));
+    assert_eq!(
+        race.last_weapons.hits,
+        vec![weapon::Hit {
+            victim: 1,
+            attacker: Some(0),
+            // It landed a moment ago.
+            reason: weapon::Reason::Potion,
+            damage: vehicle::pick::damage::SPIN,
+        }]
+    );
+    assert_eq!(race.last_weapons.flashes, [1]);
+    assert_eq!(race.last_weapons.detonations.len(), 1);
+    assert!(race.weapons.mines().is_empty());
+}

@@ -3,7 +3,7 @@
 //! beam of light in it, comes down from above the kart while the grab holds it, and shrinks away
 //! after. The models are `render::mask`'s.
 //!
-//! Both masks and both beams are made once (hidden); the one that the driver's mask is, shows.
+//! Both masks and both beams are made for each kart (hidden); the one that the driver's mask is, shows.
 //! The head stays in the first pose of its animation, as in the game: only the beam animates.
 
 use bevy::asset::RenderAssetUsages;
@@ -11,13 +11,15 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::model::{Model, ModelHeader};
+use loader::vram::Vram;
 use render::mask::Masks;
 use render::mesh::{self, PARTS, SCALE};
 use vehicle::stuck::{MaskHead, MaskShown, Placed};
 
-use crate::drive::{Drive, animation_pose, interpolated, rotation_of};
+use crate::drive::{animation_pose, rotation_of};
+use crate::kart::{Attached, KartMotion, KartSlot};
+use crate::spawn_parts;
 use crate::subtract::SubtractMaterial;
-use crate::{KART_LAYER, Textures, spawn_parts};
 
 /// `alphaScale` at which the beam is gone.
 const ALPHA_GONE: f32 = 0x1000 as f32;
@@ -86,17 +88,18 @@ pub struct MaskPart {
     current: Option<Placement>,
 }
 
-/// Makes the four instances, hidden.
+/// Makes the four instances of `kart`'s masks, hidden.
 pub fn spawn(
-    models: Res<MaskModels>,
-    textures: Res<Textures>,
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+    masks: &Masks,
+    vram: &Vram,
+    kart: Entity,
+    layer: usize,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
 ) {
-    let Some(masks) = &models.0 else { return };
     for good_guy in [true, false] {
         let mask = masks.of(good_guy);
         for (beam, model) in [(false, &mask.head), (true, &mask.beam)] {
@@ -104,12 +107,14 @@ pub fn spawn(
                 good_guy,
                 beam,
                 model,
-                &textures,
-                &mut commands,
-                &mut images,
-                &mut meshes,
-                &mut materials,
-                &mut subtract_materials,
+                vram,
+                kart,
+                layer,
+                commands,
+                images,
+                meshes,
+                materials,
+                subtract_materials,
             );
         }
     }
@@ -119,7 +124,9 @@ fn spawn_part(
     good_guy: bool,
     beam: bool,
     model: &Model,
-    textures: &Textures,
+    vram: &Vram,
+    kart: Entity,
+    layer: usize,
     commands: &mut Commands,
     images: &mut Assets<Image>,
     meshes: &mut Assets<Mesh>,
@@ -131,7 +138,7 @@ fn spawn_part(
         return;
     };
     // Unscaled: the mask's own size is set on the entity.
-    let data = mesh::model_mesh(header, &pose, &textures.vram, [0x1000; 3]);
+    let data = mesh::model_mesh(header, &pose, vram, [0x1000; 3]);
     let mut atlas = Image::new(
         Extent3d {
             width: data.atlas.width as u32,
@@ -164,28 +171,37 @@ fn spawn_part(
         meshes,
         materials,
         subtract_materials,
-        KART_LAYER,
+        layer,
     );
-    commands.entity(group).insert(MaskPart {
-        good_guy,
-        beam,
-        header: header.clone(),
-        parts,
-        frame: 0,
-        alpha: 0,
-        tick: 0,
-        previous: None,
-        current: None,
-    });
+    commands.entity(group).insert((
+        Attached(kart),
+        MaskPart {
+            good_guy,
+            beam,
+            header: header.clone(),
+            parts,
+            frame: 0,
+            alpha: 0,
+            tick: 0,
+            previous: None,
+            current: None,
+        },
+    ));
 }
 
-/// Shows the driver's mask where the sim has it, between the last two ticks, and the beam in the
+/// Shows each driver's mask where the sim has it, between the last two ticks, and the beam in the
 /// frame of its animation.
 pub fn update(
-    drive: Res<Drive>,
     sim: Res<crate::props::Sim>,
     fixed: Res<Time<Fixed>>,
-    mut instances: Query<(&mut MaskPart, &mut Transform, &mut Visibility, &Children)>,
+    karts: Query<(&KartSlot, &KartMotion)>,
+    mut instances: Query<(
+        &mut MaskPart,
+        &Attached,
+        &mut Transform,
+        &mut Visibility,
+        &Children,
+    )>,
     parts: Query<(
         Option<&MeshMaterial3d<StandardMaterial>>,
         Option<&MeshMaterial3d<SubtractMaterial>>,
@@ -194,18 +210,21 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let mask = sim.driver().mask;
-    let kart = {
-        let pose = interpolated(&drive, &fixed);
-        Transform {
-            translation: pose.translation,
-            rotation: pose.rotation,
-            scale: Vec3::ONE,
-        }
-    };
     let t = fixed.overstep_fraction();
 
-    for (mut part, mut transform, mut visibility, children) in &mut instances {
+    for (mut part, attached, mut transform, mut visibility, children) in &mut instances {
+        let Ok((slot, motion)) = karts.get(attached.0) else {
+            continue;
+        };
+        let mask = sim.race.karts.get(slot.0).and_then(|k| k.driver.mask);
+        let kart = {
+            let pose = motion.pose(t);
+            Transform {
+                translation: pose.translation,
+                rotation: pose.rotation,
+                scale: Vec3::ONE,
+            }
+        };
         let shown = mask
             .and_then(|m| Some((m, m.shown?)))
             .filter(|(m, _)| m.good_guy == part.good_guy);

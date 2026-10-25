@@ -335,14 +335,28 @@ impl Race {
                 let kind = match launch {
                     vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
                     vehicle::item::Launch::Missile => weapon::Kind::Missile,
-                    vehicle::item::Launch::Mine => {
-                        let gte = &mut kart.coll.gte;
+                    vehicle::item::Launch::Mine | vehicle::item::Launch::Potion => {
+                        // A potion goes forward with Up held, backward with Down held (Up wins),
+                        // and is dropped otherwise.
+                        let held = input.buttons_held;
+                        let potion = (launch == vehicle::item::Launch::Potion).then_some(
+                            if held & vehicle::buttons::UP != 0 {
+                                weapon::mine::Throw::Forward
+                            } else if held & vehicle::buttons::DOWN != 0 {
+                                weapon::mine::Throw::Backward
+                            } else {
+                                weapon::mine::Throw::Drop
+                            },
+                        );
                         self.weapons.drop_mine(
-                            slot,
-                            &kart.driver,
+                            weapon::mine::Release {
+                                shooter: slot,
+                                driver: &kart.driver,
+                                gte: &mut kart.coll.gte,
+                                potion,
+                            },
                             level,
                             &bodies,
-                            gte,
                             env.elapsed_time_ms,
                         );
                         vehicle::item::launch_effects(&kart.driver, launch, effects);

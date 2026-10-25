@@ -92,6 +92,8 @@ pub enum Reason {
     /// A Nitro or TNT crate that was dropped.
     Mine = 2,
     Missile = 3,
+    /// A potion that was thrown a moment ago.
+    Potion = 4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,7 +253,7 @@ pub struct Tick {
     pub explosions: Vec<Explosion>,
     /// The mines that went off.
     pub detonations: Vec<mine::Detonation>,
-    /// The karts a crate's blast went off on, whose screens flash white (`RB_Burst_CollThread`).
+    /// The karts a blast went off on, whose screens flash white (`RB_Burst_CollThread`).
     pub flashes: Vec<usize>,
 }
 
@@ -390,14 +392,16 @@ impl Weapons {
         random_number: &mut i32,
     ) -> Tick {
         let mut tick = std::mem::take(&mut self.pending);
+        let mut coll = Collision::default();
         // The mines come first (their bucket does).
         self.tick_mines(&mut mine::Ctx {
             bodies,
             elapsed_ms,
             random_number,
             tick: &mut tick,
+            level: Some(level),
+            coll: &mut coll,
         });
-        let mut coll = Collision::default();
         for i in 0..self.projectiles.len() {
             if self.projectiles[i].dead {
                 continue;
@@ -440,6 +444,7 @@ impl Weapons {
         });
         for (victim, body) in bodies.iter().enumerate() {
             if victim != p.parent && in_reach(p.pos, body.at, radius_squared) {
+                tick.flashes.push(victim);
                 tick.hits.push(Hit {
                     victim,
                     attacker: Some(p.parent),

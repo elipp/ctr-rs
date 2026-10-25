@@ -100,6 +100,7 @@ pub mod buttons {
     pub const CROSS: u32 = 0x10;
     pub const SQUARE: u32 = 0x20;
     pub const CIRCLE: u32 = 0x40;
+    pub const UP: u32 = 0x1;
     pub const DOWN: u32 = 0x2;
     pub const R1: u32 = 0x400;
     pub const L1: u32 = 0x800;
