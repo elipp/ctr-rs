@@ -49,8 +49,93 @@ const WUMPA_JUICED_COUNT: i8 = 10;
 /// `HELD_ITEM_STACK_COUNT`: what a triple bomb or missile holds.
 const STACK_COUNT: u8 = 3;
 
-/// `ITEMSET_FALLBACK_ITEM_COUNT`: items 0 to `MISSILE_3X`.
-const FALLBACK_ITEM_COUNT: i32 = held::MISSILE_3X as i32 + 1;
+/// The items that can be had: the clock and the warpball (the electric ball) are left out until
+/// they exist in the sim, and the spring, which the roulette never gives.
+pub const ENABLED: [u8; 9] = [
+    held::TURBO,
+    held::BOMB_1X,
+    held::MISSILE_1X,
+    held::TNT,
+    held::POTION,
+    held::SHIELD,
+    held::MASK,
+    held::BOMB_3X,
+    held::MISSILE_3X,
+];
+
+/// `data.RNG_itemSetRace1`: by 20 entries, the more an item has, the likelier it is. 8/20 potion,
+/// 8/20 TNT, 2/20 bomb, 1/20 turbo, 1/20 shield.
+const RACE1: [u8; 20] = [4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 0, 6];
+
+/// `data.RNG_itemSetRace2`: 52 entries.
+const RACE2: [u8; 52] = [
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 10, 10, 10, 0, 0, 0, 0, 0,
+    6, 6, 6, 2, 2, 2, 11, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 8,
+];
+
+/// `data.RNG_itemSetRace3`: 20 entries.
+const RACE3: [u8; 20] = [
+    4, 3, 1, 10, 10, 0, 0, 6, 2, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7, 8,
+];
+
+/// `data.RNG_itemSetRace4`: 20 stored, but the game draws from the first 19 (the last entry, a
+/// turbo, is never given).
+const RACE4: [u8; 19] = [0, 6, 2, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8];
+
+/// `ITEMSET_RNG_BUCKET_COUNT` and `ITEMSET_RNG_RANDOM_SHIFT`
+const RNG_BUCKETS: u32 = 200;
+const RNG_SHIFT: u32 = 3;
+
+/// The item set of a driver in `place` (0 for the leader) of `racers` on `lap`, as
+/// `VehPhysGeneral_SetHeldItem` picks it for a race: 0 to 3 for `RACE1` to `RACE4`.
+///
+/// DIVERGENCE: retail has no set for 7 racers or for 1, which leaves the roulette without an
+/// item. 7 or more go by the table for 8 here, and 2 or fewer give the leader `RACE1` and the
+/// rest `RACE2`. (Retail's 2 is a boss race, which is not here.)
+fn item_set(racers: usize, place: usize, lap: u8, random_number: &mut i32) -> usize {
+    let mut set = match racers {
+        0..=2 => usize::from(place != 0),
+        3 => match place {
+            0 => 0,
+            // The 2nd place of three has the 2nd or the 3rd place's items, by the next number.
+            1 if math::mix_rng_scramble(random_number) & 1 != 0 => 1,
+            1 => 2,
+            _ => 3,
+        },
+        4 => place.min(3),
+        5 => place.min(3),
+        6 => match place {
+            0 => 0,
+            5 => 3,
+            p => (p - 1) / 2 + 1,
+        },
+        _ => match place {
+            1 => 1,
+            p => (p / 2).min(3),
+        },
+    };
+    // The 4th place's set is the 3rd place's on the first lap.
+    if set == 3 && lap == 0 {
+        set = 2;
+    }
+    set
+}
+
+/// Draws an item from `set`'s table: the entry that `rng` lands on, or if that is not enabled the
+/// next one that is, wrapping round.
+fn draw(set: usize, rng: u32) -> u8 {
+    let table: &[u8] = match set {
+        0 => &RACE1,
+        1 => &RACE2,
+        2 => &RACE3,
+        _ => &RACE4,
+    };
+    let start = (rng * table.len() as u32 / RNG_BUCKETS) as usize;
+    (0..table.len())
+        .map(|n| table[(start + n) % table.len()])
+        .find(|item| ENABLED.contains(item))
+        .unwrap_or(held::TURBO)
+}
 
 /// A driver with nothing in hand.
 pub fn empty(d: &mut Driver) {
@@ -77,7 +162,7 @@ pub fn start_roulette(d: &mut Driver) {
 
 /// The roulette, one game tick (`VehPhysProc`'s item roll): it counts down and then picks.
 /// `random_number` is `sdata->randomNumber`.
-pub fn tick(d: &mut Driver, random_number: &mut i32) {
+pub fn tick(d: &mut Driver, racers: usize, random_number: &mut i32) {
     if d.held_item_id != held::ROULETTE {
         return;
     }
@@ -85,7 +170,7 @@ pub fn tick(d: &mut Driver, random_number: &mut i32) {
         d.item_roll_timer -= 1;
         return;
     }
-    set_held_item(d, random_number);
+    set_held_item(d, racers, random_number);
 }
 
 /// The weapons that can be fired so far. A driver that holds another one throws it away with the
@@ -283,13 +368,22 @@ pub fn debug_roll(d: &mut Driver, item: u8) {
 }
 
 /// `VehPhysGeneral_SetHeldItem` for the rain cloud, which picks the weapon when it ends.
-pub fn pick(d: &mut Driver, random_number: &mut i32) {
-    set_held_item(d, random_number);
+pub fn pick(d: &mut Driver, racers: usize, random_number: &mut i32) {
+    set_held_item(d, racers, random_number);
 }
 
-/// `VehPhysGeneral_SetHeldItem`, as far as a driver without a place goes.
-fn set_held_item(d: &mut Driver, random_number: &mut i32) {
-    let item = (math::mix_rng_scramble(random_number) % FALLBACK_ITEM_COUNT) as u8;
+/// `VehPhysGeneral_SetHeldItem` for a race of `racers`. (Battle and the crystal challenge are not
+/// here.)
+fn set_held_item(d: &mut Driver, racers: usize, random_number: &mut i32) {
+    let set = item_set(
+        racers,
+        d.driver_rank.max(0) as usize,
+        d.lap_index,
+        random_number,
+    );
+    // (`MixRNG_Scramble() >> 3) % 200`; the shift is of an unsigned word.)
+    let rng = (math::mix_rng_scramble(random_number) as u32 >> RNG_SHIFT) % RNG_BUCKETS;
+    let item = draw(set, rng);
     give(d, item);
 }
 
@@ -323,10 +417,10 @@ mod tests {
         assert_eq!(d.held_item_id, held::ROULETTE);
         let mut rng = 1;
         for _ in 0..ROLL_TICKS {
-            tick(&mut d, &mut rng);
+            tick(&mut d, 8, &mut rng);
             assert_eq!(d.held_item_id, held::ROULETTE);
         }
-        tick(&mut d, &mut rng);
+        tick(&mut d, 8, &mut rng);
         assert!(d.held_item_id <= held::MISSILE_3X);
         assert_ne!(d.held_item_id, held::SPRING);
     }
@@ -424,9 +518,48 @@ mod tests {
         for seed in 0..200 {
             let mut d = driver();
             let mut rng = seed;
-            set_held_item(&mut d, &mut rng);
+            set_held_item(&mut d, 8, &mut rng);
             let triple = matches!(d.held_item_id, held::BOMB_3X | held::MISSILE_3X);
             assert_eq!(d.num_held_items, if triple { 3 } else { 0 });
         }
+    }
+
+    #[test]
+    fn the_tables_are_drawn_from_as_the_game_does() {
+        // Race 1: entry 0 of 20 is a potion, the last is a shield.
+        assert_eq!(draw(0, 0), held::POTION);
+        assert_eq!(draw(0, 199), held::SHIELD);
+        // Race 4 samples 19 entries: the first is a turbo.
+        assert_eq!(draw(3, 0), held::TURBO);
+        // A clock (the last entry of Race 3) or a warpball moves on to the next enabled entry,
+        // wrapping round: Race 3 ends 9, 9, 9, 7, 7, 7, 7, 7, 8, so a warpball goes on to a mask,
+        // and a clock to the potion at the start.
+        assert_eq!(draw(2, 11 * 200 / 20), held::MASK);
+        assert_eq!(draw(2, 199), held::POTION);
+        for set in 0..4 {
+            for rng in 0..RNG_BUCKETS {
+                assert!(ENABLED.contains(&draw(set, rng)));
+            }
+        }
+    }
+
+    #[test]
+    fn the_place_decides_the_item_set() {
+        let mut rng = 0;
+        // Eight racers, from the lead on a later lap.
+        let sets: Vec<_> = (0..8).map(|p| item_set(8, p, 1, &mut rng)).collect();
+        assert_eq!(sets, [0, 1, 1, 1, 2, 2, 3, 3]);
+        // The 4th place's set is the 3rd place's on the first lap.
+        assert_eq!(item_set(8, 7, 0, &mut rng), 2);
+        let sets: Vec<_> = (0..6).map(|p| item_set(6, p, 1, &mut rng)).collect();
+        assert_eq!(sets, [0, 1, 1, 2, 2, 3]);
+        let sets: Vec<_> = (0..5).map(|p| item_set(5, p, 1, &mut rng)).collect();
+        assert_eq!(sets, [0, 1, 2, 3, 3]);
+        assert_eq!(item_set(4, 3, 1, &mut rng), 3);
+        assert_eq!(rng, 0, "only 3 racers draw a number for the set");
+        assert_eq!(item_set(3, 0, 1, &mut rng), 0);
+        assert_eq!(item_set(3, 2, 1, &mut rng), 3);
+        assert!(matches!(item_set(3, 1, 1, &mut rng), 1 | 2));
+        assert_ne!(rng, 0);
     }
 }

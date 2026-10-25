@@ -439,9 +439,11 @@ impl Race {
                 vehicle::cloud::init(victim, self.tick, &mut self.objects.random_number);
             }
         }
+        let racers = self.karts.len();
         for kart in &mut self.karts {
             vehicle::cloud::tick(
                 &mut kart.driver,
+                racers,
                 env.elapsed_time_ms,
                 &mut self.objects.random_number,
             );
@@ -452,7 +454,7 @@ impl Race {
         }
         // The weapon roulettes that crates started run on, and pick.
         for kart in &mut self.karts {
-            vehicle::item::tick(&mut kart.driver, &mut self.objects.random_number);
+            vehicle::item::tick(&mut kart.driver, racers, &mut self.objects.random_number);
         }
         let mut ticks: Vec<KartTick> = self
             .karts

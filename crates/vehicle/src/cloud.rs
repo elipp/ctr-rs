@@ -80,7 +80,7 @@ pub fn effect(d: &Driver) -> u8 {
 
 /// `RB_RainCloud_ThTick` and `RB_RainCloud_FadeAway`, once per tick, after the drivers'. Needs the
 /// roulette's random number for the weapon it rolls when the cloud ends.
-pub fn tick(d: &mut Driver, elapsed_time_ms: i32, random_number: &mut i32) {
+pub fn tick(d: &mut Driver, racers: usize, elapsed_time_ms: i32, random_number: &mut i32) {
     let (_, at) = crate::baked::inst_matrix(d);
 
     // The clouds that are going away shrink, and follow the kart halfway.
@@ -132,7 +132,7 @@ pub fn tick(d: &mut Driver, elapsed_time_ms: i32, random_number: &mut i32) {
     d.cloud = None;
     if cloud.effect == rain_cloud::ITEM_ROLL && d.held_item_id != held::NONE {
         d.item_roll_timer = 0;
-        item::pick(d, random_number);
+        item::pick(d, racers, random_number);
     }
     d.fading_clouds.push(cloud);
 }
@@ -190,15 +190,15 @@ mod tests {
         init(&mut d, 0, &mut rng);
         // 0x1e00 / 32 ms: 240 ticks, and one more that sees it at zero.
         for _ in 0..240 {
-            tick(&mut d, 32, &mut rng);
+            tick(&mut d, 8, 32, &mut rng);
             assert!(d.cloud.is_some());
         }
-        tick(&mut d, 32, &mut rng);
+        tick(&mut d, 8, 32, &mut rng);
         assert_eq!(effect(&d), rain_cloud::NONE);
         assert_eq!(d.fading_clouds.len(), 1);
         // It shrinks 0x100 a tick from the kart's size, and is gone when it goes below zero.
         for _ in 0..40 {
-            tick(&mut d, 32, &mut rng);
+            tick(&mut d, 8, 32, &mut rng);
         }
         assert!(d.fading_clouds.is_empty());
     }
@@ -208,12 +208,12 @@ mod tests {
         let mut d = driver(held::TURBO);
         let mut rng = 1;
         init(&mut d, 0, &mut rng);
-        tick(&mut d, 32, &mut rng);
+        tick(&mut d, 8, 32, &mut rng);
         assert_eq!(d.held_item_id, held::ROULETTE);
         assert_eq!(d.item_roll_timer, ROLL_TICKS);
         // When the cloud ends, the roulette picks.
         d.cloud.as_mut().unwrap().time_ms = 0;
-        tick(&mut d, 32, &mut rng);
+        tick(&mut d, 8, 32, &mut rng);
         assert_ne!(d.held_item_id, held::ROULETTE);
         assert_eq!(d.item_roll_timer, 0);
     }
@@ -224,7 +224,7 @@ mod tests {
         let mut rng = 1;
         init(&mut d, 0, &mut rng);
         d.actions_flag_set |= actions::MASK_WEAPON;
-        tick(&mut d, 32, &mut rng);
+        tick(&mut d, 8, 32, &mut rng);
         assert!(d.cloud.is_none());
         assert_eq!(d.fading_clouds.len(), 1);
     }
