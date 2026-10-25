@@ -25,7 +25,7 @@ pub enum Action {
     CloseLobby,
     StartRace,
     RestartRace,
-    /// (Debug) Roll that item into our hand: 0 to 11.
+    /// (Debug) Roll that item into our hand: one of `vehicle::item::ENABLED`.
     DebugAddWeapon(u8),
     /// (Debug) Set our wumpa count, clamped to what a kart can hold.
     DebugSetWumpa(u8),
@@ -40,7 +40,7 @@ fn word(text: &str) -> (&str, &str) {
 
 const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
 const RACE_USAGE: &str = "Usage: /race start | restart";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 11>";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11>";
 
 impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
@@ -99,9 +99,11 @@ impl Action {
                     "weapon" => value
                         .parse()
                         .ok()
-                        .filter(|&n| n <= 11)
+                        .filter(|n| vehicle::item::ENABLED.contains(n))
                         .map(Action::DebugAddWeapon)
-                        .ok_or_else(|| "Usage: /debug set weapon <0 to 11>".to_string()),
+                        .ok_or_else(|| {
+                            "Usage: /debug set weapon <0 to 4, 6, 7, 10 or 11>".to_string()
+                        }),
                     "" => Err(DEBUG_USAGE.into()),
                     _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
                 }
@@ -404,7 +406,7 @@ mod tests {
         assert!(error("debug").starts_with("Usage: /debug"));
         assert!(error("debug set").starts_with("Usage: /debug"));
         assert!(error("debug set teapot 3").contains("/debug set teapot"));
-        assert!(error("debug set weapon 12").contains("0 to 11"));
+        assert!(error("debug set weapon 12").contains("0 to 4, 6, 7, 10 or 11"));
         assert!(error("debug set wumpa x").contains("<number>"));
         assert!(error("join-lobby abc").contains("Unknown command: /join-lobby"));
         assert!(error("lobby join nonsense").starts_with("Not a lobby address"));

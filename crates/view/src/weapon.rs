@@ -86,9 +86,6 @@ fn shine_size(shine: &Shine) -> Vec2 {
 const THETA_STEP: f32 = 0x100 as f32;
 const FRAMES_PER_SECOND: f32 = 30.0;
 
-/// `UI_WEAPON_ROULETTE_RACING_COUNT`: the roulette shuffles through the first twelve items.
-const ROULETTE_ITEMS: u32 = 12;
-
 /// How many times a second the roulette picture changes: every other tick of the game.
 const SHUFFLES_PER_SECOND: f32 = 15.0;
 
@@ -104,14 +101,10 @@ impl Plugin for WeaponPlugin {
 }
 
 /// The item the roulette shows at `step`: a scramble of the step, so that it does not go round in
-/// order. (Retail takes `rand()`; this is only for show.) The spring turns into a turbo.
+/// order. (Retail takes `rand()`; this is only for show.) Only the items it can land on.
 fn shuffled(step: u32) -> u8 {
-    let item = (step.wrapping_mul(2_654_435_761) >> 16) % ROULETTE_ITEMS;
-    if item == held::SPRING as u32 {
-        held::TURBO
-    } else {
-        item as u8
-    }
+    let enabled = &vehicle::item::ENABLED;
+    enabled[((step.wrapping_mul(2_654_435_761) >> 16) as usize) % enabled.len()]
 }
 
 fn show(
@@ -323,15 +316,13 @@ fn shine(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use render::weapons::ICON_IDS;
 
     #[test]
     fn the_shuffle_only_shows_items_that_have_pictures() {
         for step in 0..2000 {
             let item = shuffled(step);
-            assert!(item < ROULETTE_ITEMS as u8 && item != held::SPRING);
+            assert!(vehicle::item::ENABLED.contains(&item));
             assert!(cell(icon_id(item, false, 0)).is_some());
         }
-        assert!(ICON_IDS.len() > ROULETTE_ITEMS as usize);
     }
 }
