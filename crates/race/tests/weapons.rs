@@ -307,7 +307,7 @@ fn a_bomb_breaks_the_weapon_crate_it_flies_through_and_the_kart_is_paid() {
         .iter()
         .position(|c| c.instance == crate_at)
         .expect("the crate is placed");
-    // `/debug-add-weapon 1`: a bomb, fired on tick 0, and left to fly.
+    // `/debug-set-weapon 1`: a bomb, fired on tick 0, and left to fly.
     race.karts[0].driver.held_item_id = held::BOMB_1X;
     let start = race.karts[0].driver.pos_curr;
     let mut flew_to = None;
@@ -333,7 +333,7 @@ fn a_bomb_breaks_the_weapon_crate_it_flies_through_and_the_kart_is_paid() {
     );
 }
 
-/// `/debug-add-weapon 4` and a throw forward, then `/debug-add-weapon 1` and a shot: the bomb
+/// `/debug-set-weapon 4` and a throw forward, then `/debug-set-weapon 1` and a shot: the bomb
 /// flies through a wumpa crate on its way to the green bottle that lies beyond it, and goes off
 /// on the bottle.
 #[test]
@@ -438,7 +438,7 @@ const START: [i32; 3] = [1679, 1, -10665];
 
 /// Slide Coliseum with `players` karts and a row of five Nitro crates on the first kart's line, 600
 /// units ahead and 6 apart (the missile's burst reaches 128, and it goes off up to 96 before the
-/// first), and a sixth 1000 ahead. The first kart holds a missile (`/debug-add-weapon 2`). Returns
+/// first), and a sixth 1000 ahead. The first kart holds a missile (`/debug-set-weapon 2`). Returns
 /// the x of each of the five, and of the sixth.
 fn nitro_row(players: usize) -> Option<(Level, Race, Vec<i32>, i32)> {
     use weapon::mine::MineKind;

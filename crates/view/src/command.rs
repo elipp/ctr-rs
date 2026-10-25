@@ -50,13 +50,13 @@ impl Action {
                 .parse::<i64>()
                 .map(|n| Action::DebugSetWumpa(n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8))
                 .map_err(|_| "Usage: /debug-set-wumpa <number>".to_string()),
-            "debug-add-weapon" => argument
+            "debug-set-weapon" => argument
                 .trim()
                 .parse()
                 .ok()
                 .filter(|&n| n <= 11)
                 .map(Action::DebugAddWeapon)
-                .ok_or_else(|| "Usage: /debug-add-weapon <0 to 11>".to_string()),
+                .ok_or_else(|| "Usage: /debug-set-weapon <0 to 11>".to_string()),
             _ => Err(format!("Unknown command: /{name}")),
         }
     }
