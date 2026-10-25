@@ -1,11 +1,11 @@
-//! The online lobby (`--drive`): L opens one and prints its address, `/join-lobby <address>` (`command.rs`)
+//! The online lobby (`--drive`): L opens one and prints its address, `/lobby join <address>` (`command.rs`)
 //! joins one. The host's G starts the race, which is tick 0 for everyone. The connections themselves
 //! are `net`'s; this reports what happens to them and hands the race to `drive.rs`.
 //!
-//! * L or `/create-lobby`: open a lobby (L again, or `/close-lobby`, to close it)
-//! * `/join-lobby <address>`: join the lobby at an address
-//! * G or `/start-race`: start the race, once the others have joined (the host only)
-//! * F9 or `/restart-race`: start the race in progress over (the host only)
+//! * L or `/lobby create`: open a lobby (L again, or `/lobby close`, to close it)
+//! * `/lobby join <address>`: join the lobby at an address
+//! * G or `/race start`: start the race, once the others have joined (the host only)
+//! * F9 or `/race restart`: start the race in progress over (the host only)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -95,7 +95,7 @@ impl Online {
 #[derive(Resource, Default)]
 pub struct Lobby {
     session: Option<Session>,
-    /// We joined someone else's lobby (`/join-lobby`) instead of opening one: the host starts the race.
+    /// We joined someone else's lobby (`/lobby join`) instead of opening one: the host starts the race.
     joined: bool,
     /// Who is in the lobby and the character each drives (the short key and the character), as
     /// the last [`Event::Lobby`] said, and whether there has been one: what changes in the next is
@@ -231,14 +231,14 @@ impl Plugin for LobbyPlugin {
 fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
     Some(match action {
         Action::CreateLobby | Action::JoinLobby(_) if lobby.is_open() => {
-            "Close the lobby first (/close-lobby)"
+            "Close the lobby first (/lobby close)"
         }
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::StartRace if lobby.online.is_some() => "The race has started (/restart-race)",
-        Action::RestartRace if lobby.online.is_none() => "No race to restart (/start-race)",
+        Action::StartRace if lobby.online.is_some() => "The race has started (/race restart)",
+        Action::RestartRace if lobby.online.is_none() => "No race to restart (/race start)",
         Action::StartRace | Action::RestartRace if lobby.countdown.is_some() => {
             "A countdown is already running"
         }
@@ -307,7 +307,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         match event {
             Event::Open(ticket) => {
                 println!(
-                    "lobby open. To join it, type this in another viewer:\n/join-lobby {ticket}\nPress G to start the race once the others have joined."
+                    "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nPress G to start the race once the others have joined."
                 );
                 toasts.write(
                     Toast::new("Lobby opened!".to_string(), 2000)

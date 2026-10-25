@@ -5,7 +5,7 @@
 - the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon
 - the other uses of a TNT crate on the head (`instTntRecv`): half the speed, the fire button ignored, the driving animation held at its middle frame
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
-- the crates' shape in `Objects` (for a `/debug-add-crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
+- the crates' shape in `Objects` (for a `/debug add crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
 
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `view/src/shield.rs`)
 - the shield bubble's hit on a kart it bumps (`SHIELD_FLAG_CRASH_ATTACK` in `VehPhysCrash_Attack`), and other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)

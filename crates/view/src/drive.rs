@@ -9,8 +9,8 @@
 //!   empty for the boost
 //! * M: use the item in hand (Circle): the mask is longer with 10 wumpa fruit. A bomb or a
 //!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
-//! * `/debug-set-wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
-//! * `/debug-set-weapon <N>`: (debug) drop what is in hand and roll item N (0 to 11), as the
+//! * `/debug set wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
+//! * `/debug set weapon <N>`: (debug) drop what is in hand and roll item N (0 to 11), as the
 //!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online, not in
 //!   a demo
 //! * Left mouse button held and mouse moves: turn the camera around the kart; scroll wheel:
@@ -816,8 +816,8 @@ fn drive_tick(
     drive.current_view = view_of(&drive.camera);
 }
 
-/// The debug commands that change our kart: `/debug-set-weapon <N>` drops what we hold and rolls
-/// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug-set-wumpa <N>`
+/// The debug commands that change our kart: `/debug set weapon <N>` drops what we hold and rolls
+/// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug set wumpa <N>`
 /// sets the wumpa count. Not online, and not in a demo, which is the inputs alone.
 fn debug_actions(
     mut actions: MessageReader<Action>,
