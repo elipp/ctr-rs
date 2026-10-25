@@ -170,7 +170,7 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
 fn load_level(id: u32) -> LevelData {
     let path = bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    // TODO: a player who joins a race on a map they do not have should be sent it (see TODO.md).
+    // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
     assert!(
         !map::is_map_id(id) || maps::get(id).is_some(),
         "map {id:#x} is not in assets/maps"
@@ -561,16 +561,20 @@ fn switch_level(world: &mut World) {
     let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
+    // (A map we lack is waited for, see `lobby.rs`.)
     let race_track = world
         .get_resource::<lobby::Lobby>()
         .and_then(|l| l.online.as_ref())
-        .map(|o| o.track);
+        .map(|o| (o.track, o.hash));
+    let missing =
+        race_track.is_some_and(|(track, hash)| map::is_map_id(track) && !maps::has(track, hash));
+    let race_track = race_track.map(|(track, _)| track);
     if race_track.is_some() {
         (level_step, racer_step) = (0, 0);
     }
     let mut options = *world.resource::<Options>();
     let current = world.resource::<LevelNumber>().0;
-    let wanted = race_track.filter(|&track| track != current);
+    let wanted = race_track.filter(|&track| track != current && !missing);
     if options.racer.is_none() {
         racer_step = 0;
     }

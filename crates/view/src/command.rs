@@ -23,6 +23,8 @@ pub enum Action {
     CreateLobby,
     JoinLobby(Ticket),
     CloseLobby,
+    /// Delete the maps other players sent us (`maps::purge`).
+    PurgeCache,
     StartRace,
     RestartRace,
     /// (Debug) Roll that item into our hand: one of `vehicle::item::ENABLED`.
@@ -39,6 +41,7 @@ fn word(text: &str) -> (&str, &str) {
 }
 
 const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
+const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11>";
 
@@ -51,6 +54,7 @@ impl Action {
         match name {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
+            "cache" => Action::cache(rest),
             "debug" => Action::debug(rest),
             _ => Err(format!("Unknown command: /{name}")),
         }
@@ -67,6 +71,15 @@ impl Action {
             "close" => Ok(Action::CloseLobby),
             "" => Err(LOBBY_USAGE.into()),
             _ => Err(format!("Unknown command: /lobby {sub}\n{LOBBY_USAGE}")),
+        }
+    }
+
+    fn cache(line: &str) -> Result<Action, String> {
+        let (sub, _) = word(line);
+        match sub {
+            "purge" => Ok(Action::PurgeCache),
+            "" => Err(CACHE_USAGE.into()),
+            _ => Err(format!("Unknown command: /cache {sub}\n{CACHE_USAGE}")),
         }
     }
 
@@ -377,6 +390,10 @@ mod tests {
         assert!(matches!(
             Action::parse("lobby close"),
             Ok(Action::CloseLobby)
+        ));
+        assert!(matches!(
+            Action::parse("cache purge"),
+            Ok(Action::PurgeCache)
         ));
         assert!(matches!(Action::parse("race start"), Ok(Action::StartRace)));
         assert!(matches!(
