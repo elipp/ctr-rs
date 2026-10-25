@@ -5,11 +5,11 @@
 //! The fly-in is a function of the tick alone, and the chase camera runs underneath it all the
 //! while, so the camera is the same for a race that is played again from a snapshot.
 
-use gte::Gte;
 use loader::lev::{FlyIn, Level, SVec3, quad_flags};
 use math::mips;
+use vehicle::rotmat::rot_to_matrix;
 
-use crate::{CameraDc, convert_rot_to_matrix};
+use crate::CameraDc;
 
 /// `transitionFrame` at the start of the fly-in: it counts down one a tick, and at 0 the fly-in
 /// is over.
@@ -93,7 +93,7 @@ impl CameraDc {
             y: spawns[0].rot.y.wrapping_add(0x400),
             z: spawns[0].rot.z,
         };
-        let matrix = convert_rot_to_matrix(&mut Gte::new(), rot);
+        let matrix = rot_to_matrix(rot);
         let [a, b] = ORIGIN_SPAWNS.map(|i| {
             let mut pos = spawns[i].pos;
             pos.y = self.track_height(level, pos);

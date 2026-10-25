@@ -128,7 +128,7 @@ fn build(
         .spawn((
             WumpaIcon {
                 diameter: (high - low).max_element(),
-                rest: crate::props::rotation_of(&mut gte::Gte::default(), inst.rot),
+                rest: crate::props::rotation_of(inst.rot),
             },
             Transform::default(),
             Visibility::default(),

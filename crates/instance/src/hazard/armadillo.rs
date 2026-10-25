@@ -5,7 +5,7 @@ use loader::lev::{InstDef, SVec3};
 use vehicle::Matrix;
 
 use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
-use vehicle::rotmat::convert_rot_to_matrix;
+use vehicle::rotmat::rot_to_matrix;
 
 /// Ticks of rolling are counted in milliseconds of `elapsedTimeMS`: 32 a tick, up to `ROLL_TIME`.
 const ROLL_STEP: i16 = 0x20;
@@ -54,7 +54,7 @@ pub struct Armadillo {
 }
 
 fn matrix_of(rot: SVec3) -> Matrix {
-    convert_rot_to_matrix(&mut gte::Gte::default(), rot)
+    rot_to_matrix(rot)
 }
 
 impl Armadillo {

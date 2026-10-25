@@ -90,6 +90,11 @@ pub fn convert_rot_to_matrix(gte: &mut Gte, rot: SVec3) -> Matrix {
     unpack(&r)
 }
 
+/// [`convert_rot_to_matrix`] for a caller with no use for the GTE it leaves the matrix in.
+pub fn rot_to_matrix(rot: SVec3) -> Matrix {
+    convert_rot_to_matrix(&mut Gte::default(), rot)
+}
+
 fn pack(m: &Matrix) -> [u32; 5] {
     let w = |a: i16, b: i16| a as u16 as u32 | (b as u16 as u32) << 16;
     let m = &m.m;
