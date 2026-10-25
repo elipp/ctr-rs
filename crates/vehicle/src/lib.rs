@@ -428,6 +428,9 @@ pub struct Driver {
     pub num_times_hit_weapon_box: u8,
     /// A bomb the driver threw is in flight (`instBombThrow != NULL`): the fire button sets it off.
     pub bomb_thrown: bool,
+    /// `instTntRecv->scale.y`: the squash of the TNT crate on the driver's head or on its way
+    /// there; `None` when there is none (`instTntRecv == NULL`).
+    pub tnt_scale_y: Option<i16>,
     /// The driver pressed the fire button for that bomb to go off, which the weapons do next.
     pub detonate_bomb: bool,
     pub hazard_timer: i16,

@@ -413,6 +413,7 @@ impl Race {
         }
         for (slot, kart) in self.karts.iter_mut().enumerate() {
             kart.driver.bomb_thrown = self.weapons.has_bomb(slot);
+            kart.driver.tnt_scale_y = self.weapons.tnt_scale_y(slot);
         }
         // The weapon roulettes that crates started run on, and pick.
         for kart in &mut self.karts {

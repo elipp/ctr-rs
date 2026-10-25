@@ -661,6 +661,10 @@ const HAZARD_BLINK_MASK: i16 = 0x80;
 const FALL_STRETCH_HEIGHT_MAX: i32 = 0xa00;
 const FALL_STRETCH_MIN: i32 = 0x280;
 const FALL_STRETCH_MAX: i32 = 0x320;
+/// `VEH_PHYS_FORCE_TNT_SCALE_Y_THRESHOLD` and `_BASE`: a TNT crate on the head that is squashed
+/// below the threshold squashes the kart by its distance from the base, twice over.
+const TNT_SCALE_Y_THRESHOLD: i16 = 2500;
+const TNT_SCALE_Y_BASE: i16 = 0x800;
 const SQUISH_INTERP_SPEED: i32 = 300;
 const SQUISH_SCALE_INTERP_SPEED: i32 = 0xa0;
 const SQUISH_SCALE_XZ_FACTOR: i32 = 0xa0;
@@ -683,7 +687,7 @@ fn div256_toward_zero(value: i32) -> i32 {
 ///
 /// A squished kart (`squishTimer`) is flat, and springs back when it ends.
 ///
-/// Not ported: the TNT box's wobble.
+/// A TNT crate on the head squashes it as well (`instTntRecv`).
 fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
     if d.kart_state == kart_state::WARP_PAD {
         return;
@@ -741,6 +745,16 @@ fn squash_stretch(d: &mut Driver, effects: &mut Vec<Effect>) {
         );
         target = target.max(stretch);
         d.jump_squish_stretch2 = jump_height as i16;
+    }
+
+    // The crate on the head bounces, and the kart under it with it.
+    if let Some(scale_y) = d.tnt_scale_y
+        && scale_y < TNT_SCALE_Y_THRESHOLD
+    {
+        target = mips::add_lo(
+            target,
+            mips::sll(mips::sub_lo(scale_y as i32, TNT_SCALE_Y_BASE as i32), 1),
+        );
     }
 
     if (d.jump_squish_stretch as i32).abs() < target.abs() {
