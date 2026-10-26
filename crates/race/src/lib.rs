@@ -21,6 +21,11 @@ use vehicle::{Driver, Effect, Env, Input, actions, kart_state};
 use weapon::Weapons;
 
 /// `driverRank` of a kart that has no place yet.
+/// The version of the sim's behavior. Clients that play a race together must agree on it: any
+/// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
+/// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
+pub const SIM_VERSION: u32 = 1;
+
 const UNSORTED: i16 = -1;
 
 /// One tick of a controller: [`Input`] without the taps, which follow from the buttons held in

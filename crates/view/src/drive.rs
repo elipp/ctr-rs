@@ -677,6 +677,7 @@ fn drive_tick(
 
     let tick = sim.race.tick();
     let own = sim.own;
+    let mut reports = Vec::new();
     if let Some(net) = lobby.online.as_mut() {
         // The pads of the others that came in since the last tick.
         for (slot, first, pads) in net.inbox.drain(..) {
@@ -688,13 +689,49 @@ fn drive_tick(
                 );
             }
         }
+        // A player left: say what we hold of its pads, which is all we take from now on.
+        for slot in std::mem::take(&mut net.asked) {
+            if slot < sim.race.players() {
+                net.frozen[slot] = true;
+                let (first, pads) = sim.race.recent(slot);
+                reports.push((slot, first, pads.iter().map(|p| net::Pad {
+                    held: p.held,
+                    lx: p.lx,
+                    ly: p.ly,
+                    ry: p.ry,
+                }).collect::<Vec<_>>()));
+            }
+        }
+        // The host settled where the pads of a player that left end: everyone ends them there.
+        for (slot, first, pads) in std::mem::take(&mut net.lefts) {
+            if slot >= sim.race.players() {
+                continue;
+            }
+            let pads: Vec<Pad> = pads.iter().map(pad_of).collect();
+            if let Err(hole) = sim.race.confirm_all(slot, first, &pads) {
+                // More than the pads kept were missing.
+                error!("the pads of player {slot} that left: missing from {}", hole.expected);
+                net.found([race::desync::Mismatch { tick: hole.expected, slot }]);
+            }
+            sim.race.leave(slot);
+            net.frozen[slot] = true;
+            net.gone[slot] = true;
+            let name = net.names.get(slot).map_or("?", String::as_str);
+            cues.toasts.write(
+                Toast::new(format!("Player {name} left the race"), 3000)
+                    .color(Color::srgb(1.0, 0.6, 0.3)),
+            );
+        }
+    }
+    for (slot, first, pads) in reports {
+        lobby.have(slot, first, pads);
     }
     // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
     // rollback window) and predict the others further and further. It waits for them instead.
     if online
         && (0..sim.race.players())
             .filter(|&slot| slot != own)
-            .any(|slot| tick > sim.race.confirmed_until(slot) + MAX_LEAD)
+            .any(|slot| tick > sim.race.confirmed_until(slot).saturating_add(MAX_LEAD))
     {
         return;
     }

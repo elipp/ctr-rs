@@ -2,6 +2,9 @@ use std::time::{Duration, Instant};
 
 use net::{Event, Pad, Session};
 
+/// The version of the sim the sessions say they play.
+const BUILD: u32 = 1;
+
 fn wait_for(session: &Session, what: &str, mut f: impl FnMut(Event) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
@@ -28,7 +31,7 @@ fn pad(slot: usize, tick: u32) -> Pad {
 
 #[test]
 fn a_host_and_two_peers_race_over_a_mesh() {
-    let host = net::host(3);
+    let host = net::host(3, BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -37,12 +40,12 @@ fn a_host_and_two_peers_race_over_a_mesh() {
         }
         _ => false,
     });
-    let first = net::join(ticket.clone().unwrap(), 7);
+    let first = net::join(ticket.clone().unwrap(), 7, BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the first peer", |e| {
         matches!(e, Event::PeerJoined(_))
     });
-    let second = net::join(ticket.unwrap(), 11);
+    let second = net::join(ticket.unwrap(), 11, BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the second peer", |e| {
         matches!(e, Event::PeerJoined(_))
@@ -152,7 +155,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
 
 #[test]
 fn a_guest_fetches_a_custom_track_from_the_host() {
-    let host = net::host(3);
+    let host = net::host(3, BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -161,7 +164,7 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7);
+    let guest = net::join(ticket.unwrap(), 7, BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
 
@@ -191,4 +194,76 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
         "the refusal",
         |e| matches!(e, Event::BlobMissing { track: t, hash: h } if t == track && h == hash + 1),
     );
+}
+
+#[test]
+fn a_guest_with_another_build_is_turned_away() {
+    let host = net::host(3, BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7, BUILD + 1);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut why = None;
+    while why.is_none() {
+        assert!(Instant::now() < deadline, "the guest was not turned away");
+        for event in guest.poll() {
+            if let Event::Failed(text) = event {
+                why = Some(text);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(why.unwrap().contains("another version"));
+}
+
+#[test]
+fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
+    let host = net::host(3, BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let first = net::join(ticket.clone().unwrap(), 7, BUILD);
+    wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the first peer", |e| matches!(e, Event::PeerJoined(_)));
+    let second = net::join(ticket.unwrap(), 11, BUILD);
+    wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the second peer", |e| matches!(e, Event::PeerJoined(_)));
+    std::thread::sleep(Duration::from_secs(8));
+    host.start(5, 0);
+    for session in [&host, &first, &second] {
+        wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
+        session.ready();
+    }
+    for session in [&host, &first, &second] {
+        wait_for(session, "tick 0", |e| matches!(e, Event::Go));
+    }
+
+    // The last guest goes. The host and the other guest hold different amounts of its pads.
+    drop(second);
+    wait_for(&host, "the host to hear of it", |e| matches!(e, Event::Gone { slot: 2 }));
+    wait_for(&first, "the guest to hear of it", |e| matches!(e, Event::Gone { slot: 2 }));
+    let pads: Vec<Pad> = (0..5).map(|t| pad(2, t)).collect();
+    host.have(2, 0, pads[..3].to_vec());
+    first.have(2, 0, pads.clone());
+    for session in [&host, &first] {
+        wait_for(session, "the pads to be settled", |e| match e {
+            Event::Left { slot, first, pads: got } => {
+                assert_eq!((slot, first), (2, 0));
+                assert_eq!(got, pads);
+                true
+            }
+            _ => false,
+        });
+    }
 }

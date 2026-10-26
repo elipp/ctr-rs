@@ -67,7 +67,11 @@ pub enum Message {
     /// whose kart is whose.
     /// `seq` counts the client's Hellos from 0: they go on streams of their own, which can
     /// arrive in any order, and the host keeps the one with the highest.
-    Hello { character: u8, seq: u32 },
+    /// `build` is the version of the sim the client plays (`race::SIM_VERSION`): the host turns
+    /// away one that differs, as its race would not come out the same.
+    Hello { character: u8, seq: u32, build: u32 },
+    /// Reliable, host to client: the Hello was of another build than the host's.
+    Reject { host: u32, yours: u32 },
     /// Reliable, host to each client: a race is about to start. `slot` is the client's player
     /// among the players; `characters` is the character of each slot, and `track` the `LevelId`
     /// the race is on, and `hash` the hash of its contents when it is a custom track (0 for the
@@ -119,6 +123,28 @@ pub enum Message {
     /// Unreliable: the answer to the [`Message::Ping`] with the same `stamp`, which gives the
     /// sender the round trip.
     Pong { stamp: u64 },
+    /// Reliable, host to each client: the player in `slot` left the race. Every client answers
+    /// with [`Message::Have`], and the host then settles where the player's pads end. (The
+    /// clients that have the most of them hand them to the ones that lack some.)
+    Gone { epoch: u32, slot: u8 },
+    /// Reliable, client to host: the answer to [`Message::Gone`]. These are the latest pads of
+    /// the player that left that the client holds, the first being that of `first`. After this
+    /// the client takes no more pads of that player.
+    Have {
+        epoch: u32,
+        slot: u8,
+        first: Tick,
+        pads: Vec<Pad>,
+    },
+    /// Reliable, host to each client: the pads of the player in `slot` are these (the most any
+    /// client had, from `first` on), and it plays a neutral pad after them. Everyone ends up
+    /// with the same pads for it, however many it had when it left.
+    Left {
+        epoch: u32,
+        slot: u8,
+        first: Tick,
+        pads: Vec<Pad>,
+    },
     /// Reliable, host to each client: the race of `epoch` is over, without a winner. The lobby
     /// goes on, and the host can start the same players again. (A stop that comes after the
     /// next race's [`Message::Restart`] is of the race before, and does not count.)
@@ -272,6 +298,21 @@ mod tests {
             Message::Hello {
                 character: 9,
                 seq: 3,
+                build: 1,
+            },
+            Message::Reject { host: 2, yours: 1 },
+            Message::Gone { epoch: 1, slot: 2 },
+            Message::Have {
+                epoch: 1,
+                slot: 2,
+                first: 40,
+                pads: vec![pad(40), pad(41)],
+            },
+            Message::Left {
+                epoch: 1,
+                slot: 2,
+                first: 40,
+                pads: vec![pad(40), pad(41)],
             },
             Message::Start {
                 epoch: 1,
