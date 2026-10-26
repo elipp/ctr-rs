@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 1;
+pub const SIM_VERSION: u32 = 2;
 
 const UNSORTED: i16 = -1;
 
@@ -157,6 +157,9 @@ const LIGHT_AT_MS: [(i32, Light); 4] = [
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
 
+/// How many checkpoints a lap is cut by (see [`Race::splits`]).
+pub const CHECKPOINTS_PER_LAP: usize = 2;
+
 /// The laps of a free drive, which has no end: more than anyone drives.
 pub const FREE_DRIVE_LAPS: u8 = u8::MAX;
 
@@ -190,6 +193,12 @@ pub struct Race {
     pub winner: Option<(usize, u32)>,
     /// The time of each lap a kart has finished, by slot, in milliseconds (`gGT->lapTime`).
     pub lap_times: Vec<Vec<i32>>,
+    /// How many of the checkpoints (two to a lap: the middle of it and the line) each kart has
+    /// passed; 0 until it is on its way. The races of OnlineCTR show the times of these.
+    pub checkpoints: Vec<u16>,
+    /// The time each kart passed each checkpoint at, by slot, in milliseconds of the race clock:
+    /// entry `i` is checkpoint `i + 1`.
+    pub splits: Vec<Vec<i32>>,
     /// `trafficLightsTimer`: above 0 the karts wait on the grid. It holds at the start while the
     /// fly-in plays, and then counts down. 0 in a race with no start ceremony.
     pub lights_ms: i32,
@@ -224,6 +233,8 @@ impl Race {
             finished: 0,
             winner: None,
             lap_times: vec![Vec::new(); specs.len()],
+            checkpoints: vec![0; specs.len()],
+            splits: vec![Vec::new(); specs.len()],
             lights_ms: 0,
             intro_ticks: 0,
             light: None,
@@ -294,6 +305,53 @@ impl Race {
             }
         }
         laps
+    }
+
+    /// OnlineCTR's checkpoint tracker (`UpdateCheckpointTracker`): the lap is cut in two, and the
+    /// time each kart passes each cut at is kept, to show against the first to pass it. A kart
+    /// is in the middle of a lap when its distance to the finish (the one the lap counter keeps)
+    /// is under half the track, and at the line when it is back above half.
+    fn update_splits(&mut self, level: &Level) {
+        let Some(start) = level.restart_points.first() else {
+            return;
+        };
+        let track_length = (start.dist_to_finish as i32) << 3;
+        let zones = [track_length, track_length / CHECKPOINTS_PER_LAP as i32, 0];
+        for (slot, kart) in self.karts.iter().enumerate() {
+            let progress = kart.driver.distance_to_finish_checkpoint as i32;
+            let passed = self.checkpoints[slot] as usize;
+            if passed == 0 {
+                if progress < track_length {
+                    self.checkpoints[slot] = 1;
+                }
+                continue;
+            }
+            let zone = passed % CHECKPOINTS_PER_LAP;
+            // The kart does not pass more than the race has.
+            if progress < zones[zone]
+                && progress > zones[zone + 1]
+                && passed <= self.laps as usize * CHECKPOINTS_PER_LAP
+            {
+                self.splits[slot].push(self.event_ms);
+                self.checkpoints[slot] += 1;
+            }
+        }
+    }
+
+    /// The checkpoint `kart` passed last, as (its number, the time it passed it at, and how
+    /// far behind the first kart to pass it that is: 0 if it was the first). None before the
+    /// first checkpoint.
+    pub fn last_split(&self, slot: usize) -> Option<(usize, i32, i32)> {
+        let time = *self.splits[slot].last()?;
+        let number = self.splits[slot].len();
+        let first = self
+            .splits
+            .iter()
+            .filter_map(|times| times.get(number - 1))
+            .min()
+            .copied()
+            .unwrap_or(time);
+        Some((number, time, time - first))
     }
 
     /// One game tick: the objects, then every kart from its pad (`pads[slot]`), in the order of
@@ -492,6 +550,7 @@ impl Race {
             }
             tick.lap = lap;
         }
+        self.update_splits(level);
         if self.lights_ms < 1 {
             self.event_ms += env.elapsed_time_ms;
         }
@@ -569,7 +628,7 @@ impl Race {
         let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
         let _ = writeln!(
             hash,
-            "{} {} {} {} {:?} {} {} {:?} {:?} {:?}",
+            "{} {} {} {} {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
             self.tick,
             self.event_ms,
             self.laps,
@@ -578,6 +637,8 @@ impl Race {
             self.lights_ms,
             self.intro_ticks,
             self.lap_times,
+            self.checkpoints,
+            self.splits,
             self.feedback,
             self.objects.ticks()
         );

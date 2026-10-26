@@ -156,3 +156,29 @@ fn the_race_is_the_same_whichever_slot_is_ours() {
         assert_eq!(client.checksum(), clients[0].checksum());
     }
 }
+
+/// The checkpoint times are in the order of the race, a kart's count follows them, and the
+/// first kart to pass one is the one the others are behind.
+#[test]
+fn checkpoint_times_follow_the_race() {
+    let Some((level, objects)) = level(LevelId::DINGO_CANYON) else {
+        return;
+    };
+    let players = 4;
+    let mut race = Race::new(&level, objects, &specs(players), true);
+    for tick in 0..1800 {
+        race.tick(&level, &pads(tick, players));
+    }
+    for slot in 0..players {
+        let times = &race.splits[slot];
+        assert!(times.windows(2).all(|w| w[0] <= w[1]), "kart {slot}: {times:?}");
+        if !times.is_empty() {
+            assert_eq!(race.checkpoints[slot] as usize, times.len() + 1);
+            let (number, time, behind) = race.last_split(slot).unwrap();
+            assert_eq!((number, time), (times.len(), *times.last().unwrap()));
+            assert!(behind >= 0);
+        } else {
+            assert!(race.last_split(slot).is_none());
+        }
+    }
+}

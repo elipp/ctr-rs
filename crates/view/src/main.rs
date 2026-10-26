@@ -35,6 +35,7 @@ mod leaderboard;
 mod lobby;
 mod maps;
 mod mask;
+mod names;
 mod probe;
 mod projectile;
 
