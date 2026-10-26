@@ -32,8 +32,12 @@ pub enum Action {
     DebugAddWeapon(u8),
     /// (Debug) Set our wumpa count, clamped to what a kart can hold.
     DebugSetWumpa(u8),
-    /// (Debug) Toast how each peer is connected: direct or by relay, the round trip time, losses.
-    DebugNetInfo,
+    /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
+    NetInfo,
+    /// Set how the drawing eases the karts of the others after a rollback.
+    NetSmoothing(crate::kart::Smoothing),
+    /// Show a toast for each rollback, or stop.
+    NetRollbacks(bool),
 }
 
 /// The first word of `text` and what follows it.
@@ -47,7 +51,12 @@ const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const DEBUG_USAGE: &str =
-    "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | netinfo";
+    "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11>";
+const NET_USAGE: &str =
+    "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
+
+/// The longest smoothing that can be set.
+const SMOOTHING_MAX_MS: f64 = 1000.0;
 
 impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
@@ -59,6 +68,7 @@ impl Action {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
             "cache" => Action::cache(rest),
+            "net" => Action::net(rest),
             "debug" => Action::debug(rest),
             _ => Err(format!("Unknown command: /{name}")),
         }
@@ -75,6 +85,47 @@ impl Action {
             "close" => Ok(Action::CloseLobby),
             "" => Err(LOBBY_USAGE.into()),
             _ => Err(format!("Unknown command: /lobby {sub}\n{LOBBY_USAGE}")),
+        }
+    }
+
+    fn net(line: &str) -> Result<Action, String> {
+        let (sub, rest) = word(line);
+        match sub {
+            "info" => Ok(Action::NetInfo),
+            "smoothing" => Action::smoothing(rest),
+            "rollbacks" => match rest {
+                "on" => Ok(Action::NetRollbacks(true)),
+                "off" => Ok(Action::NetRollbacks(false)),
+                _ => Err("Usage: /net rollbacks on|off".into()),
+            },
+            "" => Err(NET_USAGE.into()),
+            _ => Err(format!("Unknown command: /net {sub}\n{NET_USAGE}")),
+        }
+    }
+
+    /// `dynamic`, or a time: `120ms`, `0.12s`, or a number of milliseconds.
+    fn smoothing(text: &str) -> Result<Action, String> {
+        use crate::kart::Smoothing;
+        // (`dynamic` was the name of `ping`.)
+        match text {
+            "ping" | "dynamic" => return Ok(Action::NetSmoothing(Smoothing::Ping)),
+            "replay" => return Ok(Action::NetSmoothing(Smoothing::Replay)),
+            _ => {}
+        }
+        let (number, to_ms) = match (text.strip_suffix("ms"), text.strip_suffix('s')) {
+            (Some(n), _) => (n, 1.0),
+            (None, Some(n)) => (n, 1000.0),
+            _ => (text, 1.0),
+        };
+        match number.trim().parse::<f64>() {
+            Ok(n) if (0.0..=SMOOTHING_MAX_MS).contains(&(n * to_ms)) => {
+                Ok(Action::NetSmoothing(crate::kart::Smoothing::Fixed(
+                    std::time::Duration::from_secs_f64(n * to_ms / 1000.0),
+                )))
+            }
+            _ => Err(format!(
+                "Smoothing is ping, replay or 0 to {SMOOTHING_MAX_MS:.0} ms\n{NET_USAGE}"
+            )),
         }
     }
 
@@ -126,7 +177,6 @@ impl Action {
                     _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
                 }
             }
-            "netinfo" => Ok(Action::DebugNetInfo),
             "" => Err(DEBUG_USAGE.into()),
             _ => Err(format!("Unknown command: /debug {sub}\n{DEBUG_USAGE}")),
         }
@@ -389,10 +439,41 @@ mod tests {
             Action::parse("debug set wumpa 10"),
             Ok(Action::DebugSetWumpa(10))
         ));
+        assert!(matches!(Action::parse("net info"), Ok(Action::NetInfo)));
+        assert!(Action::parse("debug netinfo").is_err());
+        let smoothing = |line| match Action::parse(line) {
+            Ok(Action::NetSmoothing(how)) => Some(how),
+            _ => None,
+        };
+        use crate::kart::Smoothing::{Fixed, Ping, Replay};
+        use std::time::Duration;
+        assert_eq!(smoothing("net smoothing ping"), Some(Ping));
+        assert_eq!(smoothing("net smoothing dynamic"), Some(Ping));
+        assert_eq!(smoothing("net smoothing replay"), Some(Replay));
+        assert_eq!(
+            smoothing("net smoothing 120ms"),
+            Some(Fixed(Duration::from_millis(120)))
+        );
+        assert_eq!(
+            smoothing("net smoothing 0.25s"),
+            Some(Fixed(Duration::from_millis(250)))
+        );
+        assert_eq!(
+            smoothing("net smoothing 80"),
+            Some(Fixed(Duration::from_millis(80)))
+        );
         assert!(matches!(
-            Action::parse("debug netinfo"),
-            Ok(Action::DebugNetInfo)
+            Action::parse("net rollbacks on"),
+            Ok(Action::NetRollbacks(true))
         ));
+        assert!(matches!(
+            Action::parse("net rollbacks off"),
+            Ok(Action::NetRollbacks(false))
+        ));
+        assert!(Action::parse("net rollbacks").is_err());
+        assert_eq!(smoothing("net smoothing"), None);
+        assert_eq!(smoothing("net smoothing 5s"), None);
+        assert_eq!(smoothing("net smoothing fast"), None);
         // Clamped to what a kart holds.
         assert!(matches!(
             Action::parse("debug  set   wumpa 99"),

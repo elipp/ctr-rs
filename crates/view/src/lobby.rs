@@ -7,6 +7,11 @@
 //! * `/cache purge`: delete the maps other players sent us (`assets/.cache/maps`)
 //! * `/race start`: start the race, once the others have joined (the host only)
 //! * `/race restart`: start the race in progress over (the host only)
+//! * `/net info`: how each peer is reached (direct or relay), the ping and the packets lost
+//! * `/net smoothing ping|replay|<duration>`: how long the drawing takes to ease a kart that a late
+//!   pad put right, by the ping, by the ticks the rollbacks replay, or fixed (`kart::Smoothing`), at
+//!   any time
+//! * `/net rollbacks on|off`: a toast for each rollback (on at first)
 //! * `/race stop`: end the race in progress for everyone, with no winner (the host only)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
@@ -109,11 +114,10 @@ pub struct Lobby {
     /// what the players are told.
     roster: Vec<(String, u8)>,
     roster_seen: bool,
-    /// A race has been started in this lobby: the players are fixed, and the next one is a
-    /// restart of it (`net` takes a start only once).
-    raced: bool,
-    /// The last round trip to each player in the lobby, by short key, from the pings.
+    /// The last round trip to each player in the lobby, by short key, from the pings, and an
+    /// average of them (which the smoothing follows, not to be moved by one slow packet).
     pub pings: std::collections::HashMap<String, std::time::Duration>,
+    pub average_pings: std::collections::HashMap<String, std::time::Duration>,
     /// The map the race is on that we are waiting for the host to send.
     fetching: Option<u32>,
     /// The start or restart that is counting down.
@@ -147,6 +151,15 @@ impl Lobby {
             left: COUNTDOWN_SECONDS,
             at: now,
         });
+    }
+
+    /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,
+    /// so that players who join now do not hear of a race in progress.)
+    fn end_race(&mut self) {
+        self.online = None;
+        if let Some(session) = &self.session {
+            session.over();
+        }
     }
 
     /// Leaves the lobby, ours or another's, and the race in it.
@@ -203,12 +216,7 @@ impl Lobby {
     fn start(&self, track: u32) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            let hash = maps::file(track).map_or(0, |(hash, _)| hash);
-            if self.raced {
-                session.restart(track, hash);
-            } else {
-                session.start(track, hash);
-            }
+            session.start(track, maps::file(track).map_or(0, |(hash, _)| hash));
         }
     }
 
@@ -274,6 +282,8 @@ pub struct LobbyPlugin;
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lobby>()
+            .init_resource::<crate::kart::Smoothing>()
+            .init_resource::<RollbackToasts>()
             .add_systems(Startup, spawn_waiting)
             .add_systems(
                 Update,
@@ -283,6 +293,7 @@ impl Plugin for LobbyPlugin {
                     report,
                     crate::remote::build,
                     finish,
+                    rollback_toasts,
                     pace,
                     waiting,
                 )
@@ -299,7 +310,7 @@ fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         }
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::PurgeCache if lobby.online.is_some() => "Not during a race",
-        Action::DebugNetInfo if !lobby.is_open() => "No lobby (/lobby create)",
+        Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -323,6 +334,8 @@ fn run(
     drive: Res<crate::drive::Drive>,
     track: Res<crate::Track>,
     time: Res<Time<Real>>,
+    mut smoothing: ResMut<crate::kart::Smoothing>,
+    mut rollbacks: ResMut<RollbackToasts>,
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
@@ -360,11 +373,25 @@ fn run(
                     continue;
                 }
             },
-            Action::DebugNetInfo => {
+            Action::NetInfo => {
                 // The answer comes as an event (`report`).
                 if let Some(session) = &lobby.session {
                     session.net_info();
                 }
+                continue;
+            }
+            Action::NetSmoothing(how) => {
+                // Takes hold at the next tick, in a race or out of one.
+                *smoothing = *how;
+                toasts.write(Toast::new(format!("Smoothing: {how}"), 2500));
+                continue;
+            }
+            Action::NetRollbacks(on) => {
+                rollbacks.0 = *on;
+                toasts.write(Toast::new(
+                    format!("Rollback toasts {}", if *on { "on" } else { "off" }),
+                    2000,
+                ));
                 continue;
             }
             // (Not the lobby's.)
@@ -375,7 +402,7 @@ fn run(
                     session.stop();
                 }
                 lobby.countdown = None;
-                lobby.online = None;
+                lobby.end_race();
                 continue;
             }
             Action::RestartRace => {
@@ -390,7 +417,7 @@ fn run(
     }
 }
 
-/// What `/debug netinfo` shows: a line per peer with the way our data goes to it (direct or by
+/// What `/net info` shows: a line per peer with the way our data goes to it (direct or by
 /// relay), the round trip time and the packets lost, and a line per other path that is open.
 fn net_info_text(peers: &[net::PeerInfo]) -> String {
     if peers.is_empty() {
@@ -558,15 +585,24 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             }
         }
     }
-    lobby.pings.extend(rtts);
+    for (key, rtt) in rtts {
+        lobby
+            .average_pings
+            .entry(key.clone())
+            .and_modify(|old| {
+                *old = old.mul_f32(1.0 - PING_SMOOTHING) + rtt.mul_f32(PING_SMOOTHING)
+            })
+            .or_insert(rtt);
+        lobby.pings.insert(key, rtt);
+    }
     for key in left {
         lobby.pings.remove(&key);
+        lobby.average_pings.remove(&key);
     }
     if stopped {
-        lobby.online = None;
+        lobby.end_race();
     }
     if started.is_some() {
-        lobby.raced = true;
         lobby.online = started;
     }
     if let Some((track, hash)) = wanted_map {
@@ -689,7 +725,7 @@ fn finish(mut lobby: ResMut<Lobby>, sim: Res<crate::props::Sim>, mut toasts: Mes
         toasts.write(Toast::new(text, AFTERMATH_SECONDS as u64 * 1000).color(ANNOUNCE_COLOR));
     }
     if sim.race.settled() >= tick + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32 {
-        lobby.online = None;
+        lobby.end_race();
     }
 }
 
@@ -717,6 +753,56 @@ fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
         time.set_relative_speed(speed);
     }
 }
+
+/// Whether a toast shows each rollback (`/net rollbacks on|off`).
+#[derive(Resource)]
+pub struct RollbackToasts(bool);
+
+impl Default for RollbackToasts {
+    fn default() -> RollbackToasts {
+        RollbackToasts(true)
+    }
+}
+
+/// A rollback of this many ticks or more is shown in a warmer color.
+const ROLLBACK_WARN_TICKS: u32 = 4;
+
+/// Shows a short toast for the rollbacks of the last frame: the ticks they replayed, and how
+/// many there were if more than one.
+fn rollback_toasts(
+    lobby: Res<Lobby>,
+    on: Res<RollbackToasts>,
+    mut seen: Local<(u32, u32)>,
+    mut toasts: MessageWriter<Toast>,
+) {
+    let Some(net) = &lobby.online else {
+        *seen = (0, 0);
+        return;
+    };
+    // A race that starts over counts from 0 again.
+    if net.corrections < seen.0 || net.replayed < seen.1 {
+        *seen = (0, 0);
+    }
+    let (count, ticks) = (net.corrections - seen.0, net.replayed - seen.1);
+    *seen = (net.corrections, net.replayed);
+    if !on.0 || count == 0 {
+        return;
+    }
+    let text = if count > 1 {
+        format!("Rollback: {ticks} ticks (x{count})")
+    } else {
+        format!("Rollback: {ticks} ticks")
+    };
+    let color = if ticks >= ROLLBACK_WARN_TICKS {
+        Color::srgb(1.0, 0.6, 0.3)
+    } else {
+        Color::srgb(0.8, 0.8, 0.8)
+    };
+    toasts.write(Toast::new(text, 700).size(16.0).color(color));
+}
+
+/// How much of a new ping goes into the average that is kept.
+const PING_SMOOTHING: f32 = 0.4;
 
 /// What the host says to everyone is yellow.
 const ANNOUNCE_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);

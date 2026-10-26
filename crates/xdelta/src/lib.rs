@@ -514,7 +514,7 @@ mod tests {
         assert_eq!(t[19], [Op::Copy(0, 0), Op::Noop]);
         assert_eq!(t[162], [Op::Copy(18, 8), Op::Noop]);
         assert_eq!(t[163], [Op::Add(1), Op::Copy(4, 0)]);
-        assert_eq!(t[234], [Op::Add(4), Op::Copy(4, 8)]);
+        assert_eq!(t[234], [Op::Add(4), Op::Copy(6, 5)]);
         assert_eq!(t[247], [Op::Copy(4, 0), Op::Add(1)]);
         assert_eq!(t[255], [Op::Copy(4, 8), Op::Add(1)]);
     }
