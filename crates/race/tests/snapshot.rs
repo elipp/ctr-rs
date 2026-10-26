@@ -126,3 +126,33 @@ fn different_pads_make_a_different_race() {
     assert_ne!(fingerprint(&a), fingerprint(&b));
     assert_ne!(a.checksum(), b.checksum());
 }
+
+/// Every client builds the race from the same roster and differs only in which slot is its own,
+/// so the race must not depend on that: each plays the same ticks from the same pads.
+#[test]
+fn the_race_is_the_same_whichever_slot_is_ours() {
+    use race::rollback::Rollback;
+
+    let Some((level, objects)) = level(LevelId::DINGO_CANYON) else {
+        return;
+    };
+    let players = 4;
+    let clients: Vec<Rollback<Race>> = (0..players)
+        .map(|own| {
+            let mut race = Race::new(&level, objects.clone(), &specs(players), true);
+            race.start_ceremony(&level);
+            let mut rollback = Rollback::new(race, players, Some(own), 120);
+            for tick in 0..300 {
+                for (slot, pad) in pads(tick, players).into_iter().enumerate() {
+                    rollback.confirm(slot, tick, pad).unwrap();
+                }
+                rollback.advance(&level);
+            }
+            rollback
+        })
+        .collect();
+    for client in &clients {
+        assert_eq!(client.tick(), 300);
+        assert_eq!(client.checksum(), clients[0].checksum());
+    }
+}
