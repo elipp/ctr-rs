@@ -1,12 +1,13 @@
-//! The online lobby (`--drive`): L opens one and prints its address, `/lobby join <address>` (`command.rs`)
-//! joins one. The host's G starts the race, which is tick 0 for everyone. The connections themselves
+//! The online lobby (`--drive`): `/lobby create` opens one and prints its address, `/lobby join <address>` (`command.rs`)
+//! joins one. The host's `/race start` starts the race, which is tick 0 for everyone. The connections themselves
 //! are `net`'s; this reports what happens to them and hands the race to `drive.rs`.
 //!
-//! * L or `/lobby create`: open a lobby (L again, or `/lobby close`, to close it)
+//! * `/lobby create`: open a lobby (`/lobby close` closes it)
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/cache purge`: delete the maps other players sent us (`assets/.cache/maps`)
-//! * G or `/race start`: start the race, once the others have joined (the host only)
-//! * F9 or `/race restart`: start the race in progress over (the host only)
+//! * `/race start`: start the race, once the others have joined (the host only)
+//! * `/race restart`: start the race in progress over (the host only)
+//! * `/race stop`: end the race in progress for everyone, with no winner (the host only)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -52,6 +53,8 @@ pub struct Online {
     pub ahead: Vec<f32>,
     /// The players whose sim differs from ours, with the first tick it was seen at.
     pub desync: Vec<Desync>,
+    /// The winner has been announced; the race ends [`AFTERMATH_SECONDS`] later.
+    pub won: bool,
 }
 
 /// A player whose sim has parted from ours.
@@ -106,6 +109,11 @@ pub struct Lobby {
     /// what the players are told.
     roster: Vec<(String, u8)>,
     roster_seen: bool,
+    /// A race has been started in this lobby: the players are fixed, and the next one is a
+    /// restart of it (`net` takes a start only once).
+    raced: bool,
+    /// The last round trip to each player in the lobby, by short key, from the pings.
+    pub pings: std::collections::HashMap<String, std::time::Duration>,
     /// The map the race is on that we are waiting for the host to send.
     fetching: Option<u32>,
     /// The start or restart that is counting down.
@@ -195,7 +203,12 @@ impl Lobby {
     fn start(&self, track: u32) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            session.start(track, maps::file(track).map_or(0, |(hash, _)| hash));
+            let hash = maps::file(track).map_or(0, |(hash, _)| hash);
+            if self.raced {
+                session.restart(track, hash);
+            } else {
+                session.start(track, hash);
+            }
         }
     }
 
@@ -264,7 +277,16 @@ impl Plugin for LobbyPlugin {
             .add_systems(Startup, spawn_waiting)
             .add_systems(
                 Update,
-                (run, countdown, report, crate::remote::build, pace, waiting).chain(),
+                (
+                    run,
+                    countdown,
+                    report,
+                    crate::remote::build,
+                    finish,
+                    pace,
+                    waiting,
+                )
+                    .chain(),
             );
     }
 }
@@ -277,11 +299,16 @@ fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         }
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::PurgeCache if lobby.online.is_some() => "Not during a race",
+        Action::DebugNetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
         Action::StartRace if lobby.online.is_some() => "The race has started (/race restart)",
         Action::RestartRace if lobby.online.is_none() => "No race to restart (/race start)",
+        Action::StopRace if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::StopRace if lobby.online.is_none() => "No race to stop",
         Action::StartRace | Action::RestartRace if lobby.countdown.is_some() => {
             "A countdown is already running"
         }
@@ -333,8 +360,24 @@ fn run(
                     continue;
                 }
             },
+            Action::DebugNetInfo => {
+                // The answer comes as an event (`report`).
+                if let Some(session) = &lobby.session {
+                    session.net_info();
+                }
+                continue;
+            }
             // (Not the lobby's.)
             Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_) => continue,
+            Action::StopRace => {
+                // Like a race that has been won, without the wait and the toast.
+                if let Some(session) = &lobby.session {
+                    session.stop();
+                }
+                lobby.countdown = None;
+                lobby.online = None;
+                continue;
+            }
             Action::RestartRace => {
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart(net.track, net.hash);
@@ -345,6 +388,48 @@ fn run(
         };
         toasts.write(Toast::new(say, 2500));
     }
+}
+
+/// What `/debug netinfo` shows: a line per peer with the way our data goes to it (direct or by
+/// relay), the round trip time and the packets lost, and a line per other path that is open.
+fn net_info_text(peers: &[net::PeerInfo]) -> String {
+    if peers.is_empty() {
+        return "No peers connected".into();
+    }
+    let ms = |d: std::time::Duration| d.as_secs_f32() * 1000.0;
+    let mut lines = Vec::new();
+    for peer in peers {
+        let loss = if peer.sent_packets == 0 {
+            0.0
+        } else {
+            100.0 * peer.lost_packets as f32 / peer.sent_packets as f32
+        };
+        let used = peer.paths.iter().find(|p| p.selected);
+        let how = match used {
+            Some(p) if p.relay => "relay",
+            Some(_) => "direct",
+            None => "no path",
+        };
+        let rtt = used.map_or(String::new(), |p| format!(", path {:.0} ms", ms(p.rtt)));
+        let ping = peer.ping.map_or("no ping yet".to_string(), |d| {
+            format!("ping {:.0} ms", ms(d))
+        });
+        lines.push(format!(
+            "{}: {how}{rtt}, {ping}, lost {}/{} ({loss:.1}%)",
+            peer.id.fmt_short(),
+            peer.lost_packets,
+            peer.sent_packets,
+        ));
+        for path in peer.paths.iter().filter(|p| !p.selected) {
+            let kind = if path.relay { "relay" } else { "direct" };
+            lines.push(format!(
+                "  also {kind} {} ({:.0} ms)",
+                path.addr,
+                ms(path.rtt)
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
@@ -361,11 +446,14 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     let mut pads = Vec::new();
     let mut sums = Vec::new();
     let mut leads = Vec::new();
+    let mut stopped = false;
+    let mut rtts = Vec::new();
+    let mut left = Vec::new();
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
                 println!(
-                    "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nPress G to start the race once the others have joined."
+                    "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nType /race start to start the race once the others have joined."
                 );
                 copy_to_clipboard(format!("/lobby join {ticket}"));
                 toasts.write(
@@ -379,15 +467,19 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
             Event::Joined(id) => println!("joined the lobby of {}", id.fmt_short()),
-            Event::PeerLeft(id) => println!(
-                "{} left{}",
-                id.fmt_short(),
-                if lobby.online.is_some() {
-                    " (the race goes on with their last pad)"
-                } else {
-                    ""
-                }
-            ),
+            Event::Rtt { id, rtt } => rtts.push((id.fmt_short().to_string(), rtt)),
+            Event::PeerLeft(id) => {
+                println!(
+                    "{} left{}",
+                    id.fmt_short(),
+                    if lobby.online.is_some() {
+                        " (the race goes on with their last pad)"
+                    } else {
+                        ""
+                    }
+                );
+                left.push(id.fmt_short().to_string());
+            }
             Event::Started {
                 slot,
                 characters,
@@ -409,6 +501,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 sums.clear();
                 leads.clear();
                 let characters_len = characters.len();
+                stopped = false;
                 started = Some(Online {
                     slot,
                     characters,
@@ -428,9 +521,15 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     ahead: vec![0.0; characters_len],
                     checks: race::desync::Checks::new(characters_len, slot),
                     desync: Vec::new(),
+                    won: false,
                 });
             }
             Event::Go => go = true,
+            // (A stop is of the race before a start that follows it, if there is one.)
+            Event::Stopped => {
+                started = None;
+                stopped = true;
+            }
             Event::Pads {
                 slot,
                 first,
@@ -448,13 +547,26 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             Event::BlobMissing { track, .. } => {
                 map_failed = Some(format!("The host cannot send the map {track:#x}"));
             }
+            Event::NetInfo(peers) => {
+                let text = net_info_text(&peers);
+                println!("{text}");
+                toasts.write(Toast::new(text, 8000).size(16.0));
+            }
             Event::Failed(why) => {
                 println!("lobby failed: {why}");
                 failed = Some(why);
             }
         }
     }
+    lobby.pings.extend(rtts);
+    for key in left {
+        lobby.pings.remove(&key);
+    }
+    if stopped {
+        lobby.online = None;
+    }
     if started.is_some() {
+        lobby.raced = true;
         lobby.online = started;
     }
     if let Some((track, hash)) = wanted_map {
@@ -550,6 +662,37 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     }
 }
 
+/// How long the race goes on after it has been won, in seconds of the race.
+const AFTERMATH_SECONDS: u32 = 5;
+
+/// Announces the winner of the race, and [`AFTERMATH_SECONDS`] later ends it: everyone goes back to
+/// a free drive (`drive_tick` puts the kart alone on the grid when there is no race). Both are
+/// counted in ticks from the win, once the tick it happened on is settled, so that every client
+/// sees the same winner whatever it predicted, and ends at the same tick. The lobby stays, and
+/// the host can start another race.
+fn finish(mut lobby: ResMut<Lobby>, sim: Res<crate::props::Sim>, mut toasts: MessageWriter<Toast>) {
+    let Some(net) = lobby.online.as_mut().filter(|net| net.go && !net.fresh) else {
+        return;
+    };
+    let Some((slot, tick)) = sim
+        .race
+        .winner
+        .filter(|&(_, tick)| tick < sim.race.settled())
+    else {
+        return;
+    };
+    if !net.won {
+        net.won = true;
+        let key = net.names.get(slot).map_or("?", String::as_str);
+        let text = format!("Race finished, player {key} won");
+        println!("{text} (tick {tick})");
+        toasts.write(Toast::new(text, AFTERMATH_SECONDS as u64 * 1000).color(ANNOUNCE_COLOR));
+    }
+    if sim.race.settled() >= tick + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32 {
+        lobby.online = None;
+    }
+}
+
 /// Keeps the clock of an online race with the others': it catches up after a hitch, and runs a bit
 /// slow while it is ahead of any of them (the ones behind do not hurry; they play on as they do).
 fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
@@ -636,6 +779,7 @@ pub fn spawn_waiting(mut commands: Commands) {
     commands.spawn((
         WaitingHud,
         Text::new("Waiting for host to start the race"),
+        TextColor(Color::srgb(1.0, 0.65, 0.1)),
         TextLayout::justify(Justify::Center),
         Visibility::Hidden,
         Node {

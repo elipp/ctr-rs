@@ -18,8 +18,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use iroh::endpoint::{Connection, presets};
@@ -27,7 +28,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::wire::{InputReceiver, InputSender, Message};
+use crate::wire::{InputReceiver, InputSender, Message, PING_SECONDS};
 
 /// What the clients speak, exchanged in the connection handshake.
 pub const ALPN: &[u8] = b"ctr-rust/lobby/3";
@@ -152,8 +153,63 @@ pub enum Event {
     Announce(String),
     /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
     Checksum { slot: usize, tick: Tick, hash: u64 },
+    /// The host stopped the race (see [`Session::stop`]).
+    Stopped,
+    /// The round trip to a player, from the latest ping (see [`Message::Ping`]): one for each
+    /// ping answered, every [`wire::PING_SECONDS`].
+    Rtt { id: EndpointId, rtt: Duration },
+    /// The answer to [`Session::net_info`]: how each peer is reached.
+    NetInfo(Vec<PeerInfo>),
     /// The session could not go on.
     Failed(String),
+}
+
+/// How we are connected to one peer.
+#[derive(Debug)]
+pub struct PeerInfo {
+    pub id: EndpointId,
+    /// The open network paths of the connection, the one in use or not.
+    pub paths: Vec<PathInfo>,
+    /// The round trip of our last ping to it and back (see [`Message::Ping`]), if one has come
+    /// back yet. Unlike the paths' figures, this is the game's own message through the whole
+    /// stack.
+    pub ping: Option<Duration>,
+    /// Packets sent and lost over all paths.
+    pub sent_packets: u64,
+    pub lost_packets: u64,
+}
+
+/// A network path to a peer: straight to it, or through a relay server.
+#[derive(Debug)]
+pub struct PathInfo {
+    pub relay: bool,
+    /// The remote address (the relay's URL for a relay path).
+    pub addr: String,
+    /// Whether our data goes this way.
+    pub selected: bool,
+    pub rtt: std::time::Duration,
+}
+
+impl PeerInfo {
+    fn of(connection: &Connection, ping: Option<Duration>) -> PeerInfo {
+        let stats = connection.stats();
+        PeerInfo {
+            id: connection.remote_id(),
+            ping,
+            paths: connection
+                .paths()
+                .iter()
+                .map(|path| PathInfo {
+                    relay: path.is_relay(),
+                    addr: path.remote_addr().to_string(),
+                    selected: path.is_selected(),
+                    rtt: path.rtt(),
+                })
+                .collect(),
+            sent_packets: stats.sent_packets,
+            lost_packets: stats.lost_packets,
+        }
+    }
 }
 
 enum Command {
@@ -182,6 +238,8 @@ enum Command {
         tick: Tick,
         hash: u64,
     },
+    NetInfo,
+    Stop,
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -247,6 +305,17 @@ impl Session {
     /// played, from [`Event::Go`] on.
     pub fn input(&self, pad: Pad) {
         let _ = self.commands.send(Command::Input(pad));
+    }
+
+    /// Ends the race in progress for everyone, if we host the lobby: they get [`Event::Stopped`]
+    /// (we do not; we know). The lobby stays, and [`Session::restart`] starts the same players again.
+    pub fn stop(&self) {
+        let _ = self.commands.send(Command::Stop);
+    }
+
+    /// Asks how each peer is reached; [`Event::NetInfo`] answers.
+    pub fn net_info(&self) {
+        let _ = self.commands.send(Command::NetInfo);
     }
 
     /// Tells the others the hash of our sim before `tick`, for them to compare with theirs.
@@ -374,7 +443,23 @@ fn send_datagram(connection: &Connection, message: &Message) {
 /// What a connection said, tagged with who.
 enum Heard {
     Message(Message),
+    /// The round trip of a ping we sent, which came back.
+    Ping(Duration),
     Closed,
+}
+
+/// The clock that the stamps of the pings are read from. Only ours reads them.
+fn stamp() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_micros() as u64
+}
+
+/// The connections without the repeats: a player can be in the lobby and the race both.
+fn distinct<'a>(connections: impl Iterator<Item = &'a Connection>) -> Vec<&'a Connection> {
+    let mut seen = HashSet::new();
+    connections
+        .filter(|c| seen.insert(c.stable_id()))
+        .collect()
 }
 
 /// Reads the datagrams and the reliable messages of a connection until it closes.
@@ -392,6 +477,14 @@ fn listen(connection: Connection, from: EndpointId, heard: UnboundedSender<(Endp
                 },
             };
             match message {
+                // Answered here, where the connection is, and at once: the loop may be busy.
+                Some(Ok(Message::Ping { stamp })) => send_datagram(&connection, &Message::Pong { stamp }),
+                Some(Ok(Message::Pong { stamp: sent })) => {
+                    let rtt = Duration::from_micros(stamp().saturating_sub(sent));
+                    if heard.send((from, Heard::Ping(rtt))).is_err() {
+                        return;
+                    }
+                }
                 Some(Ok(message)) => {
                     if heard.send((from, Heard::Message(message))).is_err() {
                         return;
@@ -544,6 +637,10 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
     let mut epoch: u32 = 0;
     let mut race_info: Option<(usize, Vec<u8>, Vec<EndpointId>)> = None;
     let mut timer = send_interval();
+    // The last round trip to each player, from the pings.
+    let mut pings: HashMap<EndpointId, Duration> = HashMap::new();
+    let mut ping_timer = tokio::time::interval(Duration::from_secs(PING_SECONDS));
+    ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -605,6 +702,11 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     ready_from.clear();
                     io.event(Event::Started { slot, characters, players, track, hash });
                 },
+                Command::Stop => if matches!(role, Role::Host) {
+                    for guest in &guests {
+                        let _ = send_reliably(&guest.connection, &Message::Stop { epoch }).await;
+                    }
+                },
                 Command::Announce(text) => if matches!(role, Role::Host) {
                     for guest in &guests {
                         let _ = send_reliably(&guest.connection, &Message::Announce { text: text.clone() }).await;
@@ -623,6 +725,20 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     }
                 },
                 Command::Ready => game_ready = true,
+                Command::NetInfo => {
+                    let peers = distinct(
+                        guests
+                            .iter()
+                            .map(|g| &g.connection)
+                            .chain(&host_connection)
+                            .chain(links.values().map(|l| &l.connection))
+                            .chain(&unclaimed),
+                    )
+                    .into_iter()
+                    .map(|c| PeerInfo::of(c, pings.get(&c.remote_id()).copied()))
+                    .collect();
+                    io.event(Event::NetInfo(peers));
+                }
                 Command::Input(pad) => if running {
                     for link in links.values_mut() {
                         link.sender.push(pad);
@@ -770,9 +886,21 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     | Message::Start { .. }
                     | Message::Restart { .. }
                     | Message::Lobby { .. } => {}
+                    Message::Stop { epoch: stopped } => {
+                        if stopped == epoch && from == host_id && !matches!(role, Role::Host) {
+                            io.event(Event::Stopped);
+                        }
+                    }
+                    // (`listen` takes these.)
+                    Message::Ping { .. } | Message::Pong { .. } => {}
                 },
+                Heard::Ping(rtt) => {
+                    pings.insert(from, rtt);
+                    io.event(Event::Rtt { id: from, rtt });
+                }
                 Heard::Closed => {
                     io.event(Event::PeerLeft(from));
+                    pings.remove(&from);
                     links.remove(&from);
                     unclaimed.retain(|c| c.remote_id() != from);
                     // A guest whose host is gone has no lobby, nor a race: the host runs both.
@@ -788,6 +916,17 @@ async fn run(endpoint: Endpoint, mut io: Io, role: Role, mut character: u8) -> R
                     }
                 }
             },
+            _ = ping_timer.tick() => {
+                let connections = guests
+                    .iter()
+                    .map(|g| &g.connection)
+                    .chain(&host_connection)
+                    .chain(links.values().map(|l| &l.connection))
+                    .chain(&unclaimed);
+                for connection in distinct(connections) {
+                    send_datagram(connection, &Message::Ping { stamp: stamp() });
+                }
+            }
             _ = timer.tick() => if running {
                 for link in links.values_mut() {
                     link.send();

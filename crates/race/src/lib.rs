@@ -180,6 +180,9 @@ pub struct Race {
     /// How many karts have finished the race (`numPlayersFinishedRace`): the next to finish is
     /// that place.
     pub finished: i16,
+    /// The first kart over the line of the last lap, as (slot, tick): the race has been won.
+    /// None until then, and always in a free drive.
+    pub winner: Option<(usize, u32)>,
     /// The time of each lap a kart has finished, by slot, in milliseconds (`gGT->lapTime`).
     pub lap_times: Vec<Vec<i32>>,
     /// `trafficLightsTimer`: above 0 the karts wait on the grid. It holds at the start while the
@@ -214,6 +217,7 @@ impl Race {
             kart_collisions,
             laps: DEFAULT_LAPS,
             finished: 0,
+            winner: None,
             lap_times: vec![Vec::new(); specs.len()],
             lights_ms: 0,
             intro_ticks: 0,
@@ -477,6 +481,10 @@ impl Race {
             if lap.new_lap {
                 self.lap_times[slot].push(lap.time);
             }
+            // The first to finish is place 0 (the slot order decides a tie).
+            if lap.finished && self.winner.is_none() && self.karts[slot].driver.driver_rank == 0 {
+                self.winner = Some((slot, self.tick));
+            }
             tick.lap = lap;
         }
         if self.lights_ms < 1 {
@@ -556,11 +564,12 @@ impl Race {
         let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
         let _ = writeln!(
             hash,
-            "{} {} {} {} {} {} {:?} {:?} {:?}",
+            "{} {} {} {} {:?} {} {} {:?} {:?} {:?}",
             self.tick,
             self.event_ms,
             self.laps,
             self.finished,
+            self.winner,
             self.lights_ms,
             self.intro_ticks,
             self.lap_times,

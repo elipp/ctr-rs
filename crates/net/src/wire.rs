@@ -110,7 +110,20 @@ pub enum Message {
     /// Reliable. The sim as it is at the start of `tick`. The bytes are the game's to make and
     /// read: this crate does not know what the sim holds.
     Snapshot { tick: Tick, state: Vec<u8> },
+    /// Unreliable, between any two connected players, every [`PING_SECONDS`]. `stamp` is the
+    /// sender's clock when it sent this, which only the sender reads: the answer repeats it.
+    Ping { stamp: u64 },
+    /// Unreliable: the answer to the [`Message::Ping`] with the same `stamp`, which gives the
+    /// sender the round trip.
+    Pong { stamp: u64 },
+    /// Reliable, host to each client: the race of `epoch` is over, without a winner. The lobby
+    /// goes on, and the host can start the same players again. (A stop that comes after the
+    /// next race's [`Message::Restart`] is of the race before, and does not count.)
+    Stop { epoch: u32 },
 }
+
+/// How often a player pings the ones it is connected to.
+pub const PING_SECONDS: u64 = 2;
 
 impl Message {
     pub fn to_bytes(&self) -> Vec<u8> {
