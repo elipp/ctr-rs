@@ -6,6 +6,8 @@
 //! draws one reads the kart's slot from there. Where a kart differs is only its render layer.
 
 use bevy::ecs::system::SystemParam;
+use std::time::Duration;
+
 use bevy::prelude::*;
 use loader::icons::Icon;
 use loader::model::{Model, ModelHeader};
@@ -37,11 +39,113 @@ pub fn reap(
     }
 }
 
+/// How far a kart is drawn from where the sim has it, and the turn of it: what a rollback moved
+/// the kart by, which fades away in the ticks after instead of showing as a jump.
+#[derive(Clone, Copy)]
+struct Offset {
+    translation: Vec3,
+    rotation: Quat,
+}
+
+impl Offset {
+    const NONE: Offset = Offset {
+        translation: Vec3::ZERO,
+        rotation: Quat::IDENTITY,
+    };
+
+    /// The offset a tick later, `ease` of it being left.
+    fn faded(self, ease: f32) -> Offset {
+        Offset {
+            translation: self.translation * ease,
+            rotation: Quat::IDENTITY.slerp(self.rotation, ease),
+        }
+    }
+}
+
+/// How the offset of a rollback fades (`/net smoothing`): the time until a tenth of it is left.
+/// It is for the drawing only, and every client sets its own.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub enum Smoothing {
+    /// Follows the round trip to the kart's player: the later their pads, the bigger the
+    /// correction, and the longer it takes to fade.
+    #[default]
+    Ping,
+    /// Follows how many ticks the rollbacks of the kart replayed lately, which is how late its
+    /// pads really are (the tick and the clocks count, not only the network). The rollback does
+    /// not say whose pad it was, so every remote kart gets the same figure from it.
+    Replay,
+    Fixed(Duration),
+}
+
+impl std::fmt::Display for Smoothing {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Smoothing::Ping => write!(f, "ping"),
+            Smoothing::Replay => write!(f, "replay"),
+            Smoothing::Fixed(d) => write!(f, "{} ms", d.as_millis()),
+        }
+    }
+}
+
+/// How the fade by ping follows the round trip: that many round trips, within the bounds, and
+/// what a player with no ping yet gets.
+const PING_ROUND_TRIPS: f32 = 1.5;
+const PING_MIN: Duration = Duration::from_millis(100);
+const PING_MAX: Duration = Duration::from_millis(330);
+const PING_UNKNOWN: Duration = Duration::from_millis(200);
+
+/// The fade by replays: the ticks replayed on average, and one more, within the bounds. The
+/// average moves this much towards each new rollback, and starts at `REPLAY_START` ticks.
+const REPLAY_MIN: Duration = Duration::from_millis(66);
+const REPLAY_MAX: Duration = Duration::from_millis(330);
+const REPLAY_WEIGHT: f32 = 0.3;
+const REPLAY_START: f32 = 2.0;
+
+/// What is left of an offset when its fade is over.
+const EASE_LEFT: f32 = 0.1;
+
+impl Smoothing {
+    /// How much of an offset is left after a tick, for a kart whose player is `ping` away and
+    /// whose rollbacks replayed `replayed` ticks on average. Under a tick of fade it is gone in
+    /// one: the old jump, spread over the tick.
+    pub fn ease(self, ping: Option<Duration>, replayed: f32) -> f32 {
+        let tick = Duration::from_secs_f64(1.0 / crate::GAME_TICK_HZ);
+        let duration = match self {
+            Smoothing::Fixed(d) => d,
+            Smoothing::Ping => ping.map_or(PING_UNKNOWN, |rtt| {
+                rtt.mul_f32(PING_ROUND_TRIPS).clamp(PING_MIN, PING_MAX)
+            }),
+            Smoothing::Replay => tick
+                .mul_f32(replayed + 1.0)
+                .clamp(REPLAY_MIN, REPLAY_MAX),
+        };
+        let ticks = duration.as_secs_f32() * crate::GAME_TICK_HZ as f32;
+        if ticks < 1.0 {
+            0.0
+        } else {
+            EASE_LEFT.powf(1.0 / ticks)
+        }
+    }
+}
+
+/// A rollback moves a kart at least this far (render units) before it is taken for a jump of
+/// the kart itself (a mask grab, a respawn) and not a late pad; the more ticks it replays and the
+/// faster the kart goes, the further a late pad can move it.
+const EASE_MIN_DISTANCE: f32 = 4.0;
+const EASE_TRAVEL_FACTOR: f32 = 3.0;
+
 /// What the drawing of a kart takes from its sim, pushed once per game tick.
 #[derive(Component, Clone)]
 pub struct KartMotion {
     previous: Pose,
     current: Pose,
+    /// What was added to each of the two poses to draw them.
+    previous_offset: Offset,
+    offset: Offset,
+    /// How much of the offset is left after a tick (see [`Smoothing::ease`]).
+    ease: f32,
+    /// The ticks that the rollbacks of the kart replayed, on average.
+    replayed_average: f32,
     /// `Driver::wheelRotation`: the front wheels' steering.
     pub wheel_rotation: i16,
     /// The instance scale: the squash and stretch the wheels follow.
@@ -66,6 +170,10 @@ impl KartMotion {
         KartMotion {
             previous: pose,
             current: pose,
+            previous_offset: Offset::NONE,
+            offset: Offset::NONE,
+            ease: 0.0,
+            replayed_average: REPLAY_START,
             wheel_rotation: 0,
             inst_scale: [0; 3],
             animation: (0, 0),
@@ -99,6 +207,8 @@ impl KartMotion {
         *self = KartMotion {
             previous,
             current: pose_of(&kart.driver),
+            previous_offset: self.offset,
+            offset: self.offset.faded(self.ease),
             previous_animation: self.animation,
             shadow_previous: self.shadow_current,
             ..*self
@@ -114,14 +224,49 @@ impl KartMotion {
     /// Nothing moves between ticks now (the pause): stay where the last one put the kart.
     pub fn freeze(&mut self) {
         self.previous = self.current;
+        self.previous_offset = self.offset;
         *self = self.clone().settled();
+    }
+
+    /// The ticks that the rollbacks of the kart replayed, on average.
+    pub fn replayed_average(&self) -> f32 {
+        self.replayed_average
+    }
+
+    /// How the offsets of the next ticks fade (see [`Smoothing::ease`]).
+    pub fn set_ease(&mut self, ease: f32) {
+        self.ease = ease;
+    }
+
+    /// A rollback of `replayed` ticks put the kart right: it was at `predicted` (the pose of the
+    /// tick the sim was at) and the sim has it elsewhere now, as `kart` says. The drawing stays
+    /// where it was and eases to the new place over the next ticks, unless the kart was moved too
+    /// far for that.
+    pub fn absorb(&mut self, predicted: &Pose, kart: &race::Kart, replayed: u32) {
+        self.replayed_average += (replayed as f32 - self.replayed_average) * REPLAY_WEIGHT;
+        let now = pose_of(&kart.driver);
+        let per_tick = self.current.translation.distance(self.previous.translation);
+        let furthest = EASE_MIN_DISTANCE.max(EASE_TRAVEL_FACTOR * per_tick * replayed as f32);
+        if predicted.translation.distance(now.translation) > furthest {
+            let average = self.replayed_average;
+            self.reset(kart);
+            self.replayed_average = average;
+            return;
+        }
+        self.offset = Offset {
+            translation: self.offset.translation + predicted.translation - now.translation,
+            rotation: self.offset.rotation * predicted.rotation * now.rotation.inverse(),
+        };
     }
 
     /// Between the last two ticks, `t` of the way to the latest.
     pub fn pose(&self, t: f32) -> Pose {
+        let (from, to) = (&self.previous_offset, &self.offset);
         Pose {
-            translation: self.previous.translation.lerp(self.current.translation, t),
-            rotation: self.previous.rotation.slerp(self.current.rotation, t),
+            translation: (self.previous.translation + from.translation)
+                .lerp(self.current.translation + to.translation, t),
+            rotation: (from.rotation * self.previous.rotation)
+                .slerp(to.rotation * self.current.rotation, t),
             scale: self.previous.scale.lerp(self.current.scale, t),
         }
     }
@@ -145,8 +290,13 @@ impl KartMotion {
             let (up, forward) = (column(1).normalize_or_zero(), column(2).normalize_or_zero());
             Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
         };
+        // (The ground does not move with a rollback's offset, but where the kart is drawn does.)
+        let eased = self
+            .previous_offset
+            .translation
+            .lerp(self.offset.translation, t);
         Some((
-            place(&before).lerp(place(&now), t),
+            place(&before).lerp(place(&now), t) + Vec3::new(eased.x, 0.0, eased.z),
             Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
             before.height as f32 + (now.height - before.height) as f32 * t,
         ))

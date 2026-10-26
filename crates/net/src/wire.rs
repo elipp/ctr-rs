@@ -74,6 +74,9 @@ pub enum Message {
     /// game's own), which a client that lacks it asks for with [`Message::Want`]. `roster` is the endpoint id of each slot (the host is 0), which the
     /// clients connect to each other by.
     Start {
+        /// Which race this is (see [`Message::Restart`]): 0 for the first of the lobby. A start
+        /// after a race that is over takes new players in, and the ones that left out.
+        epoch: u32,
         slot: u8,
         characters: Vec<u8>,
         track: u32,
@@ -271,6 +274,7 @@ mod tests {
                 seq: 3,
             },
             Message::Start {
+                epoch: 1,
                 slot: 2,
                 characters: vec![0, 5, 15],
                 track: 4,

@@ -1,0 +1,7 @@
+# Added by claude.sh when the disc directory exists.
+services:
+  claude:
+    environment:
+      CTR_BIN: /disc/ctr-u.bin
+    volumes:
+      - ${CTR_DISC_DIR:?set by claude.sh}:/disc:ro

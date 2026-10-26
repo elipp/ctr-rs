@@ -17,7 +17,7 @@ const FADE_MS: u64 = 300;
 pub const DEFAULT_COLOR: Color = Color::WHITE;
 
 /// The grey behind a toast, so that it reads over any scene (the fade scales its alpha).
-const BACKGROUND: Color = Color::srgba(0.25, 0.25, 0.25, 0.6);
+const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.45);
 
 /// The font size of a toast unless it says otherwise.
 const DEFAULT_SIZE: f32 = 28.0;

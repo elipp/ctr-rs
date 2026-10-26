@@ -554,6 +554,7 @@ fn drive_tick(
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
     mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
+    smoothing: Res<crate::kart::Smoothing>,
     mut cues: Cues,
 ) {
     let drive = &mut *drive;
@@ -747,12 +748,27 @@ fn drive_tick(
 
     // Everyone's karts play together, by slot, ours among them. The pads that are not in yet
     // are predicted, and put right when they come.
+    // A late pad puts the karts of the others right, which would show as a jump: the drawing
+    // eases from where the kart was predicted to be to where it is now.
+    let mut replayed = 0;
+    if sim.race.dirty() {
+        let predicted: Vec<Pose> = sim.race.karts.iter().map(|k| pose_of(&k.driver)).collect();
+        replayed = sim.race.correct(&track.0);
+        for (mut motion, slot, ours) in &mut motions {
+            if let (false, Some(before), Some(kart)) =
+                (ours, predicted.get(slot.0), sim.race.karts.get(slot.0))
+            {
+                motion.absorb(before, kart, replayed);
+            }
+        }
+    }
     let advance = sim.race.advance(&track.0);
-    if advance.replayed > 0
+    replayed += advance.replayed;
+    if replayed > 0
         && let Some(net) = lobby.online.as_mut()
     {
         net.corrections += 1;
-        net.replayed += advance.replayed;
+        net.replayed += replayed;
     }
     // The hashes of the ticks that are final now: the others get ours, and ours are held up
     // against theirs.
@@ -811,6 +827,18 @@ fn drive_tick(
         drive.camera.fly_in(&track.0, fly_in_frame);
     }
 
+    // The offsets of the others' karts fade as far as their players' pings call for.
+    for (mut motion, slot, ours) in &mut motions {
+        if !ours {
+            let ping = lobby
+                .online
+                .as_ref()
+                .and_then(|net| net.names.get(slot.0))
+                .and_then(|name| lobby.average_pings.get(name));
+            let ease = smoothing.ease(ping.copied(), motion.replayed_average());
+            motion.set_ease(ease);
+        }
+    }
     each_motion(&sim, &mut motions, |motion, kart| motion.push(kart));
     drive.previous_view = drive.current_view;
     drive.current_view = view_of(&drive.camera);

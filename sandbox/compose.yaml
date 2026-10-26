@@ -1,0 +1,87 @@
+# Claude Code in a container that can only reach the Claude and crates.io domains.
+# Run it with `sandbox/claude.sh`, which sets the variables used below.
+#
+#   claude  on `internal` (no route out)  ->  proxy  on `internal` and `egress`  ->  allowlist
+
+name: claude-sandbox
+
+services:
+  claude:
+    build:
+      context: .
+      dockerfile: claude.Dockerfile
+      args:
+        # Same uid/gid as the host user, so files written to the project are yours.
+        UID: ${HOST_UID:-501}
+        GID: ${HOST_GID:-20}
+    image: ctr-claude
+    depends_on: [proxy]
+    stdin_open: true
+    tty: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    networks: [internal]
+    environment:
+      HTTPS_PROXY: http://proxy:3128
+      HTTP_PROXY: http://proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      TERM:
+      COLORTERM:
+      GIT_AUTHOR_NAME:
+      GIT_AUTHOR_EMAIL:
+      GIT_COMMITTER_NAME:
+      GIT_COMMITTER_EMAIL:
+    volumes:
+      - ..:/work
+      - claude-state:/home/claude/.claude-state
+      - claude-cargo-registry:/home/claude/.cargo/registry
+      - claude-cargo-git:/home/claude/.cargo/git
+      - claude-target:/target
+      - claude-uv-cache:/home/claude/.cache/uv
+      - claude-venv:/venv
+      # This project's Claude memory on the host, read-write.
+      - ${CLAUDE_MEMORY:?set by claude.sh}:/home/claude/.claude-state/projects/-work/memory
+
+  proxy:
+    build:
+      context: .
+      dockerfile: proxy.Dockerfile
+    image: ctr-claude-proxy
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal, egress]
+
+  # Makes the memory mount's parent directory in the state volume as `claude`, not as root (the
+  # bind mount above would otherwise create it as root and Claude could not write transcripts).
+  state-init:
+    image: ctr-claude
+    profiles: [init]
+    entrypoint: [mkdir, -p, /home/claude/.claude-state/projects/-work]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    volumes:
+      - claude-state:/home/claude/.claude-state
+
+networks:
+  internal:
+    internal: true
+  egress:
+
+# Created by Docker before this was a compose project, so compose only uses them.
+volumes:
+  claude-state:
+    external: true
+  claude-cargo-registry:
+    external: true
+  claude-cargo-git:
+    external: true
+  claude-target:
+    external: true
+  claude-uv-cache:
+    external: true
+  claude-venv:
+    external: true

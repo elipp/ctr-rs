@@ -292,8 +292,9 @@ mod tests {
         assert_eq!(d.invincible_timer, DAMAGE_INVINCIBLE_TIMER);
         // A second hit finds no shield (the invincible timer shrugs it off instead).
         assert!(!absorb(&mut d));
-        // It pops over eleven ticks: the first runs in the tick that decides it.
-        run(&mut d, POP_SCALE.len() as u32 - 1);
+        // It pops over eleven ticks (the first runs in the tick that decides it), and is gone in
+        // the twelfth.
+        run(&mut d, POP_SCALE.len() as u32);
         assert!(d.shield.is_some());
         run(&mut d, 1);
         assert!(d.shield.is_none());

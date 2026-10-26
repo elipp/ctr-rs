@@ -467,11 +467,12 @@ mod tests {
     fn the_arrival_plays_to_the_end_and_goes() {
         let frames = run(10, 40);
         // The missile is gone at tick 10; the first frame reads timer 0 of the chased table,
-        // and the arrival counts down from 12 (its first frame is the off-the-table one).
+        // and the arrival counts down from 12 (its first frame is the off-the-table one). Timer 0
+        // draws nothing, so the last frame is the table's second.
         assert_eq!(frames[10], Some(ANIM_CHASED[0]));
         assert_eq!(frames[11], Some((0, 1)));
         assert_eq!(frames[12], Some(ANIM_ARRIVED[10]));
-        assert_eq!(frames[21], Some(ANIM_ARRIVED[0]));
+        assert_eq!(frames[21], Some(ANIM_ARRIVED[1]));
         assert!(frames[22..].iter().all(Option::is_none));
     }
 
