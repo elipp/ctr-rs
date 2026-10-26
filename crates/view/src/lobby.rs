@@ -60,6 +60,17 @@ pub struct Online {
     pub desync: Vec<Desync>,
     /// The winner has been announced; the race ends [`AFTERMATH_SECONDS`] later.
     pub won: bool,
+    /// The players that left the race (by slot): they have a neutral pad from their last on, and
+    /// the race does not wait for them to finish.
+    pub gone: Vec<bool>,
+    /// The players that left whose pads we still have to report (`Event::Gone`): `drive_tick`
+    /// answers once the pads that came in are taken.
+    pub asked: Vec<usize>,
+    /// The slots whose pads we stopped taking, having reported what we hold of them.
+    pub frozen: Vec<bool>,
+    /// Where the pads of the players that left end (`Event::Left`), for `drive_tick` to apply:
+    /// (slot, first tick, pads).
+    pub lefts: Vec<(usize, u32, Vec<Pad>)>,
 }
 
 /// A player whose sim has parted from ours.
@@ -133,7 +144,7 @@ impl Lobby {
 
     /// Opens a lobby of our own, for others to join. (They get its address when it is up.)
     pub fn host(&mut self, character: u8) {
-        self.session = Some(net::host(character));
+        self.session = Some(net::host(character, race::SIM_VERSION));
         self.joined = false;
         self.roster.clear();
         self.roster_seen = false;
@@ -170,7 +181,7 @@ impl Lobby {
     /// Joins the lobby at `ticket`.
     pub fn join(&mut self, ticket: Ticket, character: u8) {
         println!("joining {ticket}");
-        self.session = Some(net::join(ticket, character));
+        self.session = Some(net::join(ticket, character, race::SIM_VERSION));
         self.joined = true;
         self.roster.clear();
         self.roster_seen = false;
@@ -187,6 +198,13 @@ impl Lobby {
     pub fn send(&self, pad: Pad) {
         if let Some(session) = &self.session {
             session.input(pad);
+        }
+    }
+
+    /// What we hold of the pads of a player that left, from tick `first` (see `Event::Gone`).
+    pub fn have(&self, slot: usize, first: u32, pads: Vec<Pad>) {
+        if let Some(session) = &self.session {
+            session.have(slot, first, pads);
         }
     }
 
@@ -476,6 +494,8 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     let mut stopped = false;
     let mut rtts = Vec::new();
     let mut left = Vec::new();
+    let mut gones = Vec::new();
+    let mut lefts = Vec::new();
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
@@ -500,7 +520,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     "{} left{}",
                     id.fmt_short(),
                     if lobby.online.is_some() {
-                        " (the race goes on with their last pad)"
+                        " (their kart idles for the rest of the race)"
                     } else {
                         ""
                     }
@@ -549,9 +569,15 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     checks: race::desync::Checks::new(characters_len, slot),
                     desync: Vec::new(),
                     won: false,
+                    gone: vec![false; characters_len],
+                    asked: Vec::new(),
+                    frozen: vec![false; characters_len],
+                    lefts: Vec::new(),
                 });
             }
             Event::Go => go = true,
+            Event::Gone { slot } => gones.push(slot),
+            Event::Left { slot, first, pads } => lefts.push((slot, first, pads)),
             // (A stop is of the race before a start that follows it, if there is one.)
             Event::Stopped => {
                 started = None;
@@ -662,9 +688,26 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         lobby.roster = players;
         lobby.roster_seen = true;
     }
+    let mut answers = Vec::new();
     if let Some(online) = &mut lobby.online {
         online.go |= go;
-        online.inbox.extend(pads);
+        // The pads of a player we reported on are not taken: the report is where they end.
+        online
+            .inbox
+            .extend(pads.into_iter().filter(|(slot, ..)| !online.frozen.get(*slot).copied().unwrap_or(false)));
+        for slot in gones {
+            if !online.go {
+                // The sim has none of its pads yet, and takes none now.
+                online.inbox.retain(|(from, ..)| *from != slot);
+                if let Some(frozen) = online.frozen.get_mut(slot) {
+                    *frozen = true;
+                }
+                answers.push(slot);
+            } else {
+                online.asked.push(slot);
+            }
+        }
+        online.lefts.extend(lefts);
         for (slot, ahead) in leads {
             if let Some(smoothed) = online.ahead.get_mut(slot) {
                 *smoothed += (ahead - *smoothed) * LEAD_SMOOTHING;
@@ -689,6 +732,9 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             );
         }
     }
+    for slot in answers {
+        lobby.have(slot, 0, Vec::new());
+    }
     if let Some(why) = failed {
         // Back to where we started: no lobby, no race.
         lobby.close();
@@ -698,7 +744,8 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     }
 }
 
-/// How long the race goes on after it has been won, in seconds of the race.
+/// How long the race goes on after it has been won, in seconds of the race, if the players still
+/// here have not all finished by then.
 const AFTERMATH_SECONDS: u32 = 5;
 
 /// Announces the winner of the race, and [`AFTERMATH_SECONDS`] later ends it: everyone goes back to
@@ -724,7 +771,15 @@ fn finish(mut lobby: ResMut<Lobby>, sim: Res<crate::props::Sim>, mut toasts: Mes
         println!("{text} (tick {tick})");
         toasts.write(Toast::new(text, AFTERMATH_SECONDS as u64 * 1000).color(ANNOUNCE_COLOR));
     }
-    if sim.race.settled() >= tick + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32 {
+    // The race is over when the last of the players still here crosses the line (the ones that
+    // left will not), or [`AFTERMATH_SECONDS`] after the win. The state is final at that point,
+    // so every client sees the same.
+    let all_over = sim.race.unsettled() == 0
+        && sim.race.karts.iter().enumerate().all(|(slot, kart)| {
+            net.gone.get(slot).copied().unwrap_or(false)
+                || kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0
+        });
+    if all_over || sim.race.settled() >= tick + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32 {
         lobby.end_race();
     }
 }

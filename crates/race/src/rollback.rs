@@ -14,6 +14,10 @@ use std::collections::VecDeque;
 
 use crate::Pad;
 
+/// How many of the latest pads of each player are kept to hand to the others when it leaves (see
+/// [`Rollback::recent`]): 4 s, what a packet repeats at most.
+pub const HISTORY: usize = 120;
+
 /// A simulation to roll back: a state that steps from everyone's pads, and is `Clone` so that a
 /// copy of it is a snapshot. Stepping must depend on nothing but the state and the pads.
 pub trait Simulation: Clone {
@@ -69,6 +73,12 @@ pub struct Rollback<S: Simulation> {
     known: Vec<VecDeque<Pad>>,
     /// The latest pad known for each slot: what the ticks past the known ones are played with.
     last: Vec<Pad>,
+    /// The last [`HISTORY`] pads confirmed for each slot, final or not, as far as `confirmed`
+    /// says. When a player leaves, whoever has the most of its pads gives them to the others.
+    recent: Vec<VecDeque<Pad>>,
+    /// The players that left: their pads end where they ended, and nothing is waited for or
+    /// predicted from them (a neutral pad follows the last one).
+    departed: Vec<bool>,
     /// Our slot: its pads are never predicted, so a tick waits for them.
     local: Option<usize>,
     /// The most unconfirmed ticks that are kept.
@@ -93,6 +103,8 @@ impl<S: Simulation> Rollback<S> {
             used: VecDeque::new(),
             known: vec![VecDeque::new(); players],
             last: vec![Pad::default(); players],
+            recent: vec![VecDeque::new(); players],
+            departed: vec![false; players],
             local,
             window,
             dirty: None,
@@ -135,8 +147,12 @@ impl<S: Simulation> Rollback<S> {
         self.known.len()
     }
 
-    /// The first tick that has no pad in from `slot`.
+    /// The first tick that has no pad in from `slot`. A player that left has all of them: its
+    /// ticks past the last pad are neutral.
     pub fn confirmed_until(&self, slot: usize) -> u32 {
+        if self.departed[slot] {
+            return u32::MAX;
+        }
         self.base + self.known[slot].len() as u32
     }
 
@@ -146,6 +162,35 @@ impl<S: Simulation> Rollback<S> {
             .map(|slot| self.confirmed_until(slot))
             .min()
             .map_or(self.played, |until| until.min(self.played))
+    }
+
+    /// The pads `slot` made last, up to [`HISTORY`] of them, as (the tick of the first, the
+    /// pads), ending where [`Rollback::confirmed_until`] does (for a player that is still here).
+    pub fn recent(&self, slot: usize) -> (u32, Vec<Pad>) {
+        let pads: Vec<Pad> = self.recent[slot].iter().copied().collect();
+        let end = self.base + self.known[slot].len() as u32;
+        (end - pads.len() as u32, pads)
+    }
+
+    /// `slot` left the race: its pads ended with the last confirmed one, and from there it
+    /// holds a neutral pad. Every client has to call this after confirming the same pads for it,
+    /// or their sims part. The ticks already played past its last pad are played again.
+    pub fn leave(&mut self, slot: usize) {
+        if self.departed[slot] {
+            return;
+        }
+        let end = self.confirmed_until(slot);
+        self.departed[slot] = true;
+        self.last[slot] = Pad::default();
+        // Those ticks were played with its last pad, which is not neutral to begin with.
+        if end < self.played && self.used[(end - self.base) as usize][slot] != Pad::default() {
+            self.dirty = Some(self.dirty.map_or(end, |d| d.min(end)));
+        }
+    }
+
+    /// Whether `slot` has left.
+    pub fn departed(&self, slot: usize) -> bool {
+        self.departed[slot]
     }
 
     /// The ticks played on a prediction (or a pad that is not known to be right yet).
@@ -166,6 +211,10 @@ impl<S: Simulation> Rollback<S> {
     /// The pad of `slot` for `tick`. It has to be the next one we do not have (the ones before
     /// it are taken as repeats), or [`Hole`] says where to start again.
     pub fn confirm(&mut self, slot: usize, tick: u32, pad: Pad) -> Result<(), Hole> {
+        // A player that left has no more pads.
+        if self.departed[slot] {
+            return Ok(());
+        }
         let expected = self.confirmed_until(slot);
         if tick < expected {
             return Ok(());
@@ -175,6 +224,10 @@ impl<S: Simulation> Rollback<S> {
         }
         self.known[slot].push_back(pad);
         self.last[slot] = pad;
+        self.recent[slot].push_back(pad);
+        if self.recent[slot].len() > HISTORY {
+            self.recent[slot].pop_front();
+        }
         // A tick that was played has to have been played with this pad.
         if tick < self.played && self.used[(tick - self.base) as usize][slot] != pad {
             self.dirty = Some(self.dirty.map_or(tick, |d| d.min(tick)));

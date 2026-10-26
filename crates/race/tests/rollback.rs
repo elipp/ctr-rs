@@ -324,3 +324,66 @@ fn the_checksums_are_those_of_the_perfect_network_each_once() {
         }
     }
 }
+
+#[test]
+fn a_player_who_leaves_ends_the_same_for_clients_that_had_different_amounts_of_its_pads() {
+    // Player 2 leaves after making 20 pads, of which client 0 has all and client 1 only 12.
+    // Client 0 hands over what it has, and both then see a neutral pad from tick 20 on.
+    let players = 3;
+    let mut clients: Vec<Rollback<Toy>> = (0..2)
+        .map(|me| Rollback::new(Toy::new(players), players, Some(me), 120))
+        .collect();
+    for tick in 0..40u32 {
+        for (me, client) in clients.iter_mut().enumerate() {
+            let other = 1 - me;
+            client.confirm(me, tick, pad_of(me, tick)).unwrap();
+            // The other client's pad is a tick late.
+            if tick > 0 {
+                client.confirm(other, tick - 1, pad_of(other, tick - 1)).unwrap();
+            }
+            let have = if me == 0 { 20 } else { 12 };
+            if tick < have {
+                client.confirm(2, tick, pad_of(2, tick)).unwrap();
+            }
+            client.advance(&());
+        }
+    }
+    let (first, pads) = clients[0].recent(2);
+    assert_eq!((first + pads.len() as u32), 20);
+    for client in &mut clients {
+        // The pads it lacks, and the ones it has already, which are repeats.
+        client.confirm_all(2, first, &pads).unwrap();
+        client.leave(2);
+        assert_eq!(client.confirmed_until(2), u32::MAX);
+        // Anything that still comes from the player that left is dropped.
+        client.confirm(2, 20, pad_of(2, 20)).unwrap();
+    }
+    for tick in 40..80u32 {
+        for (me, client) in clients.iter_mut().enumerate() {
+            let other = 1 - me;
+            client.confirm(me, tick, pad_of(me, tick)).unwrap();
+            client.confirm(other, tick - 1, pad_of(other, tick - 1)).unwrap();
+            client.advance(&());
+        }
+    }
+    // The last pad of each is still on its way: deliver it, and the late ones are put right.
+    for (me, client) in clients.iter_mut().enumerate() {
+        let other = 1 - me;
+        client.confirm(other, 79, pad_of(other, 79)).unwrap();
+        client.correct(&());
+    }
+    let mut perfect = Toy::new(players);
+    for tick in 0..80 {
+        let pads: Vec<Pad> = (0..players)
+            .map(|s| match s {
+                2 if tick >= 20 => Pad::default(),
+                _ => pad_of(s, tick),
+            })
+            .collect();
+        perfect.step(&(), &pads);
+    }
+    for client in &clients {
+        assert_eq!(client.tick(), 80);
+        assert_eq!(client.state(), &perfect);
+    }
+}
