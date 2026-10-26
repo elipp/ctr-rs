@@ -66,6 +66,9 @@ pub struct Online {
     /// The players that left whose pads we still have to report (`Event::Gone`): `drive_tick`
     /// answers once the pads that came in are taken.
     pub asked: Vec<usize>,
+    /// The kart the camera follows: ours, or another's once we have finished (R1 and L1 change
+    /// it).
+    pub watching: usize,
     /// The slots whose pads we stopped taking, having reported what we hold of them.
     pub frozen: Vec<bool>,
     /// Where the pads of the players that left end (`Event::Left`), for `drive_tick` to apply:
@@ -421,6 +424,7 @@ fn run(
                 }
                 lobby.countdown = None;
                 lobby.end_race();
+                toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
                 continue;
             }
             Action::RestartRace => {
@@ -570,6 +574,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                     desync: Vec::new(),
                     won: false,
                     gone: vec![false; characters_len],
+                    watching: slot,
                     asked: Vec::new(),
                     frozen: vec![false; characters_len],
                     lefts: Vec::new(),
@@ -627,6 +632,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     }
     if stopped {
         lobby.end_race();
+        toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
     }
     if started.is_some() {
         lobby.online = started;

@@ -94,6 +94,15 @@ pub(crate) struct WumpaHud;
 #[derive(Component)]
 struct LapHud;
 
+/// The time at the checkpoint just passed: green if we were the first there, else red and how
+/// far behind the first.
+#[derive(Component)]
+struct SplitHud;
+
+/// How long a checkpoint time stays up, in milliseconds of the race. (The last one, at the finish
+/// line, stays.)
+const SPLIT_SHOW_MS: i32 = 3000;
+
 /// How many ticks we may play past the last pad of another player before we wait for it: the
 /// prediction is that long at most. The clock is kept with the others' without this (see
 /// `lobby::pace`), so it only matters when one of them stalls for good: 2 seconds.
@@ -342,6 +351,7 @@ impl Plugin for DrivePlugin {
                     hud,
                     wumpa_hud,
                     lap_hud,
+                    split_hud,
                     wumpa_bar,
                     turbo_bar,
                     reserves_hud,
@@ -357,6 +367,7 @@ impl Plugin for DrivePlugin {
                     crate::skid::update,
                     crate::mask::update.after(crate::kart::show),
                     crate::shield::update.after(crate::kart::show).after(chase),
+                    crate::names::overhead.after(crate::kart::show).after(chase),
                 ),
             )
             .add_systems(
@@ -379,6 +390,21 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
             left: Val::Px(8.0),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        SplitHud,
+        Text::new(""),
+        TextFont {
+            font_size: 30.0.into(),
+            ..default()
+        },
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(70.0),
+            width: Val::Percent(100.0),
             ..default()
         },
     ));
@@ -735,6 +761,8 @@ fn drive_tick(
     {
         return;
     }
+    // Which way R1 and L1 were tapped this tick, to change the kart the camera follows.
+    let mut cycle = 0;
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
     // others get it as well. (A tick that waits plays the pad it already has.)
     if sim.race.confirmed_until(own) <= tick {
@@ -759,6 +787,8 @@ fn drive_tick(
             }
             Pad::of_input(&input)
         };
+        let taps = pad.held & !held;
+        cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
         sim.race
             .confirm(own, tick, pad)
             .expect("our pads come in order");
@@ -854,7 +884,28 @@ fn drive_tick(
         elapsed_time_ms: vehicle::Env::default().elapsed_time_ms,
         ..Default::default()
     };
-    let kart = sim.kart();
+    // Once we have finished, the camera can follow the others (R1 and L1), the ones still here.
+    let finished = sim.driver().actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+    if let Some(net) = lobby.online.as_mut() {
+        let players = sim.race.players();
+        let before = net.watching;
+        if !finished || net.watching >= players || net.gone[net.watching] {
+            net.watching = own;
+        }
+        if finished && cycle != 0 {
+            for _ in 0..players {
+                net.watching = (net.watching as i32 + cycle).rem_euclid(players as i32) as usize;
+                if !net.gone[net.watching] {
+                    break;
+                }
+            }
+        }
+        if net.watching != before {
+            drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
+        }
+    }
+    let watching = lobby.online.as_ref().map_or(own, |net| net.watching);
+    let kart = &sim.race.karts[watching];
     drive
         .camera
         .follow_driver(&kart.driver, &track.0, &camera_input);
@@ -1091,6 +1142,42 @@ fn lap_hud(
     }
     for mut text in &mut text {
         text.0 = lines.join("\n");
+    }
+}
+
+/// `m:ss.cc`, as a checkpoint time is told.
+fn split_time(ms: i32) -> String {
+    let ms = ms.max(0);
+    format!("{}:{:02}.{:02}", ms / 60000, ms / 1000 % 60, ms % 1000 / 10)
+}
+
+/// Shows the time of the checkpoint we passed last (see `race::Race::last_split`) against the
+/// first kart to pass it.
+fn split_hud(
+    sim: Res<crate::props::Sim>,
+    lobby: Res<crate::lobby::Lobby>,
+    mut text: Query<(&mut Text, &mut TextColor), With<SplitHud>>,
+) {
+    let race = &*sim.race;
+    let finished = sim.driver().actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+    let shown = lobby
+        .online
+        .as_ref()
+        .and(race.last_split(sim.own))
+        .filter(|&(_, time, _)| finished || race.event_ms - time < SPLIT_SHOW_MS);
+    let (line, color) = match shown {
+        Some((_, time, 0)) => (split_time(time), Color::srgb(0.4, 1.0, 0.4)),
+        Some((_, _, behind)) => (
+            format!("+{}", split_time(behind)),
+            Color::srgb(1.0, 0.3, 0.3),
+        ),
+        None => (String::new(), Color::WHITE),
+    };
+    for (mut text, mut text_color) in &mut text {
+        if text.0 != line {
+            text.0 = line.clone();
+        }
+        text_color.0 = color;
     }
 }
 
