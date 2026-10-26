@@ -2,9 +2,11 @@
 //! after the physics): whether the kart puffs smoke from its two pipes this
 //! tick, and where and how fast. The particles themselves are the renderer's.
 //!
-//! Not ported: the stop while the boost flame burns, the multiplayer thinning (`numPlyrCurrGame`), bots, the engine
-//! revving at the start (`revEngineState`), invisibility and the underwater
-//! bubbles.
+//! While the engine revs (the start of a race, a mask grab) the smoke is dark whenever the gas
+//! is held, as it is in the boost window.
+//!
+//! Not ported: the stop while the boost flame burns, the multiplayer thinning (`numPlyrCurrGame`), bots,
+//! invisibility and the underwater bubbles.
 
 use crate::{Driver, Matrix, kart_state};
 
@@ -57,8 +59,13 @@ pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
     let y = (sy * POSITION_Y) >> 1;
     let z = (sz * POSITION_Z) >> 4;
     let pipes = [(sx * 9) >> 3, (sx * -0x12) >> 4];
-    // Revving at the start never runs here, so the window decides.
-    let dark = d.kart_state != kart_state::ENGINE_REVVING && in_boost_window(d);
+    // Revving, the gas decides; driving, the boost window does (the rev's meter is not the
+    // drift's).
+    let dark = if d.kart_state == kart_state::ENGINE_REVVING {
+        crate::stuck::revving(d)
+    } else {
+        in_boost_window(d)
+    };
     pipes
         .map(|x| Puff {
             position: rotate(m, [x, y, z]),
@@ -106,6 +113,17 @@ mod tests {
         d.failed_boost_exhaust_timer = 2;
         assert_eq!(exhaust(&mut d).len(), 2);
         assert_eq!(d.failed_boost_exhaust_timer, 1);
+    }
+
+    #[test]
+    fn revving_makes_dark_smoke_only_with_the_gas_held() {
+        let mut d = driver();
+        d.kart_state = kart_state::ENGINE_REVVING;
+        // The rev's meter in the boost window does not count.
+        d.turbo_meter_room_left = 200;
+        assert!(exhaust(&mut d).iter().all(|p| !p.dark));
+        d.rev.charge_state = 2;
+        assert!(exhaust(&mut d).iter().all(|p| p.dark));
     }
 
     #[test]

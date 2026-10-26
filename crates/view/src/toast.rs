@@ -16,6 +16,9 @@ const FADE_MS: u64 = 300;
 /// The color of a toast unless it says otherwise.
 pub const DEFAULT_COLOR: Color = Color::WHITE;
 
+/// The grey behind a toast, so that it reads over any scene (the fade scales its alpha).
+const BACKGROUND: Color = Color::srgba(0.25, 0.25, 0.25, 0.6);
+
 /// The font size of a toast unless it says otherwise.
 const DEFAULT_SIZE: f32 = 28.0;
 
@@ -126,8 +129,10 @@ fn show(
             TextColor(toast.color),
             Node {
                 margin: UiRect::top(Val::Px(toast.lower)),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
                 ..default()
             },
+            BackgroundColor(BACKGROUND),
             ChildOf(column),
         ));
     }
@@ -136,15 +141,16 @@ fn show(
 fn expire(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    mut showing: Query<(Entity, &Showing, &mut TextColor)>,
+    mut showing: Query<(Entity, &Showing, &mut TextColor, &mut BackgroundColor)>,
 ) {
     let now = time.elapsed();
-    for (entity, showing, mut color) in &mut showing {
+    for (entity, showing, mut color, mut background) in &mut showing {
         let Some(left) = showing.until.checked_sub(now).filter(|d| !d.is_zero()) else {
             commands.entity(entity).despawn();
             continue;
         };
         let alpha = (left.as_millis() as f32 / FADE_MS as f32).min(1.0);
         color.0 = showing.color.with_alpha(showing.color.alpha() * alpha);
+        background.0 = BACKGROUND.with_alpha(BACKGROUND.alpha() * alpha);
     }
 }

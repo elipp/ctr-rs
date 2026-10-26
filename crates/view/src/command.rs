@@ -1,6 +1,6 @@
 //! The command line: Return opens it, typing and pasting (Cmd or Ctrl V) fill it in, Return again
 //! sends what is typed and Escape closes it without. A line that starts with `/` is a command
-//! (an [`Action`], which the keys can ask for as well); any other is a chat message.
+//! (an [`Action`]); any other is a chat message.
 //!
 //! While it is open it takes the keyboard: the keys are cleared from the game's input every frame,
 //! so that typing does not drive the kart.
@@ -13,11 +13,10 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use net::Ticket;
 
-use crate::lobby::Lobby;
 use crate::toast::Toast;
 
-/// Something a player can ask for: a key does it, and so does its `/command`. Both only send it;
-/// what it does is up to whoever handles it (the lobby's are in `lobby.rs`).
+/// Something a player can ask for with a `/command`. The command only sends it; what it does is
+/// up to whoever handles it (the lobby's are in `lobby.rs`).
 #[derive(Message, Clone, Debug)]
 pub enum Action {
     CreateLobby,
@@ -27,10 +26,14 @@ pub enum Action {
     PurgeCache,
     StartRace,
     RestartRace,
+    /// End the race in progress for everyone, with no winner (the host only).
+    StopRace,
     /// (Debug) Roll that item into our hand: one of `vehicle::item::ENABLED`.
     DebugAddWeapon(u8),
     /// (Debug) Set our wumpa count, clamped to what a kart can hold.
     DebugSetWumpa(u8),
+    /// (Debug) Toast how each peer is connected: direct or by relay, the round trip time, losses.
+    DebugNetInfo,
 }
 
 /// The first word of `text` and what follows it.
@@ -42,8 +45,9 @@ fn word(text: &str) -> (&str, &str) {
 
 const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
 const CACHE_USAGE: &str = "Usage: /cache purge";
-const RACE_USAGE: &str = "Usage: /race start | restart";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11>";
+const RACE_USAGE: &str = "Usage: /race start | restart | stop";
+const DEBUG_USAGE: &str =
+    "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | netinfo";
 
 impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
@@ -88,6 +92,7 @@ impl Action {
         match sub {
             "start" => Ok(Action::StartRace),
             "restart" => Ok(Action::RestartRace),
+            "stop" => Ok(Action::StopRace),
             "" => Err(RACE_USAGE.into()),
             _ => Err(format!("Unknown command: /race {sub}\n{RACE_USAGE}")),
         }
@@ -121,6 +126,7 @@ impl Action {
                     _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
                 }
             }
+            "netinfo" => Ok(Action::DebugNetInfo),
             "" => Err(DEBUG_USAGE.into()),
             _ => Err(format!("Unknown command: /debug {sub}\n{DEBUG_USAGE}")),
         }
@@ -207,7 +213,7 @@ impl Plugin for CommandPlugin {
         app.init_resource::<CommandLine>()
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
-            .add_systems(Update, (open, bindings, submit, show).chain());
+            .add_systems(Update, (open, submit, show).chain());
     }
 }
 
@@ -271,28 +277,6 @@ fn capture(
 fn open(keys: Res<ButtonInput<KeyCode>>, mut line: ResMut<CommandLine>) {
     if !line.open && keys.just_pressed(KeyCode::Enter) {
         line.open = true;
-    }
-}
-
-/// The keys that ask for an action: L opens a lobby, or closes the one we are in, G starts the
-/// race and F9 starts it over.
-fn bindings(
-    keys: Res<ButtonInput<KeyCode>>,
-    lobby: Res<Lobby>,
-    mut actions: MessageWriter<Action>,
-) {
-    if keys.just_pressed(KeyCode::KeyL) {
-        actions.write(if lobby.is_open() {
-            Action::CloseLobby
-        } else {
-            Action::CreateLobby
-        });
-    }
-    if keys.just_pressed(KeyCode::KeyG) {
-        actions.write(Action::StartRace);
-    }
-    if keys.just_pressed(KeyCode::F9) {
-        actions.write(Action::RestartRace);
     }
 }
 
@@ -400,9 +384,14 @@ mod tests {
             Action::parse("race restart"),
             Ok(Action::RestartRace)
         ));
+        assert!(matches!(Action::parse("race stop"), Ok(Action::StopRace)));
         assert!(matches!(
             Action::parse("debug set wumpa 10"),
             Ok(Action::DebugSetWumpa(10))
+        ));
+        assert!(matches!(
+            Action::parse("debug netinfo"),
+            Ok(Action::DebugNetInfo)
         ));
         // Clamped to what a kart holds.
         assert!(matches!(

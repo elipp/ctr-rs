@@ -646,6 +646,12 @@ pub fn rev_engine_init(d: &mut Driver) {
         d.stats.accel_speed_class_stat as i32 + d.stats.sacred_fire_speed as i32 / 3;
 }
 
+/// Whether the kart is revving its engine now: on the grid or in a mask's hands, with the gas held
+/// and the pedal not locked out.
+pub fn revving(d: &Driver) -> bool {
+    d.kart_state == kart_state::ENGINE_REVVING && d.rev.charge_state == charge::ACTIVE
+}
+
 /// `VehStuckProc_RevEngine_Update`: once the mask has lowered the kart close enough to the
 /// track, the rev ends, and gives a boost if it was high enough.
 pub fn rev_engine_update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {

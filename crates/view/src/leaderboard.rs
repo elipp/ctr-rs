@@ -1,6 +1,6 @@
 //! The leaderboard of an online race, down the right side of the screen: a row for each player
 //! with their place, their character's portrait (`render::portraits`) and the short form of
-//! their iroh key, the leader on top. Our own row is yellow.
+//! their iroh key and the round trip to them (ping), the leader on top. Our own row is yellow.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -41,6 +41,10 @@ struct Row {
 #[derive(Component)]
 struct PlaceLabel(usize);
 
+/// The round trip to a player in a row, in milliseconds (nothing for our own row).
+#[derive(Component)]
+struct PingLabel(usize);
+
 const OWN_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);
 
 /// How many times larger than on the PlayStation a portrait is drawn.
@@ -64,7 +68,7 @@ pub struct LeaderboardPlugin;
 
 impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, order).chain());
+        app.add_systems(Update, (build, order, pings).chain());
     }
 }
 
@@ -200,6 +204,16 @@ fn build(
             TextColor(color),
             ChildOf(row),
         ));
+        commands.spawn((
+            PingLabel(slot),
+            Text::new(""),
+            TextFont {
+                font_size: 14.0.into(),
+                ..default()
+            },
+            TextColor(Color::srgb(0.7, 0.7, 0.7)),
+            ChildOf(row),
+        ));
         let _ = row;
     });
     commands.entity(column).insert(Board {
@@ -257,5 +271,22 @@ fn order(
         row.pop = (row.pop - POP_DECAY * dt).max(0.0);
         node.top = Val::Px(row.y);
         node.right = Val::Px(-row.pop * POP_DISTANCE);
+    }
+}
+
+/// Writes the round trip to each player (the last ping) in their row.
+fn pings(lobby: Res<Lobby>, mut labels: Query<(&PingLabel, &mut Text)>) {
+    let Some(online) = &lobby.online else {
+        return;
+    };
+    for (PingLabel(slot), mut text) in &mut labels {
+        let ping = online.names.get(*slot).and_then(|name| lobby.pings.get(name));
+        let label = match ping {
+            Some(rtt) => format!("{:.0} ms", rtt.as_secs_f32() * 1000.0),
+            None => String::new(),
+        };
+        if text.0 != label {
+            text.0 = label;
+        }
     }
 }

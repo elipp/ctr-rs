@@ -769,8 +769,8 @@ fn drive_tick(
     // A beep every second of ticks, higher for each player: the clients' beeps line up when
     // their ticks do.
     if online && tick.is_multiple_of(TICKS_PER_BEEP) {
-        let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
-        cues.beep(frequency, 100);
+        // let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
+        // cues.beep(frequency, 100);
     }
     // The traffic lights come on, one by one.
     if let Some(light) = sim.race.light {
@@ -1040,11 +1040,14 @@ fn wumpa_bar(sim: Res<crate::props::Sim>, mut bars: Query<&mut crate::bar::Bar, 
 }
 
 /// The boost timing bar, `MAX - current` of the drift's meter: empty outside a drift, full when
-/// the window of the boost is reached.
+/// the window of the boost is reached. While the engine revs (the grid, a mask grab) it shows
+/// the rev, which the sim keeps in the same meter.
 fn turbo_bar(sim: Res<crate::props::Sim>, mut bars: Query<&mut crate::bar::Bar, With<TurboBar>>) {
     let d = sim.driver();
     let max = (d.stats.turbo_max_room as i32) << 5;
-    let value = if d.phys_state == vehicle::PhysState::PowerSlide && max > 0 {
+    let shown = d.phys_state == vehicle::PhysState::PowerSlide
+        || d.kart_state == vehicle::kart_state::ENGINE_REVVING;
+    let value = if shown && max > 0 {
         ((max - d.turbo_meter_room_left as i32) as f32 / max as f32).clamp(0.0, 1.0)
     } else {
         0.0
