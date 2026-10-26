@@ -56,6 +56,7 @@ impl Toast {
         self
     }
 
+    #[expect(dead_code, reason = "the start lights were the only lowered toasts")]
     pub fn lowered(mut self, pixels: f32) -> Toast {
         self.lower = pixels;
         self

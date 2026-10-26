@@ -1,5 +1,5 @@
-//! The wumpa counter's fruit: the spinning 3D wumpa of the levels, at the top right of the screen
-//! next to the count. A camera of its own draws it over the picture, an orthographic one: the
+//! The wumpa counter's fruit: the spinning 3D wumpa of the levels, at the top of the screen right
+//! of the weapon, next to the count. A camera of its own draws it over the picture, an orthographic one: the
 //! game's projection is 90 degrees wide, which stretches anything near a corner of the screen.
 //! One world unit of that camera is a pixel of the window.
 
@@ -29,29 +29,23 @@ const LAYER: usize = 3;
 /// How far in front of the camera it hangs, in pixels: anything between its near and far plane.
 const DEPTH: f32 = 100.0;
 
-/// Where the middle of the fruit is, in pixels from the top right corner of the window (with the
-/// count a single digit: the counter grows to the left, and the fruit goes with it), and how tall
-/// it is.
-pub const CENTER: Vec2 = Vec2::new(102.0, 32.0);
+/// Where the middle of the fruit is: right of the middle of the screen in pixels of retail's
+/// screen, and down from its top in lines. As in retail screenshots, right of the weapon and
+/// level with it. And how tall the fruit is, in logical pixels.
+pub const FRUIT_X: f32 = 63.0;
+pub const MIDDLE_Y: f32 = 19.0;
 const HEIGHT_PIXELS: f32 = 44.0;
 
-/// The characters of the counter's text with a one-digit count: "x 9".
-const SINGLE_DIGIT_CHARS: usize = 3;
+/// Where the counter's "x" starts, right of the middle of the screen in pixels of retail's
+/// screen; the count grows to the right from there.
+pub const COUNTER_X: f32 = 84.0;
+
+/// The texels between the "x" and the count.
+pub const COUNTER_GAP: usize = 2;
 
 /// The counter's fruit from the racer pack, for a level that has no fruit of its own (a map).
 #[derive(Resource)]
 pub struct FruitDisplay(pub Model);
-
-/// How far the counter has grown to the left over a one-digit count: one glyph of the monospace
-/// font for each character over "x 9".
-pub fn growth(node: &ComputedNode, text: &Text) -> f32 {
-    let chars = text.0.chars().count();
-    if chars <= SINGLE_DIGIT_CHARS {
-        return 0.0;
-    }
-    let width = node.size().x * node.inverse_scale_factor();
-    width / chars as f32 * (chars - SINGLE_DIGIT_CHARS) as f32
-}
 
 pub struct WumpaIconPlugin;
 
@@ -180,7 +174,6 @@ fn show(
     fixed: Res<Time<Fixed>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut icon: Query<(&WumpaIcon, &mut Transform)>,
-    counter: Query<(&ComputedNode, &Text), With<crate::drive::WumpaHud>>,
     mut last: Local<(u32, f32)>,
 ) {
     let Ok(window) = windows.single() else {
@@ -194,16 +187,11 @@ fn show(
     }
     *last = (ticks, turns);
     let angle = turns / crate::props::FRUIT_SPIN_TICKS * std::f32::consts::TAU;
-    // The count is on the right edge, so a second digit makes it grow towards the fruit: the fruit
-    // moves left by what the counter grew.
-    let growth = counter
-        .single()
-        .map_or(0.0, |(node, text)| growth(node, text));
     for (icon, mut transform) in &mut icon {
         // The camera looks at the middle of the window, with y up.
         transform.translation = Vec3::new(
-            window.width() / 2.0 - CENTER.x - growth,
-            window.height() / 2.0 - CENTER.y,
+            FRUIT_X * crate::hud::PIXEL.x,
+            window.height() / 2.0 - MIDDLE_Y * crate::hud::PIXEL.y,
             -DEPTH,
         );
         transform.scale = Vec3::splat(HEIGHT_PIXELS / icon.diameter);

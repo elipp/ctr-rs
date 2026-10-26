@@ -224,7 +224,7 @@ const HISTORY: usize = 100;
 
 /// What has been typed so far, if the line is open.
 #[derive(Resource, Default)]
-struct CommandLine {
+pub(crate) struct CommandLine {
     open: bool,
     text: String,
     /// Return was pressed: `submit` sends the line.
@@ -299,7 +299,7 @@ impl Plugin for CommandPlugin {
 }
 
 /// Reads the typing while the line is open, and keeps it from the game.
-fn capture(
+pub(crate) fn capture(
     mut line: ResMut<CommandLine>,
     mut events: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,

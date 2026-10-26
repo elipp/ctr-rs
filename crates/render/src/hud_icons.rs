@@ -9,9 +9,33 @@ use crate::mesh::Atlas;
 /// the one of `ids[n]` is at rows `n * height` on. `icons` is the flat icon array of a racer's
 /// pack (`loader::icons::parse_icons`). An icon the pack lacks stays clear.
 pub fn strip(icons: &[Icon], vram: &Vram, ids: &[i32], width: usize, height: usize) -> Atlas {
-    let mut rgba = vec![0u8; width * ids.len() * height * 4];
-    for (n, id) in ids.iter().enumerate() {
-        let Some(icon) = icons.iter().find(|i| i.global_index == *id) else {
+    let picked: Vec<_> = ids
+        .iter()
+        .map(|id| icons.iter().find(|i| i.global_index == *id))
+        .collect();
+    strip_of(&picked, vram, width, height)
+}
+
+/// The same for icons found by their names: the ones with no global index (-1) cannot be found
+/// otherwise.
+pub fn strip_named(
+    icons: &[Icon],
+    vram: &Vram,
+    names: &[&str],
+    width: usize,
+    height: usize,
+) -> Atlas {
+    let picked: Vec<_> = names
+        .iter()
+        .map(|name| icons.iter().find(|i| i.name == *name))
+        .collect();
+    strip_of(&picked, vram, width, height)
+}
+
+fn strip_of(icons: &[Option<&Icon>], vram: &Vram, width: usize, height: usize) -> Atlas {
+    let mut rgba = vec![0u8; width * icons.len() * height * 4];
+    for (n, icon) in icons.iter().enumerate() {
+        let Some(icon) = icon else {
             continue;
         };
         let layout = &icon.layout;
@@ -28,7 +52,7 @@ pub fn strip(icons: &[Icon], vram: &Vram, ids: &[i32], width: usize, height: usi
     }
     Atlas {
         width,
-        height: ids.len() * height,
+        height: icons.len() * height,
         rgba,
     }
 }
