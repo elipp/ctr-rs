@@ -1,37 +1,59 @@
 {
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [
+      "scripts/uv-run.sh *"
+    ]
+  },
   "permissions": {
     "allow": [
+      "Read",
+      "Grep",
+      "Glob",
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",
       "Bash(git show*)",
       "Bash(git blame*)",
-      "Bash(git branch)",
       "Bash(git branch --list*)",
-      "Bash(git branch -a*)",
-      "Bash(git branch -v*)",
-      "Bash(git check-ignore*)",
       "Bash(git rev-parse*)",
-      "Bash(ls*)",
-      "Bash(pwd)",
-      "Bash(which *)",
-      "Bash(grep *)",
-      "Bash(rg *)",
-      "Bash(find *)",
-      "Bash(cat *)",
-      "Bash(head *)",
-      "Bash(tail *)",
       "Bash(wc *)",
       "Bash(readelf *)",
       "Bash(objdump *)",
-      "Bash(nm *)"
+      "Bash(nm *)",
+      "Bash(scripts/uv-run.sh)",
+      "Bash(scripts/uv-run.sh *)"
     ],
     "ask": [
-      "Bash(find * -exec*)",
-      "Bash(find * -execdir*)",
-      "Bash(find * -delete*)",
-      "Bash(find * -ok*)",
-      "Bash(find * -fprint*)"
+      "Bash(rg *)",
+      "Bash(find *)"
+    ],
+    "deny": [
+      "Read(./.env*)",
+      "Read(**/*secret*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Edit(./scripts/**)",
+      "Edit(./.claude/**)",
+      "Edit(./.git/**)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(uv *)",
+      "Bash(uvx *)",
+      "Bash(node *)",
+      "Bash(perl *)",
+      "Bash(ruby *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(ssh *)",
+      "Bash(sudo *)",
+      "Bash(rm *)",
+      "Bash(git push*)",
+      "Bash(git reset*)",
+      "Bash(git checkout*)",
+      "Bash(git clean*)"
     ]
   }
 }
