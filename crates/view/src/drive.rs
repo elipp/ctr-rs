@@ -16,6 +16,7 @@
 //! * Left mouse button held and mouse moves: turn the camera around the kart; scroll wheel:
 //!   closer or farther; double click or Home: back to the default view
 //! * R: back to the starting grid
+//! * Escape, P or Start: the pause menu (`pause.rs`)
 //! * F5 / 1: start recording a demo from the grid, again to save it to `demo.ctr`
 //! * F6 / 2: play `demo.ctr` back from the grid (any F5 or R ends it, the kart stays where it is)
 //!
@@ -34,7 +35,11 @@ use vehicle::{Driver, Effect, Input, buttons};
 
 use crate::Track;
 use crate::command::Action;
+use crate::font::CtrText;
+use crate::hud;
 use crate::kart::{KartMotion, KartSlot};
+use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
+use render::font::{Font, Gradient};
 use render::mesh::SCALE;
 
 /// The kart model's entity: its pose is the interpolated pose of the sim.
@@ -86,13 +91,9 @@ fn view_of(camera: &camera::CameraDc) -> View {
 #[derive(Component)]
 struct Hud;
 
-/// The wumpa counter.
+/// The wumpa count: the number after the "x".
 #[derive(Component)]
 pub(crate) struct WumpaHud;
-
-/// The lap, the place and the lap times.
-#[derive(Component)]
-struct LapHud;
 
 /// The time at the checkpoint just passed: green if we were the first there, else red and how
 /// far behind the first.
@@ -118,16 +119,15 @@ const TICKS_PER_BEEP: u32 = 60;
 /// The pitch of the first player's beep; each next player is a major third higher.
 const BEEP_HZ: f32 = 440.0;
 
-/// What a tick can ask of the player's ears and eyes outside the sim.
+/// What a tick can ask of the player's ears and eyes outside the sim. (The traffic lights are
+/// drawn by `lights.rs`; retail also plays a sound with each, `OtherFX` 0x45 for a red light and
+/// 0x46 for the green, which is not here yet.)
 #[derive(bevy::ecs::system::SystemParam)]
 struct Cues<'w, 's> {
     commands: Commands<'w, 's>,
     pitches: ResMut<'w, Assets<bevy::audio::Pitch>>,
     toasts: MessageWriter<'w, Toast>,
 }
-
-/// The dot of a traffic light. (The default font has ASCII only, so no `⬤` yet.)
-const DOT: &str = "O";
 
 impl Cues<'_, '_> {
     fn beep(&mut self, hertz: f32, millis: u64) {
@@ -137,21 +137,6 @@ impl Cues<'_, '_> {
         ));
         self.commands
             .spawn((AudioPlayer(pitch), PlaybackSettings::DESPAWN));
-    }
-
-    /// A light of the start: a toast with as many dots as there are lights on, the last one
-    /// green. Retail plays a sound with each (`OtherFX` 0x45 for a red light, 0x46 for green)
-    /// and draws the lights sliding in from the top.
-    fn light(&mut self, light: race::Light) {
-        let (on, color) = match light {
-            race::Light::Red1 => (1, Color::srgb(1.0, 0.2, 0.2)),
-            race::Light::Red2 => (2, Color::srgb(1.0, 0.2, 0.2)),
-            race::Light::Red3 => (3, Color::srgb(1.0, 0.2, 0.2)),
-            race::Light::Green => (4, Color::srgb(0.2, 1.0, 0.3)),
-        };
-        let text = vec![DOT; on].join(" ");
-        self.toasts
-            .write(Toast::new(text, 900).color(color).size(64.0).lowered(120.0));
     }
 }
 
@@ -169,10 +154,6 @@ struct TurboBar;
 /// The boost reserves, as a number under the boost timing bar.
 #[derive(Component)]
 struct ReservesHud;
-
-/// The "[paused]" label.
-#[derive(Component)]
-struct PausedHud;
 
 /// "REC" or "DEMO" while a demo is being recorded or played.
 #[derive(Component)]
@@ -354,7 +335,6 @@ impl Plugin for DrivePlugin {
                     crate::flash::show,
                     hud,
                     wumpa_hud,
-                    lap_hud,
                     split_hud,
                     wumpa_bar,
                     turbo_bar,
@@ -384,20 +364,6 @@ impl Plugin for DrivePlugin {
 
 pub(crate) fn spawn_hud(mut commands: Commands) {
     commands.spawn((
-        LapHud,
-        Text::new(""),
-        TextFont {
-            font_size: 24.0.into(),
-            ..default()
-        },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            left: Val::Px(8.0),
-            ..default()
-        },
-    ));
-    commands.spawn((
         SplitHud,
         Text::new(""),
         TextFont {
@@ -412,20 +378,32 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
     ));
+    // The counter: a small white "x" and the count in the big orange digits, level with the
+    // middle of the fruit, right of it.
+    let height = Font::Large.line_height() as f32;
     commands.spawn((
-        WumpaHud,
-        Text::new(""),
-        TextFont {
-            font_size: 34.0.into(),
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 0.65, 0.1)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            right: Val::Px(20.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(hud::x(COUNTER_X)),
+            top: hud::y(MIDDLE_Y - height / 2.0),
+            align_items: AlignItems::FlexEnd,
+            column_gap: hud::x(COUNTER_GAP as f32),
             ..default()
         },
+        children![
+            (
+                CtrText::new("x", Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
+                Node {
+                    margin: UiRect::bottom(hud::y(3.0)),
+                    ..default()
+                },
+            ),
+            (
+                WumpaHud,
+                CtrText::new("0", Font::Large, Gradient::ORANGE).fixed(hud::PIXEL),
+            ),
+        ],
     ));
     let node = Node {
         position_type: PositionType::Absolute,
@@ -455,34 +433,26 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
     ));
+    // The readouts for development go where the HUD of a race leaves room: the bottom left is
+    // the place's and the top right the lap's. These are above the boost bar, and under the lap.
     commands.spawn((
         Hud,
         Text::new(""),
+        TextLayout::justify(Justify::Right),
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(8.0),
-            left: Val::Px(8.0),
-            ..default()
-        },
-    ));
-    // Above the three lines of `Hud`.
-    commands.spawn((
-        PausedHud,
-        Text::new("[paused]"),
-        Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(80.0),
-            left: Val::Px(8.0),
+            bottom: Val::Px(64.0),
+            right: Val::Px(20.0),
             ..default()
         },
     ));
     commands.spawn((
         DemoHud,
         Text::new(""),
+        TextLayout::justify(Justify::Right),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
+            top: hud::y(32.0),
             right: Val::Px(8.0),
             ..default()
         },
@@ -577,10 +547,9 @@ fn drive_tick(
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
-    mut enter_held: Local<bool>,
-    mut paused: Local<bool>,
+    mut menu: ResMut<crate::pause::PauseMenu>,
+    mut was_paused: Local<bool>,
     mut keys_held: Local<[bool; 4]>,
-    mut label: Query<&mut Visibility, With<PausedHud>>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
     mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
@@ -600,34 +569,25 @@ fn drive_tick(
         return;
     }
 
-    // P toggles the pause, once per press. (Enter is the command line's.)
-    let enter_down = keys.pressed(KeyCode::KeyP);
-    if enter_down && !*enter_held && !online {
-        *paused = !*paused;
-        for mut visibility in &mut label {
-            *visibility = if *paused {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-        }
-        if *paused {
-            // Nothing moves between ticks now, so the interpolation must not either.
-            drive.previous_view = drive.current_view;
-            for (mut motion, _, _) in &mut motions {
-                motion.freeze();
-            }
+    // The pause menu stops the race, unless the race is everyone's.
+    let paused = menu.open && !online;
+    if paused && !*was_paused {
+        // Nothing moves between ticks now, so the interpolation must not either.
+        drive.previous_view = drive.current_view;
+        for (mut motion, _, _) in &mut motions {
+            motion.freeze();
         }
     }
-    *enter_held = enter_down;
-    if *paused && !online {
+    *was_paused = paused;
+    if paused {
         return;
     }
 
     // F5 records a demo from the grid (and saves it when pressed again), F6 plays the saved
-    // one. R is the grid without either. A demo is the inputs alone, so every start puts
-    // everything, the objects too, back as it was at tick 0.
-    let mut restart = keys.pressed(KeyCode::KeyR) && !online;
+    // one. R (or the menu's RESTART) is the grid without either. A demo is the inputs alone, so
+    // every start puts everything, the objects too, back as it was at tick 0.
+    let picked = std::mem::take(&mut menu.restart);
+    let mut restart = (keys.pressed(KeyCode::KeyR) || picked) && !online;
     // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
     // a frame can pass without a tick.
     let demo_down = [
@@ -792,7 +752,10 @@ fn drive_tick(
     // others get it as well. (A tick that waits plays the pad it already has.)
     if sim.race.confirmed_until(own) <= tick {
         let held = sim.kart().held;
-        let pad = if online {
+        let pad = if online && menu.open {
+            // The menu has the controls: the kart coasts.
+            Pad::default()
+        } else if online {
             Pad::of_input(&read_input(&keys, &pads, held))
         } else {
             let mut input = match &drive.demo {
@@ -875,14 +838,10 @@ fn drive_tick(
         return;
     };
     // A beep every second of ticks, higher for each player: the clients' beeps line up when
-    // their ticks do.
+    // their ticks do. (Off.)
     if online && tick.is_multiple_of(TICKS_PER_BEEP) {
         // let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
         // cues.beep(frequency, 100);
-    }
-    // The traffic lights come on, one by one.
-    if let Some(light) = sim.race.light {
-        cues.light(light);
     }
     let mine = &ticks[sim.own];
     // Everyone's exhaust and sparks, ours and the others' (the others' as the sim has them).
@@ -1118,65 +1077,13 @@ fn chase(
 }
 
 /// The wumpa count.
-fn wumpa_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<WumpaHud>>) {
-    for mut text in &mut text {
-        text.0 = format!("x {}", sim.driver().num_wumpas);
-    }
-}
-
-/// `m:ss.mmm`
-fn lap_time(ms: i32) -> String {
-    let ms = ms.max(0);
-    format!("{}:{:02}.{:03}", ms / 60000, ms / 1000 % 60, ms % 1000)
-}
-
-/// The place as the HUD says it: 1st, 2nd, 3rd, 4th ...
-fn place(rank: i16) -> String {
-    let n = rank.max(0) as u32 + 1;
-    let suffix = match (n % 10, n % 100) {
-        (_, 11..=13) => "th",
-        (1, _) => "st",
-        (2, _) => "nd",
-        (3, _) => "rd",
-        _ => "th",
-    };
-    format!("{n}{suffix}")
-}
-
-/// Our lap out of the race's, the place when there are others, and the time of the lap being
-/// driven and of the ones before it. Nothing while no race is on: driving alone is a free drive.
-fn lap_hud(
-    sim: Res<crate::props::Sim>,
-    lobby: Res<crate::lobby::Lobby>,
-    mut text: Query<&mut Text, With<LapHud>>,
-) {
-    if lobby.online.is_none() {
-        for mut text in &mut text {
-            if !text.0.is_empty() {
-                text.0.clear();
-            }
+fn wumpa_hud(sim: Res<crate::props::Sim>, mut counts: Query<&mut CtrText, With<WumpaHud>>) {
+    let count = sim.driver().num_wumpas.to_string();
+    for mut text in &mut counts {
+        // A changed text puts its glyphs up again: only a new count changes it.
+        if text.text != count {
+            text.text = count.clone();
         }
-        return;
-    }
-    let race = &*sim.race;
-    let driver = sim.driver();
-    let laps = race.laps;
-    // A kart that finished stays on its last lap.
-    let lap = (driver.lap_index + 1).min(laps);
-    let mut lines = vec![format!("LAP {lap}/{laps}")];
-    if race.karts.len() > 1 {
-        lines[0] += &format!("  {}", place(driver.driver_rank));
-    }
-    let finished = driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    if !finished {
-        // The first lap counts from the green light.
-        lines.push(lap_time(race.event_ms - driver.lap_time));
-    }
-    for (i, ms) in race.lap_times[sim.own].iter().enumerate() {
-        lines.push(format!("{}  {}", i + 1, lap_time(*ms)));
-    }
-    for mut text in &mut text {
-        text.0 = lines.join("\n");
     }
 }
 

@@ -1,6 +1,7 @@
 //! The weapon the driver holds, at the top middle of the screen (`UI_Weapon_DrawSelf`). While the
 //! roulette runs it shuffles through the weapons, a new one every other tick, and then shows
-//! the one the sim settled on, with the number of shots when there are several.
+//! the one the sim settled on, with the number of shots when there are several. Behind it is a
+//! dark, see-through box, as in retail screenshots.
 //!
 //! A driver with 10 wumpa fruit is juiced up: a glow pulses behind the wumpa fruit (not the count) and, when
 //! there is a weapon, behind the weapon (`UI_Weapon_DrawBG`).
@@ -34,6 +35,18 @@ struct WeaponHud;
 
 #[derive(Component)]
 struct Quantity;
+
+/// The see-through box behind the icon while there is one.
+#[derive(Component)]
+struct WeaponBox;
+
+/// The box's rows of the icon's cell, top and bottom: the art sticks out of it a little above
+/// and below, as in retail screenshots (the bubbles of a potion over its top).
+const BOX_ROWS: (f32, f32) = (3.0, 30.0);
+
+/// The box's fill and its line. Measured by eye from screenshots.
+const BOX_FILL: Color = Color::srgba(0.0, 0.0, 0.04, 0.55);
+const BOX_LINE: Color = Color::BLACK;
 
 /// How much larger than the PlayStation's pixels the HUD is drawn.
 const SCALE: f32 = 1.5;
@@ -115,6 +128,7 @@ fn show(
     mut images: ResMut<Assets<Image>>,
     icons: Option<Res<WeaponIcons>>,
     mut hud: Query<(&mut ImageNode, &mut Visibility, &Children), With<WeaponHud>>,
+    mut boxes: Query<&mut Visibility, (With<WeaponBox>, Without<WeaponHud>)>,
     mut quantity: Query<&mut Text, With<Quantity>>,
 ) {
     let driver = sim.driver();
@@ -166,6 +180,26 @@ fn show(
             },
             ChildOf(root),
         ));
+        // The box, behind the icon: the cell's width, and a little shorter than the cell.
+        let row = WEAPON_SIZE.y / HEIGHT as f32;
+        commands.spawn((
+            WeaponBox,
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-WEAPON_SIZE.x / 2.0)),
+                top: Val::Px(WEAPON_TOP + BOX_ROWS.0 * row),
+                width: Val::Px(WEAPON_SIZE.x),
+                height: Val::Px((BOX_ROWS.1 - BOX_ROWS.0) * row),
+                border: UiRect::axes(Val::Px(WEAPON_SCALE), Val::Px(row)),
+                ..default()
+            },
+            BackgroundColor(BOX_FILL),
+            BorderColor::all(BOX_LINE),
+            GlobalZIndex(-1),
+            Pickable::IGNORE,
+        ));
         return;
     };
     let shown = match driver.held_item_id {
@@ -187,6 +221,15 @@ fn show(
     } else {
         Visibility::Hidden
     };
+    // The box stays while the icon strobes.
+    let boxed = if cell.is_some() {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut boxes {
+        visibility.set_if_neq(boxed);
+    }
     if let Some(n) = cell {
         let top = (n * HEIGHT) as f32;
         image.rect = Some(Rect::new(0.0, top, WIDTH as f32, top + HEIGHT as f32));
@@ -217,10 +260,8 @@ fn shine(
         &Shine,
         &mut ImageNode,
         &mut Visibility,
-        &mut Node,
         Option<&UiTargetCamera>,
     )>,
-    counter: Query<(&ComputedNode, &Text), With<crate::drive::WumpaHud>>,
     cameras: Query<(Entity, &Camera), With<Camera3d>>,
 ) {
     // The weapon's own system makes the pictures, on its first frame.
@@ -263,10 +304,13 @@ fn shine(
             Shine::Wumpa,
             size(
                 &Shine::Wumpa,
+                // Behind the fruit only, not the count.
                 Node {
-                    // (Behind the fruit; `right` follows it in the system below.)
-                    right: Val::Px(crate::wumpa_icon::CENTER.x - wumpa.x / 2.0),
-                    top: Val::Px(crate::wumpa_icon::CENTER.y - wumpa.y / 2.0),
+                    left: Val::Percent(50.0),
+                    margin: UiRect::left(Val::Px(
+                        crate::wumpa_icon::FRUIT_X * crate::hud::PIXEL.x - wumpa.x / 2.0,
+                    )),
+                    top: Val::Px(crate::wumpa_icon::MIDDLE_Y * crate::hud::PIXEL.y - wumpa.y / 2.0),
                     ..default()
                 },
             ),
@@ -282,22 +326,15 @@ fn shine(
         time.elapsed_secs() * FRAMES_PER_SECOND * THETA_STEP * if armed { 2.0 } else { 1.0 };
     // 1 to 2 over the colours at their dimmest, which the picture is made at.
     let pulse = shine_pulse(theta as u32) / 2.0;
-    let growth = counter
-        .single()
-        .map_or(0.0, |(node, text)| crate::wumpa_icon::growth(node, text));
     // The UI is drawn by the camera of the highest order, which is the fruit's own: the glows
     // would be drawn over the fruit and blend with it. They are drawn by the main camera instead,
     // under the cameras that draw the fruit (and the kart).
     let main = cameras.iter().find(|(_, c)| c.order == 0).map(|(e, _)| e);
-    for (entity, shine, mut image, mut visibility, mut node, target) in &mut glows {
+    for (entity, shine, mut image, mut visibility, target) in &mut glows {
         if let Some(main) = main
             && target.is_none_or(|t| t.0 != main)
         {
             commands.entity(entity).insert(UiTargetCamera(main));
-        }
-        if matches!(shine, Shine::Wumpa) {
-            // The glow is behind the fruit only, not the count: it goes where the fruit does.
-            node.right = Val::Px(crate::wumpa_icon::CENTER.x + growth - shine_size(shine).x / 2.0);
         }
         let up = match shine {
             Shine::Weapon => armed,

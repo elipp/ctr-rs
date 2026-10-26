@@ -1,6 +1,9 @@
-//! The leaderboard of an online race, down the right side of the screen: a row for each player
-//! with their place, their character's portrait (`render::portraits`) and the short form of
-//! their iroh key and the round trip to them (ping), the leader on top. Our own row is yellow.
+//! Who is where in an online race, down the left of the screen under the times, as retail shows
+//! it: each player's portrait (`render::portraits`) in a black frame, with their place at its top
+//! right in the middle font, the leader on top. A row slides to its new place when the order
+//! changes, and one that gained a place sticks out for a moment. Our own place is orange and the
+//! others' white: retail's are all white, but online two players may drive the same character.
+//! The places and sizes are measured from retail screenshots.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -10,8 +13,11 @@ use loader::bigindex::BigIndex;
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
 use loader::icons::parse_icons;
+use render::font::{Font, Gradient};
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 
+use crate::font::CtrText;
+use crate::hud;
 use crate::lobby::Lobby;
 
 /// The portraits as a picture, loaded when the first race needs it.
@@ -25,6 +31,8 @@ struct Board {
     characters: Vec<u8>,
     /// The slots in the order of the race.
     order: Vec<usize>,
+    /// The distance from one row's top to the next, in logical pixels.
+    pitch: f32,
 }
 
 /// A row, which slides to its place when the order changes.
@@ -41,34 +49,32 @@ struct Row {
 #[derive(Component)]
 struct PlaceLabel(usize);
 
-/// The round trip to a player in a row, in milliseconds (nothing for our own row).
-#[derive(Component)]
-struct PingLabel(usize);
+/// Where the column starts, in pixels and lines of retail's screen: under the times.
+const LEFT: f32 = 12.0;
+const TOP: f32 = 66.0;
 
-const OWN_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);
+/// How far down the rows may go: above the big place at the bottom left. More players than fit
+/// at full size make the rows smaller.
+const BOTTOM: f32 = 176.0;
 
-/// How many times larger than on the PlayStation a portrait is drawn.
-const PORTRAIT_SCALE: f32 = 1.0;
+/// The frame round a portrait, and the space between two rows, in pixels of retail's screen.
+const FRAME: f32 = 1.0;
+const GAP: f32 = 2.0;
 
-/// Where the column starts: under the lap times.
-const TOP: f32 = 230.0;
-
-/// The height of a row, and the distance from one row's top to the next.
-const ROW_HEIGHT: f32 = 30.0;
-const PITCH: f32 = ROW_HEIGHT + 4.0;
-const COLUMN_WIDTH: f32 = 210.0;
+/// How far the place number is in from the portrait's right edge, and down from its top.
+const NUMBER_IN: Vec2 = Vec2::new(2.0, 1.0);
 
 /// How fast a row closes in on its place (per second), how far a row that gained a place sticks
-/// out at first, and how fast that goes (per second).
+/// out at first (in pixels of retail's screen), and how fast that goes (per second).
 const SLIDE_RATE: f32 = 12.0;
-const POP_DISTANCE: f32 = 18.0;
+const POP_DISTANCE: f32 = 9.0;
 const POP_DECAY: f32 = 2.5;
 
 pub struct LeaderboardPlugin;
 
 impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, order, pings).chain());
+        app.add_systems(Update, (build, order).chain());
     }
 }
 
@@ -104,6 +110,13 @@ fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Hand
     atlas_image(portrait_atlas(&pack_icons(), vram), images)
 }
 
+/// How much smaller than retail's the rows of `players` are, to fit above the big place: 1 when
+/// they fit as they are.
+fn row_scale(players: usize) -> f32 {
+    let row = HEIGHT as f32 + 2.0 * FRAME + GAP;
+    ((BOTTOM - TOP) / (players as f32 * row)).min(1.0)
+}
+
 /// Puts the column up when a race has been built, and takes it down when there is none. (A level
 /// switch takes every node away, and a race on the new level builds it again.)
 fn build(
@@ -133,54 +146,44 @@ fn build(
             handle
         }
     };
+    let players = online.characters.len();
+    let scale = row_scale(players);
+    // A pixel of retail's screen, at the rows' size.
+    let pixel = hud::PIXEL * scale;
+    let (across, down) = (|n: f32| Val::Px(n * pixel.x), |n: f32| Val::Px(n * pixel.y));
+    let pitch = (HEIGHT as f32 + 2.0 * FRAME + GAP) * pixel.y;
     let column = commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(TOP),
-                right: Val::Px(20.0),
-                width: Val::Px(COLUMN_WIDTH),
-                height: Val::Px(online.characters.len() as f32 * PITCH),
+                left: hud::x(LEFT),
+                top: hud::y(TOP),
                 ..default()
             },
             Pickable::IGNORE,
         ))
         .id();
-    (0..online.characters.len()).for_each(|slot| {
-        let own = slot == online.slot;
-        let color = if own { OWN_COLOR } else { Color::WHITE };
+    for slot in 0..players {
         let character = (online.characters[slot] as usize).min(ICON_IDS.len() - 1);
         let row = commands
             .spawn((
                 Row {
                     slot,
-                    y: slot as f32 * PITCH,
+                    y: slot as f32 * pitch,
                     pop: 0.0,
                 },
                 Node {
                     position_type: PositionType::Absolute,
-                    top: Val::Px(slot as f32 * PITCH),
-                    right: Val::Px(0.0),
-                    height: Val::Px(ROW_HEIGHT),
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(8.0),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
+                    top: Val::Px(slot as f32 * pitch),
+                    left: Val::ZERO,
+                    border: UiRect::axes(across(FRAME), down(FRAME)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                BorderColor::all(Color::BLACK),
+                Pickable::IGNORE,
                 ChildOf(column),
             ))
             .id();
-        commands.spawn((
-            PlaceLabel(slot),
-            Text::new(""),
-            TextFont {
-                font_size: 20.0.into(),
-                ..default()
-            },
-            TextColor(color),
-            ChildOf(row),
-        ));
         commands.spawn((
             ImageNode::new(portraits.clone()).with_rect(Rect::new(
                 0.0,
@@ -189,37 +192,36 @@ fn build(
                 ((character + 1) * HEIGHT) as f32,
             )),
             Node {
-                width: Val::Px(WIDTH as f32 * PORTRAIT_SCALE),
-                height: Val::Px(HEIGHT as f32 * PORTRAIT_SCALE),
+                width: across(WIDTH as f32),
+                height: down(HEIGHT as f32),
                 ..default()
             },
+            Pickable::IGNORE,
             ChildOf(row),
         ));
+        let gradient = if slot == online.slot {
+            Gradient::ORANGE
+        } else {
+            Gradient::WHITE
+        };
         commands.spawn((
-            Text::new(online.labels[slot].clone()),
-            TextFont {
-                font_size: 18.0.into(),
+            PlaceLabel(slot),
+            CtrText::new("", Font::Middle, gradient).fixed(pixel),
+            Node {
+                position_type: PositionType::Absolute,
+                right: across(NUMBER_IN.x),
+                top: down(NUMBER_IN.y),
                 ..default()
             },
-            TextColor(color),
+            Pickable::IGNORE,
             ChildOf(row),
         ));
-        commands.spawn((
-            PingLabel(slot),
-            Text::new(""),
-            TextFont {
-                font_size: 14.0.into(),
-                ..default()
-            },
-            TextColor(Color::srgb(0.7, 0.7, 0.7)),
-            ChildOf(row),
-        ));
-        let _ = row;
-    });
+    }
     commands.entity(column).insert(Board {
         names: online.names.clone(),
         characters: online.characters.clone(),
-        order: (0..online.characters.len()).collect(),
+        order: (0..players).collect(),
+        pitch,
     });
 }
 
@@ -228,7 +230,7 @@ fn order(
     sim: Res<crate::props::Sim>,
     time: Res<Time<Real>>,
     mut boards: Query<&mut Board>,
-    mut labels: Query<(&PlaceLabel, &mut Text)>,
+    mut labels: Query<(&PlaceLabel, &mut CtrText)>,
     mut rows: Query<(&mut Row, &mut Node)>,
 ) {
     let Ok(mut board) = boards.single_mut() else {
@@ -256,8 +258,8 @@ fn order(
     for (PlaceLabel(slot), mut text) in &mut labels {
         if let Some(place) = board.order.iter().position(|s| s == slot) {
             let label = (place + 1).to_string();
-            if text.0 != label {
-                text.0 = label;
+            if text.text != label {
+                text.text = label;
             }
         }
     }
@@ -267,26 +269,26 @@ fn order(
         let Some(place) = board.order.iter().position(|&s| s == row.slot) else {
             continue;
         };
-        row.y += (place as f32 * PITCH - row.y) * follow;
+        row.y += (place as f32 * board.pitch - row.y) * follow;
         row.pop = (row.pop - POP_DECAY * dt).max(0.0);
         node.top = Val::Px(row.y);
-        node.right = Val::Px(-row.pop * POP_DISTANCE);
+        node.left = hud::x(row.pop * POP_DISTANCE);
     }
 }
 
-/// Writes the round trip to each player (the last ping) in their row.
-fn pings(lobby: Res<Lobby>, mut labels: Query<(&PingLabel, &mut Text)>) {
-    let Some(online) = &lobby.online else {
-        return;
-    };
-    for (PingLabel(slot), mut text) in &mut labels {
-        let ping = online.names.get(*slot).and_then(|name| lobby.pings.get(name));
-        let label = match ping {
-            Some(rtt) => format!("{:.0} ms", rtt.as_secs_f32() * 1000.0),
-            None => String::new(),
-        };
-        if text.0 != label {
-            text.0 = label;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_shrink_to_fit_above_the_place() {
+        assert_eq!(row_scale(1), 1.0);
+        assert_eq!(row_scale(3), 1.0);
+        let row = HEIGHT as f32 + 2.0 * FRAME + GAP;
+        for players in 4..=8 {
+            let scale = row_scale(players);
+            assert!(scale < 1.0);
+            assert!(players as f32 * row * scale <= BOTTOM - TOP + 0.001);
         }
     }
 }

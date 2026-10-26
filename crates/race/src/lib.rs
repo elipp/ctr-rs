@@ -130,7 +130,7 @@ pub struct KartTick {
 pub const START_LIGHTS_MS: i32 = 0xf00;
 
 /// The lights go out for good at this timer (`MainMain`'s floor).
-const LIGHTS_FLOOR_MS: i32 = -960;
+pub const LIGHTS_FLOOR_MS: i32 = -960;
 
 /// The ticks of the start-line fly-in (`CAM_StartOfRace`'s `transitionFrame`, 0xa5) and the one
 /// that ends it. The traffic lights only start to count when it is over.
@@ -153,6 +153,15 @@ const LIGHT_AT_MS: [(i32, Light); 4] = [
     (0x3c0, Light::Red3),
     (0, Light::Green),
 ];
+
+/// How many of the lights are on at `lights_ms` (`trafficLightsTimer`), the three reds first
+/// and then the green.
+pub fn lights_on(lights_ms: i32) -> usize {
+    LIGHT_AT_MS
+        .iter()
+        .filter(|&&(at, _)| lights_ms <= at)
+        .count()
+}
 
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
@@ -664,5 +673,21 @@ impl rollback::Simulation for Race {
 
     fn checksum(&self) -> u64 {
         Race::checksum(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lights_come_on_one_by_one() {
+        assert_eq!(lights_on(START_LIGHTS_MS), 0);
+        assert_eq!(lights_on(0xb40 + 1), 0);
+        assert_eq!(lights_on(0xb40), 1);
+        assert_eq!(lights_on(0x780), 2);
+        assert_eq!(lights_on(1), 3);
+        assert_eq!(lights_on(0), 4);
+        assert_eq!(lights_on(LIGHTS_FLOOR_MS), 4);
     }
 }
