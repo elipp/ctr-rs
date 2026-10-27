@@ -459,7 +459,7 @@ fn matches_reference_on_random_triangles() {
     let Some(exe) = build_driver(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"),
         "coll_reference",
-        &["game/COLL.c"],
+        &["game/COLL.c", "game/COLL/COLL_InstanceQuery.c"],
     ) else {
         return;
     };
@@ -497,7 +497,7 @@ fn matches_reference_on_tracks() {
     let Some(exe) = build_driver(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"),
         "coll_reference",
-        &["game/COLL.c"],
+        &["game/COLL.c", "game/COLL/COLL_InstanceQuery.c"],
     ) else {
         return;
     };

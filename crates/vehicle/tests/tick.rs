@@ -663,6 +663,7 @@ fn matches_reference_on_tracks() {
         "vehicle_tick",
         &[
             coll_c.to_str().unwrap(),
+            "game/COLL/COLL_InstanceQuery.c",
             "game/Vehicle/VehCalc.c",
             "game/Vehicle/VehFrame.c",
             "game/Vehicle/VehFire.c",

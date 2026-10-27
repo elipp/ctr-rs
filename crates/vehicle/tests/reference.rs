@@ -362,6 +362,7 @@ fn matches_reference_on_tracks() {
         "vehicle_reference",
         &[
             "game/COLL.c",
+            "game/COLL/COLL_InstanceQuery.c",
             "game/Vehicle/VehCalc.c",
             "game/Vehicle/VehAfterColl.c",
             "game/Vehicle/VehPhysProc.c",
