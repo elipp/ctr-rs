@@ -968,6 +968,16 @@ fn debug_actions(
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
+        // Like F7 and F8, for as long as asked: the frame is cut short, so the others run ahead.
+        if let Action::DebugStall(time) = action {
+            if lobby.online.is_some() {
+                info!("(debug) stalling for {time:?}");
+                std::thread::sleep(*time);
+            } else {
+                toasts.write(Toast::new("Only online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            }
+            continue;
+        }
         if !matches!(action, Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_)) {
             continue;
         }
