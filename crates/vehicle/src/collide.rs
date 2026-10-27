@@ -28,10 +28,12 @@ const BOUNCE_DOT_DIVISOR: i32 = 0xc00;
 
 const DAMAGE_TYPE_MASK: u8 = 2;
 const DAMAGE_TYPE_TURBO: u8 = 3;
+const DAMAGE_REASON_SHIELD: u8 = 0;
 const DAMAGE_REASON_TURBO: u8 = 5;
 const DAMAGE_REASON_MASK: u8 = 6;
 const TURBO_DAMAGE_IMPACT: i32 = 0xa00;
 
+const SOUND_BUBBLE_POP: u8 = 0x4f;
 const VOICELINE_CRASH: u8 = 1;
 const VOICELINE_HARD_CRASH: u8 = 5;
 const VOICELINE_PRIORITY: u8 = 0x10;
@@ -288,16 +290,19 @@ fn any_two_cars(
         other.actions_flag_set |= actions::HUMAN_HUMAN_COLLISION;
     }
 
-    let result = attack(d, other, can_play_feedback, impact, effects);
-    attack(other, d, result, impact, effects);
+    let result = attack(d, other, can_play_feedback, false, impact, effects);
+    attack(other, d, result, true, impact, effects);
 }
 
-/// `VehPhysCrash_Attack`: `driver2` may hurt `driver1` by touching it: with the Aku Aku mask, or
-/// with a boost (if `driver1` is not boosting). The result is `can_play_feedback`.
+/// `VehPhysCrash_Attack`: `driver2` may hurt `driver1` by touching it: with the Aku Aku mask, with
+/// the shield bubble it holds (if `driver1` holds none, and the bubble pops), or with a boost (if
+/// `driver1` is not boosting). The result is `can_play_feedback`; `play_bubble_pop` is for the
+/// sound of the bubble, once for the pair.
 fn attack(
     driver1: &mut Driver,
     driver2: &mut Driver,
     can_play_feedback: bool,
+    play_bubble_pop: bool,
     impact: i32,
     effects: &mut Vec<Effect>,
 ) -> bool {
@@ -319,6 +324,39 @@ fn attack(
                 echo,
                 volume: VOLUME_MAX as u8,
             });
+            effects.push(Effect::Voiceline {
+                id: VOICELINE_CRASH,
+                driver_id: driver1.driver_id,
+                priority: VOICELINE_PRIORITY,
+            });
+        }
+    }
+
+    let holds = |d: &Driver| d.shield.is_some_and(|s| s.holding);
+    if holds(driver2) && !holds(driver1) {
+        let bubble = driver2.shield.as_mut().expect("it holds one");
+        bubble.crash_attack = true;
+        bubble.holding = false;
+
+        driver1.pending_damage_type = DAMAGE_TYPE_MASK;
+        driver1.pending_damage_reason = DAMAGE_REASON_SHIELD;
+        driver1.pending_damage_attacker = Some(driver2.driver_id);
+
+        if can_play_feedback
+            && driver1.kart_state != kart_state::BLASTED
+            && driver1.invincible_timer == 0
+        {
+            let echo = driver1.actions_flag_set & actions::ENGINE_ECHO != 0;
+            effects.push(Effect::DriverCrashing {
+                echo,
+                volume: VOLUME_MAX as u8,
+            });
+            if play_bubble_pop {
+                effects.push(Effect::Sound {
+                    id: SOUND_BUBBLE_POP,
+                    echo: false,
+                });
+            }
             effects.push(Effect::Voiceline {
                 id: VOICELINE_CRASH,
                 driver_id: driver1.driver_id,
@@ -351,4 +389,46 @@ pub fn take_pending_damage(d: &mut Driver, effects: &mut Vec<Effect>) {
     let damage = d.pending_damage_type;
     d.pending_damage_type = 0;
     pick::new_state(d, damage, effects);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kart(id: u8, shielded: bool) -> Driver {
+        let mut d = Driver {
+            kart_state: kart_state::NORMAL,
+            driver_id: id,
+            ..Driver::default()
+        };
+        if shielded {
+            crate::shield::shoot_shield(&mut d, &mut Vec::new());
+        }
+        d
+    }
+
+    #[test]
+    fn a_kart_that_bumps_a_held_bubble_is_hurt_and_the_bubble_pops() {
+        let (mut bubble, mut other) = (kart(0, true), kart(1, false));
+        attack(&mut other, &mut bubble, true, true, 0, &mut Vec::new());
+        assert_eq!(other.pending_damage_type, DAMAGE_TYPE_MASK);
+        assert_eq!(other.pending_damage_reason, DAMAGE_REASON_SHIELD);
+        assert_eq!(other.pending_damage_attacker, Some(0));
+        let shield = bubble.shield.unwrap();
+        assert!(shield.crash_attack && !shield.holding);
+
+        // On its next tick it pops.
+        crate::shield::tick(&mut bubble, 0, &mut Vec::new());
+        assert!(bubble.shield.unwrap().pop_frame.is_some());
+    }
+
+    #[test]
+    fn two_held_bubbles_hurt_nobody() {
+        let (mut a, mut b) = (kart(0, true), kart(1, true));
+        attack(&mut a, &mut b, true, false, 0, &mut Vec::new());
+        attack(&mut b, &mut a, true, true, 0, &mut Vec::new());
+        assert_eq!(a.pending_damage_type, 0);
+        assert_eq!(b.pending_damage_type, 0);
+        assert!(a.shield.unwrap().holding && b.shield.unwrap().holding);
+    }
 }

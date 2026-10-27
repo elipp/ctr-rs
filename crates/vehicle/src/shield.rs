@@ -11,8 +11,10 @@
 //! The fire button shoots the bubble (`SHIELD_FLAG_SHOOT`, [`shoot`]): on its next tick it is gone
 //! and the driver asks for a shield bomb (`Driver::shield_shot`), which the `weapon` crate flies.
 //!
-//! Not ported: the bubble's hit on a kart it bumps (`SHIELD_FLAG_CRASH_ATTACK` in
-//! `VehPhysCrash_Attack`).
+//! A kart that bumps into a held bubble is hurt by it, like by the mask, and the bubble pops
+//! (`SHIELD_FLAG_CRASH_ATTACK`, set by [`crate::collide`]'s `attack`).
+//!
+//! Not ported: the white flash on the owner's screen when the bubble pops that way.
 
 use crate::{Driver, Effect, actions, kart_state};
 
@@ -92,6 +94,9 @@ pub struct Shield {
     pub holding: bool,
     /// `SHIELD_FLAG_POP_ON_DAMAGE`: it took a hit, and pops on its next tick.
     pub pop_on_damage: bool,
+    /// `SHIELD_FLAG_CRASH_ATTACK`: it hurt a kart that bumped into this one, and pops on its next
+    /// tick (see [`crate::collide`]).
+    pub crash_attack: bool,
     /// `SHIELD_FLAG_SHOOT`: the fire button was pressed, and it is shot on its next tick.
     pub shoot: bool,
     /// `animFrame` while it grows; while it pops, the frame of the pop (`None` before).
@@ -122,6 +127,7 @@ pub fn shoot_shield(d: &mut Driver, effects: &mut Vec<Effect>) {
         duration: if blue { 0 } else { DURATION_NORMAL },
         holding: true,
         pop_on_damage: false,
+        crash_attack: false,
         shoot: false,
         grow_frame: 0,
         pop_frame: None,
@@ -204,6 +210,7 @@ pub fn tick(d: &mut Driver, timer: u32, effects: &mut Vec<Effect>) {
         }
 
         if s.pop_on_damage
+            || s.crash_attack
             || d.actions_flag_set & actions::RACE_FINISHED != 0
             || d.kart_state == kart_state::MASK_GRABBED
         {
