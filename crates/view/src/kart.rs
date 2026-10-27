@@ -148,6 +148,8 @@ pub struct KartMotion {
     replayed_average: f32,
     /// `Driver::wheelRotation`: the front wheels' steering.
     pub wheel_rotation: i16,
+    /// `Driver::hazardTimer`: the wheels wobble with it.
+    pub hazard_timer: i16,
     /// The instance scale: the squash and stretch the wheels follow.
     pub inst_scale: [i32; 3],
     /// `Driver::animIndex` and `animFrame`: which pose of the model to show.
@@ -175,6 +177,7 @@ impl KartMotion {
             ease: 0.0,
             replayed_average: REPLAY_START,
             wheel_rotation: 0,
+            hazard_timer: 0,
             inst_scale: [0; 3],
             animation: (0, 0),
             previous_animation: (0, 0),
@@ -189,6 +192,7 @@ impl KartMotion {
         let d = &kart.driver;
         self.shadow_current = ground_shadow(d, &mut kart.coll.gte.clone());
         self.wheel_rotation = d.wheel_rotation;
+        self.hazard_timer = d.hazard_timer;
         self.inst_scale = [d.inst_scale_x, d.inst_scale_y, d.inst_scale_z].map(i32::from);
         self.animation = (d.anim_index, d.anim_frame);
         self

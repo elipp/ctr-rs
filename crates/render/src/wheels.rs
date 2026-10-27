@@ -66,8 +66,9 @@ pub struct WheelQuad {
 
 /// `DrawTiresSolid_BuildWheelLocalPairs`: for each wheel its centre (in
 /// 1/4 game units, `scale` = the instance scale, 0x1000 = 1.0), and the "rim"
-/// vector whose direction is the axle (4096 = unit length).
-fn local_pairs(scale: [i32; 3], wheel_rotation: i16) -> [(Vec3, Vec3); WHEELS] {
+/// vector whose direction is the axle (4096 = unit length). `hazard_timer` is
+/// `Driver::hazardTimer`, which makes the axles wobble.
+fn local_pairs(scale: [i32; 3], wheel_rotation: i16, hazard_timer: i16) -> [(Vec3, Vec3); WHEELS] {
     let x = ((scale[0] * 0x90) >> 12) as f32;
     let y = ((scale[1] * 0x40) >> 12) as f32;
     let front_z = ((scale[2] * 0xc7) >> 12) as f32;
@@ -84,12 +85,23 @@ fn local_pairs(scale: [i32; 3], wheel_rotation: i16) -> [(Vec3, Vec3); WHEELS] {
         Vec3::new(x - 4096.0, 0.0, rear_z),
         Vec3::new(-x + 4096.0, 0.0, rear_z),
     ];
-    // The front axles follow the steering. (The hazard wobble of retail's
-    // `hazardTimer` is not drawn.)
+    // The front axles follow the steering.
     let (sin, cos) = math::sin_cos(((wheel_rotation as i32) << 2) as u32);
     let (sin, cos) = (sin as f32, cos as f32);
     rims[0] = Vec3::new(centers[0].x - cos, 0.0, centers[0].z + sin);
     rims[1] = Vec3::new(centers[1].x + cos, 0.0, centers[1].z - sin);
+    // The hazard wobble: each axle circles in the plane across the kart, a quarter of a turn
+    // after the one before it (in the order front left, rear left, front right, rear right), and
+    // wider on an odd timer (`DrawTiresSolid_AddHazardOffset`).
+    let (mut angle, mut shift) = ((hazard_timer as i32) << 5, 9);
+    if hazard_timer & 1 != 0 {
+        (angle, shift) = (angle << 1, 6);
+    }
+    for (wheel, quarter) in [(0, 0), (2, 0x400), (1, 0x800), (3, 0xc00)] {
+        let (sin, cos) = math::sin_cos((angle + quarter) as u32);
+        rims[wheel].y += ((cos as i32) >> shift) as f32;
+        rims[wheel].z += ((sin as i32) >> shift) as f32;
+    }
     std::array::from_fn(|i| (centers[i], rims[i]))
 }
 
@@ -110,10 +122,11 @@ pub fn wheel_quads(
     scale: [i32; 3],
     wheel_size: i32,
     wheel_rotation: i16,
+    hazard_timer: i16,
     eye: Vec3,
 ) -> [WheelQuad; WHEELS] {
     let radius = radius(wheel_size);
-    let pairs = local_pairs(scale, wheel_rotation);
+    let pairs = local_pairs(scale, wheel_rotation, hazard_timer);
     std::array::from_fn(|i| {
         let (center, rim) = pairs[i];
         let center = position + rotation * (center / FINE * SCALE);
@@ -223,6 +236,7 @@ mod tests {
             [0xccc; 3],
             WHEEL_SIZE,
             0,
+            0,
             eye_side,
         );
         // Looking along the axle: the picture of the tyre seen from the side. (The rim vector
@@ -235,6 +249,7 @@ mod tests {
             Mat3::IDENTITY,
             [0xccc; 3],
             WHEEL_SIZE,
+            0,
             0,
             eye_front,
         );

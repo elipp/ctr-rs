@@ -116,15 +116,17 @@ pub fn update(
             continue;
         };
         // The tires sit at the kart's squashed and stretched size.
-        let (wheel_rotation, scale) = motion.map_or((0, [DRIVER_INSTANCE_SCALE; 3]), |m| {
-            (m.wheel_rotation, m.inst_scale)
-        });
+        let (wheel_rotation, hazard_timer, scale) =
+            motion.map_or((0, 0, [DRIVER_INSTANCE_SCALE; 3]), |m| {
+                (m.wheel_rotation, m.hazard_timer, m.inst_scale)
+            });
         let quads = wheel_quads(
             pose.translation,
             Mat3::from_quat(pose.rotation),
             scale,
             wheels.wheel_size,
             wheel_rotation,
+            hazard_timer,
             eye,
         );
         let radius = radius(wheels.wheel_size);
