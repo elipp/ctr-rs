@@ -55,6 +55,7 @@ mod shield;
 mod skid;
 mod sky;
 mod subtract;
+mod suggest;
 mod toast;
 mod tracker;
 mod weapon;
