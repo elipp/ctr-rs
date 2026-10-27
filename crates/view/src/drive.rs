@@ -742,7 +742,7 @@ fn drive_tick(
             sim.race.leave(slot);
             net.frozen[slot] = true;
             net.gone[slot] = true;
-            let name = net.names.get(slot).map_or("?", String::as_str);
+            let name = net.labels.get(slot).map_or("?", String::as_str);
             cues.toasts.write(
                 Toast::new(format!("Player {name} left the race"), 3000)
                     .color(Color::srgb(1.0, 0.6, 0.3)),

@@ -7,6 +7,9 @@ edition = "2024"
 # Records every system and render span for the Tracy profiler. It costs a lot of CPU and grows
 # memory while a profiler is attached, so it is off unless asked for: `--features tracy`.
 tracy = ["bevy/trace_tracy"]
+# Names the commands and components in Bevy's error and warning messages (instead of
+# "Enable the debug feature to see the name"): `--features debug`.
+debug = ["bevy/debug"]
 
 [dependencies]
 bevy = { version = "0.20.0", features = [
@@ -22,6 +25,8 @@ render = { path = "../render" }
 camera = { path = "../camera" }
 gte = { path = "../gte" }
 net = { path = "../net" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
 race = { path = "../race" }
 math = { path = "../math" }
 weapon = { path = "../weapon" }

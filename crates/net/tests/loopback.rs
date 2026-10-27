@@ -31,7 +31,7 @@ fn pad(slot: usize, tick: u32) -> Pad {
 
 #[test]
 fn a_host_and_two_peers_race_over_a_mesh() {
-    let host = net::host(3, BUILD);
+    let host = net::host(3, "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -40,12 +40,12 @@ fn a_host_and_two_peers_race_over_a_mesh() {
         }
         _ => false,
     });
-    let first = net::join(ticket.clone().unwrap(), 7, BUILD);
+    let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the first peer", |e| {
         matches!(e, Event::PeerJoined(_))
     });
-    let second = net::join(ticket.unwrap(), 11, BUILD);
+    let second = net::join(ticket.unwrap(), 11, "", BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the second peer", |e| {
         matches!(e, Event::PeerJoined(_))
@@ -155,7 +155,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
 
 #[test]
 fn a_guest_fetches_a_custom_track_from_the_host() {
-    let host = net::host(3, BUILD);
+    let host = net::host(3, "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -164,7 +164,7 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, BUILD);
+    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
 
@@ -198,7 +198,7 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
 
 #[test]
 fn a_guest_with_another_build_is_turned_away() {
-    let host = net::host(3, BUILD);
+    let host = net::host(3, "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -207,7 +207,7 @@ fn a_guest_with_another_build_is_turned_away() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, BUILD + 1);
+    let guest = net::join(ticket.unwrap(), 7, "", BUILD + 1);
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut why = None;
     while why.is_none() {
@@ -224,7 +224,7 @@ fn a_guest_with_another_build_is_turned_away() {
 
 #[test]
 fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
-    let host = net::host(3, BUILD);
+    let host = net::host(3, "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -233,10 +233,10 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
         }
         _ => false,
     });
-    let first = net::join(ticket.clone().unwrap(), 7, BUILD);
+    let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the first peer", |e| matches!(e, Event::PeerJoined(_)));
-    let second = net::join(ticket.unwrap(), 11, BUILD);
+    let second = net::join(ticket.unwrap(), 11, "", BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the second peer", |e| matches!(e, Event::PeerJoined(_)));
     std::thread::sleep(Duration::from_secs(8));

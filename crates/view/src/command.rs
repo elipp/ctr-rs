@@ -38,16 +38,19 @@ pub enum Action {
     NetSmoothing(crate::kart::Smoothing),
     /// Show a toast for each rollback, or stop.
     NetRollbacks(bool),
+    /// Change a setting (`config.rs` does it).
+    SetConfig(crate::config::Setting),
 }
 
 /// The first word of `text` and what follows it.
-fn word(text: &str) -> (&str, &str) {
+pub(crate) fn word(text: &str) -> (&str, &str) {
     let text = text.trim();
     text.split_once(char::is_whitespace)
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
 const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
+const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const DEBUG_USAGE: &str =
@@ -68,6 +71,7 @@ impl Action {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
             "cache" => Action::cache(rest),
+            "config" => Action::config(rest),
             "net" => Action::net(rest),
             "debug" => Action::debug(rest),
             _ => Err(format!("Unknown command: /{name}")),
@@ -126,6 +130,15 @@ impl Action {
             _ => Err(format!(
                 "Smoothing is ping, replay or 0 to {SMOOTHING_MAX_MS:.0} ms\n{NET_USAGE}"
             )),
+        }
+    }
+
+    fn config(line: &str) -> Result<Action, String> {
+        let (sub, rest) = word(line);
+        match sub {
+            "set" => crate::config::Setting::parse(rest).map(Action::SetConfig),
+            "" => Err(CONFIG_USAGE.into()),
+            _ => Err(format!("Unknown command: /config {sub}\n{CONFIG_USAGE}")),
         }
     }
 
@@ -441,6 +454,17 @@ mod tests {
         ));
         assert!(matches!(Action::parse("net info"), Ok(Action::NetInfo)));
         assert!(Action::parse("debug netinfo").is_err());
+        assert!(matches!(
+            Action::parse("config set nickname  Big Bob "),
+            Ok(Action::SetConfig(crate::config::Setting::Nickname(n))) if n == "Big Bob"
+        ));
+        assert!(matches!(
+            Action::parse("config set nickname"),
+            Ok(Action::SetConfig(crate::config::Setting::Nickname(n))) if n.is_empty()
+        ));
+        assert!(Action::parse("config set nickname 0123456789abc").is_err());
+        assert!(Action::parse("config set colour red").is_err());
+        assert!(Action::parse("config get nickname").is_err());
         let smoothing = |line| match Action::parse(line) {
             Ok(Action::NetSmoothing(how)) => Some(how),
             _ => None,

@@ -196,7 +196,7 @@ fn build(
             ChildOf(row),
         ));
         commands.spawn((
-            Text::new(online.names[slot].clone()),
+            Text::new(online.labels[slot].clone()),
             TextFont {
                 font_size: 18.0.into(),
                 ..default()
