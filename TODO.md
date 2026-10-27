@@ -1,18 +1,15 @@
 ## Unimplemented
-- the red beaker's rain cloud is simulated (`vehicle::cloud`) and drawn (`STATIC_CLOUD` in `view/src/projectile.rs`, the rain as gizmo lines in `view/src/rain.rs`, positions from `render::rain`), but unchecked in the viewer. Not done: the cloud's sounds, the rain's fade with the cloud's distance to the camera and its additive blend, and clearing the cloud when a plant eats the kart (`VehStuckProc_PlantEaten_Init`; `cloud::dispel` is ready)
 - the particles of a shattering potion (`emSet_PotionShatter`)
 - the Tiger Temple door that a shattering potion opens (`RB_Potion_OnShatter_TeethSearch`, and the open-door check in `RB_Potion_ThTick_InAir`)
 - the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon
 - the other uses of a TNT crate on the head (`instTntRecv`): half the speed, the fire button ignored, the driving animation held at its middle frame
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the crates' shape in `Objects` (for a `/debug add crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
-
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `view/src/shield.rs`)
 - the shield bubble's hit on a kart it bumps (`SHIELD_FLAG_CRASH_ATTACK` in `VehPhysCrash_Attack`), and other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 - the shield bomb's sounds (rolling loop 0x59, explosion 0x4c) and the `numTimesMissileLaunched` stat
 
 ## Maps
-- a joiner who lacks the map of a race now gets it from the host (`Session::fetch`/`provide`, checked against `Map::hash`, saved to `assets/.cache/maps/`, which `/cache purge` empties). Not done: asking a peer instead of the host, progress for the download, a size/rate limit on what a host accepts to serve, and the lobby offering a map before the countdown (so the download is not inside the race start)
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
 
