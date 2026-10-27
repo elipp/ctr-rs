@@ -256,6 +256,13 @@ fn level_summary(l: &Loaded) {
         *kinds.entry(i.model_name.as_str()).or_default() += 1;
     }
     println!("instances by model: {kinds:?}");
+    println!(
+        "paths: {} position paths of {:?} points, {} recorded paths of {:?} points",
+        level.position_paths.len(),
+        level.position_paths.iter().map(Vec::len).collect::<Vec<_>>(),
+        level.paths.len(),
+        level.paths.iter().map(Vec::len).collect::<Vec<_>>(),
+    );
     for (n, s) in level.driver_spawns.iter().enumerate() {
         println!("spawn {n}: pos {} rot {}", p(s.pos), p(s.rot));
     }

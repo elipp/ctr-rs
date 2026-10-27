@@ -6,7 +6,6 @@
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the crates' shape in `Objects` (for a `/debug add crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `view/src/shield.rs`)
-- the shield bubble's hit on a kart it bumps (`SHIELD_FLAG_CRASH_ATTACK` in `VehPhysCrash_Attack`), and other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 - the shield bomb's sounds (rolling loop 0x59, explosion 0x4c) and the `numTimesMissileLaunched` stat
 - The crate depth bias is too much for Papy's Pyramid
 - The flower doesn't hurt on Papu's Pyramid

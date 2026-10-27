@@ -258,9 +258,9 @@ pub fn hide_fruit(sim: Res<Sim>, mut fruit: Query<(&FruitBody, &mut Visibility)>
     }
 }
 
-/// A placed snowball or barrel (its index among `Objects::rollers`).
+/// A placed snowball or barrel (`Slot::Roller`), or a barrel of N. Gin Labs (`Slot::Drum`).
 #[derive(Component)]
-pub struct Rolling(usize);
+pub struct Rolling(Slot);
 
 /// The orientation of an angle triple, as the matrix `ConvertRotToMatrix` makes of it: its
 /// columns are where the model's axes go (as for the kart).
@@ -280,13 +280,13 @@ fn quat_of(matrix: &vehicle::Matrix) -> Quat {
 }
 
 /// The scale an object's init sets on its instance, replacing the level file's (`RB_Plant_Init`,
-/// `RB_CtrLetter_Init`, `RB_Snowball_LInB` which the barrels share, `RB_Minecart_LInB`); the other
+/// `RB_CtrLetter_Init`, `RB_Snowball_LInB` which the barrels share, `RB_Baron_LInB`, `RB_Minecart_LInB`); the other
 /// placed models keep theirs. By model name.
 fn spawn_scale(model: &str) -> Option<i16> {
     match model {
         "plant" => Some(0x2800),
         "c" | "t" | "r" => Some(0x1800),
-        "snowball" | "barrel" | "minecart" => Some(0x1000),
+        "snowball" | "barrel" | "drum" | "minecart" => Some(0x1000),
         _ => None,
     }
 }
@@ -380,7 +380,7 @@ pub fn spawn(
         // culled like the level.
         let convex = matches!(
             by_instance.get(&n),
-            Some(Slot::Crate(_) | Slot::Roller(_) | Slot::Fruit(_))
+            Some(Slot::Crate(_) | Slot::Roller(_) | Slot::Drum(_) | Slot::Fruit(_))
         );
         if convex {
             mesh::wind_outward(&mut data.parts);
@@ -422,9 +422,9 @@ pub fn spawn(
             shown: None,
         };
         let (transform, parent) = match by_instance.get(&n) {
-            Some(&Slot::Roller(i)) => (
+            Some(&slot @ (Slot::Roller(_) | Slot::Drum(_))) => (
                 Transform::default(),
-                Some(body(commands, transform, Rolling(i))),
+                Some(body(commands, transform, Rolling(slot))),
             ),
             // A fruit's model hangs off a body that is hidden once it is picked up.
             Some(&Slot::Fruit(i)) => (
@@ -611,7 +611,13 @@ pub fn roll(
 ) {
     let fraction = fixed.overstep_fraction();
     for (rolling, mut transform) in &mut rolling {
-        let (from, to) = sim.race.objects.roller_frames(rolling.0);
+        let objects = &sim.race.objects;
+        let frames = match rolling.0 {
+            Slot::Roller(i) => Some(objects.roller_frames(i)),
+            Slot::Drum(i) => objects.drum_frames(i),
+            _ => None,
+        };
+        let Some((from, to)) = frames else { continue };
         let place = |p: loader::lev::PosRot| (Vec3::from(to_world(p.pos)), rotation_of(p.rot));
         let ((from_pos, from_rot), (to_pos, to_rot)) = (place(from), place(to));
         transform.translation = from_pos.lerp(to_pos, fraction);
