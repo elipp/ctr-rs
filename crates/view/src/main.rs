@@ -40,6 +40,7 @@ mod lights;
 mod lobby;
 mod maps;
 mod mask;
+mod minimap;
 mod names;
 mod pause;
 mod place;
@@ -562,6 +563,7 @@ fn main() {
             weapon::WeaponPlugin,
             tracker::TrackerPlugin,
             wumpa_icon::WumpaIconPlugin,
+            minimap::MinimapPlugin,
             toast::ToastPlugin,
             config::ConfigPlugin,
         ));
