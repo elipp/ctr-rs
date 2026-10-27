@@ -14,6 +14,8 @@
 
 ## Confirmed
 
+- other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
+
 ## Not bugs
 
 - **Wumpa glow missing at 10 wumpa, and a shield that pops by itself.** Both are the end of the

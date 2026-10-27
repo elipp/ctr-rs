@@ -18,6 +18,7 @@ use vehicle::Driver;
 use vehicle::search::Instances;
 
 use hazard::armadillo::Armadillo;
+use hazard::drum::Drum;
 use hazard::fireball::{Fireball, Spark};
 use hazard::minecart::Minecart;
 use hazard::roller::{self, Roller};
@@ -135,6 +136,7 @@ pub struct Objects {
     pub fireballs: Vec<Placed<Fireball>>,
     pub minecarts: Vec<Placed<Minecart>>,
     pub rollers: Vec<Placed<Roller>>,
+    pub drums: Vec<Placed<Drum>>,
     pub turtles: Vec<Placed<Turtle>>,
     pub fruit: Vec<Placed<Fruit>>,
     pub crates: Vec<Placed<CrateBox>>,
@@ -160,6 +162,7 @@ pub enum Slot {
     Fireball(usize),
     Minecart(usize),
     Roller(usize),
+    Drum(usize),
     Turtle(usize),
     Fruit(usize),
     Crate(usize),
@@ -213,6 +216,7 @@ impl Objects {
             fireballs: Vec::new(),
             minecarts: Vec::new(),
             rollers: Vec::new(),
+            drums: Vec::new(),
             turtles: Vec::new(),
             fruit: Vec::new(),
             crates: Vec::new(),
@@ -280,6 +284,16 @@ impl Objects {
                         });
                     }
                 }
+                "drum" => {
+                    if !level.paths.first().is_some_and(|path| !path.is_empty()) {
+                        continue;
+                    }
+                    objects.drums.push(Placed {
+                        instance,
+                        sim: Drum::new(&def.name, objects.position_path.len()),
+                        frames: frames(),
+                    });
+                }
                 "snowball" | "barrel" => {
                     if let Some(path) = digit(def)
                         .filter(|&p| level.paths.get(p).is_some_and(|path| path.len() > 1))
@@ -310,6 +324,7 @@ impl Objects {
             fireballs,
             minecarts,
             rollers,
+            drums,
             turtles,
             fruit,
             crates,
@@ -331,6 +346,7 @@ impl Objects {
         each(fruit, &cx, random_number, &mut f);
         each(crates, &cx, random_number, &mut f);
         each(rollers, &cx, random_number, &mut f);
+        each(drums, &cx, random_number, &mut f);
     }
 
     /// The instance of each object and where the object is kept, for the ones that show them.
@@ -339,6 +355,7 @@ impl Objects {
             .chain(slots_of(&self.fireballs, Slot::Fireball))
             .chain(slots_of(&self.minecarts, Slot::Minecart))
             .chain(slots_of(&self.rollers, Slot::Roller))
+            .chain(slots_of(&self.drums, Slot::Drum))
             .chain(slots_of(&self.turtles, Slot::Turtle))
             .chain(slots_of(&self.fruit, Slot::Fruit))
             .chain(slots_of(&self.crates, Slot::Crate))
@@ -350,6 +367,13 @@ impl Objects {
         self.each_object(|e| e.object.th_tick(&e.cx, &mut tick));
         self.ticks += 1;
         tick
+    }
+
+    /// Where a barrel is now and where it is a tick later, to draw it between the two.
+    pub fn drum_frames(&self, drum: usize) -> Option<(PosRot, PosRot)> {
+        let path = self.roll_paths.first().filter(|path| !path.is_empty())?;
+        let point = self.drums[drum].sim.point;
+        Some((Drum::frame(path, point), Drum::frame(path, point + 1)))
     }
 
     /// Where a roller is now and where it is a tick later, to draw it between the two.
