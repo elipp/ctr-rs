@@ -6,6 +6,10 @@
 
 use bevy::prelude::*;
 
+/// Retail's screen, in its pixels across and lines down.
+pub const WIDTH: i32 = 512;
+pub const HEIGHT: i32 = 240;
+
 /// A pixel of retail's screen, in logical pixels.
 pub const PIXEL: Vec2 = Vec2::new(2.0, 3.0);
 

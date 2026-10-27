@@ -230,6 +230,50 @@ impl FlyIn {
     pub const EYE_POINTS: usize = 0x96;
 }
 
+/// Where the minimap's dots go (`struct UIMapSpawnMetadata`): the part of the world the picture
+/// covers, the corner and size of that part on the screen, and how the picture is turned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Minimap {
+    pub world_end: (i16, i16),
+    pub world_start: (i16, i16),
+    pub icon_size: (i16, i16),
+    pub icon_start: (i16, i16),
+    /// A quarter turn each: 0 to 3.
+    pub mode: i16,
+    /// The picture's top half is drawn only when this is 0.
+    pub top_half_mode: i16,
+}
+
+impl Minimap {
+    /// `ST1_MAP` of a level file, the first entry of its `ptrSpawnType1`: none on levels without
+    /// a map. (Read from the file, not kept in [`Level`], whose encoding names a map.)
+    pub fn parse(file: &DramFile) -> io::Result<Option<Minimap>> {
+        let p = Payload(&file.data);
+        let at = match p.u32(LEVEL_SPAWN_TYPE_1)? {
+            0 => return Ok(None),
+            at => at as usize,
+        };
+        if p.u32(at)? == 0 {
+            return Ok(None);
+        }
+        let map = match p.u32(at + 4)? {
+            0 => return Ok(None),
+            map => map as usize,
+        };
+        let pair = |k: usize| -> io::Result<(i16, i16)> {
+            Ok((p.i16(map + k * 2)?, p.i16(map + k * 2 + 2)?))
+        };
+        Ok(Some(Minimap {
+            world_end: pair(0)?,
+            world_start: pair(2)?,
+            icon_size: pair(4)?,
+            icon_start: pair(6)?,
+            mode: p.i16(map + 0x10)?,
+            top_half_mode: p.i16(map + 0x12)?,
+        }))
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Level {
     pub instances: Vec<InstDef>,

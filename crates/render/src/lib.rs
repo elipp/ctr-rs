@@ -8,6 +8,7 @@ pub mod hud_icons;
 pub mod lights;
 pub mod mask;
 pub mod mesh;
+pub mod minimap;
 pub mod particles;
 pub mod place;
 pub mod portraits;

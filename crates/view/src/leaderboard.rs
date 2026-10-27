@@ -12,7 +12,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::bigindex::BigIndex;
 use loader::disc::open_bigfile;
 use loader::dram::DramFile;
-use loader::icons::parse_icons;
+use loader::icons::{parse_groups, parse_icons};
 use render::font::{Font, Gradient};
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 
@@ -81,12 +81,21 @@ impl Plugin for LeaderboardPlugin {
 /// The icons of a racer's pack, which have the HUD's pictures. Every racer's pack has the same
 /// ones; character 0's will do.
 pub(crate) fn pack_icons() -> Vec<loader::icons::Icon> {
+    parse_icons(&pack()).expect("parse racer pack icons")
+}
+
+/// The same pack's icon groups.
+pub(crate) fn pack_groups() -> Vec<loader::icons::IconGroup> {
+    parse_groups(&pack()).expect("parse racer pack icons")
+}
+
+fn pack() -> DramFile {
     let path = crate::bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let pack = big
         .read(&mut disc, BigIndex::ARCADE_1P_PACK.get())
         .expect("read racer pack");
-    parse_icons(&DramFile::parse(&pack).expect("parse racer pack")).expect("parse racer pack icons")
+    DramFile::parse(&pack).expect("parse racer pack")
 }
 
 /// A picture of the HUD as a texture, for the UI to cut from.
