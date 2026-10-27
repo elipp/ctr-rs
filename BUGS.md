@@ -12,6 +12,9 @@
   `item::request_fire`) is handled on the tick it is set, as the neighbouring potion test's
   `debug_roll` and wait loop assume. Not checked on the commit before it.
 
+- The few usf boost pads in the game (Claude claims it's implemented)
+- Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
+
 ## Confirmed
 
 - other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
