@@ -32,6 +32,9 @@ pub enum Action {
     DebugAddWeapon(u8),
     /// (Debug) Set our wumpa count, clamped to what a kart can hold.
     DebugSetWumpa(u8),
+    /// (Debug) Freeze this client for that long, online only: the others wait for it, and the
+    /// host removes it after `net::KICK_AFTER`.
+    DebugStall(std::time::Duration),
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
     NetInfo,
     /// Set how the drawing eases the karts of the others after a rollback.
@@ -54,12 +57,25 @@ const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config s
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const DEBUG_USAGE: &str =
-    "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11>";
+    "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 
+/// The longest stall that can be set.
+const STALL_MAX_MS: f64 = 60_000.0;
+
 /// The longest smoothing that can be set.
 const SMOOTHING_MAX_MS: f64 = 1000.0;
+
+/// A time as milliseconds: `120ms`, `0.12s`, or a bare number of milliseconds.
+fn milliseconds(text: &str) -> Option<f64> {
+    let (number, to_ms) = match (text.strip_suffix("ms"), text.strip_suffix('s')) {
+        (Some(n), _) => (n, 1.0),
+        (None, Some(n)) => (n, 1000.0),
+        _ => (text, 1.0),
+    };
+    number.trim().parse::<f64>().ok().map(|n| n * to_ms)
+}
 
 impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
@@ -116,17 +132,10 @@ impl Action {
             "replay" => return Ok(Action::NetSmoothing(Smoothing::Replay)),
             _ => {}
         }
-        let (number, to_ms) = match (text.strip_suffix("ms"), text.strip_suffix('s')) {
-            (Some(n), _) => (n, 1.0),
-            (None, Some(n)) => (n, 1000.0),
-            _ => (text, 1.0),
-        };
-        match number.trim().parse::<f64>() {
-            Ok(n) if (0.0..=SMOOTHING_MAX_MS).contains(&(n * to_ms)) => {
-                Ok(Action::NetSmoothing(crate::kart::Smoothing::Fixed(
-                    std::time::Duration::from_secs_f64(n * to_ms / 1000.0),
-                )))
-            }
+        match milliseconds(text) {
+            Some(ms) if (0.0..=SMOOTHING_MAX_MS).contains(&ms) => Ok(Action::NetSmoothing(
+                crate::kart::Smoothing::Fixed(std::time::Duration::from_secs_f64(ms / 1000.0)),
+            )),
             _ => Err(format!(
                 "Smoothing is ping, replay or 0 to {SMOOTHING_MAX_MS:.0} ms\n{NET_USAGE}"
             )),
@@ -190,6 +199,15 @@ impl Action {
                     _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
                 }
             }
+            "stall" => match milliseconds(rest) {
+                Some(ms) if (0.0..=STALL_MAX_MS).contains(&ms) => Ok(Action::DebugStall(
+                    std::time::Duration::from_secs_f64(ms / 1000.0),
+                )),
+                _ => Err(format!(
+                    "A stall is 0 to {} s, like 3s or 500ms\n{DEBUG_USAGE}",
+                    STALL_MAX_MS / 1000.0
+                )),
+            },
             "" => Err(DEBUG_USAGE.into()),
             _ => Err(format!("Unknown command: /debug {sub}\n{DEBUG_USAGE}")),
         }
@@ -453,6 +471,13 @@ mod tests {
             Ok(Action::DebugSetWumpa(10))
         ));
         assert!(matches!(Action::parse("net info"), Ok(Action::NetInfo)));
+        assert!(matches!(
+            Action::parse("debug stall 3s"),
+            Ok(Action::DebugStall(d)) if d == std::time::Duration::from_secs(3)
+        ));
+        assert!(Action::parse("debug stall").is_err());
+        assert!(Action::parse("debug stall 5m").is_err());
+        assert!(Action::parse("debug stall 61s").is_err());
         assert!(Action::parse("debug netinfo").is_err());
         assert!(matches!(
             Action::parse("config set nickname  Big Bob "),

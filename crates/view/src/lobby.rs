@@ -453,7 +453,10 @@ fn run(
                 continue;
             }
             // (Not the lobby's.)
-            Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_) | Action::SetConfig(_) => continue,
+            Action::DebugAddWeapon(_)
+            | Action::DebugSetWumpa(_)
+            | Action::DebugStall(_)
+            | Action::SetConfig(_) => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.
                 if let Some(session) = &lobby.session {
