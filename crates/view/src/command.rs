@@ -2,6 +2,10 @@
 //! sends what is typed and Escape closes it without. A line that starts with `/` is a command
 //! (an [`Action`]); any other is a chat message.
 //!
+//! While a command is typed, what can come next is listed above the line (`suggest.rs`): Up and
+//! Down pick one, Tab puts it in the line, and Return does too, sending the line if nothing can
+//! follow it. Otherwise Up and Down go through the lines sent before.
+//!
 //! While it is open it takes the keyboard: the keys are cleared from the game's input every frame,
 //! so that typing does not drive the kart.
 
@@ -13,6 +17,7 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use net::Ticket;
 
+use crate::suggest::Menu;
 use crate::toast::Toast;
 
 /// Something a player can ask for with a `/command`. The command only sends it; what it does is
@@ -81,7 +86,7 @@ impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
     /// and a subcommand (`/lobby join <address>`), which may have subcommands of its own
     /// (`/debug set wumpa 10`).
-    fn parse(line: &str) -> Result<Action, String> {
+    pub(crate) fn parse(line: &str) -> Result<Action, String> {
         let (name, rest) = word(line);
         match name {
             "lobby" => Action::lobby(rest),
@@ -235,6 +240,8 @@ pub(crate) struct CommandLine {
     browsing: Option<usize>,
     /// What was typed before the browsing started: the newest option after the history's.
     draft: String,
+    /// The suggestion picked, of those listed for the text.
+    selected: usize,
 }
 
 impl CommandLine {
@@ -268,7 +275,47 @@ impl CommandLine {
     /// Typing edits what is shown, which is the text from then on.
     fn edit(&mut self, f: impl FnOnce(&mut String)) {
         self.browsing = None;
+        self.selected = 0;
         f(&mut self.text);
+    }
+
+    /// The suggestions for the text, unless it is a line of the history being browsed.
+    fn menu(&self) -> Option<Menu> {
+        self.browsing
+            .is_none()
+            .then(|| Menu::of(&self.text))
+            .flatten()
+    }
+
+    /// The suggestion picked, if there are any to pick.
+    fn selection(&self) -> Option<(Menu, usize)> {
+        let menu = self.menu().filter(|m| !m.options.is_empty())?;
+        let index = self.selected.min(menu.options.len() - 1);
+        Some((menu, index))
+    }
+
+    /// Up or Down through the suggestions, round from the last to the first: false if there are
+    /// none.
+    fn step(&mut self, down: bool) -> bool {
+        let Some((menu, index)) = self.selection() else {
+            return false;
+        };
+        let count = menu.options.len();
+        let next = if down { index + 1 } else { index + count - 1 };
+        self.selected = next % count;
+        true
+    }
+
+    /// Puts the suggestion picked in the line: true if nothing can follow it.
+    fn complete(&mut self) -> bool {
+        let Some((line, done)) = self
+            .selection()
+            .and_then(|(menu, index)| menu.pick(&self.text, index))
+        else {
+            return false;
+        };
+        self.edit(|t| *t = line);
+        done
     }
 
     /// Keeps the line that was sent, unless it is the same as the last.
@@ -322,15 +369,32 @@ pub(crate) fn capture(
             continue;
         }
         match &event.logical_key {
-            Key::Enter => line.entered = true,
+            Key::Enter => {
+                // A suggestion picked goes in first; the line is sent if that ends it.
+                if line.selection().is_none() || line.complete() {
+                    line.entered = true;
+                }
+            }
+            Key::Tab => {
+                line.complete();
+            }
             Key::Escape => {
                 line.open = false;
                 line.text.clear();
                 line.browsing = None;
                 line.draft.clear();
+                line.selected = 0;
             }
-            Key::ArrowUp => line.older(),
-            Key::ArrowDown => line.newer(),
+            Key::ArrowUp => {
+                if !line.step(false) {
+                    line.older();
+                }
+            }
+            Key::ArrowDown => {
+                if !line.step(true) {
+                    line.newer();
+                }
+            }
             Key::Backspace => line.edit(|t| {
                 t.pop();
             }),
@@ -396,18 +460,35 @@ fn chat(message: &str, toasts: &mut MessageWriter<Toast>) {
     toasts.write(Toast::new("Chat is not implemented yet", 2000));
 }
 
-/// The line on screen while it is open.
+/// The colours of the suggestions: the one picked, the others, and what they do.
+const PICKED: Color = Color::srgb(1.0, 0.75, 0.3);
+const OPTION: Color = Color::srgb(0.9, 0.9, 0.9);
+const ABOUT: Color = Color::srgb(0.6, 0.6, 0.6);
+
+/// The line and its suggestions, at the bottom of the screen.
+#[derive(Component)]
+struct CommandBox;
+
+/// The suggestions over the line.
+#[derive(Component)]
+struct Suggestions;
+
+/// The line on screen while it is open, and over it what can be typed next.
 fn show(
     line: Res<CommandLine>,
     time: Res<Time<Real>>,
     mut commands: Commands,
-    mut texts: Query<(Entity, &mut Text), With<CommandText>>,
+    boxes: Query<Entity, With<CommandBox>>,
+    suggestions: Query<Entity, With<Suggestions>>,
+    mut texts: Query<&mut Text, With<CommandText>>,
+    // What the suggestions were made for: the text and the one picked.
+    mut shown: Local<Option<(String, usize)>>,
 ) {
-    let existing = texts.iter_mut().next();
     if !line.open {
-        if let Some((entity, _)) = existing {
+        for entity in &boxes {
             commands.entity(entity).despawn();
         }
+        *shown = None;
         return;
     }
     let cursor = if ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2) {
@@ -415,31 +496,112 @@ fn show(
     } else {
         " "
     };
-    let line = format!("> {}{cursor}", line.text);
-    match existing {
-        Some((_, mut text)) => text.0 = line,
-        None => {
-            commands.spawn((
-                CommandText,
-                Text::new(line),
+    let text = format!("> {}{cursor}", line.text);
+    let Ok(list) = suggestions.single() else {
+        commands.spawn((
+            CommandBox,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(40.0),
+                left: Val::Px(20.0),
+                right: Val::Px(20.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            // Over every other piece of the HUD.
+            GlobalZIndex(i32::MAX),
+            children![
+                (
+                    Suggestions,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::BLACK.with_alpha(0.75)),
+                    Visibility::Hidden,
+                ),
+                (
+                    CommandText,
+                    Text::new(text),
+                    TextFont {
+                        font_size: FONT_SIZE.into(),
+                        ..default()
+                    },
+                    Node {
+                        padding: UiRect::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::BLACK),
+                ),
+            ],
+        ));
+        return;
+    };
+    for mut shown_text in &mut texts {
+        shown_text.0 = text.clone();
+    }
+    let key = (line.text.clone(), line.selected);
+    if shown.as_ref() == Some(&key) {
+        return;
+    }
+    *shown = Some(key);
+    commands.entity(list).despawn_children();
+    let rows = suggestion_rows(&line);
+    commands.entity(list).insert(if rows.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    });
+    for (name, about, color) in rows {
+        commands.spawn((
+            Text::new(name),
+            TextFont {
+                font_size: FONT_SIZE.into(),
+                ..default()
+            },
+            TextColor(color),
+            ChildOf(list),
+            children![(
+                TextSpan::new(about),
                 TextFont {
                     font_size: FONT_SIZE.into(),
                     ..default()
                 },
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(40.0),
-                    left: Val::Px(20.0),
-                    right: Val::Px(20.0),
-                    padding: UiRect::all(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::BLACK),
-                // Over every other piece of the HUD.
-                GlobalZIndex(i32::MAX),
-            ));
-        }
+                TextColor(ABOUT),
+            )],
+        ));
     }
+}
+
+/// The rows of suggestions for the line: each option, the picked one in its own colour, and
+/// what else can be typed there; the names padded to line up what they do.
+fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
+    let Some(menu) = line.menu() else {
+        return Vec::new();
+    };
+    let picked = line.selection().map(|(_, index)| index);
+    let width = menu
+        .options
+        .iter()
+        .map(|o| o.name.chars().count())
+        .chain(menu.arg.map(|(arg, _)| arg.chars().count()))
+        .max()
+        .unwrap_or(0);
+    let row = |name: &str, about: &str, color| (format!("{name:width$}   "), about.into(), color);
+    let mut rows: Vec<_> = menu
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let color = if picked == Some(i) { PICKED } else { OPTION };
+            row(o.name, o.about, color)
+        })
+        .collect();
+    if let Some((arg, about)) = menu.arg {
+        rows.push(row(arg, about, ABOUT));
+    }
+    rows
 }
 
 #[cfg(test)]
