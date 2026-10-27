@@ -23,7 +23,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::{Connection, ConnectionError, presets};
 pub use iroh::EndpointId;
 use iroh::{Endpoint, EndpointAddr, RelayUrl};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -37,6 +37,14 @@ pub const ALPN: &[u8] = b"ctr-rust/lobby/6";
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
 pub const MAX_BLOB: usize = 32 << 20;
+
+/// How long the host waits for a new pad of a player in a race before it removes them. The
+/// others wait for the player from 2 seconds on (the game's `MAX_LEAD`), so it is up to 6 seconds
+/// of that.
+pub const KICK_AFTER: Duration = Duration::from_secs(8);
+
+/// The code that the host closes the connection of a player it removes with.
+const KICKED: u32 = 1;
 
 /// The most characters of a nickname.
 pub const NICK_MAX: usize = 12;
@@ -558,7 +566,9 @@ enum Heard {
     Message(Message),
     /// The round trip of a ping we sent, which came back.
     Ping(Duration),
-    Closed,
+    /// The connection closed: the number it has (see `Connection::stable_id`), and whether the
+    /// host removed us ([`KICKED`]).
+    Closed { id: usize, kicked: bool },
 }
 
 /// The clock that the stamps of the pings are read from. Only ours reads them.
@@ -606,7 +616,13 @@ fn listen(connection: Connection, from: EndpointId, heard: UnboundedSender<(Endp
                 // Not ours to understand: a stranger's, or a newer build's.
                 Some(Err(_)) => {}
                 None => {
-                    let _ = heard.send((from, Heard::Closed));
+                    let kicked = matches!(
+                        connection.close_reason(),
+                        Some(ConnectionError::ApplicationClosed(close))
+                            if close.error_code.into_inner() == u64::from(KICKED)
+                    );
+                    let id = connection.stable_id();
+                    let _ = heard.send((from, Heard::Closed { id, kicked }));
                     return;
                 }
             }
@@ -675,6 +691,8 @@ struct Link {
     peer_has: Tick,
     /// The race the link is for.
     epoch: u32,
+    /// When its pads last went further (or the link began).
+    advanced: Instant,
 }
 
 impl Link {
@@ -685,6 +703,7 @@ impl Link {
             sender: InputSender::default(),
             receiver: InputReceiver::default(),
             peer_has: 0,
+            advanced: Instant::now(),
         }
     }
 
@@ -694,6 +713,20 @@ impl Link {
         packet.epoch = self.epoch;
         send_datagram(&self.connection, &Message::Inputs(packet));
     }
+}
+
+/// The players to remove from a race: the ones whose pads stopped coming for [`KICK_AFTER`], and
+/// are behind everyone else. (When one player hangs, the rest wait for it and stop sending as
+/// well, so being silent is not enough: the one to blame is the one that is furthest back.) `own`
+/// is how far our pads go, and `guests` has for each player how far theirs go and when that
+/// last changed.
+fn stalled(own: Tick, guests: &[(EndpointId, Tick, Instant)], now: Instant) -> Vec<EndpointId> {
+    let back = guests.iter().map(|&(_, next, _)| next).fold(own, Tick::min);
+    guests
+        .iter()
+        .filter(|&&(_, next, since)| next <= back && now.duration_since(since) >= KICK_AFTER)
+        .map(|&(id, _, _)| id)
+        .collect()
 }
 
 /// Starts the links over for the race of `epoch`: nothing sent or received yet, on the
@@ -813,6 +846,14 @@ async fn run(
                 match &role {
                     // A player who joins in a race waits for the next one.
                     Role::Host => {
+                        // A player who comes back to the lobby (it was removed from the race, or
+                        // its connection is dead and we have not seen it yet) is a new guest:
+                        // the race it was in is lost to it, but the lobby is not.
+                        if let Some(old) = guests.iter().find(|g| g.id == id) {
+                            old.connection.close(0u32.into(), b"rejoined");
+                        }
+                        guests.retain(|g| g.id != id);
+                        gone.remove(&id);
                         let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()) };
                         io.event(Event::PeerJoined(id));
                         if racing {
@@ -1057,6 +1098,7 @@ async fn run(
                             })?;
                             let after = link.receiver.next();
                             if after > before {
+                                link.advanced = Instant::now();
                                 let pads = (before..after)
                                     .map(|t| link.receiver.get(t).expect("just accepted"))
                                     .collect();
@@ -1148,13 +1190,26 @@ async fn run(
                     pings.insert(from, rtt);
                     io.event(Event::Rtt { id: from, rtt });
                 }
-                Heard::Closed => {
-                    io.event(Event::PeerLeft(from));
-                    pings.remove(&from);
+                Heard::Closed { id: closed, kicked } => {
+                    // The old connection of a player that came back: the new one is in `guests`.
+                    let stale = guests
+                        .iter()
+                        .any(|g| g.id == from && g.connection.stable_id() != closed);
+                    if !stale {
+                        io.event(Event::PeerLeft(from));
+                        pings.remove(&from);
+                    }
                     links.remove(&from);
                     unclaimed.retain(|c| c.remote_id() != from);
                     // A guest whose host is gone has no lobby, nor a race: the host runs both.
                     if from == host_id && !matches!(role, Role::Host) {
+                        if kicked {
+                            return Err(format!(
+                                "the host removed you: nothing came from you for {} seconds. \
+                                 You can join the lobby again, but not this race",
+                                KICK_AFTER.as_secs()
+                            ).into());
+                        }
                         return Err("the host closed the lobby".into());
                     }
                     if matches!(role, Role::Host) {
@@ -1162,7 +1217,9 @@ async fn run(
                         // is made of, until the next one.
                         let in_race = racing && plan.as_ref().is_some_and(|p| p.slot_of(from).is_some());
                         if in_race {
-                            gone.insert(from);
+                            if !stale {
+                                gone.insert(from);
+                            }
                             if let Some(slot) = plan.as_ref().and_then(|plan| plan.slot_of(from))
                                 && departed.insert(from)
                             {
@@ -1183,7 +1240,7 @@ async fn run(
                                 }
                                 io.event(Event::Gone { slot });
                             }
-                        } else {
+                        } else if !stale {
                             let had = guests.len();
                             guests.retain(|g| g.id != from);
                             if guests.len() != had {
@@ -1207,6 +1264,36 @@ async fn run(
             _ = timer.tick() => if running {
                 for link in links.values_mut() {
                     link.send();
+                }
+                if matches!(role, Role::Host) && racing {
+                    let own = links.values().next().map(|link| link.sender.tick());
+                    let heard: Vec<(EndpointId, Tick, Instant)> = links
+                        .iter()
+                        .filter(|(id, _)| !departed.contains(*id))
+                        .map(|(&id, link)| (id, link.receiver.next(), link.advanced))
+                        .collect();
+                    let silent = own.map_or_else(Vec::new, |own| stalled(own, &heard, Instant::now()));
+                    for id in silent {
+                        // Closing the connection is what a player leaving does: the rest follows
+                        // from `Heard::Closed`. (The link goes now, or the next tick would do this
+                        // again.)
+                        links.remove(&id);
+                        let Some(guest) = guests.iter().find(|g| g.id == id) else { continue };
+                        guest.connection.close(KICKED.into(), b"no pads");
+                        let who = if guest.nick.1.is_empty() {
+                            id.fmt_short().to_string()
+                        } else {
+                            guest.nick.1.clone()
+                        };
+                        let text = format!(
+                            "{who} was removed from the race: nothing came from them for {} seconds",
+                            KICK_AFTER.as_secs()
+                        );
+                        for other in guests.iter().filter(|g| g.id != id) {
+                            let _ = send_reliably(&other.connection, &Message::Announce { text: text.clone() }).await;
+                        }
+                        io.event(Event::Announce(text));
+                    }
                 }
             },
         }
@@ -1325,6 +1412,9 @@ async fn run(
                 .all(|id| ready_from.contains(id) || departed.contains(id))
         {
             running = true;
+            for link in links.values_mut() {
+                link.advanced = Instant::now();
+            }
             for guest in &guests {
                 let _ = send_reliably(&guest.connection, &Message::Go).await;
             }
@@ -1345,6 +1435,21 @@ mod tests {
             assert_eq!(ticket.to_string().parse(), Ok(ticket));
         }
         assert!("nonsense".parse::<Ticket>().is_err());
+    }
+
+    #[test]
+    fn the_furthest_back_silent_player_is_removed() {
+        let [a, b] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
+        let now = Instant::now();
+        let long_ago = now - KICK_AFTER - Duration::from_secs(1);
+        // The hung player is at 100; the one waiting for it went on to 160 and is silent as well.
+        assert_eq!(stalled(160, &[(a, 100, long_ago), (b, 160, long_ago)], now), [a]);
+        // Silent for a moment only.
+        assert!(stalled(160, &[(a, 100, now), (b, 160, long_ago)], now).is_empty());
+        // Everyone is where the host is.
+        assert_eq!(stalled(100, &[(a, 100, long_ago)], now), [a]);
+        // The host is the furthest back: it is not blamed, nor are the others.
+        assert!(stalled(90, &[(a, 100, long_ago), (b, 160, long_ago)], now).is_empty());
     }
 
     #[test]

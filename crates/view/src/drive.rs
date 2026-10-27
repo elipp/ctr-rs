@@ -108,6 +108,10 @@ const SPLIT_SHOW_MS: i32 = 3000;
 /// `lobby::pace`), so it only matters when one of them stalls for good: 2 seconds.
 const MAX_LEAD: u32 = 60;
 
+/// How often the toast "Waiting for ..." is put up again while we wait: every 3 seconds, and it
+/// stays that long.
+const WAIT_TOAST_TICKS: u32 = 90;
+
 /// The ticks between the beeps of an online race: a second.
 const TICKS_PER_BEEP: u32 = 60;
 
@@ -582,6 +586,7 @@ fn drive_tick(
     mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
     smoothing: Res<crate::kart::Smoothing>,
     mut cues: Cues,
+    mut waited: Local<u32>,
 ) {
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
@@ -754,13 +759,33 @@ fn drive_tick(
     }
     // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
     // rollback window) and predict the others further and further. It waits for them instead.
-    if online
-        && (0..sim.race.players())
+    let late: Vec<usize> = if online {
+        (0..sim.race.players())
             .filter(|&slot| slot != own)
-            .any(|slot| tick > sim.race.confirmed_until(slot).saturating_add(MAX_LEAD))
-    {
+            .filter(|&slot| tick > sim.race.confirmed_until(slot).saturating_add(MAX_LEAD))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !late.is_empty() {
+        // (The host removes a player that stays silent: see `net::KICK_AFTER`.)
+        if *waited % WAIT_TOAST_TICKS == 0
+            && let Some(net) = lobby.online.as_ref()
+        {
+            let names: Vec<&str> = late
+                .iter()
+                .map(|&slot| net.labels.get(slot).map_or("?", String::as_str))
+                .collect();
+            let text = format!("Waiting for {}...", names.join(", "));
+            cues.toasts.write(
+                Toast::new(text, WAIT_TOAST_TICKS as u64 * 1000 / crate::GAME_TICK_HZ as u64)
+                    .color(Color::srgb(1.0, 0.8, 0.2)),
+            );
+        }
+        *waited += 1;
         return;
     }
+    *waited = 0;
     // Which way R1 and L1 were tapped this tick, to change the kart the camera follows.
     let mut cycle = 0;
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
