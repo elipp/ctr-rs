@@ -22,6 +22,9 @@
 - /race restart doesn't include any pending clients (not a bug?)
 - Show lobby members while waiting for race start
 
+  While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled
+  elsewhere.
+
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
