@@ -24,18 +24,62 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use iroh::endpoint::{Connection, presets};
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
+pub use iroh::EndpointId;
+use iroh::{Endpoint, EndpointAddr, RelayUrl};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::wire::{InputReceiver, InputSender, Message, PING_SECONDS};
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/5";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/6";
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
 pub const MAX_BLOB: usize = 32 << 20;
+
+/// The most characters of a nickname.
+pub const NICK_MAX: usize = 12;
+
+/// How long a player waits between changes of its nickname (the game's to keep: see
+/// [`Session::set_nickname`]).
+pub const NICK_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// A nickname as it is kept and sent: trimmed, without control characters, and at most
+/// [`NICK_MAX`] characters. Empty means none.
+pub fn clean_nick(nick: &str) -> String {
+    nick.chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(NICK_MAX)
+        .collect()
+}
+
+/// What each player is called, given the id and the nickname of each (empty for none): the
+/// nickname, or the short form of the key without one. Players with the same nickname (whatever
+/// the case) all get the first 3 characters of their key added, so that they can be told apart.
+pub fn display_names(players: &[(EndpointId, &str)]) -> Vec<String> {
+    players
+        .iter()
+        .map(|&(id, nick)| {
+            let short = id.fmt_short().to_string();
+            if nick.is_empty() {
+                return short;
+            }
+            let twins = players
+                .iter()
+                .filter(|(_, other)| other.to_lowercase() == nick.to_lowercase())
+                .count();
+            if twins > 1 {
+                format!("{nick}#{}", &short[..3])
+            } else {
+                nick.to_string()
+            }
+        })
+        .collect()
+}
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -105,7 +149,7 @@ pub enum Event {
     /// is in it once it has said what it drives. `you` is our own place in the list, if we are in
     /// it yet.
     Lobby {
-        players: Vec<(EndpointId, u8)>,
+        players: Vec<Player>,
         you: Option<usize>,
     },
     /// We joined the lobby of this host.
@@ -173,6 +217,16 @@ pub enum Event {
     NetInfo(Vec<PeerInfo>),
     /// The session could not go on.
     Failed(String),
+}
+
+/// A player in the lobby.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Player {
+    pub id: EndpointId,
+    /// What it drives (`GAME_CHARACTER_IDS` order).
+    pub character: u8,
+    /// What it wants to be called, empty for none (see [`display_names`]).
+    pub nick: String,
 }
 
 /// How we are connected to one peer.
@@ -243,6 +297,7 @@ enum Command {
     },
     Announce(String),
     Character(u8),
+    Nickname(String),
     RaceOver,
     Ready,
     Have {
@@ -312,6 +367,13 @@ impl Session {
         let _ = self.commands.send(Command::Character(character));
     }
 
+    /// Changes what we are called, at any time (in a race too): everyone in the lobby is told,
+    /// and gets [`Event::Lobby`]. Cleaned with [`clean_nick`]. Holding to [`NICK_COOLDOWN`]
+    /// between changes is the game's to do.
+    pub fn set_nickname(&self, nick: &str) {
+        let _ = self.commands.send(Command::Nickname(clean_nick(nick)));
+    }
+
     /// The game is ready to play tick 0 (the level is up and the race built), after
     /// [`Event::Started`]. Once every player is, [`Event::Go`] comes.
     pub fn ready(&self) {
@@ -376,19 +438,24 @@ impl Io {
     }
 }
 
-/// Opens a lobby, driving `character`. [`Event::Open`] comes once it can be reached.
+/// Opens a lobby, driving `character` and called `nick` (empty for none, see [`clean_nick`]).
+/// [`Event::Open`] comes once it can be reached.
 ///
 /// `build` is the version of the sim (`race::SIM_VERSION`): a guest with another is turned away.
-pub fn host(character: u8, build: u32) -> Session {
-    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Host, character, build)))
+pub fn host(character: u8, nick: &str, build: u32) -> Session {
+    let nick = clean_nick(nick);
+    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Host, character, nick, build)))
 }
 
-/// Joins the lobby of `ticket`, driving `character`.
+/// Joins the lobby of `ticket`, driving `character` and called `nick`.
 ///
 /// `build` is the version of the sim (`race::SIM_VERSION`): the host turns us away if its own is
 /// another.
-pub fn join(ticket: Ticket, character: u8, build: u32) -> Session {
-    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Join(ticket), character, build)))
+pub fn join(ticket: Ticket, character: u8, nick: &str, build: u32) -> Session {
+    let nick = clean_nick(nick);
+    spawn(move |endpoint, io| {
+        Box::pin(run(endpoint, io, Role::Join(ticket), character, nick, build))
+    })
 }
 
 type Task = std::pin::Pin<Box<dyn Future<Output = Result<(), Error>>>>;
@@ -442,16 +509,25 @@ fn send_interval() -> tokio::time::Interval {
 /// A message on a stream of its own, which iroh delivers whole and in order.
 /// The host tells everyone, itself included, who is in the lobby: itself, then the guests that
 /// have said what they drive, in the order they joined.
-async fn tell_lobby(me: EndpointId, character: u8, guests: &[Guest], io: &Io) {
-    let players: Vec<(EndpointId, u8)> = std::iter::once((me, character))
-        .chain(
-            guests
-                .iter()
-                .filter_map(|g| g.hello.map(|(_, c)| (g.id, c))),
-        )
-        .collect();
+async fn tell_lobby(me: EndpointId, character: u8, nick: &str, guests: &[Guest], io: &Io) {
+    let players: Vec<Player> = std::iter::once(Player {
+        id: me,
+        character,
+        nick: nick.to_string(),
+    })
+    .chain(guests.iter().filter_map(|g| {
+        g.hello.map(|(_, character)| Player {
+            id: g.id,
+            character,
+            nick: g.nick.1.clone(),
+        })
+    }))
+    .collect();
     let message = Message::Lobby {
-        players: players.iter().map(|&(id, c)| (*id.as_bytes(), c)).collect(),
+        players: players
+            .iter()
+            .map(|p| (*p.id.as_bytes(), p.character, p.nick.clone()))
+            .collect(),
     };
     for guest in guests {
         let _ = send_reliably(&guest.connection, &message).await;
@@ -550,6 +626,8 @@ struct Guest {
     connection: Connection,
     /// What it said it drives, and the number of the Hello that said it; none  until it comes.
     hello: Option<(u32, u8)>,
+    /// What it wants to be called, and the number of the Hello or Nick that said it.
+    nick: (u32, String),
 }
 
 /// The race as agreed at the start.
@@ -647,6 +725,7 @@ async fn run(
     mut io: Io,
     role: Role,
     mut character: u8,
+    mut nick: String,
     build: u32,
 ) -> Result<(), Error> {
     let me = endpoint.id();
@@ -677,7 +756,8 @@ async fn run(
                 connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
             };
             io.event(Event::Joined(ticket.id));
-            send_reliably(&connection, &Message::Hello { character, seq: 0, build }).await?;
+            let hello = Message::Hello { character, seq: 0, build, nick: nick.clone() };
+            send_reliably(&connection, &hello).await?;
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
             host_connection = Some(connection);
@@ -733,7 +813,7 @@ async fn run(
                 match &role {
                     // A player who joins in a race waits for the next one.
                     Role::Host => {
-                        let guest = Guest { id, connection: connection.clone(), hello: None };
+                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()) };
                         io.event(Event::PeerJoined(id));
                         if racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
@@ -797,11 +877,24 @@ async fn run(
                 Command::Character(c) => if plan.is_none() {
                     character = c;
                     if matches!(role, Role::Host) {
-                        tell_lobby(me, character, &guests, &io).await;
+                        tell_lobby(me, character, &nick, &guests, &io).await;
                     }
                     if let Some(connection) = &host_connection {
                         // The host takes the latest Hello it has, so one that is sent again overrides.
-                        send_reliably(connection, &Message::Hello { character, seq: hellos, build }).await?;
+                        let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone() };
+                        send_reliably(connection, &hello).await?;
+                        hellos += 1;
+                    }
+                },
+                // Unlike the character, a nickname can change in a race: the host tells everyone.
+                Command::Nickname(new) => if new != nick {
+                    nick = new;
+                    if matches!(role, Role::Host) {
+                        tell_lobby(me, character, &nick, &guests, &io).await;
+                    }
+                    if let Some(connection) = &host_connection {
+                        let message = Message::Nick { seq: hellos, nick: nick.clone() };
+                        send_reliably(connection, &message).await?;
                         hellos += 1;
                     }
                 },
@@ -867,20 +960,37 @@ async fn run(
                             "the host plays another version of the sim ({theirs}, yours is {yours}): you both need the same build"
                         ).into());
                     }
-                    Message::Hello { character: theirs, seq, .. } => {
+                    Message::Hello { character: theirs, seq, nick: theirs_nick, .. } => {
                         if let Some(guest) = guests.iter_mut().find(|g| g.id == from)
                             && guest.hello.is_none_or(|(have, _)| seq > have)
                         {
                             guest.hello = Some((seq, theirs));
-                            tell_lobby(me, character, &guests, &io).await;
+                            if seq >= guest.nick.0 {
+                                guest.nick = (seq, clean_nick(&theirs_nick));
+                            }
+                            tell_lobby(me, character, &nick, &guests, &io).await;
                         }
                     }
+                    // (It may beat the Hello: the guest is in the lobby once that comes.)
+                    Message::Nick { seq, nick: theirs } => if matches!(role, Role::Host)
+                        && let Some(guest) = guests.iter_mut().find(|g| g.id == from)
+                        && seq > guest.nick.0
+                    {
+                        guest.nick = (seq, clean_nick(&theirs));
+                        tell_lobby(me, character, &nick, &guests, &io).await;
+                    },
                     Message::Lobby { players } if from == host_id && !matches!(role, Role::Host) => {
-                        let players: Vec<(EndpointId, u8)> = players
+                        let players: Vec<Player> = players
                             .iter()
-                            .map(|(bytes, c)| EndpointId::from_bytes(bytes).map(|id| (id, *c)))
+                            .map(|(bytes, character, nick)| {
+                                EndpointId::from_bytes(bytes).map(|id| Player {
+                                    id,
+                                    character: *character,
+                                    nick: clean_nick(nick),
+                                })
+                            })
                             .collect::<Result<_, _>>()?;
-                        let you = players.iter().position(|&(id, _)| id == me);
+                        let you = players.iter().position(|p| p.id == me);
                         io.event(Event::Lobby { players, you });
                     }
                     Message::Start { epoch: new, slot, characters, track, hash, roster }
@@ -1077,7 +1187,7 @@ async fn run(
                             let had = guests.len();
                             guests.retain(|g| g.id != from);
                             if guests.len() != had {
-                                tell_lobby(me, character, &guests, &io).await;
+                                tell_lobby(me, character, &nick, &guests, &io).await;
                             }
                         }
                     }
@@ -1235,5 +1345,25 @@ mod tests {
             assert_eq!(ticket.to_string().parse(), Ok(ticket));
         }
         assert!("nonsense".parse::<Ticket>().is_err());
+    }
+
+    #[test]
+    fn nicknames_are_trimmed_and_cut() {
+        assert_eq!(clean_nick("  Penta \n"), "Penta");
+        assert_eq!(clean_nick("Dingodile the Great"), "Dingodile th");
+        assert_eq!(clean_nick("a\u{7}b"), "ab");
+        assert_eq!(clean_nick("ääääääääääääää").chars().count(), NICK_MAX);
+        assert_eq!(clean_nick("   "), "");
+    }
+
+    #[test]
+    fn equal_nicknames_get_the_key_added() {
+        let [a, b, c] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
+        let short = |id: EndpointId| id.fmt_short().to_string()[..3].to_string();
+        let names = display_names(&[(a, "Penta"), (b, "penta"), (c, "")]);
+        assert_eq!(names[0], format!("Penta#{}", short(a)));
+        assert_eq!(names[1], format!("penta#{}", short(b)));
+        assert_eq!(names[2], c.fmt_short().to_string());
+        assert_eq!(display_names(&[(a, "Penta"), (b, "Tiny")]), ["Penta", "Tiny"]);
     }
 }

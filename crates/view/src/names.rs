@@ -112,7 +112,7 @@ pub(crate) fn overhead(
     let followed = net.watching != net.slot;
     for (_, mut text, mut visibility) in &mut watching {
         let line = if followed {
-            let name = net.names.get(net.watching).map_or("?", String::as_str);
+            let name = net.labels.get(net.watching).map_or("?", String::as_str);
             format!("{name}\nR1 / L1: change the camera")
         } else {
             String::new()
@@ -134,7 +134,7 @@ pub(crate) fn overhead(
     let forward = camera_transform.forward();
     for (_, label, mut text, mut node, mut visibility) in &mut labels {
         let slot = label.0;
-        let name = net.names.get(slot).map_or("", String::as_str);
+        let name = net.labels.get(slot).map_or("", String::as_str);
         let at = karts
             .iter()
             .find(|(kart, _)| kart.0 == slot)

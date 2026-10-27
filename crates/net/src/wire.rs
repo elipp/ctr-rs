@@ -69,7 +69,17 @@ pub enum Message {
     /// arrive in any order, and the host keeps the one with the highest.
     /// `build` is the version of the sim the client plays (`race::SIM_VERSION`): the host turns
     /// away one that differs, as its race would not come out the same.
-    Hello { character: u8, seq: u32, build: u32 },
+    /// `nick` is what the client wants to be called (empty for none, see `clean_nick`). Its `seq`
+    /// is shared with [`Message::Nick`], so that the latest of either wins.
+    Hello {
+        character: u8,
+        seq: u32,
+        build: u32,
+        nick: String,
+    },
+    /// Reliable, client to host, at any time (a race included): the client is called `nick` from
+    /// now on. The host passes it on in [`Message::Lobby`]. `seq` counts with the Hellos'.
+    Nick { seq: u32, nick: String },
     /// Reliable, host to client: the Hello was of another build than the host's.
     Reject { host: u32, yours: u32 },
     /// Reliable, host to each client: a race is about to start. `slot` is the client's player
@@ -108,8 +118,9 @@ pub enum Message {
     /// Reliable, host to client: the host has no such track to send.
     NoBlob { track: u32, hash: u64 },
     /// Reliable, host to each client: who is in the lobby and what each drives, the host first.
-    /// It comes whenever that changes, in full, so a client that joins late catches up.
-    Lobby { players: Vec<([u8; 32], u8)> },
+    /// It comes whenever that changes, in full, so a client that joins late catches up. Each
+    /// is the endpoint id, the character and the nickname (empty for none).
+    Lobby { players: Vec<([u8; 32], u8, String)> },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
@@ -299,6 +310,11 @@ mod tests {
                 character: 9,
                 seq: 3,
                 build: 1,
+                nick: "Penta".into(),
+            },
+            Message::Nick {
+                seq: 4,
+                nick: "Penta Penguin".into(),
             },
             Message::Reject { host: 2, yours: 1 },
             Message::Gone { epoch: 1, slot: 2 },
@@ -343,7 +359,7 @@ mod tests {
                 hash: 77,
             },
             Message::Lobby {
-                players: vec![([1; 32], 4), ([2; 32], 15)],
+                players: vec![([1; 32], 4, String::new()), ([2; 32], 15, "Ripper".into())],
             },
             Message::Announce {
                 text: "Restarting in 5".into(),

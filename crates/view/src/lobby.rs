@@ -19,7 +19,7 @@
 //! that has not come yet is predicted, and put right when it does (`race::rollback`).
 
 use bevy::prelude::*;
-use net::{Event, Pad, Session, Ticket};
+use net::{EndpointId, Event, Pad, Session, Ticket};
 
 use crate::command::Action;
 use crate::maps;
@@ -31,8 +31,13 @@ pub struct Online {
     pub slot: usize,
     /// The character each slot drives, which sets its kart's stats.
     pub characters: Vec<u8>,
-    /// The short form of each slot's iroh key (`fmt_short`), as the players are known by.
+    /// The short form of each slot's iroh key (`fmt_short`), which keys the pings.
     pub names: Vec<String>,
+    /// The endpoint of each slot.
+    pub ids: Vec<EndpointId>,
+    /// What each slot is called on screen (`net::display_names`): the nickname if there is one.
+    /// It follows the nicknames, which can change in a race.
+    pub labels: Vec<String>,
     /// The `LevelId` it is on, which the viewer shows before anything is played.
     pub track: u32,
     /// The hash of the contents of the map, if it is a map (0 for the game's tracks).
@@ -126,8 +131,10 @@ pub struct Lobby {
     /// Who is in the lobby and the character each drives (the short key and the character), as
     /// the last [`Event::Lobby`] said, and whether there has been one: what changes in the next is
     /// what the players are told.
-    roster: Vec<(String, u8)>,
+    roster: Vec<Member>,
     roster_seen: bool,
+    /// The nickname of every player the lobby has told of (empty for none).
+    nicks: std::collections::HashMap<EndpointId, String>,
     /// The last round trip to each player in the lobby, by short key, from the pings, and an
     /// average of them (which the smoothing follows, not to be moved by one slow packet).
     pub pings: std::collections::HashMap<String, std::time::Duration>,
@@ -139,6 +146,16 @@ pub struct Lobby {
     pub online: Option<Online>,
 }
 
+/// A player in the lobby, as the last [`Event::Lobby`] said.
+struct Member {
+    /// The short form of the key.
+    key: String,
+    /// What the player is called (see [`Online::labels`]).
+    label: String,
+    nick: String,
+    character: u8,
+}
+
 impl Lobby {
     /// Whether we are in a lobby (ours or another's), or creating one.
     pub fn is_open(&self) -> bool {
@@ -146,8 +163,8 @@ impl Lobby {
     }
 
     /// Opens a lobby of our own, for others to join. (They get its address when it is up.)
-    pub fn host(&mut self, character: u8) {
-        self.session = Some(net::host(character, race::SIM_VERSION));
+    pub fn host(&mut self, character: u8, nick: &str) {
+        self.session = Some(net::host(character, nick, race::SIM_VERSION));
         self.joined = false;
         self.roster.clear();
         self.roster_seen = false;
@@ -182,9 +199,9 @@ impl Lobby {
     }
 
     /// Joins the lobby at `ticket`.
-    pub fn join(&mut self, ticket: Ticket, character: u8) {
+    pub fn join(&mut self, ticket: Ticket, character: u8, nick: &str) {
         println!("joining {ticket}");
-        self.session = Some(net::join(ticket, character, race::SIM_VERSION));
+        self.session = Some(net::join(ticket, character, nick, race::SIM_VERSION));
         self.joined = true;
         self.roster.clear();
         self.roster_seen = false;
@@ -194,6 +211,25 @@ impl Lobby {
     pub fn set_character(&self, character: u8) {
         if let Some(session) = &self.session {
             session.set_character(character);
+        }
+    }
+
+    /// We are called something else now, which the others learn at once, in a race too.
+    pub fn set_nickname(&self, nick: &str) {
+        if let Some(session) = &self.session {
+            session.set_nickname(nick);
+        }
+    }
+
+    /// Names the slots of the race after the nicknames known now.
+    fn refresh_labels(&mut self) {
+        if let Some(online) = &mut self.online {
+            let players: Vec<(EndpointId, &str)> = online
+                .ids
+                .iter()
+                .map(|id| (*id, self.nicks.get(id).map_or("", String::as_str)))
+                .collect();
+            online.labels = net::display_names(&players);
         }
     }
 
@@ -357,6 +393,7 @@ fn run(
     time: Res<Time<Real>>,
     mut smoothing: ResMut<crate::kart::Smoothing>,
     mut rollbacks: ResMut<RollbackToasts>,
+    config: Res<crate::config::Config>,
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
@@ -367,11 +404,11 @@ fn run(
         let now = time.elapsed_secs();
         let say = match action {
             Action::CreateLobby => {
-                lobby.host(drive.character as u8);
+                lobby.host(drive.character as u8, &config.nickname);
                 "Creating lobby..."
             }
             Action::JoinLobby(ticket) => {
-                lobby.join(ticket.clone(), drive.character as u8);
+                lobby.join(ticket.clone(), drive.character as u8, &config.nickname);
                 "Joining lobby..."
             }
             Action::CloseLobby => {
@@ -416,7 +453,7 @@ fn run(
                 continue;
             }
             // (Not the lobby's.)
-            Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_) => continue,
+            Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_) | Action::SetConfig(_) => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.
                 if let Some(session) = &lobby.session {
@@ -553,13 +590,17 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 leads.clear();
                 let characters_len = characters.len();
                 stopped = false;
+                let names: Vec<String> = players
+                    .iter()
+                    .map(|id| id.fmt_short().to_string())
+                    .collect();
                 started = Some(Online {
                     slot,
                     characters,
-                    names: players
-                        .iter()
-                        .map(|id| id.fmt_short().to_string())
-                        .collect(),
+                    // (Named after the nicknames below.)
+                    labels: names.clone(),
+                    names,
+                    ids: players,
                     track,
                     hash,
                     inbox: Vec::new(),
@@ -634,9 +675,11 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         lobby.end_race();
         toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
     }
-    if started.is_some() {
+    let new_race = started.is_some();
+    if new_race {
         lobby.online = started;
     }
+    let nicks_told = roster.is_some();
     if let Some((track, hash)) = wanted_map {
         if let Some(session) = &lobby.session {
             session.fetch(track, hash);
@@ -661,38 +704,65 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         return;
     }
     if let Some((players, you)) = roster {
-        let players: Vec<(String, u8)> = players
+        let labels = net::display_names(
+            &players
+                .iter()
+                .map(|p| (p.id, p.nick.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        let members: Vec<Member> = players
             .iter()
-            .map(|(id, c)| (id.fmt_short().to_string(), *c))
+            .zip(labels)
+            .map(|(p, label)| Member {
+                key: p.id.fmt_short().to_string(),
+                label,
+                nick: p.nick.clone(),
+                character: p.character,
+            })
             .collect();
+        for p in &players {
+            lobby.nicks.insert(p.id, p.nick.clone());
+        }
         // A guest that has just joined meets the lobby as it is, which is not news.
         if lobby.roster_seen || !lobby.joined {
-            for (n, (id, character)) in players.iter().enumerate() {
+            for (n, member) in members.iter().enumerate() {
                 let name = crate::CHARACTERS
-                    .get(*character as usize)
+                    .get(member.character as usize)
                     .copied()
                     .unwrap_or("?");
-                let who = if Some(n) == you { "you" } else { id.as_str() };
-                let before = lobby.roster.iter().find(|(known, _)| known == id);
+                let is_you = Some(n) == you;
+                let who = if is_you { "you" } else { member.label.as_str() };
+                let before = lobby.roster.iter().find(|known| known.key == member.key);
                 let text = match before {
                     // We know that we joined.
-                    None if Some(n) == you => continue,
+                    None if is_you => continue,
                     None => format!("{who} joined as {name}"),
-                    Some((_, was)) if was != character => format!("{who} is now {name}"),
+                    Some(was) if was.character != member.character => {
+                        format!("{who} is now {name}")
+                    }
+                    // (We know what we called ourselves.)
+                    Some(was) if was.nick != member.nick && !is_you => {
+                        format!("{} is now called {}", was.label, member.label)
+                    }
                     Some(_) => continue,
                 };
                 toasts.write(Toast::new(text, 3000).color(Color::srgb(0.4, 1.0, 0.4)));
             }
-            for (id, _) in &lobby.roster {
-                if players.iter().all(|(now, _)| now != id) {
+            for was in &lobby.roster {
+                if members.iter().all(|now| now.key != was.key) {
                     toasts.write(
-                        Toast::new(format!("{id} left"), 3000).color(Color::srgb(1.0, 0.6, 0.3)),
+                        Toast::new(format!("{} left", was.label), 3000)
+                            .color(Color::srgb(1.0, 0.6, 0.3)),
                     );
                 }
             }
         }
-        lobby.roster = players;
+        lobby.roster = members;
         lobby.roster_seen = true;
+    }
+    // The race is named after the nicknames when it starts, and again when one changes.
+    if new_race || nicks_told {
+        lobby.refresh_labels();
     }
     let mut answers = Vec::new();
     if let Some(online) = &mut lobby.online {
@@ -772,8 +842,8 @@ fn finish(mut lobby: ResMut<Lobby>, sim: Res<crate::props::Sim>, mut toasts: Mes
     };
     if !net.won {
         net.won = true;
-        let key = net.names.get(slot).map_or("?", String::as_str);
-        let text = format!("Race finished, player {key} won");
+        let name = net.labels.get(slot).map_or("?", String::as_str);
+        let text = format!("Race finished, player {name} won");
         println!("{text} (tick {tick})");
         toasts.write(Toast::new(text, AFTERMATH_SECONDS as u64 * 1000).color(ANNOUNCE_COLOR));
     }

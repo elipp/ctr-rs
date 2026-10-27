@@ -7825,6 +7825,8 @@ dependencies = [
  "net",
  "race",
  "render",
+ "serde",
+ "serde_json",
  "vehicle",
  "weapon",
 ]

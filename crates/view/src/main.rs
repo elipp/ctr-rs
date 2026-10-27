@@ -24,6 +24,7 @@
 mod banner;
 mod bar;
 mod command;
+mod config;
 mod drive;
 mod exhaust;
 mod explosion;
@@ -370,7 +371,9 @@ struct FlyCamera {
 fn main() {
     maps::load();
     let track_id = 0;
-    let mut racer = Some(0);
+    let config = config::Config::load();
+    // The character driven last time, unless the command line says otherwise.
+    let mut racer = Some(config.character.filter(|&c| (c as usize) < CHARACTERS.len()).unwrap_or(0));
     let mut low = false;
     let mut show_hidden = false;
     let mut cull = true;
@@ -506,6 +509,7 @@ fn main() {
                 .chain(),
         );
     character_data.insert(app.world_mut());
+    app.insert_resource(config);
     let world = app.world_mut();
     let mut scene_systems = vec![
         world.register_system(setup),
@@ -523,6 +527,7 @@ fn main() {
             tracker::TrackerPlugin,
             wumpa_icon::WumpaIconPlugin,
             toast::ToastPlugin,
+            config::ConfigPlugin,
         ));
     } else {
         scene_systems.push(app.world_mut().register_system(probe::spawn_text));
@@ -615,6 +620,11 @@ fn switch_level(world: &mut World) {
         && let (Some(lobby), Some(racer)) = (world.get_resource::<lobby::Lobby>(), options.racer)
     {
         lobby.set_character(racer as u8);
+    }
+    if racer_step != 0
+        && let (Some(mut config), Some(racer)) = (world.get_resource_mut::<config::Config>(), options.racer)
+    {
+        config.set_character(racer);
     }
     let character = (racer_step != 0).then(|| load_character(options.racer));
 
