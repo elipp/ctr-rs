@@ -14,25 +14,6 @@
 
 ## Confirmed
 
-### NYI:
-The crate depth bias is too much for Papy's Pyramid
-The flower doesn't hurt on Papu's Pyramid
-The spider is buggy and doesn't hurt 
-The few usf boost pads in the game
-Rollers in N.Gin Labs
-Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
-Bubble doesn't hurt when colliding
-With three players, changing track causes DESYNC
-Blizzard bluff seals don't move / hurt
-
-Spectate only mode
-
-submerged in the mud in tiny arena looks off
-
-/race restart doesn't include any pending clients (not a bug?)
-
-Show lobby members while waiting
-
 ## Not bugs
 
 - **Wumpa glow missing at 10 wumpa, and a shield that pops by itself.** Both are the end of the

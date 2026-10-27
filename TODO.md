@@ -8,6 +8,19 @@
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `view/src/shield.rs`)
 - the shield bubble's hit on a kart it bumps (`SHIELD_FLAG_CRASH_ATTACK` in `VehPhysCrash_Attack`), and other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 - the shield bomb's sounds (rolling loop 0x59, explosion 0x4c) and the `numTimesMissileLaunched` stat
+- The crate depth bias is too much for Papy's Pyramid
+- The flower doesn't hurt on Papu's Pyramid
+- The spider is buggy and doesn't hurt 
+- The few usf boost pads in the game
+- Rollers in N.Gin Labs
+- Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
+- Bubble doesn't hurt when colliding
+- With three players, changing track causes DESYNC
+- Blizzard bluff seals don't move / hurt
+- Spectate only mode
+- submerged in the mud in tiny arena looks off
+- /race restart doesn't include any pending clients (not a bug?)
+- Show lobby members while waiting for race start
 
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
