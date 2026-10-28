@@ -100,6 +100,9 @@ fn view_of(camera: &camera::CameraDc) -> View {
 #[derive(Component)]
 struct Hud;
 
+/// How much larger than retail's the counter's "x" is drawn, by eye.
+const COUNTER_X_SCALE: f32 = 1.5;
+
 /// The wumpa count: the number after the "x".
 #[derive(Component)]
 pub(crate) struct WumpaHud;
@@ -397,8 +400,9 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
     ));
-    // The counter: a small white "x" and the count in the big orange digits, level with the
-    // middle of the fruit, right of it.
+    // The counter: a small "x" and the count in the big orange digits, level with the middle of
+    // the fruit, right of it. The "x" is orange too, and its middle is the digits' (retail draws
+    // it 4 lines down from their top, 8 tall, on digits 16 tall).
     let height = Font::Large.line_height() as f32;
     commands.spawn((
         Node {
@@ -406,18 +410,12 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             left: Val::Percent(50.0),
             margin: UiRect::left(hud::x(COUNTER_X)),
             top: hud::y(MIDDLE_Y - height / 2.0),
-            align_items: AlignItems::FlexEnd,
+            align_items: AlignItems::Center,
             column_gap: hud::x(COUNTER_GAP as f32),
             ..default()
         },
         children![
-            (
-                CtrText::new("x", Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
-                Node {
-                    margin: UiRect::bottom(hud::y(3.0)),
-                    ..default()
-                },
-            ),
+            CtrText::new("x", Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
             (
                 WumpaHud,
                 CtrText::new("0", Font::Large, Gradient::ORANGE).fixed(hud::PIXEL),
