@@ -13,11 +13,14 @@
 //! everyone's there.
 
 use bevy::ecs::system::SystemParam;
-use bevy::picking::events::{PointerClick, PointerOut, PointerOver};
+use bevy::picking::events::{PointerClick, PointerOver};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
+use render::font::Font;
+
 use crate::command::Action;
+use crate::font::{CtrText, TexelSize};
 use crate::lobby::Lobby;
 use crate::toast::Toast;
 
@@ -143,12 +146,14 @@ pub struct FxPlugin;
 
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Effects>().add_systems(
-            Update,
-            (act, online, keys, show)
-                .chain()
-                .run_if(crate::drive::driving),
-        );
+        app.init_resource::<Effects>()
+            .init_resource::<Picked>()
+            .add_systems(
+                Update,
+                (act, online, keys, show)
+                    .chain()
+                    .run_if(crate::drive::driving),
+            );
     }
 }
 
@@ -233,17 +238,18 @@ const ITEMS: [Item; 8] = [
 ];
 
 impl Item {
+    /// The line, in what the game's font has (capitals, digits, a little punctuation).
     fn label(self, fx: &Effects) -> String {
-        let on_off = |on: bool| if on { "on" } else { "off" };
+        let on_off = |on: bool| if on { "ON" } else { "OFF" };
         match self {
-            Item::Confetti => format!("Confetti: {}", fx.confetti.name()),
-            Item::Flash => "Flash".into(),
-            Item::Finish => "Finish first (offline)".into(),
-            Item::Speed => format!("Speed: {}x", fx.speed),
-            Item::Freeze => format!("Freeze: {}", on_off(fx.frozen)),
-            Item::Step => "Step one tick".into(),
-            Item::Weather => format!("Weather: {}", on_off(fx.weather)),
-            Item::BeakerRain => format!("Beaker rain: {}", on_off(fx.beaker_rain)),
+            Item::Confetti => format!("CONFETTI: {}", fx.confetti.name().to_uppercase()),
+            Item::Flash => "FLASH".into(),
+            Item::Finish => "FINISH FIRST".into(),
+            Item::Speed => format!("SPEED: {}X", fx.speed),
+            Item::Freeze => format!("FREEZE: {}", on_off(fx.frozen)),
+            Item::Step => "STEP ONE TICK".into(),
+            Item::Weather => format!("WEATHER: {}", on_off(fx.weather)),
+            Item::BeakerRain => format!("BEAKER RAIN: {}", on_off(fx.beaker_rain)),
         }
     }
 
@@ -265,97 +271,85 @@ impl Item {
     }
 }
 
-/// The panel.
+/// The panel, and the texel size it was built for.
 #[derive(Component)]
-struct Panel;
+struct Panel(TexelSize);
 
-/// The text of a line.
+/// A row, and its place in the panel.
+#[derive(Component)]
+struct Row(usize);
+
+/// The text of a row.
 #[derive(Component)]
 struct Line(Item);
 
-const FONT_SIZE: f32 = 18.0;
-const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
-const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
-const HOVERED: Color = Color::srgb(1.0, 0.85, 0.3);
+/// The row the mouse last pointed at, which has the menu's bar.
+#[derive(Resource, Default)]
+struct Picked(usize);
 
-/// Puts the panel up or takes it down, and keeps its lines those of the settings now.
+/// Puts the panel up or takes it down (and builds it again for a new texel size), keeps its lines
+/// those of the settings now, and the bar on the row picked.
+#[allow(clippy::too_many_arguments)]
 fn show(
     mut commands: Commands,
     fx: Res<Effects>,
-    panels: Query<Entity, With<Panel>>,
-    mut lines: Query<(&Line, &mut Text)>,
+    size: Res<TexelSize>,
+    time: Res<Time<Real>>,
+    picked: Res<Picked>,
+    panels: Query<(Entity, &Panel)>,
+    mut lines: Query<(&Line, &mut CtrText)>,
+    mut rows: Query<(&Row, &mut BackgroundColor)>,
 ) {
-    match (fx.panel, panels.single()) {
-        (true, Err(_)) => spawn(&mut commands, &fx),
-        (false, Ok(panel)) => commands.entity(panel).despawn(),
-        _ => {}
+    let panel = panels.single().ok();
+    let stale = panel.is_some_and(|(_, built)| built.0 != *size);
+    if let Some((entity, _)) = panel.filter(|_| stale || !fx.panel) {
+        commands.entity(entity).despawn();
+    }
+    if fx.panel && (panel.is_none() || stale) {
+        spawn(&mut commands, &fx, &size);
+        return;
     }
     if fx.is_changed() {
         for (Line(item), mut text) in &mut lines {
             let label = item.label(&fx);
-            if text.0 != label {
-                text.0 = label;
+            if text.text != label {
+                text.text = label;
             }
         }
     }
+    let bar = crate::rect_menu::bar(time.elapsed_secs());
+    for (Row(i), mut color) in &mut rows {
+        color.0 = if *i == picked.0 { bar } else { Color::NONE };
+    }
 }
 
-fn spawn(commands: &mut Commands, fx: &Effects) {
-    let panel = commands
-        .spawn((
-            Panel,
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(120.0),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL),
-            BorderColor::all(BORDER),
-            GlobalZIndex(i32::MAX - 2),
-        ))
-        .id();
-    commands.spawn((
-        ChildOf(panel),
-        Text::new("Effects (F3)"),
-        TextFont {
-            font_size: FONT_SIZE.into(),
-            ..default()
-        },
-        TextColor(BORDER),
-        Node {
-            margin: UiRect::bottom(Val::Px(4.0)),
-            ..default()
-        },
-    ));
-    for item in ITEMS {
+fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize) {
+    let (panel, rows) = crate::rect_menu::spawn(commands, size, "EFFECTS", |node| {
+        node.right = size.x(24);
+        node.top = size.y(40);
+    });
+    commands
+        .entity(panel)
+        .insert((Panel(*size), GlobalZIndex(i32::MAX - 2)));
+    for (i, item) in ITEMS.into_iter().enumerate() {
         commands
             .spawn((
-                ChildOf(panel),
-                Line(item),
-                Text::new(item.label(fx)),
-                TextFont {
-                    font_size: FONT_SIZE.into(),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
+                ChildOf(rows),
+                Row(i),
                 Node {
-                    padding: UiRect::vertical(Val::Px(2.0)),
+                    height: size.y(crate::rect_menu::ROW),
+                    padding: UiRect::left(size.x(1)),
                     ..default()
                 },
+                BackgroundColor(Color::NONE),
             ))
-            .observe(|over: On<PointerOver>, mut colors: Query<&mut TextColor>| {
-                if let Ok(mut color) = colors.get_mut(over.entity) {
-                    color.0 = HOVERED;
-                }
-            })
-            .observe(|out: On<PointerOut>, mut colors: Query<&mut TextColor>| {
-                if let Ok(mut color) = colors.get_mut(out.entity) {
-                    color.0 = Color::WHITE;
-                }
+            .with_child((
+                Line(item),
+                CtrText::new(item.label(fx), Font::Middle, crate::rect_menu::TEXT),
+                Pickable::IGNORE,
+            ))
+            .observe(move |_: On<PointerOver>, mut picked: ResMut<Picked>| {
+                picked.0 = i;
             })
             .observe(
                 move |click: On<PointerClick>,

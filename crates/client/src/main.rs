@@ -52,6 +52,7 @@ mod projectile;
 
 mod props;
 mod rain;
+mod rect_menu;
 mod remote;
 mod resources;
 mod scene;
