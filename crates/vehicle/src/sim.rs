@@ -602,14 +602,19 @@ fn tick_from_coll_fixed(
         PhysState::Tumble => tumble::animate(d),
     }
 
-    // The HUD's jump meter, which gives the hang-time turbo, runs after the drivers' tick.
-    crate::jump_meter::update(d, env, effects);
+    // The thread buckets after the drivers': the exhaust fire's (dying at the end of the frame's
+    // logic, in `PROC_CheckAllForDead`),
+    crate::turbo::tick(d, env.elapsed_time_ms as i16, effects);
 
-    // The mask's own thread.
+    // the mask's own thread,
     stuck::mask_tick(d, env);
 
-    // The shield's.
+    // and the shield's.
     crate::shield::tick(d, env.timer, effects);
+
+    // The HUD's jump meter, which gives the hang-time turbo, runs in the frame's render, after
+    // all of the logic: a fire it lights or feeds first ticks on the next frame.
+    crate::jump_meter::update(d, env, effects);
 
     TickResult {
         mask_grab,
