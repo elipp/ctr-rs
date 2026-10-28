@@ -54,6 +54,34 @@ impl Particles {
         }
     }
 
+    /// The dirt, grass or snow that the kart's tires threw this game tick (before
+    /// [`Particles::tick`]). `timer` is the game's frame counter.
+    pub fn spray(&mut self, slot: usize, spray: &Option<vehicle::sparks::Spray>, timer: u32) {
+        use render::particles::{
+            TERRAIN_DIRT, TERRAIN_GRASS_DARK, TERRAIN_GRASS_LIGHT, TERRAIN_SNOW,
+        };
+        use vehicle::sparks::Kick;
+        let Some(spray) = spray else {
+            return;
+        };
+        let set: &[_] = match spray.kick {
+            Kick::Dirt => &TERRAIN_DIRT,
+            Kick::LightGrass => &TERRAIN_GRASS_LIGHT,
+            Kick::DarkGrass => &TERRAIN_GRASS_DARK,
+            Kick::Snow => &TERRAIN_SNOW,
+        };
+        for &tire in &spray.tires {
+            let streak = Particle::terrain_spray(
+                set,
+                tire,
+                |v| vehicle::exhaust::rotate(&spray.matrix, v),
+                timer,
+                &mut self.rng,
+            );
+            self.list.push((slot, streak));
+        }
+    }
+
     /// The puffs of this game tick of kart `slot` (before [`Particles::tick`]).
     pub fn puffs(&mut self, slot: usize, puffs: &[vehicle::exhaust::Puff]) {
         for puff in puffs {
@@ -125,7 +153,10 @@ const MAX_QUADS: usize = 64;
 
 /// The streaks of the sparks of a kart, all in one mesh.
 #[derive(Component)]
-pub struct SparkLines;
+pub struct SparkLines {
+    /// The streaks that are drawn over the picture (the grass's), not added to it.
+    solid: bool,
+}
 
 /// The meshes that draw the smoke that adds, the smoke that subtracts and the sparks of `kart`.
 /// The smoke is in the kart's render layer.
@@ -206,34 +237,37 @@ pub fn spawn(
         NoFrustumCulling,
     ));
 
-    // The sparks: untextured streaks that fade out towards their tails.
-    let mut spark_mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    spark_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * quads]);
-    spark_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * quads]);
-    spark_mesh.insert_indices(Indices::U32(
-        (0..quads as u32)
-            .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
-            .collect(),
-    ));
-    commands.spawn((
-        SparkLines,
-        Attached(kart),
-        Mesh3d(meshes.add(spark_mesh)),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            unlit: true,
-            cull_mode: None,
-            double_sided: true,
-            alpha_mode: AlphaMode::Add,
-            ..default()
-        })),
-        Transform::default(),
-        spark_layer,
-        NoFrustumCulling,
-    ));
+    // The sparks: untextured streaks that fade out towards their tails. Those of the grass are
+    // drawn over the picture, the others added to it.
+    for (solid, alpha_mode) in [(false, AlphaMode::Add), (true, AlphaMode::Opaque)] {
+        let mut spark_mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
+        spark_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4 * quads]);
+        spark_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4 * quads]);
+        spark_mesh.insert_indices(Indices::U32(
+            (0..quads as u32)
+                .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))
+                .collect(),
+        ));
+        commands.spawn((
+            SparkLines { solid },
+            Attached(kart),
+            Mesh3d(meshes.add(spark_mesh)),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                unlit: true,
+                cull_mode: None,
+                double_sided: true,
+                alpha_mode,
+                ..default()
+            })),
+            Transform::default(),
+            spark_layer.clone(),
+            NoFrustumCulling,
+        ));
+    }
 }
 
 /// Lays the particles out as camera-facing quads, between the last two ticks.
@@ -300,7 +334,7 @@ pub fn update(
 
 /// Lays the sparks out as streaks facing the camera, from a coloured head to a dark tail.
 pub fn update_sparks(
-    lines: Query<(&Attached, &Mesh3d), With<SparkLines>>,
+    lines: Query<(&SparkLines, &Attached, &Mesh3d)>,
     karts: Query<(&Transform, &KartSlot), Without<SparkLines>>,
     cameras: Query<
         &Transform,
@@ -319,7 +353,7 @@ pub fn update_sparks(
         return;
     };
     let t = fixed.overstep_fraction();
-    for (attached, mesh) in &lines {
+    for (lines, attached, mesh) in &lines {
         let Ok((kart, slot)) = karts.get(attached.0) else {
             continue;
         };
@@ -333,7 +367,9 @@ pub fn update_sparks(
         let wanted = particles
             .list
             .iter()
-            .filter(|(of, p)| *of == slot.0 && p.is_line())
+            .filter(|(of, p)| {
+                *of == slot.0 && p.is_line() && p.semi_transparent() != lines.solid
+            })
             .take(quads);
         for (n, (_, p)) in wanted.enumerate() {
             let world = |v: Vec3| v / 256.0 * SCALE;
@@ -347,11 +383,13 @@ pub fn update_sparks(
             let toward_camera = camera.translation - head;
             let side = along.cross(toward_camera).normalize_or_zero() * (SPARK_WIDTH * SCALE / 2.0);
             let color = p.rgb().map(|c| c as f32 / 255.0);
+            // A line that does not fade keeps its colour to the tail.
+            let tail_shade = if p.line_fades() { 0.0 } else { 1.0 };
             for (k, (point, shade)) in [
                 (head + side, 1.0),
                 (head - side, 1.0),
-                (tail + side, 0.0),
-                (tail - side, 0.0),
+                (tail + side, tail_shade),
+                (tail - side, tail_shade),
             ]
             .into_iter()
             .enumerate()

@@ -3,6 +3,9 @@
 //! scrapes a wall (`VehEmitter_Sparks_Wall`). Where they start and in which direction
 //! is here; the particles themselves are the renderer's.
 //!
+//! The ground also kicks up what it is made of (`VehEmitter_Terrain_Ground`): dirt, grass and snow
+//! throw streaks from the tires.
+//!
 //! Not ported: the multiplayer thinning and the rumble that goes with the wall.
 
 use crate::exhaust::rotate;
@@ -11,6 +14,11 @@ use crate::{Driver, actions, kart_state};
 
 const LANDING_MIN_SPEED: i32 = 6 * 256;
 const LANDING_MIN_JUMP: i32 = 22 * 256;
+const SPRAY_MIN_SPEED: i32 = 0x300;
+const SPRAY_TIRE_X: i32 = 0x1e;
+const SPRAY_TIRE_Y: i32 = 0x0a;
+const SPRAY_TIRE_FRONT_Z: i32 = 0x28;
+const SPRAY_TIRE_BACK_Z: i32 = -0x14;
 const WALL_MIN_SPEED: i32 = 2 * 256;
 const WALL_RUB_TIMER_FULL: i16 = 0xf0;
 const WALL_LEFT_X: i32 = -0x2200;
@@ -49,6 +57,73 @@ pub fn landing(d: &Driver) -> Option<Landing> {
         back: rotate(&m, [0, 0, -0x1800]),
         side: rotate(&m, [0x1800, 0, 0]),
         push: rotate(&m, [0, 0, -0x200]),
+    })
+}
+
+/// What the ground throws: the emitter set of the terrain (`Terrain::em_OddFrame` and
+/// `em_EvenFrame`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kick {
+    Dirt,
+    /// Grass alternates between a light and a dark green from one tick to the next.
+    LightGrass,
+    DarkGrass,
+    Snow,
+}
+
+/// The streaks of this tick from the tires of a kart on dirt, grass or snow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spray {
+    pub kick: Kick,
+    /// Where each tire is, in game units from the kart's middle, in the world's axes.
+    pub tires: Vec<[i32; 3]>,
+    /// Turns a streak's velocity into the world's axes.
+    pub matrix: crate::Matrix,
+}
+
+/// The spray of the ground under a kart that is fast enough, on the ground, and not held back:
+/// from the rear tires, and from all four while drifting. `timer` is the frame counter.
+pub fn spray(d: &Driver, timer: u32) -> Option<Spray> {
+    use crate::terrain::terrain_type;
+    if d.actions_flag_set & actions::TOUCH_GROUND == 0
+        || d.actions_flag_set & actions::ACCEL_PREVENTION != 0
+    {
+        return None;
+    }
+    let fast = |speed: i16| (speed as i32).abs() >= SPRAY_MIN_SPEED;
+    if !fast(d.fire_speed) && !fast(d.speed_approx) {
+        return None;
+    }
+    let kick = match d.terrain_meta1 {
+        terrain_type::DIRT | terrain_type::SLOWDIRT => Kick::Dirt,
+        // The tick's parity picks the set: even ticks the light one.
+        terrain_type::GRASS | terrain_type::SLOWGRASS if timer & 1 == 0 => Kick::LightGrass,
+        terrain_type::GRASS | terrain_type::SLOWGRASS => Kick::DarkGrass,
+        terrain_type::SNOW => Kick::Snow,
+        _ => return None,
+    };
+    let (matrix, _) = crate::baked::inst_matrix(d);
+    // The loop counts 4, 3, 2, 1 while drifting and 2, 1 otherwise.
+    let tires: &[(i32, i32)] = if d.kart_state == kart_state::DRIFTING {
+        &[
+            (-SPRAY_TIRE_X, SPRAY_TIRE_FRONT_Z),
+            (SPRAY_TIRE_X, SPRAY_TIRE_FRONT_Z),
+            (-SPRAY_TIRE_X, SPRAY_TIRE_BACK_Z),
+            (SPRAY_TIRE_X, SPRAY_TIRE_BACK_Z),
+        ]
+    } else {
+        &[
+            (-SPRAY_TIRE_X, SPRAY_TIRE_BACK_Z),
+            (SPRAY_TIRE_X, SPRAY_TIRE_BACK_Z),
+        ]
+    };
+    Some(Spray {
+        kick,
+        tires: tires
+            .iter()
+            .map(|&(x, z)| rotate(&matrix, [x, SPRAY_TIRE_Y, z]))
+            .collect(),
+        matrix,
     })
 }
 
@@ -123,6 +198,41 @@ mod tests {
         assert_eq!(l.side, [0x1800, 0, 0]);
         d.jump_height_prev = 0x400;
         assert!(landing(&d).is_none());
+    }
+
+    #[test]
+    fn dirt_grass_and_snow_spray_from_the_rear_tires_and_all_four_in_a_drift() {
+        let mut d = kart();
+        d.actions_flag_set = actions::TOUCH_GROUND;
+        d.speed_approx = 0x400;
+        d.terrain_meta1 = terrain_type::DIRT;
+        let spray = spray(&d, 0).expect("spray");
+        assert_eq!(spray.kick, Kick::Dirt);
+        assert_eq!(spray.tires.len(), 2);
+        assert_eq!(spray.tires[0], [-0x1e, 0x0a, -0x14]);
+        d.kart_state = kart_state::DRIFTING;
+        assert_eq!(super::spray(&d, 0).unwrap().tires.len(), 4);
+        d.terrain_meta1 = terrain_type::GRASS;
+        assert_eq!(super::spray(&d, 2).unwrap().kick, Kick::LightGrass);
+        assert_eq!(super::spray(&d, 3).unwrap().kick, Kick::DarkGrass);
+    }
+
+    #[test]
+    fn nothing_sprays_when_slow_airborne_held_back_or_on_asphalt() {
+        let mut d = kart();
+        d.actions_flag_set = actions::TOUCH_GROUND;
+        d.speed_approx = 0x2ff;
+        d.terrain_meta1 = terrain_type::SNOW;
+        assert!(spray(&d, 0).is_none());
+        d.fire_speed = -0x300;
+        assert!(spray(&d, 0).is_some());
+        d.actions_flag_set |= actions::ACCEL_PREVENTION;
+        assert!(spray(&d, 0).is_none());
+        d.actions_flag_set = 0;
+        assert!(spray(&d, 0).is_none());
+        d.actions_flag_set = actions::TOUCH_GROUND;
+        d.terrain_meta1 = terrain_type::ASPHALT;
+        assert!(spray(&d, 0).is_none());
     }
 
     #[test]
