@@ -16,7 +16,7 @@ use vehicle::collide::Feedback;
 use vehicle::exhaust::Puff;
 use vehicle::lap::Lap;
 use vehicle::sim::{Racer, TickResult, spawn};
-use vehicle::sparks::{Landing, Wall};
+use vehicle::sparks::{Landing, Spray, Wall};
 use vehicle::{Driver, Effect, Env, Input, actions, kart_state};
 use weapon::Weapons;
 
@@ -122,6 +122,8 @@ pub struct KartTick {
     /// The sparks of a landing, and of the wall the kart scraped.
     pub landing: Option<Landing>,
     pub wall: Option<Wall>,
+    /// What dirt, grass or snow under the kart throws.
+    pub spray: Option<Spray>,
     /// The line the kart crossed, if it did.
     pub lap: Lap,
 }
@@ -582,13 +584,14 @@ impl Race {
             .zip(effects)
             .zip(results)
             .map(|((kart, mut effects), result)| {
-                let (landing, wall, puffs) = after_tick(&mut kart.driver, &env, &mut effects);
+                let (landing, wall, spray, puffs) = after_tick(&mut kart.driver, &env, &mut effects);
                 KartTick {
                     result,
                     effects,
                     puffs,
                     landing,
                     wall,
+                    spray,
                     lap: Lap::default(),
                 }
             })
@@ -661,16 +664,17 @@ fn after_tick(
     driver: &mut Driver,
     env: &Env,
     effects: &mut Vec<Effect>,
-) -> (Option<Landing>, Option<Wall>, Vec<Puff>) {
+) -> (Option<Landing>, Option<Wall>, Option<Spray>, Vec<Puff>) {
     // The pickup HUD gives the fruit that were picked up to the driver.
     vehicle::wumpa::hud_tick(driver, true, effects);
 
     // A kart that a plant ate has no particle procedure (`DRIVER_FUNC_PARTICLES`, which is
     // `VehEmitter_DriverMain` otherwise): no sparks, smoke, skid marks or ground sounds.
-    let (mut landing, mut wall, mut puffs) = (None, None, Vec::new());
+    let (mut landing, mut wall, mut spray, mut puffs) = (None, None, None, Vec::new());
     if driver.phys_state != vehicle::PhysState::PlantEaten {
         landing = vehicle::sparks::landing(driver);
         wall = vehicle::sparks::wall(driver);
+        spray = vehicle::sparks::spray(driver, env.timer);
         // The exhaust and the skid marks keep their state in the driver, so they run for every
         // kart even when nobody sees the particles.
         puffs = vehicle::exhaust::exhaust(driver);
@@ -680,7 +684,7 @@ fn after_tick(
         }
     }
     vehicle::turbo::tick(driver, env.elapsed_time_ms as i16, effects);
-    (landing, wall, puffs)
+    (landing, wall, spray, puffs)
 }
 
 /// FNV-1a over the text written to it: a hash of a value's `Debug`, with no text kept.

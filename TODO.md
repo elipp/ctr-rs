@@ -8,7 +8,6 @@
 - submerged in the mud in tiny arena looks off
 - While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled elsewhere.
 - Skyboxes have a hole in the top mid (probably a clear color issue?)
-- Grass/possibly other particle effects
 
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
