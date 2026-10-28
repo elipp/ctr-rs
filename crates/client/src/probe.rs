@@ -1,4 +1,4 @@
-//! Collision probe overlay: every frame, sweeps a segment from the camera
+//! Collision probe overlay of the viewer (`/debug viewer`): every frame, sweeps a segment from the camera
 //! through `coll` (the port of `COLL_FIXED_*`) and draws what it hits.
 //!
 //! * `F` cycles the probe: straight down (like the game's player search) or
@@ -47,8 +47,12 @@ impl Plugin for ProbePlugin {
             direction: Direction::Down,
             want_all: false,
         })
-        .add_systems(Startup, spawn_text)
-        .add_systems(Update, (toggles, run_probe).chain());
+        .add_systems(
+            Update,
+            (toggles, run_probe)
+                .chain()
+                .run_if(not(crate::drive::driving)),
+        );
     }
 }
 

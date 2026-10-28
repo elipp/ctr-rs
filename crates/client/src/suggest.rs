@@ -134,6 +134,28 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                 ],
             ),
+            node(
+                "level",
+                "How the level is built",
+                &[
+                    node(
+                        "hidden",
+                        "Untextured blocks and red-cornered faces",
+                        &[leaf("on", "Show them"), leaf("off", "Hide them")],
+                    ),
+                    node(
+                        "cull",
+                        "Back faces",
+                        &[leaf("on", "Cull them, as the game does"), leaf("off", "Draw them")],
+                    ),
+                    node(
+                        "colors",
+                        "Vertex colors",
+                        &[leaf("hi", "color_hi"), leaf("lo", "color_lo")],
+                    ),
+                ],
+            ),
+            leaf("viewer", "Switch between the race and the fly-through viewer"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
         ],
     ),

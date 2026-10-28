@@ -1,4 +1,4 @@
-//! Drive mode (`--drive`): the kart on the keyboard, simulated by the
+//! Drive mode (the default; `/debug viewer` leaves it): the kart on the keyboard, simulated by the
 //! `vehicle` crate once per game tick (30 Hz), drawn between the last two
 //! ticks, with a chase camera.
 //!
@@ -311,6 +311,12 @@ enum DemoMode {
 
 const DEMO_FILE: &str = "demo.ctr";
 
+/// Whether the race is on, and not the viewer (`/debug viewer`): the systems of the race run
+/// only then.
+pub(crate) fn driving(drive: Option<Res<Drive>>) -> bool {
+    drive.is_some()
+}
+
 pub struct DrivePlugin;
 
 impl Plugin for DrivePlugin {
@@ -320,7 +326,9 @@ impl Plugin for DrivePlugin {
             .add_systems(Startup, spawn_hud)
             .add_systems(
                 FixedUpdate,
-                (drive_tick, crate::flash::step, crate::projectile::tick).chain(),
+                (drive_tick, crate::flash::step, crate::projectile::tick)
+                    .chain()
+                    .run_if(driving),
             )
             .add_systems(
                 Update,
@@ -338,7 +346,8 @@ impl Plugin for DrivePlugin {
                     split_hud,
                     reserves_hud,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(driving),
             )
             .add_systems(
                 Update,
@@ -349,12 +358,14 @@ impl Plugin for DrivePlugin {
                     crate::mask::update.after(crate::kart::show),
                     crate::shield::update.after(crate::kart::show).after(chase),
                     crate::names::overhead.after(crate::kart::show).after(chase),
-                ),
+                )
+                    .run_if(driving),
             )
             .add_systems(
                 PostUpdate,
                 (crate::exhaust::update, crate::exhaust::update_sparks)
-                    .before(TransformSystems::Propagate),
+                    .before(TransformSystems::Propagate)
+                    .run_if(driving),
             );
     }
 }
