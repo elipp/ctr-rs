@@ -403,7 +403,11 @@ fn flame_jet_lit(header: &ModelHeader, rot: loader::lev::SVec3) -> ModelHeader {
     let m = vehicle::rotmat::rot_to_matrix(rot).m;
     // The matrix transposed, applied to the light.
     let light: [f32; 3] = std::array::from_fn(|i| {
-        (0..3).map(|j| m[j][i] as i32 * FLAME_JET_LIGHT[j]).sum::<i32>() as f32 / 4096.0 / 4096.0
+        (0..3)
+            .map(|j| m[j][i] as i32 * FLAME_JET_LIGHT[j])
+            .sum::<i32>() as f32
+            / 4096.0
+            / 4096.0
     });
     let mut lit = header.clone();
     for color in &mut lit.colors {
@@ -581,8 +585,8 @@ pub fn spawn(
                 if fix_crates {
                     pos.y += crate_fixup(level_id, n);
                 }
-                let fixed = Transform::from_translation(Vec3::from(to_world(pos)))
-                    .with_rotation(rotation);
+                let fixed =
+                    Transform::from_translation(Vec3::from(to_world(pos))).with_rotation(rotation);
                 (
                     Transform::default(),
                     Some(body(commands, fixed, CrateBody(i))),

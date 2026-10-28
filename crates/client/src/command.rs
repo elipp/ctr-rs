@@ -206,7 +206,8 @@ impl Action {
 
     /// `hidden on|off`, `cull on|off`, `colors hi|lo`, `crate-fixup on|off`, or nothing.
     fn level(line: &str) -> Result<Action, String> {
-        const USAGE: &str = "Usage: /debug level hidden on|off | cull on|off | colors hi|lo | crate-fixup on|off";
+        const USAGE: &str =
+            "Usage: /debug level hidden on|off | cull on|off | colors hi|lo | crate-fixup on|off";
         let (what, value) = word(line);
         let on_off = || match value {
             "on" => Ok(true),

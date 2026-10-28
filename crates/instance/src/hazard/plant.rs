@@ -9,7 +9,7 @@ use loader::lev::InstDef;
 use vehicle::rotmat::rot_to_matrix;
 use vehicle::{Matrix, Sound3D};
 
-use crate::{Contact, Context, Damage, Frames, Instance, Pose, Shape, Spit, Tick};
+use crate::{Contact, Context, Damage, Frames, Instance, Mines, Pose, Shape, Spit, Tick};
 
 /// `PlantAnim_*`: the model's animations. Grabbing a mine is unused.
 pub mod anim {
@@ -110,7 +110,8 @@ impl Plant {
         }
     }
 
-    /// One game tick. It looks for drivers in front of its mouth while it is hungry.
+    /// One game tick. It looks for drivers in front of its mouth while it is hungry, and for mines
+    /// while it grabs one.
     pub fn tick(&mut self, frames: &Frames, out: &mut Tick) {
         let sound = |id, plant: &Plant| Sound3D { id, pos: plant.pos };
         // A thread that switches procedures runs the new one at once.
@@ -166,6 +167,11 @@ impl Plant {
                 Phase::Grabbing => {
                     if self.more(frames) {
                         self.anim_frame += 1;
+                        // Its mouth closes on whatever mine is there too.
+                        out.contacts.push(Contact {
+                            mines: Mines::Only,
+                            ..self.mouth()
+                        });
                     } else {
                         self.start(Phase::Eating, anim::START_EAT);
                         continue;
@@ -395,9 +401,14 @@ mod tests {
             plant.tick(&FRAMES, &mut out);
             ticks += 1;
             assert!(ticks < 300);
-            // It does not look for another kart while it has one.
-            assert!(out.contacts.is_empty());
         }
+        // It does not look for another kart while it has one, but its grab sets off a mine, for
+        // each frame of the grab after the first.
+        assert!(out.contacts.iter().all(|c| c.mines == Mines::Only));
+        assert_eq!(
+            out.contacts.len(),
+            FRAMES[anim::GRAB_DRIVER as usize] as usize - 1
+        );
         let ids: Vec<u8> = out.sounds.iter().map(|s| s.id).collect();
         assert_eq!(ids, [GRAB_SFX, CHEW_SFX, CHEW_SFX, SPIT_SFX]);
         assert!(!plant.eating_player);

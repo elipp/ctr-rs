@@ -68,7 +68,11 @@ impl Spider {
     pub fn new(def: &InstDef, id: Option<usize>) -> Spider {
         let base_y = def.pos.y as i32;
         Spider {
-            pos: [def.pos.x as i32, base_y + HEIGHTS[0] as i32, def.pos.z as i32],
+            pos: [
+                def.pos.x as i32,
+                base_y + HEIGHTS[0] as i32,
+                def.pos.z as i32,
+            ],
             base_y,
             delay: DELAYS
                 .iter()
@@ -157,7 +161,7 @@ impl Spider {
         }
         out.contacts.push(Contact {
             voice: true,
-            ..Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND)
+            ..Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND).and_mines()
         });
     }
 }
@@ -234,7 +238,13 @@ mod tests {
         // Five wiggles of six frames, the last frame of each starting the next.
         let out = run(&mut spider, 6 * 5);
         assert_eq!((spider.anim_index, spider.anim_frame), (anim::DROP, 0));
-        assert_eq!(out.sounds, [Sound3D { id: DROP_SFX, pos: spider.pos }]);
+        assert_eq!(
+            out.sounds,
+            [Sound3D {
+                id: DROP_SFX,
+                pos: spider.pos
+            }]
+        );
         // Up there still: the roof is where the drop starts.
         assert_eq!(spider.pos[1], 50 + 0x4c0);
         run(&mut spider, 10);
@@ -270,7 +280,12 @@ mod tests {
         let mut spider = Spider::new(&def("spider#0"), Some(0));
         let contact = run(&mut spider, 1).contacts[0];
         assert_eq!(
-            (contact.damage, contact.hit_radius, contact.sound, contact.voice),
+            (
+                contact.damage,
+                contact.hit_radius,
+                contact.sound,
+                contact.voice
+            ),
             (Damage::Spin, 0x9000, 0x7b, true)
         );
     }

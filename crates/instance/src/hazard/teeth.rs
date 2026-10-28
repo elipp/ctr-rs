@@ -202,7 +202,11 @@ mod tests {
             scale: Default::default(),
             color_rgba: 0,
             flags: 0,
-            pos: SVec3 { x: 100, y: 0, z: 200 },
+            pos: SVec3 {
+                x: 100,
+                y: 0,
+                z: 200,
+            },
             rot: SVec3::default(),
             model_id: 0x70,
         })

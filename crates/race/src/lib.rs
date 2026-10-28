@@ -503,6 +503,14 @@ impl Race {
         for instance in hurt {
             self.objects.caught(instance, &mut self.last);
         }
+        // Then the mines in their reach, the ones dropped this tick too: the hazards' threads run
+        // after the karts' in retail.
+        let karts: Vec<[i32; 3]> = self
+            .karts
+            .iter()
+            .map(|k| vehicle::baked::inst_matrix(&k.driver).1)
+            .collect();
+        set_off_mines(&self.last.contacts, &karts, &mut self.weapons);
         let results = {
             let mut racers: Vec<Racer> = self
                 .karts
@@ -584,7 +592,8 @@ impl Race {
             .zip(effects)
             .zip(results)
             .map(|((kart, mut effects), result)| {
-                let (landing, wall, spray, puffs) = after_tick(&mut kart.driver, &env, &mut effects);
+                let (landing, wall, spray, puffs) =
+                    after_tick(&mut kart.driver, &env, &mut effects);
                 KartTick {
                     result,
                     effects,
@@ -615,6 +624,30 @@ impl Race {
     }
 }
 
+/// The hazards that look for mines set off the first in their reach (`RB_Hazard_ThCollide_Generic`),
+/// most of them only when no kart (at `karts`) is in reach, hurt or not. A mine's thread goes to
+/// the front of its bucket, so the newest is found first. One set off this tick is still there
+/// and stops the search, as a dead thread stays in its bucket until the frame ends.
+fn set_off_mines(
+    contacts: &[instance::Contact],
+    karts: &[[i32; 3]],
+    weapons: &mut weapon::Weapons,
+) {
+    for contact in contacts {
+        let look = match contact.mines {
+            instance::Mines::Ignored => false,
+            instance::Mines::IfNoDriver => !karts.iter().any(|&at| contact.hits(at)),
+            instance::Mines::Only => true,
+        };
+        if !look {
+            continue;
+        }
+        if let Some(index) = weapons.mines().iter().rposition(|m| contact.hits(m.pos)) {
+            weapons.set_off_mine(index);
+        }
+    }
+}
+
 /// What a kart does before the stages of a tick: the same for every kart, so that all clients
 /// play every kart the same way.
 fn before_tick(
@@ -627,7 +660,11 @@ fn before_tick(
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
     let (_, at) = vehicle::baked::inst_matrix(driver);
-    for contact in objects.contacts.iter().filter(|c| c.hits(at)) {
+    let drivers = objects
+        .contacts
+        .iter()
+        .filter(|c| c.mines != instance::Mines::Only);
+    for contact in drivers.filter(|c| c.hits(at)) {
         // A plant has one mouthful: the first kart it hurts is the one it eats.
         if contact.damage == instance::Damage::Eat && hurt.contains(&contact.instance) {
             continue;
@@ -760,5 +797,75 @@ mod tests {
         assert_eq!(lights_on(1), 3);
         assert_eq!(lights_on(0), 4);
         assert_eq!(lights_on(LIGHTS_FLOOR_MS), 4);
+    }
+
+    use instance::{Contact, Damage, Mines};
+    use weapon::mine::MineKind;
+
+    /// Mines at the x of `xs` (by the order they were dropped), and what a hazard at x = 0 that
+    /// reaches 100 units sets off, by x.
+    fn set_off_by(contact: Contact, karts: &[[i32; 3]], xs: &[i32]) -> Vec<i32> {
+        let mut weapons = weapon::Weapons::default();
+        for &x in xs {
+            weapons.place_mine(MineKind::Nitro, [x, 0, 0], 0);
+        }
+        set_off_mines(&[contact], karts, &mut weapons);
+        weapons
+            .mines()
+            .iter()
+            .filter(|m| m.is_dead())
+            .map(|m| m.pos[0])
+            .collect()
+    }
+
+    fn seal() -> Contact {
+        Contact::sphere([0, 0, 0], Damage::Spin, 100 * 100, 0)
+    }
+
+    #[test]
+    fn a_hazard_sets_off_the_newest_mine_in_its_reach_when_no_kart_is() {
+        assert_eq!(set_off_by(seal().and_mines(), &[], &[50, 500, 20]), [20]);
+        assert_eq!(set_off_by(seal().and_mines(), &[], &[500]), [] as [i32; 0]);
+    }
+
+    #[test]
+    fn a_kart_in_reach_keeps_the_mines_from_going_off_even_unhurt() {
+        assert_eq!(
+            set_off_by(seal().and_mines(), &[[0, 0, 90]], &[50]),
+            [] as [i32; 0]
+        );
+        assert_eq!(set_off_by(seal().and_mines(), &[[0, 0, 110]], &[50]), [50]);
+    }
+
+    #[test]
+    fn a_hazard_that_only_looks_for_drivers_sets_off_nothing() {
+        assert_eq!(set_off_by(seal(), &[], &[50]), [] as [i32; 0]);
+    }
+
+    #[test]
+    fn a_grab_sets_off_a_mine_with_the_kart_in_its_mouth() {
+        let grab = Contact {
+            mines: Mines::Only,
+            ..seal()
+        };
+        assert_eq!(set_off_by(grab, &[[0, 0, 0]], &[50]), [50]);
+    }
+
+    #[test]
+    fn a_contact_that_only_looks_for_mines_hurts_no_kart() {
+        let mut driver = Driver::default();
+        let (_, at) = vehicle::baked::inst_matrix(&driver);
+        let grab = Contact {
+            mines: Mines::Only,
+            ..Contact::sphere(at, Damage::Spin, 100 * 100, 0)
+        };
+        let objects = instance::Tick {
+            contacts: vec![grab],
+            ..Default::default()
+        };
+        let mut effects = Vec::new();
+        before_tick(&mut driver, &objects, &mut 0, &mut Vec::new(), &mut effects);
+        assert!(!driver.pending_spin);
+        assert!(effects.is_empty());
     }
 }

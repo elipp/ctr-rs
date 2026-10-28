@@ -1,12 +1,12 @@
 //! What the session reports (`net::Event`), taken in once a frame.
 
-use bevy::prelude::*;
-use net::Event;
+use super::commands::{copy_to_clipboard, net_info_text};
+use super::online::Online;
+use super::{ANNOUNCE_COLOR, Lobby, Member};
 use crate::maps;
 use crate::toast::Toast;
-use super::commands::{copy_to_clipboard, net_info_text};
-use super::{ANNOUNCE_COLOR, Lobby, Member};
-use super::online::Online;
+use bevy::prelude::*;
+use net::Event;
 
 /// How much of a new reading of the clocks' difference is taken in (they come 30 times a second
 /// from each player).
@@ -44,7 +44,11 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
                 );
             }
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
-            Event::Lobby { players, spectators, you } => roster = Some((players, spectators, you)),
+            Event::Lobby {
+                players,
+                spectators,
+                you,
+            } => roster = Some((players, spectators, you)),
             Event::Announce(text) => {
                 toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
@@ -350,4 +354,3 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
 
 /// How much of a new ping goes into the average that is kept.
 pub(super) const PING_SMOOTHING: f32 = 0.4;
-

@@ -85,24 +85,27 @@ impl WeatherView {
     /// The streaks `t` of the way from the last tick to this one, as the two ends in the world.
     fn lines(&self, t: f32) -> impl Iterator<Item = [Vec3; 2]> {
         let eye = self.eyes[0].lerp(self.eyes[1], t);
-        self.streaks[1].iter().enumerate().filter_map(move |(i, now)| {
-            let now = (*now)?;
-            let from = match self.streaks[0].get(i) {
-                Some(Some(before)) if before[0][0].abs_diff(now[0][0]) < WRAP_JUMP as u32 => {
-                    *before
-                }
-                _ => now,
-            };
-            // Camera-relative, so the lerp of the eye and the lerp of the streak add up to the
-            // streak's own movement through the world.
-            let lerp = |a: [i32; 3], b: [i32; 3]| {
-                Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32)
-                    .lerp(Vec3::new(b[0] as f32, b[1] as f32, b[2] as f32), t)
-                    * SCALE
-            };
-            let (begin, end) = (eye + lerp(from[0], now[0]), eye + lerp(from[1], now[1]));
-            Some([end + (begin - end) * STREAK_STRETCH, end])
-        })
+        self.streaks[1]
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, now)| {
+                let now = (*now)?;
+                let from = match self.streaks[0].get(i) {
+                    Some(Some(before)) if before[0][0].abs_diff(now[0][0]) < WRAP_JUMP as u32 => {
+                        *before
+                    }
+                    _ => now,
+                };
+                // Camera-relative, so the lerp of the eye and the lerp of the streak add up to the
+                // streak's own movement through the world.
+                let lerp = |a: [i32; 3], b: [i32; 3]| {
+                    Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32)
+                        .lerp(Vec3::new(b[0] as f32, b[1] as f32, b[2] as f32), t)
+                        * SCALE
+                };
+                let (begin, end) = (eye + lerp(from[0], now[0]), eye + lerp(from[1], now[1]));
+                Some([end + (begin - end) * STREAK_STRETCH, end])
+            })
     }
 
     /// The colours of the two ends of a streak. The GPU adds a streak to the picture (all of it,
