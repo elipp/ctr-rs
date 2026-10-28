@@ -1,9 +1,11 @@
-//! The sound effects (`game/HOWL/HOWL_OtherFX.c`): what starts them on a channel and stops them.
+//! The sound effects (`game/HOWL/HOWL_OtherFX.c`) and the engines'
+//! loops (`EngineAudio_*` of `HOWL_Engine.c`): what starts them on a channel, changes them as
+//! they play and stops them.
 
-use loader::howl::{OtherFx, other_fx_flags};
+use loader::howl::{EngineFx, OtherFx, other_fx_flags};
 
 use crate::channel::{self, AD, Attr, Kind, SR, flags, update};
-use crate::tables::DISTORT_OTHER_FX;
+use crate::tables::{DISTORT_ENGINE, DISTORT_OTHER_FX};
 use crate::{Howl, Sfx};
 
 /// The distortion that keeps a sound at its own pitch (`HOWL_SFX_DISTORTION_NONE`).
@@ -102,6 +104,65 @@ impl Howl {
             .destroy_matching(Kind::OtherFx, id as u32, 0xffff);
     }
 
+    /// `EngineAudio_InitOnce`: engine loop `id` starts on a channel of its own, at `sfx`. False
+    /// if it is not loaded or all channels are taken.
+    pub fn start_engine(&mut self, id: u16, sfx: Sfx) -> bool {
+        let Some(&fx) = self.engine_fx.get(id as usize) else {
+            return false;
+        };
+        if !self.spu.has(fx.sample) {
+            return false;
+        }
+        let attr = Attr {
+            reverb: sfx.echo as u16,
+            ..self.engine_fx_attr(&fx, sfx.volume, sfx.pan, sfx.distort)
+        };
+        let Some(channel) = self.channels.alloc(update::ALL_ATTRS, &attr) else {
+            return false;
+        };
+        let stats = self.channels.stats_mut(channel);
+        stats.kind = Kind::EngineFx;
+        stats.echo = sfx.echo as u8;
+        stats.vol = sfx.volume;
+        stats.distort = sfx.distort;
+        stats.lr = sfx.pan;
+        stats.time_left = 0;
+        stats.sound = id as u32;
+        stats.flags |= flags::LOOPS;
+        true
+    }
+
+    /// `EngineAudio_Recalculate`: engine loop `id` plays on at `sfx`. (Retail turns it down
+    /// for two or more players on one screen; there is one here.)
+    pub fn set_engine(&mut self, id: u16, sfx: Sfx) {
+        let Some(&fx) = self.engine_fx.get(id as usize) else {
+            return;
+        };
+        let volume = self.volume_fx as u32 * fx.volume as u32 * sfx.volume as u32;
+        let attr = Attr {
+            volume: channel::volume(volume >> 10, sfx.pan, self.stereo),
+            pitch: distorted(fx.pitch, sfx.distort, &DISTORT_ENGINE),
+            reverb: sfx.echo as u16,
+            ..Attr::default()
+        };
+        let edited = self
+            .channels
+            .edit(Kind::EngineFx, id as u32, update::DYNAMIC_ATTRS, &attr);
+        if let Some(channel) = edited {
+            let stats = self.channels.stats_mut(channel);
+            stats.echo = sfx.echo as u8;
+            stats.vol = sfx.volume;
+            stats.distort = sfx.distort;
+            stats.lr = sfx.pan;
+        }
+    }
+
+    /// `EngineAudio_Stop`.
+    pub fn stop_engine(&mut self, id: u16) {
+        self.channels
+            .destroy_matching(Kind::EngineFx, id as u32, u32::MAX);
+    }
+
     /// `howl_InitChannelAttr_OtherFX`, without the echo.
     pub(crate) fn other_fx_attr(&self, fx: &OtherFx, vol: u8, pan: u8, distort: u8) -> Attr {
         let volume = self.fx_volume(fx) * fx.volume as u32 * vol as u32;
@@ -110,6 +171,19 @@ impl Howl {
             ad: AD,
             sr: SR,
             pitch: distorted(fx.pitch, distort, &DISTORT_OTHER_FX),
+            reverb: 0,
+            volume: channel::volume(volume >> 10, pan, self.stereo),
+        }
+    }
+
+    /// `howl_InitChannelAttr_EngineFX`, without the echo.
+    pub(crate) fn engine_fx_attr(&self, fx: &EngineFx, vol: u8, pan: u8, distort: u8) -> Attr {
+        let volume = self.volume_fx as u32 * fx.volume as u32 * vol as u32;
+        Attr {
+            sample: fx.sample,
+            ad: AD,
+            sr: SR,
+            pitch: distorted(fx.pitch, distort, &DISTORT_ENGINE),
             reverb: 0,
             volume: channel::volume(volume >> 10, pan, self.stereo),
         }
@@ -136,7 +210,7 @@ mod tests {
     use super::*;
     use crate::spu::Samples;
 
-    /// Sound effect 0 is a one-shot held 10/300 s, 1 loops.
+    /// Sound effect 0 is a one-shot held 10/300 s, 1 loops; engine 0 loops.
     fn howl() -> Howl {
         let samples: Samples = vec![Some(vec![0u8; 64].into_boxed_slice())];
         let fx = |flags| OtherFx {
@@ -146,7 +220,17 @@ mod tests {
             sample: 0,
             duration: 10,
         };
-        Howl::new(vec![fx(0), fx(other_fx_flags::LOOPS)], samples)
+        let engine = EngineFx {
+            flags: 0,
+            volume: 200,
+            pitch: 0x800,
+            sample: 0,
+        };
+        Howl::new(
+            vec![fx(0), fx(other_fx_flags::LOOPS)],
+            vec![engine],
+            samples,
+        )
     }
 
     #[test]
@@ -172,10 +256,33 @@ mod tests {
     }
 
     #[test]
-    fn the_distortion_is_an_octave_in_128() {
+    fn an_engine_loops_at_what_it_is_set_to() {
+        let mut howl = howl();
+        assert!(howl.start_engine(0, Sfx::SILENT));
+        howl.vsync();
+        let sfx = Sfx {
+            volume: 0x80,
+            distort: 0x80 + 64,
+            ..Sfx::SILENT
+        };
+        howl.set_engine(0, sfx);
+        howl.vsync();
+        // 64 steps of distortion is an octave up.
+        assert_eq!(howl.channels.stats(0).distort, 0x80 + 64);
+        for _ in 0..100 {
+            howl.vsync();
+        }
+        assert_eq!(howl.channels.taken(), [0]);
+        howl.stop_engine(0);
+        assert!(howl.channels.taken().is_empty());
+    }
+
+    #[test]
+    fn the_distortions_are_an_octave_in_128_and_in_64() {
         assert_eq!(distorted(0x1000, 0x80, &DISTORT_OTHER_FX), 0x1000);
         assert_eq!(distorted(0x1000, 0xff, &DISTORT_OTHER_FX), 0x1fd3);
         assert_eq!(distorted(0x1000, 0x00, &DISTORT_OTHER_FX), 0x800);
+        assert_eq!(distorted(0x1000, 0xc0, &DISTORT_ENGINE), 0x2000);
     }
 
     #[test]

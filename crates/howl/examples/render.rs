@@ -2,23 +2,26 @@
 //! without the game:
 //!
 //! ```text
-//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46
+//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16
 //! ```
 //!
 //! A number is a sound effect, played until its time is up (one that loops is stopped after two
-//! seconds). The disc image is `CTR_BIN`, or `assets/ctr-u.bin`.
+//! seconds). `e` and a number is an engine loop, revved from idle to the top and back over four
+//! seconds. The disc image is `CTR_BIN`, or `assets/ctr-u.bin`.
 
 use std::io::Write;
 use std::path::PathBuf;
 
 use howl::{AntiSpam, Howl, Sfx};
 
-/// A sixtieth of a second of output.
+/// A sixtieth of a second of output: the engine is set again every one, as the game does.
 const BLANK: usize = howl::spu::RATE as usize / 60;
 
 fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
-    let out = args.next().expect("usage: render <out.wav> <sound>...");
+    let out = args
+        .next()
+        .expect("usage: render <out.wav> <sound or eN>...");
     let disc = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -37,21 +40,45 @@ fn main() -> std::io::Result<()> {
             Some(hex) => u16::from_str_radix(hex, 16),
             None => s.parse(),
         };
-        let id = number(&arg).expect("a sound number");
-        let Some(sound) = howl.play(id, AntiSpam::Off, sfx) else {
-            eprintln!("sound {arg} does not play");
-            continue;
-        };
-        let fx = howl.other_fx()[id as usize];
-        let loops = fx.flags & loader::howl::other_fx_flags::LOOPS != 0;
-        // Its duration is in 300ths of a second, 5 a blank.
-        let held = if loops {
-            120
+        if let Some(engine) = arg.strip_prefix('e') {
+            let id = number(engine).expect("an engine number");
+            howl.start_engine(
+                id,
+                Sfx {
+                    echo: sfx.echo,
+                    ..Sfx::SILENT
+                },
+            );
+            for i in 0..240 {
+                // Up for two seconds, down for two: the volume and distortion of
+                // `EngineSound_Player` from idle (0x82, 0x3c) to full (0xe6, 200).
+                let t = if i < 120 { i } else { 240 - i };
+                let revved = Sfx {
+                    volume: (0x82 + (0xe6 - 0x82) * t / 120) as u8,
+                    distort: (0x3c + (200 - 0x3c) * t / 120) as u8,
+                    ..sfx
+                };
+                howl.set_engine(id, revved);
+                blank(&mut howl, 1);
+            }
+            howl.stop_engine(id);
         } else {
-            fx.duration as usize / 5 + 1
-        };
-        blank(&mut howl, held);
-        howl.stop(sound);
+            let id = number(&arg).expect("a sound number");
+            let Some(sound) = howl.play(id, AntiSpam::Off, sfx) else {
+                eprintln!("sound {arg} does not play");
+                continue;
+            };
+            let fx = howl.other_fx()[id as usize];
+            let loops = fx.flags & loader::howl::other_fx_flags::LOOPS != 0;
+            // Its duration is in 300ths of a second, 5 a blank.
+            let held = if loops {
+                120
+            } else {
+                fx.duration as usize / 5 + 1
+            };
+            blank(&mut howl, held);
+            howl.stop(sound);
+        }
         blank(&mut howl, 12);
     }
 

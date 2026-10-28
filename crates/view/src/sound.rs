@@ -1,11 +1,15 @@
 //! The game's sounds, which the sound engine of the `howl` crate plays: the beeps of the traffic
-//! lights, and what the karts' ticks ask for ([`vehicle::Effect`]). Our kart's play
+//! lights, what the karts' ticks ask for ([`vehicle::Effect`]), and the engines. Our kart's play
 //! as retail plays a player's, in the middle; the other karts' are heard from where they are, as
 //! `PlaySound3D` hears a sound from the camera (see `DIVERGENCE.md`).
 //!
 //! The sound engine is one [`Howl`] that the game and the audio thread share: the game starts,
 //! changes and stops sounds in it, and Bevy plays the samples it renders ([`Mixer`]). Rendering
 //! is the engine's clock too (the SPU's vertical blank, when sounds start, change and end).
+//!
+//! The engines loop (`EngineAudio_InitOnce`) at what `vehicle::engine_sound` makes of their
+//! karts each tick (`EngineAudio_Recalculate`): ours on our class's loop, and the two other
+//! karts nearest the camera on the two loops retail gives the AIs (`EngineSound_NearestAIs`).
 
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -15,12 +19,20 @@ use bevy::prelude::*;
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION};
 use race::{KartTick, Light, Race};
 use render::mesh::SCALE;
-use vehicle::Effect;
 use vehicle::calc::map_to_range;
+use vehicle::engine_sound::{EngineSound, EngineVoice, FarVoice};
+use vehicle::stats::CHARACTER_ENGINES;
+use vehicle::{Driver, Effect, actions};
 
 /// `DotLights_AudioAndVideo`: a red light comes on, and the green.
 const RED_LIGHT_SFX: u16 = 0x45;
 const GREEN_LIGHT_SFX: u16 = 0x46;
+
+/// An engine class has a loop for each of four players (`engine * 4 + driverID`); ours is the
+/// first player's.
+const ENGINES_PER_CLASS: u16 = 4;
+/// The loops of the two other karts nearest the camera: the AIs' (`EngineSound_NearestAIs`).
+const FAR_ENGINES: [u16; 2] = [0x10, 0x11];
 
 /// `PlaySound3D`: a sound this far from the camera or farther is not heard, and one this near
 /// or nearer is at full volume, in level units.
@@ -35,6 +47,7 @@ pub struct SoundPlugin;
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<Mixer>()
+            .init_resource::<Kept>()
             .add_systems(Startup, start_mixer);
     }
 }
@@ -48,7 +61,7 @@ impl Sounds {
     pub fn load(path: &std::path::Path) -> Sounds {
         let howl = Howl::read(path).unwrap_or_else(|e| {
             warn!("no sounds: {}: {e}", path.display());
-            Howl::new(Vec::new(), Vec::new())
+            Howl::new(Vec::new(), Vec::new(), Vec::new())
         });
         Sounds(Arc::new(Mutex::new(howl)))
     }
@@ -119,16 +132,31 @@ impl Source for Output {
     }
 }
 
+/// What the game's sounds keep between ticks.
+#[derive(Resource, Default)]
+struct Kept {
+    /// The engine loops that play: ours, then the two of the other karts nearest the camera.
+    engine_loops: Option<[u16; 3]>,
+    /// By slot.
+    engines: Vec<EngineSound>,
+    /// What the two loops of the nearest others played last.
+    far: [FarVoice; 2],
+    /// The last tick heard: a race that starts again starts everything again.
+    tick: u32,
+}
+
 /// What plays the game's sounds.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct Sfx<'w> {
     sounds: Res<'w, Sounds>,
+    kept: ResMut<'w, Kept>,
 }
 
 impl Sfx<'_> {
-    /// What tick `tick` of `race` asks to be heard: the traffic light that came on, and each
-    /// kart's sounds (`karts`, by slot). Ours (`own`) play in the middle, the others' are heard
-    /// from where they are (`places`, in world space, by slot) by the camera `ear`.
+    /// What tick `tick` of `race` asks to be heard: the traffic light that came on, the engines,
+    /// and each kart's sounds (`karts`, by slot). Ours (`own`) play
+    /// in the middle, the others' are heard from where they are (`places`, in world space, by
+    /// slot) by the camera `ear`. A race that starts again first stops every sound.
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
@@ -139,9 +167,24 @@ impl Sfx<'_> {
         places: &[Vec3],
         ear: &Transform,
     ) {
+        let drivers: Vec<&Driver> = race.karts.iter().map(|kart| &kart.driver).collect();
+        let drivers = &drivers[..];
         let light = race.light;
+        if drivers.get(own).is_none() {
+            return;
+        }
         let mut sounds = self.sounds.lock();
+        let kept = &mut *self.kept;
+        if tick < kept.tick || kept.engines.len() != drivers.len() {
+            sounds.stop_all(true);
+            *kept = Kept {
+                engines: vec![EngineSound::default(); drivers.len()],
+                ..Kept::default()
+            };
+        }
+        kept.tick = tick;
         sounds.frame = tick;
+        engines(&mut sounds, kept, drivers, own, places, ear);
 
         if let Some(light) = light {
             let id = match light {
@@ -180,6 +223,70 @@ impl Sfx<'_> {
                 }
             }
         }
+    }
+}
+
+/// The engines after a tick: ours (`own`) as `EngineSound_Player` hears it, and the two other
+/// karts nearest the camera `ear` as `EngineSound_NearestAIs` does (`places` in world space, by
+/// slot). Another engine of ours starts the loops again.
+fn engines(
+    sounds: &mut Howl,
+    kept: &mut Kept,
+    drivers: &[&Driver],
+    own: usize,
+    places: &[Vec3],
+    ear: &Transform,
+) {
+    let ours = drivers[own];
+    let class = CHARACTER_ENGINES
+        .get(ours.character as usize)
+        .map_or(0, |&class| class as u16);
+    let loops = [class * ENGINES_PER_CLASS, FAR_ENGINES[0], FAR_ENGINES[1]];
+    if kept.engine_loops != Some(loops) {
+        for id in kept.engine_loops.take().into_iter().flatten() {
+            sounds.stop_engine(id);
+        }
+        // `VehBirth_EngineAudio_AllPlayers`, and `MainInit` for the AIs'.
+        for id in loops {
+            sounds.start_engine(id, howl::Sfx::SILENT);
+        }
+        kept.engine_loops = Some(loops);
+        kept.engines = vec![EngineSound::default(); drivers.len()];
+        kept.far = Default::default();
+    }
+    let voice = kept.engines[own].player(ours);
+    sounds.set_engine(loops[0], engine_sfx(voice));
+
+    // The nearest and the next nearest, the first found of equals.
+    let mut nearest = [(None, i32::MAX); 2];
+    for (slot, &at) in places.iter().enumerate().take(drivers.len()) {
+        if slot == own {
+            continue;
+        }
+        let distance = ((at - ear.translation).length() / SCALE) as i32;
+        if distance < nearest[0].1 {
+            nearest = [(Some(slot), distance), nearest[0]];
+        } else if distance < nearest[1].1 {
+            nearest[1] = (Some(slot), distance);
+        }
+    }
+    let echo = ours.actions_flag_set & actions::ENGINE_ECHO != 0;
+    for (i, (slot, distance)) in nearest.into_iter().enumerate() {
+        let sfx = slot.map_or(howl::Sfx::SILENT, |slot| {
+            let pan = CENTRE as i32 + side_of(ear, places[slot]);
+            let kart = &mut kept.engines[slot];
+            engine_sfx(kart.far(drivers[slot], distance, pan, &mut kept.far[i], echo))
+        });
+        sounds.set_engine(loops[1 + i], sfx);
+    }
+}
+
+fn engine_sfx(voice: EngineVoice) -> howl::Sfx {
+    howl::Sfx {
+        volume: voice.volume,
+        distort: voice.distort,
+        pan: voice.pan,
+        echo: voice.echo,
     }
 }
 
@@ -246,7 +353,7 @@ mod tests {
 
     #[test]
     fn the_mixer_plays_what_the_engine_renders_left_then_right() {
-        let howl = Arc::new(Mutex::new(Howl::new(Vec::new(), Vec::new())));
+        let howl = Arc::new(Mutex::new(Howl::new(Vec::new(), Vec::new(), Vec::new())));
         let mut output = Mixer(howl).decoder();
         let samples: Vec<f32> = output.by_ref().take(4 * BLOCK).collect();
         assert_eq!(samples, vec![0.0; 4 * BLOCK]);

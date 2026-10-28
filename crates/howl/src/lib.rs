@@ -7,8 +7,8 @@
 //! the sounds' time and passes what changed on to the voices (`howl_PlayAudio_Update`), so
 //! [`Howl::render`] is the clock of the sounds as the console's is.
 //!
-//! Not ported yet: the engines, the voice lines, the music, the banks (every sample a sound
-//! effect plays is loaded), and the volume options.
+//! Not ported yet: the voice lines, the music, the banks (every sample a sound effect or an
+//! engine plays is loaded), and the volume options.
 
 pub mod channel;
 pub mod fx;
@@ -19,7 +19,7 @@ pub mod tables;
 use std::io;
 use std::path::Path;
 
-use loader::howl::OtherFx;
+use loader::howl::{EngineFx, OtherFx};
 
 use channel::Channels;
 pub use fx::{AntiSpam, NO_DISTORTION, Sound, crash_sound};
@@ -62,6 +62,7 @@ pub struct Howl {
     pub(crate) spu: Spu,
     pub(crate) channels: Channels,
     pub(crate) other_fx: Vec<OtherFx>,
+    pub(crate) engine_fx: Vec<EngineFx>,
     /// `vol_FX` and `vol_Voice`.
     pub volume_fx: u8,
     pub volume_voice: u8,
@@ -77,11 +78,12 @@ pub struct Howl {
 
 impl Howl {
     /// `howl_InitGlobals`.
-    pub fn new(other_fx: Vec<OtherFx>, samples: Samples) -> Howl {
+    pub fn new(other_fx: Vec<OtherFx>, engine_fx: Vec<EngineFx>, samples: Samples) -> Howl {
         Howl {
             spu: Spu::new(samples),
             channels: Channels::default(),
             other_fx,
+            engine_fx,
             volume_fx: 215,
             volume_voice: 255,
             stereo: true,
@@ -91,18 +93,19 @@ impl Howl {
         }
     }
 
-    /// Reads `SOUNDS/KART.HWL` from the disc image at `path`: its sound effects, and the ADPCM of
-    /// their samples.
+    /// Reads `SOUNDS/KART.HWL` from the disc image at `path`: its sound effects and engines, and
+    /// the ADPCM of their samples.
     pub fn read(path: &Path) -> io::Result<Howl> {
         let (mut disc, header) = loader::disc::open_howl(path)?;
         let mut samples: Samples = vec![None; header.sample_sizes.len()];
-        for sample in header.other_fx.iter().map(|fx| fx.sample) {
+        let used = header.other_fx.iter().map(|fx| fx.sample);
+        for sample in used.chain(header.engine_fx.iter().map(|fx| fx.sample)) {
             let Some(slot @ None) = samples.get_mut(sample as usize) else {
                 continue;
             };
             *slot = header.adpcm(&mut disc, sample)?.map(Vec::into_boxed_slice);
         }
-        Ok(Howl::new(header.other_fx, samples))
+        Ok(Howl::new(header.other_fx, header.engine_fx, samples))
     }
 
     /// The sound effects, by number.
@@ -127,6 +130,11 @@ impl Howl {
     pub fn vsync(&mut self) {
         self.channels.run_timers();
         self.channels.update(&mut self.spu);
+    }
+
+    /// `howl_StopAudio`: every sound stops but, unless `all_fx`, the menu's.
+    pub fn stop_all(&mut self, all_fx: bool) {
+        self.channels.destroy_all(all_fx);
     }
 }
 
@@ -155,7 +163,7 @@ mod tests {
             sample: 0,
             duration: 0,
         };
-        Howl::new(vec![fx], vec![Some(adpcm.into_boxed_slice())])
+        Howl::new(vec![fx], vec![], vec![Some(adpcm.into_boxed_slice())])
     }
 
     #[test]
