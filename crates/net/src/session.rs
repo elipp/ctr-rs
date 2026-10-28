@@ -436,10 +436,20 @@ pub(crate) async fn run(
                         }
                     }
                     Message::Checksum { epoch: sent, tick, hash } => {
-                        if sent == epoch && let Some(slot) = plan.as_ref().and_then(|plan| plan.slot_of(from))
-                            && links.contains_key(&from)
-                        {
-                            io.event(Event::Checksum { slot, tick, hash });
+                        let slot = plan.as_ref().and_then(|plan| plan.slot_of(from));
+                        let linked = links.contains_key(&from);
+                        match slot {
+                            Some(slot) if sent == epoch && linked => {
+                                io.event(Event::Checksum { slot, tick, hash });
+                            }
+                            _ => io.event(Event::ChecksumDropped {
+                                from,
+                                tick,
+                                sent,
+                                epoch,
+                                planned: slot.is_some(),
+                                linked,
+                            }),
                         }
                     }
                     // A guest asks for a track the host chose.

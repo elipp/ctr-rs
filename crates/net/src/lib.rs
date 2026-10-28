@@ -111,6 +111,16 @@ pub enum Event {
     Announce(String),
     /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
     Checksum { slot: usize, tick: Tick, hash: u64 },
+    /// A hash from `from` that was not taken in, and why: it is of another race (`sent` is not
+    /// our `epoch`), or we know of no such player in the race (`planned`) or have no link to it.
+    ChecksumDropped {
+        from: EndpointId,
+        tick: Tick,
+        sent: u32,
+        epoch: u32,
+        planned: bool,
+        linked: bool,
+    },
     /// The host stopped the race (see [`Session::stop`]).
     Stopped,
     /// The player in `slot` left the race. The game answers with [`Session::have`] once it has

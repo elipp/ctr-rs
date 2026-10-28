@@ -711,6 +711,7 @@ fn drive_tick(
                 net.found([race::desync::Mismatch {
                     tick: hole.expected,
                     slot,
+                    hashes: None,
                 }]);
             }
             sim.race.leave(slot);
