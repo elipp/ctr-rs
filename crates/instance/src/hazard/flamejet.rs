@@ -5,7 +5,7 @@ use loader::lev::InstDef;
 use vehicle::rotmat::rot_to_matrix;
 use vehicle::{Matrix, Sound3D};
 
-use crate::{Contact, Context, Damage, Flame, Instance, Shape, Tick};
+use crate::{Contact, Context, Damage, Flame, Instance, Mines, Shape, Tick};
 
 /// `fjBounds`: the box in front of the nozzle, in the jet's own space. It reaches 320 units.
 const MIN: [i32; 3] = [-0x40, -0x40, 0];
@@ -74,6 +74,7 @@ impl FlameJet {
                     min: MIN,
                     max: MAX,
                 },
+                mines: Mines::IfNoDriver,
                 ..Contact::sphere(self.pos, Damage::Burn, 0, 0)
             });
         } else if self.cycle_timer > LAST_TICK {

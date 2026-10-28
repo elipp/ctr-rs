@@ -85,8 +85,8 @@ impl Seal {
             match self.phase {
                 Phase::Moving => {
                     for a in 0..3 {
-                        self.pos[a] = self.start[a] as i32
-                            - self.dist * self.vel[a] as i32 / SLIDE_TICKS;
+                        self.pos[a] =
+                            self.start[a] as i32 - self.dist * self.vel[a] as i32 / SLIDE_TICKS;
                     }
                     let sliding = if self.away {
                         self.dist < SLIDE_TICKS
@@ -115,7 +115,8 @@ impl Seal {
                         let slant = |curr: i16, desired: i16| {
                             interpolate(curr, desired.wrapping_neg(), SLANT_SPEED)
                         };
-                        self.rot_curr.y = interpolate(self.rot_curr.y, self.turn_around_y, TURN_SPEED);
+                        self.rot_curr.y =
+                            interpolate(self.rot_curr.y, self.turn_around_y, TURN_SPEED);
                         self.rot_curr.x = slant(self.rot_curr.x, self.rot_desired.x);
                         self.rot_curr.z = slant(self.rot_curr.z, self.rot_desired.z);
                         self.matrix = rot_to_matrix(self.rot_curr);
@@ -129,7 +130,7 @@ impl Seal {
                 }
             }
             out.contacts
-                .push(Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND));
+                .push(Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND).and_mines());
             return;
         }
     }
@@ -175,11 +176,7 @@ mod tests {
             scale: Default::default(),
             color_rgba: 0,
             flags: 0,
-            pos: SVec3 {
-                x: 7,
-                y: 8,
-                z: 9,
-            },
+            pos: SVec3 { x: 7, y: 8, z: 9 },
             rot: SVec3 {
                 x: 20,
                 y: 0x400,

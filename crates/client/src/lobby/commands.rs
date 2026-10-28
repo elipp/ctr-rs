@@ -1,12 +1,12 @@
 //! The lobby's commands (`/lobby`, `/race`, `/net`, `/cache`) and what they answer.
 
-use bevy::prelude::*;
+use super::countdown::Then;
+use super::progress::RollbackToasts;
+use super::{ANNOUNCE_COLOR, Lobby};
 use crate::command::Action;
 use crate::maps;
 use crate::toast::Toast;
-use super::countdown::Then;
-use super::{ANNOUNCE_COLOR, Lobby};
-use super::progress::RollbackToasts;
+use bevy::prelude::*;
 
 /// Puts `text` on the system clipboard. It is done on a thread of its own: on Linux the clipboard's
 /// owner has to stay up to serve the paste (until something else is copied), and a failure is only
@@ -33,7 +33,9 @@ pub(super) fn copy_to_clipboard(text: String) {
 /// Why `action` cannot be done now, if it cannot.
 pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
     Some(match action {
-        Action::CreateLobby | Action::JoinLobby(_) | Action::SpectateLobby(_) if lobby.is_open() => {
+        Action::CreateLobby | Action::JoinLobby(_) | Action::SpectateLobby(_)
+            if lobby.is_open() =>
+        {
             "Close the lobby first (/lobby close)"
         }
         Action::ToggleSpectator if !lobby.is_open() || !lobby.joined => {
@@ -209,4 +211,3 @@ pub(super) fn net_info_text(peers: &[net::PeerInfo]) -> String {
     }
     lines.join("\n")
 }
-

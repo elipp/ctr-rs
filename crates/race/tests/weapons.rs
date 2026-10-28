@@ -790,3 +790,62 @@ fn a_shot_shield_flies_straight_and_blasts_the_kart_in_its_way() {
     assert_eq!(race.last_weapons.explosions[0].kind, Kind::Shield);
     assert!(race.karts[1].driver.pending_tumble);
 }
+
+/// Polar Pass with one kart, a tick on, and the contact of its first seal.
+fn seal_race() -> Option<(Level, Race, instance::Contact)> {
+    let (level, mut race) = race_on(LevelId::POLAR_PASS, 1, |_| {})?;
+    race.tick(&level, &fire_pads(1, false));
+    let seal = *race
+        .last
+        .contacts
+        .iter()
+        .find(|c| level.instances[c.instance].model_name == "seal")
+        .expect("the level has a seal");
+    Some((level, race, seal))
+}
+
+/// A Nitro crate in a seal's way goes off when the seal reaches it, with a plain explosion and
+/// nobody hurt (`RB_CheckHazardCollisions`' mine bucket).
+#[test]
+fn a_seal_sets_off_the_mine_in_its_way() {
+    use weapon::mine::MineKind;
+
+    let Some((level, mut race, seal)) = seal_race() else {
+        return;
+    };
+    race.weapons.place_mine(MineKind::Nitro, seal.pos, 0);
+    race.tick(&level, &fire_pads(1, false));
+    let went_off: Vec<_> = race
+        .last_weapons
+        .detonations
+        .iter()
+        .map(|d| (d.kind, d.pos, d.blowup))
+        .collect();
+    assert_eq!(went_off, [(MineKind::Nitro, seal.pos, false)]);
+    assert!(race.last_weapons.hits.is_empty());
+}
+
+/// A kart in the seal's reach is what it hits: the mine there lies on.
+#[test]
+fn a_seal_with_a_kart_in_reach_leaves_the_mine_be() {
+    use weapon::mine::MineKind;
+
+    let Some((level, mut race, seal)) = seal_race() else {
+        return;
+    };
+    race.weapons.place_mine(MineKind::GreenBeaker, seal.pos, 0);
+    // Above the seal, in its reach (128) and out of the beaker's own (80).
+    let [x, y, z] = seal.pos;
+    race.karts[0].driver.pos_curr = math::Vec3 {
+        x: x << 8,
+        y: (y + 90) << 8,
+        z: z << 8,
+    };
+    // (Where the hazards find it.)
+    race.karts[0].driver.inst_pos = [x, y + 90, z];
+    race.tick(&level, &fire_pads(1, false));
+    assert_eq!(race.karts[0].driver.kart_state, kart_state::SPINNING);
+    assert!(race.last_weapons.detonations.is_empty());
+    assert!(race.last_weapons.hits.is_empty());
+    assert!(race.weapons.mines().iter().all(|m| !m.is_dead()));
+}

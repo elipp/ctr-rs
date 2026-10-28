@@ -26,8 +26,8 @@ use crate::maps;
 
 use commands::run;
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
-use hud::waiting;
 pub use hud::spawn_waiting;
+use hud::waiting;
 pub use online::Online;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
 use report::report;
@@ -283,4 +283,3 @@ impl Plugin for LobbyPlugin {
 
 /// What the host says to everyone is yellow.
 const ANNOUNCE_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);
-

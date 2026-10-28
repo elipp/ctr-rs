@@ -15,8 +15,8 @@ use loader::dram::DramFile;
 use loader::icons::{Icon, parse_level_groups};
 use loader::vram::Vram;
 use render::mesh::SCALE;
-use weapon::mine::MineKind;
 use render::particles::{Particle, Rng, quarter_units_to_world};
+use weapon::mine::MineKind;
 
 use crate::exhaust::{SCREEN_PIXEL_ASPECT, icon_image};
 

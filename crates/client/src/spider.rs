@@ -17,8 +17,8 @@ use loader::vram::Vram;
 use render::mesh::{self, SCALE};
 
 use crate::props::{Sim, rotation_of};
-use crate::subtract::SubtractMaterial;
 use crate::spawn_parts;
+use crate::subtract::SubtractMaterial;
 
 /// The colour of the web where it is not faded (`0x3f` of 255).
 const BRIGHTNESS: f32 = 0x3f as f32 / 255.0;
@@ -39,7 +39,11 @@ pub fn shadows(mut shadows: Query<(&SpiderShadow, &mut Transform)>, sim: Res<Sim
     }
 }
 
-pub fn draw_webs(sim: Res<Sim>, cameras: Query<&GlobalTransform, With<Camera3d>>, mut gizmos: Gizmos) {
+pub fn draw_webs(
+    sim: Res<Sim>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    mut gizmos: Gizmos,
+) {
     let at = |p: [i32; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32) * SCALE;
     for spider in &sim.race.objects.spiders {
         let (top, bottom) = spider.sim.web();
@@ -121,8 +125,13 @@ pub fn spawn_shadow(
         ..default()
     };
     let (pos, _) = objects.spiders[index].sim.shadow();
-    let transform = Transform::from_translation(Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32) * SCALE)
-        .with_rotation(rotation_of(SVec3 { x: 0, y: 0x200, z: 0 }));
+    let transform =
+        Transform::from_translation(Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32) * SCALE)
+            .with_rotation(rotation_of(SVec3 {
+                x: 0,
+                y: 0x200,
+                z: 0,
+            }));
     let body = commands
         .spawn((SpiderShadow(index), transform, Visibility::default()))
         .id();

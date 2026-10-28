@@ -44,7 +44,6 @@ mod projectile;
 
 mod props;
 mod rain;
-mod spider;
 mod remote;
 mod resources;
 mod scene;
@@ -54,6 +53,7 @@ mod skid;
 mod sky;
 mod slide_meter;
 mod sound;
+mod spider;
 mod subtract;
 mod suggest;
 mod toast;
@@ -162,7 +162,8 @@ fn main() {
         )
         .add_systems(
             PostUpdate,
-            kart::hide_parts.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+            kart::hide_parts
+                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         )
         .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(sky::SkyPlugin)

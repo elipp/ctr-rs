@@ -78,7 +78,11 @@ impl Online {
 
     /// The kart of the sim that the view is of, and the HUD: ours, or the one a spectator follows.
     pub fn viewed(&self) -> usize {
-        if self.spectating() { self.watching } else { self.slot }
+        if self.spectating() {
+            self.watching
+        } else {
+            self.slot
+        }
     }
 
     /// A line for the HUD: where the race is, and how many ticks were played on a prediction, and how often (and how far back) a
@@ -117,4 +121,3 @@ impl Online {
         }
     }
 }
-
