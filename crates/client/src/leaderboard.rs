@@ -20,10 +20,11 @@ use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 use crate::font::CtrText;
 use crate::hud;
 use crate::lobby::Lobby;
+use crate::lobby_list::spawn_tags;
 
 /// The portraits as a picture, loaded when the first race needs it.
 #[derive(Resource)]
-struct Portraits(Handle<Image>);
+pub(crate) struct Portraits(pub(crate) Handle<Image>);
 
 /// The column of rows, with the race it was built for.
 #[derive(Component)]
@@ -44,6 +45,10 @@ struct Row {
     pop: f32,
 }
 
+/// The name on a portrait, which follows the nicknames.
+#[derive(Component)]
+struct NameTag(usize);
+
 /// The number of a place, from 0.
 #[derive(Component)]
 struct PlaceLabel(usize);
@@ -54,11 +59,11 @@ const VISIBLE: usize = 4;
 /// Where the first place's portrait and number are on retail's screen (`UI_RANK_ICON_X`,
 /// `UI_RANK_ICON_BASE_Y`, `UI_RANK_TEXT_X`, `UI_RANK_TEXT_START_Y`), and the lines from one place
 /// to the next (`UI_RANK_TEXT_SLOT_HEIGHT`).
-const ICON_X: f32 = 20.0;
-const ICON_Y: f32 = 57.0;
-const TEXT_X: f32 = 52.0;
-const TEXT_Y: f32 = 56.0;
-const SLOT: f32 = 27.0;
+pub(crate) const ICON_X: f32 = 20.0;
+pub(crate) const ICON_Y: f32 = 57.0;
+pub(crate) const TEXT_X: f32 = 52.0;
+pub(crate) const TEXT_Y: f32 = 56.0;
+pub(crate) const SLOT: f32 = 27.0;
 
 /// How fast a row closes in on its place (per second), how far a row that gained a place sticks
 /// out at first (in pixels of retail's screen), and how fast that goes (per second).
@@ -70,7 +75,10 @@ pub struct LeaderboardPlugin;
 
 impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, order).chain().run_if(crate::drive::driving));
+        app.add_systems(
+            Update,
+            (build, order, names).chain().run_if(crate::drive::driving),
+        );
     }
 }
 
@@ -159,35 +167,40 @@ fn build(
     for slot in 0..players {
         let character = (online.characters[slot] as usize).min(ICON_IDS.len() - 1);
         let y = slot as f32 * SLOT;
-        commands.spawn((
-            Row { slot, y, pop: 0.0 },
-            // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
-            ImageNode::new(portraits.clone())
-                .with_rect(Rect::new(
-                    0.0,
-                    (character * HEIGHT) as f32,
-                    WIDTH as f32,
-                    ((character + 1) * HEIGHT) as f32,
-                ))
-                .with_mode(NodeImageMode::Stretch),
-            Node {
-                position_type: PositionType::Absolute,
-                left: hud::x(ICON_X),
-                top: hud::y(ICON_Y + y),
-                width: hud::x(WIDTH as f32),
-                height: hud::y(HEIGHT as f32),
-                ..default()
-            },
-            Pickable::IGNORE,
-            ChildOf(column),
-        ));
+        let portrait = commands
+            .spawn((
+                Row { slot, y, pop: 0.0 },
+                // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
+                ImageNode::new(portraits.clone())
+                    .with_rect(Rect::new(
+                        0.0,
+                        (character * HEIGHT) as f32,
+                        WIDTH as f32,
+                        ((character + 1) * HEIGHT) as f32,
+                    ))
+                    .with_mode(NodeImageMode::Stretch),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: hud::x(ICON_X),
+                    top: hud::y(ICON_Y + y),
+                    width: hud::x(WIDTH as f32),
+                    height: hud::y(HEIGHT as f32),
+                    ..default()
+                },
+                Pickable::IGNORE,
+                ChildOf(column),
+            ))
+            .id();
+        let label = online.labels.get(slot).map_or("", String::as_str);
+        let key = online.names.get(slot).map_or("", String::as_str);
+        let tag = spawn_tags(&mut commands, portrait, label, key);
+        commands.entity(tag).insert(NameTag(slot));
     }
     // The numbers, over the portraits.
     for place in 0..players.min(VISIBLE) {
         commands.spawn((
             PlaceLabel(place),
-            CtrText::new((place + 1).to_string(), Font::Middle, Gradient::WHITE)
-                .fixed(hud::PIXEL),
+            CtrText::new((place + 1).to_string(), Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
             Node {
                 position_type: PositionType::Absolute,
                 left: hud::x(TEXT_X),
@@ -264,5 +277,19 @@ fn order(
         } else {
             Visibility::Hidden
         });
+    }
+}
+
+/// Keeps the names on the portraits those of the nicknames now.
+fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
+    let Some(online) = &lobby.online else {
+        return;
+    };
+    for (NameTag(slot), mut text) in &mut tags {
+        if let Some(label) = online.labels.get(*slot)
+            && text.0 != *label
+        {
+            text.0.clone_from(label);
+        }
     }
 }

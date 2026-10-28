@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, presets};
 use iroh::Endpoint;
+use iroh::endpoint::{Connection, presets};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -368,7 +368,14 @@ pub fn host(character: u8, nick: &str, build: u32) -> Session {
 pub fn join(ticket: Ticket, character: u8, nick: &str, build: u32) -> Session {
     let nick = clean_nick(nick);
     spawn(move |endpoint, io| {
-        Box::pin(run(endpoint, io, Role::Join(ticket), character, nick, build))
+        Box::pin(run(
+            endpoint,
+            io,
+            Role::Join(ticket),
+            character,
+            nick,
+            build,
+        ))
     })
 }
 

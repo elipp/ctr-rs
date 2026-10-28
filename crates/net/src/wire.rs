@@ -120,7 +120,9 @@ pub enum Message {
     /// Reliable, host to each client: who is in the lobby and what each drives, the host first.
     /// It comes whenever that changes, in full, so a client that joins late catches up. Each
     /// is the endpoint id, the character and the nickname (empty for none).
-    Lobby { players: Vec<([u8; 32], u8, String)> },
+    Lobby {
+        players: Vec<([u8; 32], u8, String)>,
+    },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
