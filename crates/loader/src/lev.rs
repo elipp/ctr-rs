@@ -274,8 +274,30 @@ impl Minimap {
     }
 }
 
+/// `struct RainBuffer` as the level file has it (`Level::rainBuffer`): the level's rain or snow,
+/// which every camera starts from. The counts are for one player.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RainBuffer {
+    pub num_particles_curr: i32,
+    pub num_particles_max: i16,
+    pub vanish_rate: i16,
+    /// The scroll (the particles' offset in their box) and how far it moves each frame; x and y
+    /// are two halfwords of one word, as the game keeps them.
+    pub scroll_xy: u32,
+    pub scroll_z: i32,
+    pub velocity_xy: u32,
+    pub velocity_z: i32,
+    pub color_top: u32,
+    pub color_bottom: u32,
+    /// The GPU's draw mode of the particles: how they blend.
+    pub fill_mode: u32,
+    /// Which slot of the ordering table they are drawn in.
+    pub offset_ot: i32,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Level {
+    pub rain_buffer: RainBuffer,
     pub instances: Vec<InstDef>,
     /// Where the level's models are in the payload (`ptrModelsPtrArray`): the ones the code
     /// finds by their `id`, like the shadow of the spiders.
@@ -379,6 +401,7 @@ const LEVEL_INSTANCES: usize = 0x10;
 const LEVEL_NUM_MODELS: usize = 0x14;
 const LEVEL_MODELS: usize = 0x18;
 const INST_DEF_SIZE: usize = 0x40;
+const LEVEL_RAIN_BUFFER: usize = 0x104;
 const LEVEL_SPAWN_TYPE_1: usize = 0x134;
 const LEVEL_NUM_POSITION_PATHS: usize = 0x138;
 const LEVEL_POSITION_PATHS: usize = 0x13c;
@@ -722,7 +745,23 @@ impl Level {
             })?
         };
 
+        let rain = LEVEL_RAIN_BUFFER;
+        let rain_buffer = RainBuffer {
+            num_particles_curr: p.u32(rain)? as i32,
+            num_particles_max: p.i16(rain + 0x4)?,
+            vanish_rate: p.i16(rain + 0x6)?,
+            scroll_xy: p.u32(rain + 0x8)?,
+            scroll_z: p.u32(rain + 0xc)? as i32,
+            velocity_xy: p.u32(rain + 0x10)?,
+            velocity_z: p.u32(rain + 0x14)? as i32,
+            color_top: p.u32(rain + 0x20)?,
+            color_bottom: p.u32(rain + 0x24)?,
+            fill_mode: p.u32(rain + 0x28)?,
+            offset_ot: p.u32(rain + 0x2c)? as i32,
+        };
+
         Ok(Self {
+            rain_buffer,
             instances: Self::parse_instances(&p)?,
             models: Self::parse_models(&p)?,
             spawn_delays: Self::parse_spawn_delays(&p)?,

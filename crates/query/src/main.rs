@@ -240,6 +240,21 @@ fn level_summary(l: &Loaded) {
         "config flags {:#x}, jump vertical speed cap {}",
         level.config_flags, level.jump_vertical_speed_cap
     );
+    let rain = &level.rain_buffer;
+    let weathered = level
+        .quad_blocks
+        .iter()
+        .filter(|q| q.weather_intensity != 0)
+        .count();
+    println!(
+        "weather: {rain:x?}; {weathered} quad blocks have intensity (max {})",
+        level
+            .quad_blocks
+            .iter()
+            .map(|q| q.weather_intensity)
+            .max()
+            .unwrap_or(0)
+    );
     println!(
         "{} restart points, {} BSP nodes",
         level.restart_points.len(),
