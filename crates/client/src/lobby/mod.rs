@@ -4,6 +4,7 @@
 //!
 //! * `/lobby create`: open a lobby (`/lobby close` closes it)
 //! * `/lobby join <address>`: join the lobby at an address
+//! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (`assets/.cache/maps`)
 //! * `/race start`: start the race, once the others have joined (the host only)
 //! * `/race restart`: start the race in progress over (the host only)
@@ -44,11 +45,15 @@ pub struct Lobby {
     session: Option<Session>,
     /// We joined someone else's lobby (`/lobby join`) instead of creating one: the host starts the race.
     joined: bool,
+    /// We only watch (`/lobby spectate`), and drive in no race.
+    spectator: bool,
     /// Who is in the lobby and the character each drives (the short key and the character), as
     /// the last [`Event::Lobby`] said, and whether there has been one: what changes in the next is
     /// what the players are told.
     roster: Vec<Member>,
     roster_seen: bool,
+    /// The guests that only watch, as the same said: the name and the short key of each.
+    watchers: Vec<(String, String)>,
     /// The nickname of every player the lobby has told of (empty for none).
     nicks: std::collections::HashMap<EndpointId, String>,
     /// The last round trip to each player in the lobby, by short key, from the pings, and an
@@ -81,6 +86,11 @@ impl Lobby {
             .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
     }
 
+    /// The guests that only watch: the name and the short key of each.
+    pub fn watchers(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.watchers.iter().map(|(n, k)| (n.as_str(), k.as_str()))
+    }
+
     /// Whether we are in a lobby and no race is on: the players wait.
     pub fn is_waiting(&self) -> bool {
         self.session.is_some() && self.online.is_none()
@@ -95,6 +105,7 @@ impl Lobby {
     pub fn host(&mut self, character: u8, nick: &str) {
         self.session = Some(net::host(character, nick, race::SIM_VERSION));
         self.joined = false;
+        self.spectator = false;
         self.roster.clear();
         self.roster_seen = false;
     }
@@ -132,8 +143,29 @@ impl Lobby {
         debug!("joining {ticket}");
         self.session = Some(net::join(ticket, character, nick, race::SIM_VERSION));
         self.joined = true;
+        self.spectator = false;
         self.roster.clear();
         self.roster_seen = false;
+    }
+
+    /// Joins the lobby at `ticket` to watch.
+    pub fn spectate(&mut self, ticket: Ticket, nick: &str) {
+        debug!("joining {ticket} to watch");
+        self.session = Some(net::spectate(ticket, nick, race::SIM_VERSION));
+        self.joined = true;
+        self.spectator = true;
+        self.roster.clear();
+        self.roster_seen = false;
+    }
+
+    /// Watch instead of driving in the next race, or drive again (a guest, before the race).
+    /// Returns whether we watch now.
+    pub fn toggle_spectator(&mut self) -> bool {
+        self.spectator = !self.spectator;
+        if let Some(session) = &self.session {
+            session.set_spectator(self.spectator);
+        }
+        self.spectator
     }
 
     /// We drive another character now, which the others learn before the race starts.

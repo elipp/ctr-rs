@@ -36,7 +36,7 @@ use crate::peers::Role;
 use crate::session::run;
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/6";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/7";
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
@@ -64,6 +64,8 @@ pub enum Event {
     /// it yet.
     Lobby {
         players: Vec<Player>,
+        /// The guests that only watch (their `character` is 0), in the order they joined.
+        spectators: Vec<Player>,
         you: Option<usize>,
     },
     /// We joined the lobby of this host.
@@ -221,6 +223,7 @@ enum Command {
     },
     Announce(String),
     Character(u8),
+    Spectate(bool),
     Nickname(String),
     RaceOver,
     Ready,
@@ -289,6 +292,12 @@ impl Session {
     /// given to [`host`] or [`join`] again and nothing changes.)
     pub fn set_character(&self, character: u8) {
         let _ = self.commands.send(Command::Character(character));
+    }
+
+    /// Changes whether we only watch, for the race that has not started yet (a guest's to do;
+    /// the host always plays). The lobby's [`Event::Lobby`] follows.
+    pub fn set_spectator(&self, spectator: bool) {
+        let _ = self.commands.send(Command::Spectate(spectator));
     }
 
     /// Changes what we are called, at any time (in a race too): everyone in the lobby is told,
@@ -368,7 +377,7 @@ impl Io {
 /// `build` is the version of the sim (`race::SIM_VERSION`): a guest with another is turned away.
 pub fn host(character: u8, nick: &str, build: u32) -> Session {
     let nick = clean_nick(nick);
-    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Host, character, nick, build)))
+    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Host, character, nick, build, false)))
 }
 
 /// Joins the lobby of `ticket`, driving `character` and called `nick`.
@@ -376,6 +385,18 @@ pub fn host(character: u8, nick: &str, build: u32) -> Session {
 /// `build` is the version of the sim (`race::SIM_VERSION`): the host turns us away if its own is
 /// another.
 pub fn join(ticket: Ticket, character: u8, nick: &str, build: u32) -> Session {
+    enter(ticket, character, nick, build, false)
+}
+
+/// Joins the lobby of `ticket` to watch: we are not one of the players of its races and make no
+/// pads, but get everyone's, so the game can play the race along with them. We are in the roster
+/// after the last player ([`Event::Started`]'s `slot` is past its `characters`), and in no
+/// [`Event::Lobby`]. `build` is as in [`join`].
+pub fn spectate(ticket: Ticket, nick: &str, build: u32) -> Session {
+    enter(ticket, 0, nick, build, true)
+}
+
+fn enter(ticket: Ticket, character: u8, nick: &str, build: u32, spectator: bool) -> Session {
     let nick = clean_nick(nick);
     spawn(move |endpoint, io| {
         Box::pin(run(
@@ -385,6 +406,7 @@ pub fn join(ticket: Ticket, character: u8, nick: &str, build: u32) -> Session {
             character,
             nick,
             build,
+            spectator,
         ))
     })
 }
