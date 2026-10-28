@@ -41,7 +41,6 @@ use vehicle::fire::{self, turbo_type};
 use vehicle::scrub::SCRUBS;
 use vehicle::collide::Feedback;
 use vehicle::pick::damage;
-use vehicle::search::NoInstances;
 use vehicle::sim::{Racer, after_logic, spawn, start_tick, tick_all};
 use vehicle::stats::{CHARACTER_ENGINES, META_PHYS};
 use vehicle::terrain::TERRAINS;
@@ -224,6 +223,8 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
         d.pending_damage_attacker.map_or(-1, i64::from)
     );
     push!("d.invincibleTimer", d.invincible_timer);
+    push!("d.PickupWumpaHUD.numCollected", d.pickup_wumpa_collected);
+    push!("d.PickupWumpaHUD.cooldown", d.pickup_wumpa_cooldown);
     push!("d.rotCurr.x", d.rot_curr_x);
     push!("d.rotCurr.y", d.rot_curr_y);
     push!("d.rotCurr.z", d.rot_curr_z);
@@ -686,11 +687,43 @@ fn multi_runs() -> usize {
         .unwrap_or(6)
 }
 
+fn pickup_runs() -> usize {
+    std::env::var("VEHICLE_TICK_PICKUP_RUNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8)
+}
+
 fn ticks() -> usize {
     std::env::var("VEHICLE_TICK_TICKS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(600)
+}
+
+/// Puts `d` at `at` (game units), facing `angle`, falling: it finds the track on its own.
+fn place(d: &mut Driver, at: [i32; 3], angle: i16) {
+    d.pos_curr = math::Vec3 {
+        x: at[0] << 8,
+        y: at[1] << 8,
+        z: at[2] << 8,
+    };
+    d.pos_prev = d.pos_curr;
+    d.angle = angle;
+    d.rot_curr_y = angle;
+    d.rot_prev = [0, angle, 0, 0];
+    d.last_valid = None;
+    d.under_driver = None;
+    let up = SVec3 {
+        x: 0,
+        y: 0x1000,
+        z: 0,
+    };
+    d.axis_angle1_normal_vec = up;
+    d.axis_angle2_normal_vec = up;
+    d.axis_angle3_normal_vec = up;
+    d.axis_angle4_normal_vec = up;
+    d.inst_pos = vehicle::baked::inst_matrix(d).1;
 }
 
 /// Spawn points and random places on the track.
@@ -706,35 +739,11 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
             let q = &level.quad_blocks[rng.below(level.quad_blocks.len() as u64) as usize];
             let (a, b) = (q.bbox.min, q.bbox.max);
             let at = |rng: &mut Rng, lo: i16, hi: i16| rng.range(lo as i32, hi as i32);
-            driver.pos_curr.x = at(rng, a.x, b.x) << 8;
-            driver.pos_curr.z = at(rng, a.z, b.z) << 8;
-            driver.pos_curr.y = (b.y as i32 + rng.range(0x10, 0x60)) << 8;
-            driver.pos_prev = driver.pos_curr;
-            driver.angle = rng.range(0, 0xfff) as i16;
-            driver.rot_curr_y = driver.angle;
-            driver.rot_prev = [0, driver.angle, 0, 0];
-            driver.last_valid = None;
-            driver.under_driver = None;
-            driver.axis_angle1_normal_vec = SVec3 {
-                x: 0,
-                y: 0x1000,
-                z: 0,
-            };
-            driver.axis_angle2_normal_vec = SVec3 {
-                x: 0,
-                y: 0x1000,
-                z: 0,
-            };
-            driver.axis_angle3_normal_vec = SVec3 {
-                x: 0,
-                y: 0x1000,
-                z: 0,
-            };
-            driver.axis_angle4_normal_vec = SVec3 {
-                x: 0,
-                y: 0x1000,
-                z: 0,
-            };
+            let x = at(rng, a.x, b.x);
+            let z = at(rng, a.z, b.z);
+            let y = b.y as i32 + rng.range(0x10, 0x60);
+            let angle = rng.range(0, 0xfff) as i16;
+            place(&mut driver, [x, y, z], angle);
         }
         let mut frames = if i % 2 == 1 {
             drifter_frames(rng, ticks())
@@ -749,6 +758,39 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
         if i % 3 == 2 {
             add_hits(&mut Rng((0x0b1a_57ed ^ ((i as u64) << 24)) | 1), &mut frames);
         }
+        out.push(Run {
+            karts: vec![Kart {
+                character,
+                driver,
+                frames,
+            }],
+        });
+    }
+    // A kart dropped onto a wumpa fruit, which it picks up, and maybe the ones in line with it.
+    let fruit: Vec<&loader::lev::InstDef> = level
+        .instances
+        .iter()
+        .filter(|i| i.model_id == PU_WUMPA_FRUIT)
+        .collect();
+    for i in 0..if fruit.is_empty() { 0 } else { pickup_runs() } {
+        let f = fruit[rng.below(fruit.len() as u64) as usize];
+        let character = rng.below(16) as usize;
+        let mut driver = Driver::new(0, character);
+        driver.anim_num_frames = [30, 12, 20, 16, 24, 8, 8, 8];
+        spawn(&mut driver, coll, level, 0);
+        let near = |rng: &mut Rng| rng.range(-0x30, 0x30);
+        let at = [
+            f.pos.x as i32 + near(rng),
+            f.pos.y as i32 + rng.range(0x10, 0x40),
+            f.pos.z as i32 + near(rng),
+        ];
+        place(&mut driver, at, rng.range(0, 0xfff) as i16);
+        let mut frames = if i % 2 == 1 {
+            drifter_frames(rng, ticks())
+        } else {
+            frames(rng, ticks())
+        };
+        frames.truncate(ticks().min(300));
         out.push(Run {
             karts: vec![Kart {
                 character,
@@ -788,6 +830,9 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
     }
     out
 }
+
+/// `PU_WUMPA_FRUIT`
+const PU_WUMPA_FRUIT: i32 = 2;
 
 /// The most karts a run has (the C driver's `MAX_KARTS`).
 const MAX_KARTS: usize = 4;
@@ -893,6 +938,7 @@ fn matches_reference_on_tracks() {
             "game/Vehicle/VehStuckProc.c",
             "game/MixRNG/MixRNG.c",
             "game/231/RB_Player.c",
+            "game/231/RB_Fruit.c",
             "game/Vehicle/VehAfterColl.c",
             proc_c.to_str().unwrap(),
             "game/Vehicle/VehPhysGeneral.c",
@@ -928,13 +974,15 @@ fn matches_reference_on_tracks() {
     // drifting, spinning, spin winding down, spin stopping, boosted by a drift,
     // fire burning, fire hidden by a new boost, on a turbo pad, turbo item boosting,
     // turbo item fired onto a burning fire, tumbling, hit with the fire burning, hit in the air,
-    // hit in a power slide, hit while spinning or tumbling, karts in company, bumping, hurt by a bump)
-    let mut totals = [0u32; 26];
+    // hit in a power slide, hit while spinning or tumbling, karts in company, bumping, hurt by a bump,
+    // fruit picked up)
+    let mut totals = [0u32; 27];
 
     for id in LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0 {
         let idx = BigIndex::level(LevelId(id), Lod::OnePlayer, LevFile::Lev);
         let file = b.big.read(&mut b.disc, idx.get()).unwrap();
-        let level = Level::parse(&DramFile::parse(&file).unwrap()).unwrap();
+        let dram = DramFile::parse(&file).unwrap();
+        let level = Level::parse(&dram).unwrap();
 
         // The scratchpad and the GTE carry over from run to run, in both.
         // (Spawning searches the level on a scratchpad of its own.)
@@ -944,6 +992,7 @@ fn matches_reference_on_tracks() {
         script.push('\n');
         script.push_str(&tables_script());
         script.push_str(&baked_script());
+        script.push_str(&instances_script(&level));
         writeln!(script, "W {}", own_collision()).unwrap();
         for run in &runs {
             writeln!(script, "M {}", run.karts.len()).unwrap();
@@ -977,6 +1026,8 @@ fn matches_reference_on_tracks() {
             let n = run.karts.len();
             let mut ds: Vec<Driver> = run.karts.iter().map(|k| k.driver.clone()).collect();
             let characters: Vec<usize> = ds.iter().map(|d| d.character as usize).collect();
+            // The pickups are as they were placed at every run's start, in both.
+            let mut objects = instance::Objects::new(&level, &dram);
             'ticks: for t in 0..run.ticks() {
                 let env = &run.karts[0].frames[t].env;
                 let mut effects: Vec<Vec<Effect>> = vec![Vec::new(); n];
@@ -1000,7 +1051,7 @@ fn matches_reference_on_tracks() {
                         })
                         .collect();
                     start_tick(&mut racers, &mut random_number);
-                    tick_all(&mut racers, &level, env, &mut NoInstances, &mut feedback)
+                    tick_all(&mut racers, &level, env, &mut Pickups(&mut objects), &mut feedback)
                 };
                 for (j, k) in run.karts.iter().enumerate() {
                     let Some(hit) = k.frames[t].hit else {
@@ -1022,12 +1073,19 @@ fn matches_reference_on_tracks() {
                 }
                 for (d, effects) in ds.iter_mut().zip(effects.iter_mut()) {
                     after_logic(d, env, effects);
+                    vehicle::wumpa::hud_tick(d, true, effects);
                 }
+                let objects_now = objects_line(&objects);
 
                 for j in 0..n {
                     let d = &ds[j];
                     let mask_grab = results[j].mask_grab;
-                    let got = tick_line(d, &collisions[j], &effects[j], mask_grab, &characters);
+                    let mut got = tick_line(d, &collisions[j], &effects[j], mask_grab, &characters);
+                    if j == 0 {
+                        // After the effects: before the scratchpad's ` | `.
+                        let at = got.rfind(" | ").unwrap();
+                        got.insert_str(at, &objects_now);
+                    }
                     let want = reference[line].trim_end();
                     line += 1;
 
@@ -1056,6 +1114,7 @@ fn matches_reference_on_tracks() {
                     totals[24] +=
                         (d.actions_flag_set & vehicle::actions::HUMAN_HUMAN_COLLISION != 0) as u32;
                     totals[25] += (d.pending_damage_type != 0) as u32;
+                    totals[26] += (j == 0 && !objects_now.is_empty()) as u32;
 
                     // A scratchpad that the drivers share holds what the last of their searches
                     // left, not any one driver's: then only the drivers and effects are compared.
@@ -1125,6 +1184,10 @@ fn matches_reference_on_tracks() {
         totals[24] > 0 && totals[25] > 0,
         "the runs do not cover bumps and the damage of a bump: {totals:?}"
     );
+    assert!(
+        totals[26] > 0,
+        "the runs do not pick up wumpa fruit: {totals:?}"
+    );
 }
 
 /// The first C output line of run `r` (the runs print a line per kart per tick).
@@ -1147,6 +1210,61 @@ fn own_collision() -> u8 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2)
+}
+
+/// The level's instances and the hitboxes that are theirs (`J`).
+fn instances_script(level: &Level) -> String {
+    let mut s = format!("J {}", level.instances.len());
+    for i in &level.instances {
+        let (p, sc) = (i.pos, i.scale);
+        write!(
+            s,
+            " {} {} {} {} {} {} {} {}",
+            i.model_id, i.flags as i32, p.x, p.y, p.z, sc.x, sc.y, sc.z
+        )
+        .unwrap();
+    }
+    let mut links = Vec::new();
+    for n in &level.bsp {
+        if let loader::lev::BspKind::Leaf { hitboxes, .. } = &n.kind {
+            for h in hitboxes {
+                if let Some(i) = h.instance {
+                    links.push((h.offset, i));
+                }
+            }
+        }
+    }
+    write!(s, " {}", links.len()).unwrap();
+    for (offset, i) in links {
+        write!(s, " {offset} {i}").unwrap();
+    }
+    s.push('\n');
+    s
+}
+
+/// The level's objects where the C driver has their `LInC`: the wumpa fruit. The other models
+/// give 1, as those without one do.
+struct Pickups<'a>(&'a mut instance::Objects);
+
+impl vehicle::search::Instances for Pickups<'_> {
+    fn touch(&mut self, instance: usize, driver: &mut Driver, sps: &coll::Scratchpad) -> i32 {
+        if self.0.fruit.iter().any(|f| f.instance == instance) {
+            self.0.hit(instance, driver, sps.input1.model_id)
+        } else {
+            1
+        }
+    }
+}
+
+/// The objects that are not as they were placed, as the C driver prints them.
+fn objects_line(objects: &instance::Objects) -> String {
+    let mut s = String::new();
+    for f in &objects.fruit {
+        if f.sim.collected {
+            write!(s, " O {} 0", f.instance).unwrap();
+        }
+    }
+    s
 }
 
 /// The animation tables (`G`), as authored: the C driver bakes them with `Vector_BakeMatrixTable`.

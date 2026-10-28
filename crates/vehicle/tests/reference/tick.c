@@ -19,6 +19,10 @@
  *             the authored animation tables, which Vector_BakeMatrixTable bakes
  *   W <mask>  each driver keeps a scratchpad (1) and a GTE (2) of its own, as the port's
  *             `Collision` per kart does (3); 0: they share the one, as in retail
+ *   J <n x "modelID flags x y z scaleX scaleY scaleZ"> <m x "hitboxOffset instance">
+ *             the level's instances, as their InstDefs place them, and the hitboxes
+ *             that are theirs; the instances with a pickup's LInC (wumpa fruit)
+ *             come back whole at every `M`
  *   M <n>     the next run's number of drivers, linked in that order in the PLAYER
  *             bucket (each bumps into the ones after it)
  *   P <i>     the driver the commands below are for (0 to start with)
@@ -36,7 +40,8 @@
  *     <n x "buttonsHeld buttonsTapped stickLX stickLY stickRY">
  *             runs one tick of the run's drivers; prints a line for each: the
  *             driver, the effects its stages requested and a few values of the
- *             scratchpad as its searches left them
+ *             scratchpad as its searches left them. The first driver's effects end
+ *             with the instances that are not as they were placed ("O instance scaleX")
  *
  * MainFrame's order: VehPickupItem_ShootOnCirclePress lands the hits the last bumps
  * queued, for all the drivers, then each stage runs over all of them before the next.
@@ -130,6 +135,110 @@ static void link_drivers(void)
 	gGT.threadBuckets[PLAYER].thread = &karts[0].thread;
 	for (int i = 0; i < MAX_KARTS; i++)
 		karts[i].thread.siblingThread = i + 1 < numKarts ? &karts[i + 1].thread : NULL;
+}
+
+/* The level's instances (`J`). */
+#define MAX_INSTANCES 1024
+struct InstDef levDefs[MAX_INSTANCES];
+struct Instance levInsts[MAX_INSTANCES];
+struct Model levModels[MAX_INSTANCES];
+static SVec3 levScales[MAX_INSTANCES];
+static int numLevInsts;
+
+/* The models whose LInC is the real one here. */
+static int has_linc(int modelID)
+{
+	return modelID == PU_WUMPA_FRUIT;
+}
+
+/* The instances' threads (PROC_BirthWithObject's), in the STATIC bucket while they live. */
+#define MAX_THREADS 64
+static struct
+{
+	struct Thread thread;
+	u8 object[0x80];
+	int used;
+} threadPool[MAX_THREADS];
+
+struct Thread *PROC_BirthWithObject(ThreadFlags flags, void *funcThTick, const char *name, struct Thread *relativeTh)
+{
+	for (int i = 0; i < MAX_THREADS; i++)
+	{
+		if (threadPool[i].used)
+			continue;
+		memset(&threadPool[i], 0, sizeof(threadPool[i]));
+		threadPool[i].used = 1;
+		struct Thread *th = &threadPool[i].thread;
+		th->object = threadPool[i].object;
+		th->funcThTick = funcThTick;
+		th->siblingThread = gGT.threadBuckets[STATIC].thread;
+		gGT.threadBuckets[STATIC].thread = th;
+		return th;
+	}
+	exit(5);
+}
+
+/* ThTick_RunBucket for the STATIC bucket. */
+static void tick_instances(void)
+{
+	for (struct Thread *th = gGT.threadBuckets[STATIC].thread; th != NULL; th = th->siblingThread)
+		if ((th->flags & THREAD_FLAG_DEAD) == 0)
+			((void (*)(struct Thread *))th->funcThTick)(th);
+}
+
+/* PROC_CheckAllForDead for the STATIC bucket. */
+static void instances_check_dead(void)
+{
+	struct Thread **next = &gGT.threadBuckets[STATIC].thread;
+	while (*next != NULL)
+	{
+		struct Thread *th = *next;
+		if ((th->flags & THREAD_FLAG_DEAD) != 0)
+		{
+			*next = th->siblingThread;
+			for (int i = 0; i < MAX_THREADS; i++)
+				if (&threadPool[i].thread == th)
+					threadPool[i].used = 0;
+		}
+		else
+			next = &th->siblingThread;
+	}
+}
+
+/* Every pickup as it was placed, and no threads. */
+static void reset_instances(void)
+{
+	for (int i = 0; i < numLevInsts; i++)
+	{
+		levInsts[i].scale = levScales[i];
+		levInsts[i].thread = NULL;
+	}
+	memset(threadPool, 0, sizeof(threadPool));
+	gGT.threadBuckets[STATIC].thread = NULL;
+}
+
+/* The pickup HUD's queue, as UI_RenderFrame_Racing runs it for a player (without the drawing):
+ * the driver gets the fruit that have reached the counter. */
+static void pickup_hud(struct Driver *drv)
+{
+	if (drv->PickupWumpaHUD.numCollected == 0)
+		return;
+	if (drv->PickupWumpaHUD.cooldown == 0)
+	{
+		drv->PickupWumpaHUD.numCollected--;
+		if (LOAD_IsOpen_RacingOrBattle() && (gGT.gameMode1 & ADVENTURE_ARENA) == 0)
+			RB_Player_ModifyWumpa(drv, 1);
+		OtherFX_Play(0x42, 1);
+		if (drv->PickupWumpaHUD.numCollected != 0)
+			drv->PickupWumpaHUD.cooldown = 5;
+	}
+	else
+		drv->PickupWumpaHUD.cooldown--;
+}
+
+/* The fly-to-HUD's screen position and the instances' 3D sounds are presentation. */
+void PlaySound3D(u32 soundID, struct Instance *inst)
+{
 }
 
 static void read_pad(int *v)
@@ -343,7 +452,7 @@ static struct Field fields[] = {
 	F(d.jump_InitialVelY, S16), F(d.jump_HighJumpTimerMS, S16), F(d.jump_LandingBoost, S16),
 	F(d.numberOfJumps, S16), F(d.jumpMeter, S16), F(d.jumpMeterTimer, S16), F(d.forcedJumpType, U8), F(d.buttonUsedToStartDrift, S16),
 	F(d.pendingDamageType, U8), F(d.pendingDamageReasonByte, U8), { "d.pendingDamageAttacker", NULL, ATTACKER },
-	F(d.invincibleTimer, S32),
+	F(d.invincibleTimer, S32), F(d.PickupWumpaHUD.numCollected, S32), F(d.PickupWumpaHUD.cooldown, S32),
 	F(d.rotCurr.x, S16), F(d.rotCurr.y, S16), F(d.rotCurr.z, S16),
 	F(d.rotPrev.x, S16), F(d.rotPrev.y, S16), F(d.rotPrev.z, S16), F(d.rotPrev.w, S16),
 	MAT(d.matrixMovingDir), MAT(d.matrixFacingDir),
@@ -593,7 +702,9 @@ static void run_tick(void)
 		}
 	}
 
-	/* The buckets after the drivers': the weapons' hits, then the turbo fires. */
+	/* The buckets after the drivers': the instances' (STATIC), the weapons' hits, then the
+	 * turbo fires. */
+	tick_instances();
 	for (int j = 0; j < numKarts; j++)
 	{
 		if (karts[j].pendingHit < 0)
@@ -616,14 +727,22 @@ static void run_tick(void)
 		leave();
 	}
 	turbo_check_dead();
+	instances_check_dead();
 	/* The HUD's jump meter gives the hang-time turbo, in the frame's render after all that. */
 	for (int j = 0; j < numKarts; j++)
 	{
 		enter(&karts[j]);
 		UI_JumpMeter_Update(&k->d);
+		pickup_hud(&k->d);
 		leave();
 	}
 
+	for (int i = 0; i < numLevInsts; i++)
+		if (has_linc(levModels[i].id) && levInsts[i].scale.x != levScales[i].x)
+		{
+			k = &karts[0];
+			effect(" O %d %d", i, levInsts[i].scale.x);
+		}
 	for (int j = 0; j < numKarts; j++)
 	{
 		k = &karts[j];
@@ -759,11 +878,50 @@ int main(void)
 		case 'W':
 			ownCollision = rd();
 			break;
+		case 'J':
+		{
+			numLevInsts = rd();
+			if (numLevInsts > MAX_INSTANCES)
+				exit(6);
+			for (int i = 0; i < numLevInsts; i++)
+			{
+				struct Instance *inst = &levInsts[i];
+				struct InstDef *def = &levDefs[i];
+				levModels[i].id = rd();
+				def->modelID = levModels[i].id;
+				def->model = &levModels[i];
+				def->ptrInstance = inst;
+				inst->model = &levModels[i];
+				inst->instDef = def;
+				inst->flags = (u32)rd();
+				inst->matrix.t[0] = rd();
+				inst->matrix.t[1] = rd();
+				inst->matrix.t[2] = rd();
+				levScales[i].x = rd();
+				levScales[i].y = rd();
+				levScales[i].z = rd();
+			}
+			for (int n = rd(); n > 0; n--)
+			{
+				u32 offset = (u32)rd();
+				int i = rd();
+				for (int h = 0; h < numAllHitboxes; h++)
+				{
+					struct BSP *b = allHitboxes[h];
+					if (((u32)(u16)b->data.hitbox.unk18 | ((u32)(u16)b->data.hitbox.unk1A << 16)) == offset)
+						b->data.hitbox.instDef = &levDefs[i];
+				}
+			}
+			data.MetaDataModels[PU_WUMPA_FRUIT].LInC = RB_Fruit_LInC;
+			reset_instances();
+			break;
+		}
 		case 'M':
 			numKarts = rd();
 			if (numKarts < 1 || numKarts > MAX_KARTS)
 				exit(4);
 			link_drivers();
+			reset_instances();
 			/* The drivers left out have no fire burning. */
 			for (int j = numKarts; j < MAX_KARTS; j++)
 				karts[j].turbo = 0;

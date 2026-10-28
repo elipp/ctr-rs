@@ -7829,6 +7829,7 @@ dependencies = [
  "coll",
  "gte",
  "hadris-iso",
+ "instance",
  "loader",
  "math",
 ]
