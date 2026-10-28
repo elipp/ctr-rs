@@ -583,7 +583,7 @@ fn tick_from_coll_fixed(
         PhysState::SpinFirst => frame::spinning(d),
         PhysState::SpinLast => frame::last_spin(d),
         PhysState::SpinStop => spin::stop_animate(d),
-        PhysState::MaskGrab => stuck::mask_grab_animate(d, env),
+        PhysState::MaskGrab => stuck::mask_grab_animate(d, env, effects),
         PhysState::RevEngine => stuck::rev_engine_animate(d, env, effects),
         PhysState::Tumble => tumble::animate(d),
     }

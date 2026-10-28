@@ -612,7 +612,10 @@ fn after_tick(
     // even when nobody sees the particles.
     let puffs = vehicle::exhaust::exhaust(driver);
     vehicle::skid::skidmarks(driver);
-    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16);
+    if driver.actions_flag_set & actions::BOT == 0 {
+        vehicle::emitter_sound::tick(driver, effects);
+    }
+    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16, effects);
     (landing, wall, puffs)
 }
 

@@ -21,6 +21,7 @@ pub mod cloud;
 pub mod collide;
 pub mod crash;
 pub mod demo;
+pub mod emitter_sound;
 pub mod engine_sound;
 pub mod exhaust;
 pub mod fire;
@@ -299,6 +300,28 @@ pub enum Effect {
     DriverCrashing { echo: bool, volume: u8 },
     /// `cameraDC[driver_id].flags |= CAMERA_FLAG_FIRE_SPEED_ZOOM`: a boost pulls the camera back.
     CameraFireSpeedZoom { driver_id: u8 },
+    /// `VehFire_Audio(driver, fireLevel)`: a boost's sound, louder and lower the bigger the boost
+    /// (see [`fire::audio`]). Its cooldown (`VehFire_AudioCooldown`) is the listener's.
+    FireAudio { fire_level: i32 },
+    /// `OtherFX_RecycleNew(&driverAudioPtrs[slot], id, flags)`: the kart's loop `slot`
+    /// ([`audio_slot`]) plays sound `id` at `volume`, `distort` (0x80 its own pitch) and `pan`
+    /// (0x80 the middle), the same sound changed as it plays; `None` stops it.
+    Recycle {
+        slot: u8,
+        id: Option<u8>,
+        volume: u8,
+        distort: u8,
+        pan: u8,
+        echo: bool,
+    },
+}
+
+/// The kart's loops (`driverAudioPtrs`), by what plays in them.
+pub mod audio_slot {
+    pub const SKID: u8 = 0;
+    pub const GROUND: u8 = 1;
+    pub const WALL: u8 = 2;
+    pub const TURBO: u8 = 3;
 }
 
 impl Driver {
@@ -377,6 +400,9 @@ pub struct Driver {
     pub turbo_meter_room_left: i16,
     pub wall_rub_timer: i16,
     pub wall_rub_speed_limit: i16,
+    /// `engineVol`: the wall rub's volume, 0 to 255, which swells while the kart scrapes a wall
+    /// and fades after (see [`emitter_sound`]).
+    pub engine_vol: i16,
 
     /// `angle`: the direction of travel; `rot_curr_w` is the render rotation's
     /// spin component.

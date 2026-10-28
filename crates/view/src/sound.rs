@@ -10,23 +10,37 @@
 //! The engines loop (`EngineAudio_InitOnce`) at what `vehicle::engine_sound` makes of their
 //! karts each tick (`EngineAudio_Recalculate`): ours on our class's loop, and the two other
 //! karts nearest the camera on the two loops retail gives the AIs (`EngineSound_NearestAIs`).
+//! Our kart's other loops (the ground, the skid, the wall rub and the turbo's roar) are the ones
+//! its tick keeps going ([`Effect::Recycle`]); retail gives the AIs none, and the other karts
+//! have none here either.
 
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source};
 use bevy::prelude::*;
-use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION};
+use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
 use race::{KartTick, Light, Race};
 use render::mesh::SCALE;
 use vehicle::calc::map_to_range;
 use vehicle::engine_sound::{EngineSound, EngineVoice, FarVoice};
 use vehicle::stats::CHARACTER_ENGINES;
-use vehicle::{Driver, Effect, actions};
+use vehicle::{Driver, Effect, actions, audio_slot, fire};
 
 /// `DotLights_AudioAndVideo`: a red light comes on, and the green.
 const RED_LIGHT_SFX: u16 = 0x45;
 const GREEN_LIGHT_SFX: u16 = 0x46;
+/// `PLAYLEVEL_FINAL_LAP_SOUND`: the leading player starts a lap (or finishes the last).
+const LAP_SFX: u16 = 0x66;
+/// `Audio_Update1`: the player finishes first.
+const WIN_SFX: u16 = 0x5f;
+/// The pause menu's (`RECTMENU_ProcessInput`): the pick moves, an item is taken, the menu goes.
+pub const MENU_MOVE_SFX: u16 = 0;
+pub const MENU_TAKE_SFX: u16 = 1;
+pub const MENU_BACK_SFX: u16 = 2;
+
+/// A tick of the race, in milliseconds (`elapsedTimeMS`).
+const TICK_MS: i16 = 32;
 
 /// An engine class has a loop for each of four players (`engine * 4 + driverID`); ours is the
 /// first player's.
@@ -68,6 +82,26 @@ impl Sounds {
 
     fn lock(&self) -> MutexGuard<'_, Howl> {
         self.0.lock().unwrap()
+    }
+
+    /// `MainFrame_TogglePauseAudio(1)`: the pause stops every sound, to start again with the race.
+    pub fn pause(&self) {
+        let mut sounds = self.lock();
+        sounds.stop_id(MENU_TAKE_SFX);
+        sounds.pause();
+    }
+
+    /// `MainFrame_TogglePauseAudio(0)`: the end of the pause stops the sounds played in it, and
+    /// starts again the ones it stopped.
+    pub fn unpause(&self) {
+        let mut sounds = self.lock();
+        sounds.stop_all(false, true);
+        sounds.unpause();
+    }
+
+    /// A sound of the menus, in the middle.
+    pub fn menu(&self, id: u16) {
+        self.lock().play(id, AntiSpam::CutRecent, howl::Sfx::FULL);
     }
 }
 
@@ -141,6 +175,10 @@ struct Kept {
     engines: Vec<EngineSound>,
     /// What the two loops of the nearest others played last.
     far: [FarVoice; 2],
+    /// Our kart's loops (`driverAudioPtrs`), by [`vehicle::audio_slot`].
+    loops: [Option<Sound>; 4],
+    /// By slot: `VehFire_AudioCooldown`, in milliseconds.
+    boost_cooldowns: Vec<i16>,
     /// The last tick heard: a race that starts again starts everything again.
     tick: u32,
 }
@@ -154,7 +192,7 @@ pub struct Sfx<'w> {
 
 impl Sfx<'_> {
     /// What tick `tick` of `race` asks to be heard: the traffic light that came on, the engines,
-    /// and each kart's sounds (`karts`, by slot). Ours (`own`) play
+    /// each kart's sounds (`karts`, by slot), our kart's loops, and our laps. Ours (`own`) play
     /// in the middle, the others' are heard from where they are (`places`, in world space, by
     /// slot) by the camera `ear`. A race that starts again first stops every sound.
     #[allow(clippy::too_many_arguments)]
@@ -170,15 +208,16 @@ impl Sfx<'_> {
         let drivers: Vec<&Driver> = race.karts.iter().map(|kart| &kart.driver).collect();
         let drivers = &drivers[..];
         let light = race.light;
-        if drivers.get(own).is_none() {
+        let Some(&ours) = drivers.get(own) else {
             return;
-        }
+        };
         let mut sounds = self.sounds.lock();
         let kept = &mut *self.kept;
         if tick < kept.tick || kept.engines.len() != drivers.len() {
-            sounds.stop_all(true);
+            sounds.stop_all(true, true);
             *kept = Kept {
                 engines: vec![EngineSound::default(); drivers.len()],
+                boost_cooldowns: vec![0; drivers.len()],
                 ..Kept::default()
             };
         }
@@ -195,12 +234,39 @@ impl Sfx<'_> {
         }
 
         for (slot, kart) in karts.iter().enumerate() {
+            let Some(&driver) = drivers.get(slot) else {
+                continue;
+            };
+            let cooldown = &mut kept.boost_cooldowns[slot];
+            *cooldown = (*cooldown - TICK_MS).max(0);
             let heard = if slot == own {
                 Some((u8::MAX, CENTRE))
             } else {
                 places.get(slot).and_then(|&at| heard(ear, at))
             };
             for effect in &kart.effects {
+                // The loops are ours alone.
+                match *effect {
+                    Effect::Recycle {
+                        slot: loop_slot,
+                        id,
+                        volume,
+                        distort,
+                        pan,
+                        echo,
+                    } if slot == own => {
+                        let sfx = howl::Sfx {
+                            volume,
+                            distort,
+                            pan,
+                            echo,
+                        };
+                        let playing = &mut kept.loops[loop_slot as usize];
+                        sounds.recycle(playing, id.map(u16::from), sfx);
+                        continue;
+                    }
+                    _ => {}
+                }
                 let Some((volume, pan)) = heard else {
                     continue;
                 };
@@ -219,8 +285,30 @@ impl Sfx<'_> {
                         let sfx = sfx(bump, NO_DISTORTION, echo);
                         sounds.play(howl::crash_sound(bump), AntiSpam::Off, sfx);
                     }
+                    // `VehFire_Audio`, which its cooldown holds back.
+                    Effect::FireAudio { fire_level } if *cooldown == 0 => {
+                        let (loud, distort, _) = fire::audio(fire_level);
+                        let echo = driver.actions_flag_set & actions::ENGINE_ECHO != 0;
+                        let sfx = sfx(loud, distort, echo);
+                        sounds.play(fire::AUDIO_SFX as u16, AntiSpam::CutRecent, sfx);
+                        *cooldown = fire::AUDIO_COOLDOWN_MS;
+                    }
                     _ => {}
                 }
+            }
+        }
+        // A fire that went out in a tick played again (a rollback) still stops its roar.
+        if ours.turbo.is_none() {
+            sounds.recycle_mute(&mut kept.loops[audio_slot::TURBO as usize]);
+        }
+
+        // `PlayLevel_UpdateLapStats` and `Audio_Update1`: a lap of ours, and our win.
+        if let Some(lap) = karts.get(own).map(|kart| kart.lap) {
+            if lap.new_lap {
+                sounds.play(LAP_SFX, AntiSpam::CutRecent, howl::Sfx::FULL);
+            }
+            if lap.finished && ours.driver_rank == 0 {
+                sounds.play(WIN_SFX, AntiSpam::Off, howl::Sfx::FULL);
             }
         }
     }

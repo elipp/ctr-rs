@@ -268,6 +268,10 @@ fn effect_line(e: &Effect, d: &Driver) -> String {
         Effect::DriverCrashing { echo, volume } => format!(" C {} {volume}", echo as u8),
         // Camera state is not part of the comparison.
         Effect::CameraFireSpeedZoom { .. } => String::new(),
+        // The C oracle has no turbo fire, which plays the boost.
+        Effect::FireAudio { .. } => String::new(),
+        // Nor does it run the emitter or the turbo fire, which keep the loops going.
+        Effect::Recycle { .. } => String::new(),
     }
 }
 

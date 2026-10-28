@@ -18,6 +18,7 @@ use render::font::{Font, Gradient};
 use crate::command::Action;
 use crate::font::{CtrText, TexelSize};
 use crate::lobby::Lobby;
+use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 
 /// Whether the menu is open, and what it was asked to do.
 #[derive(Resource, Default)]
@@ -93,30 +94,50 @@ impl Plugin for PausePlugin {
     }
 }
 
-/// Opens and closes the menu, moves the pick and takes an item.
+/// Opens and closes the menu, moves the pick and takes an item, with the menu's sounds. Offline
+/// it pauses the race's sounds too (`MainFreeze_IfPressStart`, `MainFrame_TogglePauseAudio`).
+#[allow(clippy::too_many_arguments)]
 fn input(
     mut menu: ResMut<PauseMenu>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     lobby: Res<Lobby>,
+    sounds: Option<Res<Sounds>>,
     mut actions: MessageWriter<Action>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let was_open = menu.open;
+    let offline = lobby.online.is_none();
+    let sound = |id| {
+        if let Some(sounds) = &sounds {
+            sounds.menu(id);
+        }
+    };
     let key = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         menu.open = !menu.open;
         menu.selected = 0;
         menu.clicked = None;
+        if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
+            if menu.open {
+                sounds.pause();
+            } else {
+                sounds.unpause();
+            }
+        }
+        sound(MENU_TAKE_SFX);
+        return finish(was_open, &menu, &mut keys);
     } else if menu.open {
         let items = items(&lobby);
         let count = items.len();
         if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) {
             menu.selected = (menu.selected + count - 1) % count;
+            sound(MENU_MOVE_SFX);
         }
         if key(&[KeyCode::ArrowDown, KeyCode::KeyS]) || pad(GamepadButton::DPadDown) {
             menu.selected = (menu.selected + 1) % count;
+            sound(MENU_MOVE_SFX);
         }
         let taken = if key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
             || pad(GamepadButton::South)
@@ -125,7 +146,11 @@ fn input(
         } else {
             menu.clicked.take()
         };
+        if taken.is_some() {
+            sound(MENU_TAKE_SFX);
+        }
         if key(&[KeyCode::Backspace]) || pad(GamepadButton::North) {
+            sound(MENU_BACK_SFX);
             menu.open = false;
         }
         match taken.and_then(|i| items.get(i)) {
@@ -143,8 +168,18 @@ fn input(
             }
             None => {}
         }
+        // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
+        if !menu.open
+            && let Some(sounds) = sounds.as_ref().filter(|_| offline)
+        {
+            sounds.unpause();
+        }
     }
-    // The keys that opened, worked or closed the menu are not for anything else.
+    finish(was_open, &menu, &mut keys);
+}
+
+/// The keys that opened, worked or closed the menu are not for anything else.
+fn finish(was_open: bool, menu: &PauseMenu, keys: &mut ButtonInput<KeyCode>) {
     if was_open || menu.open {
         keys.reset_all();
     }
