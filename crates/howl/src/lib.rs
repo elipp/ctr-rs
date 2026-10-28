@@ -7,6 +7,8 @@
 //! the sounds' time and passes what changed on to the voices (`howl_PlayAudio_Update`), so
 //! [`Howl::render`] is the clock of the sounds as the console's is.
 //!
+//! The voice lines ([`voiceline`]) grunt, and queue the lines they would speak.
+//!
 //! The [`music`] is the songs of the level's song pack, which play their notes on the channels
 //! too; the states of a race ([`state`]) start, fade and stop them.
 //!
@@ -23,6 +25,7 @@ pub mod reverb;
 pub mod spu;
 pub mod state;
 pub mod tables;
+pub mod voiceline;
 
 use std::io;
 use std::path::Path;
@@ -86,6 +89,9 @@ pub struct Howl {
     pub frame: u32,
     /// What `howl_PauseAudio` took off the channels (`channelStatsCurr`).
     paused: Vec<Stats>,
+    pub(crate) voicelines: voiceline::Voicelines,
+    /// `audioRNG`, which the voice lines draw from.
+    pub(crate) rng: u32,
     /// `curReverb`: one of [`REVERBS`], or their number for none.
     reverb: u16,
     /// `audioState`: where the race is, none before it starts.
@@ -115,6 +121,8 @@ impl Howl {
             count: 0,
             frame: 0,
             paused: Vec::new(),
+            voicelines: voiceline::Voicelines::default(),
+            rng: 0x15a3_7e63,
             // `SetReverbMode(5)`, which the SPU's reverb already is: off, and not heard.
             reverb: REVERBS.len() as u16,
             state: None,

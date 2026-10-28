@@ -56,12 +56,14 @@ fn the_sounds_the_karts_send_once_do_not_loop() {
         return;
     };
     // The ids of `Effect::Sound` in `vehicle` and `race`, the bumps of `crash_sound`, the boost,
-    // the menu's, the lap's and the win's.
+    // the menu's, the lap's and the win's, and the grunts.
     let once = [
         6, 7, 8, 10, 11, 12, 0xf, 0x10, 21, 0x41, 0x42, 0x47, 0x4a, 0x52, 0x53, 0x54, 0x55, 0x57,
         0x58, 0x5a, 0x5b, 0x69, 0x71, 0x7e, 0xd, 0, 1, 2, 5, 0x66, 0x5f, 0x3c, 0x43, 0x49, 0x4c,
         0x3d, 0x3f, 0x50, 0x51, 0x3e, 0x70, 0x81,
-    ];
+    ]
+    .into_iter()
+    .chain(0x1c..0x3c);
     let fx = howl.other_fx();
     for id in once {
         assert_eq!(

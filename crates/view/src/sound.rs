@@ -238,7 +238,7 @@ pub struct Sfx<'w> {
 
 impl Sfx<'_> {
     /// What tick `tick` of `race` (on `level`) asks to be heard: the traffic light that came on,
-    /// the engines, each kart's sounds (`karts`, by slot), our kart's loops, our
+    /// the engines, each kart's sounds and voice lines (`karts`, by slot), our kart's loops, our
     /// laps and item roulette, the sounds of the objects and the weapons, and where the race is
     /// for the music. Ours (`own`) play in the middle, the others' are heard from where they are
     /// (`places`, in world space, by slot) by the camera `ear`. A race that starts again first
@@ -264,6 +264,7 @@ impl Sfx<'_> {
         let kept = &mut *self.kept;
         if tick < kept.tick || kept.engines.len() != drivers.len() {
             sounds.stop_all(true, true, true);
+            sounds.clear_voicelines();
             sounds.set_state(State::Traffic);
             *kept = Kept {
                 engines: vec![EngineSound::default(); drivers.len()],
@@ -296,11 +297,24 @@ impl Sfx<'_> {
                 places.get(slot).and_then(|&at| heard(ear, at))
             };
             for effect in &kart.effects {
-                // The loops are ours alone, and what a kart sends off is heard from where it is.
+                // The voice lines are not heard from anywhere, the loops are ours alone, and what
+                // a kart sends off is heard from where it is.
                 match *effect {
                     Effect::Sound3D(sound) => {
                         let echo = driver.actions_flag_set & actions::ENGINE_ECHO != 0;
                         play_3d(&mut sounds, ear, &sound, echo);
+                        continue;
+                    }
+                    Effect::Voiceline {
+                        id,
+                        driver_id,
+                        priority,
+                    } => {
+                        let character = drivers
+                            .iter()
+                            .find(|d| d.driver_id == driver_id)
+                            .map_or(driver.character, |d| d.character);
+                        sounds.request_voiceline(id, character, priority, finished);
                         continue;
                     }
                     Effect::Recycle {
@@ -343,10 +357,15 @@ impl Sfx<'_> {
                     }
                     // `VehFire_Audio`, which its cooldown holds back.
                     Effect::FireAudio { fire_level } if *cooldown == 0 => {
-                        let (loud, distort, _) = fire::audio(fire_level);
+                        let (loud, distort, cheer) = fire::audio(fire_level);
                         let echo = driver.actions_flag_set & actions::ENGINE_ECHO != 0;
                         let sfx = sfx(loud, distort, echo);
                         sounds.play(fire::AUDIO_SFX as u16, AntiSpam::CutRecent, sfx);
+                        if cheer {
+                            let (voice, priority) =
+                                (fire::BIG_BOOST_VOICELINE, fire::VOICELINE_PRIORITY);
+                            sounds.request_voiceline(voice, driver.character, priority, finished);
+                        }
                         *cooldown = fire::AUDIO_COOLDOWN_MS;
                     }
                     _ => {}
@@ -362,6 +381,7 @@ impl Sfx<'_> {
         if let Some(lap) = karts.get(own).map(|kart| kart.lap) {
             if lap.new_lap {
                 sounds.play(LAP_SFX, AntiSpam::CutRecent, howl::Sfx::FULL);
+                sounds.clear_voiceline_times();
             }
             if lap.finished && ours.driver_rank == 0 {
                 sounds.play(WIN_SFX, AntiSpam::Off, howl::Sfx::FULL);
