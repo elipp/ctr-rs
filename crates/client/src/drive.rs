@@ -885,6 +885,7 @@ fn drive_tick(
     // Everyone's exhaust and sparks, ours and the others' (the others' as the sim has them).
     for (slot, kart) in ticks.iter().enumerate() {
         particles.sparks(slot, kart.landing, kart.wall);
+        particles.spray(slot, &kart.spray, tick);
         particles.puffs(slot, &kart.puffs);
     }
     particles.tick();

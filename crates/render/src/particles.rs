@@ -6,7 +6,7 @@
 //! These are cosmetic, so they run on the renderer's side with a private
 //! random generator. (Retail draws from the game's shared generator
 //! (`RngDeadCoed`), which gameplay such as the item roll also uses.)
-//! Supported: the axis and function entries of emitters, no oscillators; and the
+//! Supported: the axis and function entries of emitters, and the square-wave oscillator; and the
 //! rotate-and-scale sprite (`ROT_Y` with `SCALE_X`) that `Particle_RenderList` draws.
 
 use crate::mesh::SCALE;
@@ -61,6 +61,10 @@ pub mod color_flags {
     pub const DRIVER_LOCAL: u16 = 0x800;
     /// Drawn as a line from where the particle was a tick ago, not as a sprite.
     pub const SPECIAL_LINE: u16 = 0x1000;
+    /// A line's tail fades to black. Without it, the tail has the colour the head had.
+    pub const LINE_KEEP_PREVIOUS: u16 = 0x4000;
+    /// The sprite or line is blended with the picture, not drawn over it.
+    pub const SEMI_TRANSPARENT: u16 = 0x80;
 }
 
 /// `ParticleEmitterFlags`
@@ -90,6 +94,57 @@ pub enum Entry {
         base: [i32; 3],
         random: [i32; 3],
     },
+    /// An oscillator on an axis (`PARTICLE_EMITTER_FLAG_OSCILLATOR`): a wave added to it.
+    /// Only the square wave is supported.
+    Oscillator {
+        axis: usize,
+        flags: u16,
+        period: u16,
+        phase: i16,
+        scale: u16,
+        offset: i16,
+        min: i16,
+        max: i16,
+    },
+}
+
+/// `ParticleOscillatorFlags` and `ParticleOscillatorMode`
+mod oscillator_flags {
+    pub const MODE_MASK: u16 = 0x7;
+    pub const MODE_SQUARE: u16 = 4;
+    pub const SKIP_PREVIOUS_SUBTRACT: u16 = 0x8;
+    pub const APPLY_TO_VELOCITY: u16 = 0x10;
+}
+
+/// `struct ParticleOscillator`: what a particle's axis is pushed by on every tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Oscillator {
+    axis: usize,
+    flags: u16,
+    period: u16,
+    phase: i16,
+    scale: u16,
+    offset: i16,
+    min: i16,
+    max: i16,
+    /// What it added last tick, which it takes back first.
+    previous: i16,
+}
+
+impl Oscillator {
+    /// `Particle_UpdateList`'s oscillator, for a square wave: its value at `clock` ticks.
+    fn value(&self, clock: u32) -> i16 {
+        let time = (clock as i32).wrapping_add(self.phase as i32);
+        let wave = if (i32::from(self.period).wrapping_mul(time) >> 6) & 0x400 != 0 {
+            0x1000
+        } else {
+            -0x1000
+        };
+        let value = ((wave + self.offset as i32).wrapping_mul(self.scale as i32)) >> 12;
+        // (Clamped with the minimum last, as the game does.)
+        let value = value.min(self.max as i32);
+        value.max(self.min as i32) as i16
+    }
 }
 
 /// `data.emSet_Exhaust_High`: the exhaust of a single player.
@@ -187,6 +242,135 @@ pub const GROUND_SPARKS: [Entry; 8] = [
         random: [0, 0, 0],
     },
 ];
+
+/// The axes of the emitter sets of the ground (`emSet_DirtLR`, `emSet_GrassL`, `emSet_GrassR`,
+/// `emSet_SnowLR`): a short streak thrown up from a tire, back and to the sides.
+const fn ground_axes(velocity_y: i32) -> [Entry; 3] {
+    [
+        Entry::Axis {
+            flags: 27,
+            axis: 0,
+            base: [-2560, -500, 0],
+            random: [5120, 1000, 0],
+        },
+        Entry::Axis {
+            flags: 27,
+            axis: 2,
+            base: [-2560, -500, 0],
+            random: [5120, 1000, 0],
+        },
+        Entry::Axis {
+            flags: 23,
+            axis: 1,
+            base: [2560, velocity_y, -300],
+            random: [0, 400, 0],
+        },
+    ]
+}
+
+/// `data.emSet_DirtLR`: dirt, a streak that goes from orange to brown, added to the picture.
+pub const TERRAIN_DIRT: [Entry; 7] = {
+    let [x, z, y] = ground_axes(1500);
+    [
+        Entry::Func {
+            flags: 1,
+            color_flags: 0x58a2,
+            lifespan: 10,
+        },
+        x,
+        z,
+        y,
+        Entry::Axis {
+            flags: 3,
+            axis: 7,
+            base: [65280, -2048, 0],
+            random: [0, 0, 0],
+        },
+        Entry::Axis {
+            flags: 3,
+            axis: 8,
+            base: [32768, -1024, 0],
+            random: [0, 0, 0],
+        },
+        Entry::Axis {
+            flags: 1,
+            axis: 9,
+            base: [1, 0, 0],
+            random: [0, 0, 0],
+        },
+    ]
+};
+
+/// `data.emSet_SnowLR`: snow, a white streak.
+pub const TERRAIN_SNOW: [Entry; 5] = {
+    let [x, z, y] = ground_axes(2000);
+    [
+        Entry::Func {
+            flags: 1,
+            color_flags: 0x58a2,
+            lifespan: 10,
+        },
+        x,
+        z,
+        y,
+        Entry::Axis {
+            flags: 1,
+            axis: 7,
+            base: [65280, 0, 0],
+            random: [0, 0, 0],
+        },
+    ]
+};
+
+/// The grass's streaks (`emSet_GrassL` and `emSet_GrassR`): solid ones, twice as long as the
+/// distance they cover in a tick, that jump up two units and down again every other tick.
+const fn grass(red: i32, green: i32) -> [Entry; 8] {
+    let [x, z, y] = ground_axes(2000);
+    [
+        Entry::Func {
+            flags: 1,
+            color_flags: 0x1800,
+            lifespan: 10,
+        },
+        x,
+        z,
+        y,
+        Entry::Oscillator {
+            axis: 1,
+            flags: oscillator_flags::MODE_SQUARE,
+            period: 0x9600,
+            phase: 0,
+            scale: 0x100,
+            offset: 0x1000,
+            min: 1,
+            max: 0x200,
+        },
+        Entry::Axis {
+            flags: 1,
+            axis: 5,
+            base: [131072, 0, 0],
+            random: [0, 0, 0],
+        },
+        Entry::Axis {
+            flags: 1,
+            axis: 7,
+            base: [red, 0, 0],
+            random: [0, 0, 0],
+        },
+        Entry::Axis {
+            flags: 1,
+            axis: 8,
+            base: [green, 0, 0],
+            random: [0, 0, 0],
+        },
+    ]
+}
+
+/// `data.emSet_GrassL`: a light green (the blue is the red).
+pub const TERRAIN_GRASS_LIGHT: [Entry; 8] = grass(15360, 65280);
+
+/// `data.emSet_GrassR`: a dark green.
+pub const TERRAIN_GRASS_DARK: [Entry; 8] = grass(1, 40960);
 
 /// `data.emSet_WallSparks`: a spark from a scrape along a wall.
 pub const WALL_SPARKS: [Entry; 8] = [
@@ -540,6 +724,10 @@ pub struct Particle {
     pub spit: Option<SpitTire>,
     /// A shard of a beaker that burst (`Particle_FuncPtr_PotionShatter`).
     pub shatter: Option<Shatter>,
+    /// The wave on one of its axes, and the game's `frameTimer_Confetti` that it runs by (the
+    /// tick the particle began on, counting on).
+    pub oscillator: Option<Oscillator>,
+    pub clock: u32,
 }
 
 /// What `Particle_FuncPtr_PotionShatter` needs: which colour fades, and its own source of
@@ -579,9 +767,35 @@ impl Particle {
             icons: 0,
             spit: None,
             shatter: None,
+            oscillator: None,
+            clock: 0,
         };
         for entry in set {
             match *entry {
+                Entry::Oscillator {
+                    axis,
+                    flags,
+                    period,
+                    phase,
+                    scale,
+                    offset,
+                    min,
+                    max,
+                } => {
+                    p.oscillator = Some(Oscillator {
+                        axis,
+                        flags,
+                        period,
+                        phase,
+                        scale,
+                        offset,
+                        min,
+                        max,
+                        previous: 0,
+                    });
+                    // An axis that nothing else started begins at zero.
+                    p.axis_flags |= 1 << axis;
+                }
                 Entry::Func {
                     color_flags,
                     lifespan,
@@ -830,6 +1044,26 @@ impl Particle {
         p
     }
 
+    /// `VehEmitter_Terrain_Ground`: a streak of what the ground is made of, from the tire at
+    /// `tire` (game units from the kart); `rotate` turns its velocity into the world's axes.
+    /// `timer` is the game's frame counter, which the wave of the grass runs by.
+    pub fn terrain_spray(
+        set: &[Entry],
+        tire: [i32; 3],
+        rotate: impl Fn([i32; 3]) -> [i32; 3],
+        timer: u32,
+        rng: &mut Rng,
+    ) -> Particle {
+        let mut p = Particle::new(set, rng);
+        p.clock = timer;
+        let velocity = rotate(std::array::from_fn(|a| p.axes[a].velocity as i32));
+        for a in 0..3 {
+            p.axes[a].start += tire[a] << 8;
+            p.axes[a].velocity = velocity[a] as i16;
+        }
+        p
+    }
+
     /// `VehEmitter_Sparks_Wall`: a spark from the tire at `tire`; `rotate` turns its velocity
     /// into the world's axes.
     pub fn wall_spark(
@@ -859,8 +1093,28 @@ impl Particle {
             if self.axis_flags >> n & 1 != 0 {
                 a.start = a.start.wrapping_add(a.velocity as i32);
                 a.velocity = a.velocity.wrapping_add(a.accel);
+                if let Some(osc) = self.oscillator.as_mut().filter(|o| o.axis == n)
+                    && osc.flags & oscillator_flags::MODE_MASK == oscillator_flags::MODE_SQUARE
+                {
+                    let to_velocity = osc.flags & oscillator_flags::APPLY_TO_VELOCITY != 0;
+                    let value = osc.value(self.clock);
+                    if osc.flags & oscillator_flags::SKIP_PREVIOUS_SUBTRACT == 0 {
+                        if to_velocity {
+                            a.velocity = a.velocity.wrapping_sub(osc.previous);
+                        } else {
+                            a.start = a.start.wrapping_sub(osc.previous as i32);
+                        }
+                    }
+                    if to_velocity {
+                        a.velocity = a.velocity.wrapping_add(value);
+                    } else {
+                        a.start = a.start.wrapping_add(value as i32);
+                    }
+                    osc.previous = value;
+                }
             }
         }
+        self.clock = self.clock.wrapping_add(1);
         self.spit_tire();
         self.potion_shatter_step();
         if self.color_flags & color_flags::DESTROY_ON_SCALE_EXPIRE != 0 {
@@ -948,13 +1202,24 @@ impl Particle {
         self.color_flags & color_flags::SPECIAL_LINE != 0
     }
 
+    /// Whether a line fades to black at its tail, and not the colour of its head.
+    pub fn line_fades(&self) -> bool {
+        self.color_flags & color_flags::LINE_KEEP_PREVIOUS != 0
+    }
+
+    /// Whether it is blended with the picture behind it.
+    pub fn semi_transparent(&self) -> bool {
+        self.color_flags & color_flags::SEMI_TRANSPARENT != 0
+    }
+
     /// Where the tail of a line is, relative to its head, in 1/256 game units: the way the
     /// particle came in the last tick, `scale` times (65536 is once).
     pub fn line_tail(&self) -> [i32; 3] {
+        // (Without a scale, the line is as long as the way the particle came.)
         let scale = if self.axis_flags & axis_flags::SCALE_X != 0 {
             self.axes[axis::SCALE_X].start
         } else {
-            0
+            0x10000
         };
         std::array::from_fn(|a| {
             (((self.previous[a] - self.axes[a].start) as i64 * scale as i64) >> 16) as i32
@@ -1029,6 +1294,51 @@ pub fn quarter_units_to_world(v: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spray(set: &[Entry], timer: u32) -> Particle {
+        Particle::terrain_spray(set, [-30, 10, -20], |v| v, timer, &mut Rng::new(7))
+    }
+
+    #[test]
+    fn a_streak_of_dirt_starts_at_the_tire_and_lives_ten_ticks() {
+        let mut p = spray(&TERRAIN_DIRT, 0);
+        assert!(p.is_line() && p.line_fades() && p.semi_transparent());
+        // The tire's place, and the random spread of the entry.
+        assert!((p.position()[0] - (-30 * 256 - 2560)).abs() <= 5120);
+        let mut ticks = 0;
+        while p.update() {
+            ticks += 1;
+        }
+        assert_eq!(ticks, 10);
+    }
+
+    #[test]
+    fn snow_is_white_and_dirt_orange() {
+        assert_eq!(spray(&TERRAIN_SNOW, 0).rgb(), [255, 255, 255]);
+        let [r, g, b] = spray(&TERRAIN_DIRT, 0).rgb();
+        assert!(r == 255 && g == 128 && b == 0, "{r} {g} {b}");
+    }
+
+    #[test]
+    fn grass_is_solid_green_in_two_shades_and_flickers_up_and_down() {
+        let light = spray(&TERRAIN_GRASS_LIGHT, 0);
+        let dark = spray(&TERRAIN_GRASS_DARK, 0);
+        assert!(light.is_line() && !light.line_fades() && !light.semi_transparent());
+        assert_eq!(light.rgb(), [60, 255, 60]);
+        assert_eq!(dark.rgb(), [0, 160, 0]);
+        // Without the wave the height follows the velocity; with it, it is 1 or 0x200 above.
+        let mut p = spray(&TERRAIN_GRASS_LIGHT, 0);
+        let mut plain = p.clone();
+        plain.oscillator = None;
+        let mut offsets = Vec::new();
+        for _ in 0..8 {
+            p.update();
+            plain.update();
+            offsets.push(p.position()[1] - plain.position()[1]);
+        }
+        assert!(offsets.iter().all(|&o| o == 1 || o == 0x200), "{offsets:?}");
+        assert!(offsets.contains(&1) && offsets.contains(&0x200), "{offsets:?}");
+    }
 
     fn puff(dark: bool) -> Particle {
         Particle::exhaust(
