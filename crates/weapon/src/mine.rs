@@ -157,6 +157,8 @@ pub struct Release<'a> {
     pub gte: &'a mut Gte,
     /// A potion, and how; `None` for the TNT item's crate.
     pub potion: Option<Throw>,
+    /// The temple doors, as of the start of the tick.
+    pub doors: &'a Doors,
 }
 
 /// What a mine is doing.
@@ -290,6 +292,7 @@ impl Weapons {
             driver,
             gte,
             potion,
+            doors,
         } = release;
         let juiced = driver.num_wumpas >= crate::JUICED;
         let kind = match (potion.is_some(), juiced) {
@@ -342,6 +345,7 @@ impl Weapons {
 
         // Where the ground is, and whether it was dropped into a level instance.
         let mut coll = Collision::default();
+        coll.door_access_flags = doors.access;
         {
             let q = &mut coll.sps.quad_block_coll;
             q.quad_flags_wanted = quad_flags::GROUND as u32;
@@ -390,14 +394,13 @@ impl Weapons {
             let mut m = self.mines[me].clone();
             let mut random_number = 0;
             let mut tick = std::mem::take(&mut self.pending);
-            let doors = Doors::default();
             let mut c = Ctx {
                 bodies,
                 elapsed_ms,
                 random_number: &mut random_number,
                 tick: &mut tick,
                 level: Some(level),
-                doors: &doors,
+                doors,
                 coll: &mut coll,
             };
             self.destroy(me, &mut m, &mut c);
