@@ -258,7 +258,8 @@ mod tests {
         crate::fire::increment(
             &mut d,
             0x960,
-            crate::fire::turbo_type::FREEZE_RESERVES_ON_TURBO_PAD | crate::fire::turbo_type::TURBO_ITEM,
+            crate::fire::turbo_type::FREEZE_RESERVES_ON_TURBO_PAD
+                | crate::fire::turbo_type::TURBO_ITEM,
             0x80,
             &mut vec![],
         );

@@ -61,6 +61,7 @@ mod tracker;
 mod weapon;
 mod weather;
 mod wheels;
+mod wrong_way;
 mod wumpa_icon;
 
 use bevy::prelude::*;
@@ -239,6 +240,7 @@ fn main() {
             heat::HeatPlugin,
             slide_meter::SlideMeterPlugin,
             toast::ToastPlugin,
+            wrong_way::WrongWayPlugin,
         ),
         config::ConfigPlugin,
         probe::ProbePlugin,
