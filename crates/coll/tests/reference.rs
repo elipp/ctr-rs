@@ -471,6 +471,7 @@ fn matches_reference_on_random_triangles() {
         paths: Vec::new(),
         fly_in: None,
         skybox: None,
+        clear_colors: [None; 3],
         quad_blocks: Vec::new(),
         vertices: Vec::new(),
         bsp: Vec::new(),

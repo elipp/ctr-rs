@@ -546,6 +546,7 @@ pub(crate) fn setup(
                 &mut meshes,
                 &mut materials,
                 skybox,
+                level.clear_colors[0],
                 perspective.clone(),
             );
         }
@@ -595,6 +596,7 @@ pub(crate) fn setup(
                 &mut meshes,
                 &mut materials,
                 skybox,
+                level.clear_colors[0],
                 default(),
             );
         }
