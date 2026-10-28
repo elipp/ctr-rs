@@ -682,12 +682,18 @@ fn drive_tick(
             if slot < sim.race.players() {
                 net.frozen[slot] = true;
                 let (first, pads) = sim.race.recent(slot);
-                reports.push((slot, first, pads.iter().map(|p| net::Pad {
-                    held: p.held,
-                    lx: p.lx,
-                    ly: p.ly,
-                    ry: p.ry,
-                }).collect::<Vec<_>>()));
+                reports.push((
+                    slot,
+                    first,
+                    pads.iter()
+                        .map(|p| net::Pad {
+                            held: p.held,
+                            lx: p.lx,
+                            ly: p.ly,
+                            ry: p.ry,
+                        })
+                        .collect::<Vec<_>>(),
+                ));
             }
         }
         // The host settled where the pads of a player that left end: everyone ends them there.
@@ -698,8 +704,14 @@ fn drive_tick(
             let pads: Vec<Pad> = pads.iter().map(pad_of).collect();
             if let Err(hole) = sim.race.confirm_all(slot, first, &pads) {
                 // More than the pads kept were missing.
-                error!("the pads of player {slot} that left: missing from {}", hole.expected);
-                net.found([race::desync::Mismatch { tick: hole.expected, slot }]);
+                error!(
+                    "the pads of player {slot} that left: missing from {}",
+                    hole.expected
+                );
+                net.found([race::desync::Mismatch {
+                    tick: hole.expected,
+                    slot,
+                }]);
             }
             sim.race.leave(slot);
             net.frozen[slot] = true;
@@ -735,8 +747,11 @@ fn drive_tick(
                 .collect();
             let text = format!("Waiting for {}...", names.join(", "));
             cues.toasts.write(
-                Toast::new(text, WAIT_TOAST_TICKS as u64 * 1000 / crate::GAME_TICK_HZ as u64)
-                    .color(Color::srgb(1.0, 0.8, 0.2)),
+                Toast::new(
+                    text,
+                    WAIT_TOAST_TICKS as u64 * 1000 / crate::GAME_TICK_HZ as u64,
+                )
+                .color(Color::srgb(1.0, 0.8, 0.2)),
             );
         }
         *waited += 1;

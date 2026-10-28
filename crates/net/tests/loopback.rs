@@ -235,10 +235,14 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
     });
     let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
-    wait_for(&host, "the first peer", |e| matches!(e, Event::PeerJoined(_)));
+    wait_for(&host, "the first peer", |e| {
+        matches!(e, Event::PeerJoined(_))
+    });
     let second = net::join(ticket.unwrap(), 11, "", BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
-    wait_for(&host, "the second peer", |e| matches!(e, Event::PeerJoined(_)));
+    wait_for(&host, "the second peer", |e| {
+        matches!(e, Event::PeerJoined(_))
+    });
     std::thread::sleep(Duration::from_secs(8));
     host.start(5, 0);
     for session in [&host, &first, &second] {
@@ -251,14 +255,22 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
 
     // The last guest goes. The host and the other guest hold different amounts of its pads.
     drop(second);
-    wait_for(&host, "the host to hear of it", |e| matches!(e, Event::Gone { slot: 2 }));
-    wait_for(&first, "the guest to hear of it", |e| matches!(e, Event::Gone { slot: 2 }));
+    wait_for(&host, "the host to hear of it", |e| {
+        matches!(e, Event::Gone { slot: 2 })
+    });
+    wait_for(&first, "the guest to hear of it", |e| {
+        matches!(e, Event::Gone { slot: 2 })
+    });
     let pads: Vec<Pad> = (0..5).map(|t| pad(2, t)).collect();
     host.have(2, 0, pads[..3].to_vec());
     first.have(2, 0, pads.clone());
     for session in [&host, &first] {
         wait_for(session, "the pads to be settled", |e| match e {
-            Event::Left { slot, first, pads: got } => {
+            Event::Left {
+                slot,
+                first,
+                pads: got,
+            } => {
                 assert_eq!((slot, first), (2, 0));
                 assert_eq!(got, pads);
                 true

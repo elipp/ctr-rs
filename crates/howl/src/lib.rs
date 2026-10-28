@@ -163,7 +163,9 @@ impl Howl {
             *slot = header.adpcm(&mut disc, sample)?.map(Vec::into_boxed_slice);
         }
         let mut howl = Howl::new(header.other_fx, header.engine_fx, packs, samples);
-        howl.xnf = loader::disc::open_xa(path).map(|(xnf, _)| xnf).unwrap_or_default();
+        howl.xnf = loader::disc::open_xa(path)
+            .map(|(xnf, _)| xnf)
+            .unwrap_or_default();
         Ok(howl)
     }
 

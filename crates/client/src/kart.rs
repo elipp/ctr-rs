@@ -115,9 +115,7 @@ impl Smoothing {
             Smoothing::Ping => ping.map_or(PING_UNKNOWN, |rtt| {
                 rtt.mul_f32(PING_ROUND_TRIPS).clamp(PING_MIN, PING_MAX)
             }),
-            Smoothing::Replay => tick
-                .mul_f32(replayed + 1.0)
-                .clamp(REPLAY_MIN, REPLAY_MAX),
+            Smoothing::Replay => tick.mul_f32(replayed + 1.0).clamp(REPLAY_MIN, REPLAY_MAX),
         };
         let ticks = duration.as_secs_f32() * crate::GAME_TICK_HZ as f32;
         if ticks < 1.0 {
