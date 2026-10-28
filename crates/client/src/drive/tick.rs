@@ -93,6 +93,7 @@ pub(super) fn drive_tick(
         // Nothing moves between ticks now, so the interpolation must not either.
         drive.previous_view = drive.current_view;
         drive.weather.freeze();
+        drive.confetti.freeze();
         for (mut motion, _, _) in &mut motions {
             motion.freeze();
         }
@@ -161,6 +162,7 @@ pub(super) fn drive_tick(
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         drive.weather = crate::weather::WeatherView::new(&track.0);
+        drive.confetti = default();
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
 
@@ -463,6 +465,9 @@ pub(super) fn drive_tick(
         drive.camera.fly_in(&track.0, fly_in_frame);
     }
     drive.weather.step(&track.0, &drive.camera, jumped);
+    let ours = &sim.race.karts[sim.own].driver;
+    let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
+    drive.confetti.step(&drive.camera, won);
 
     // The offsets of the others' karts fade as far as their players' pings call for.
     for (mut motion, slot, ours) in &mut motions {
