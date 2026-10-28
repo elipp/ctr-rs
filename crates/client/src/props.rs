@@ -127,6 +127,8 @@ struct Shown {
     parts: [Option<Handle<Mesh>>; PARTS],
     /// The animation and frame the mesh has.
     shown: Option<(u8, i16)>,
+    /// The sim does not draw it (a door that is fully open).
+    hidden: bool,
 }
 
 impl Shown {
@@ -158,7 +160,7 @@ impl Shown {
 }
 
 /// The objects that move or animate by the sim and have a pose to show for it
-/// (`Objects::pose`): armadillos, minecarts, spiders, seals and plants.
+/// (`Objects::pose`): armadillos, minecarts, spiders, seals, plants and the temple door.
 #[derive(Resource, Default)]
 pub struct Hazards(Vec<Shown>);
 
@@ -452,6 +454,7 @@ pub fn spawn(
             inst_scale,
             parts: Default::default(),
             shown: None,
+            hidden: false,
         };
         let (transform, parent) = match by_instance.get(&n) {
             Some(&slot @ (Slot::Roller(_) | Slot::Drum(_))) => (
@@ -600,19 +603,28 @@ pub fn pose_hazards(
             continue;
         };
         h.moved(pose.pos, &pose.matrix);
+        h.hidden = pose.hidden;
         h.pose(pose.animation, &mut meshes);
     }
 }
 
 /// Puts the hazards between their last two ticks.
 pub fn place_hazards(
-    mut bodies: Query<(&HazardBody, &mut Transform)>,
+    mut bodies: Query<(&HazardBody, &mut Transform, &mut Visibility)>,
     hazards: Res<Hazards>,
     fixed: Res<Time<Fixed>>,
 ) {
     let t = fixed.overstep_fraction();
-    for (body, mut transform) in &mut bodies {
+    for (body, mut transform, mut visibility) in &mut bodies {
         let s = &hazards.0[body.0];
+        let want = if s.hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *visibility != want {
+            *visibility = want;
+        }
         // The path of a minecart restarts with a jump, which must not be smoothed over.
         let jump = s.previous.0.distance(s.current.0) > 5.0;
         let from = if jump { s.current } else { s.previous };

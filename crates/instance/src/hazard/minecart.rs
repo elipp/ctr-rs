@@ -139,6 +139,7 @@ impl Instance for Minecart {
             pos: self.pos,
             matrix: self.matrix,
             animation: (0, self.anim_frame),
+            hidden: false,
         })
     }
 

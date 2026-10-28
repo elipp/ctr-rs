@@ -369,7 +369,30 @@ impl Race {
         assert_eq!(pads.len(), self.karts.len(), "one pad for each kart");
         // The objects tick with the karts and before them, so that the contacts they give are
         // this tick's.
-        self.last = self.objects.tick();
+        let blockers: Vec<instance::Blocker> = self
+            .karts
+            .iter()
+            .map(|k| instance::Blocker {
+                model: coll::model_id::PLAYER,
+                at: weapon::Body::of(&k.driver).at,
+            })
+            .chain(
+                self.weapons
+                    .mines()
+                    .iter()
+                    .filter(|m| !m.is_dead())
+                    .map(|m| instance::Blocker {
+                        model: m.kind.model(),
+                        at: m.pos,
+                    }),
+            )
+            .collect();
+        self.last = self.objects.tick(&blockers);
+        // The doors as the karts and the weapons find them this tick.
+        let doors = self.objects.doors();
+        for kart in &mut self.karts {
+            kart.coll.door_access_flags = doors.access;
+        }
         self.light = None;
         if self.tick >= self.intro_ticks && self.lights_ms > LIGHTS_FLOOR_MS {
             let before = self.lights_ms;
@@ -518,7 +541,11 @@ impl Race {
             &bodies,
             env.elapsed_time_ms,
             &mut self.objects.random_number,
+            &doors,
         );
+        for &instance in &self.last_weapons.opened_doors {
+            self.objects.open_door(instance);
+        }
         for hit in &self.last_weapons.crate_hits {
             self.objects
                 .hit(hit.instance, &mut self.karts[hit.owner].driver, hit.model);
