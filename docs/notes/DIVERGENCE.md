@@ -80,3 +80,7 @@ This file is for the places where the port _intentionally_ differs from the orig
 - A track that cannot be read is over at the next frame of the game, where `CDSYS_XAPlay` fails at once (a voice line's cooldown is then that of a line that played, not the second of one that did not).
 - `CDSYS_XAPauseAtEnd` runs every frame the viewer draws, a pause's too, not every frame of the game: what it does goes by the XA's time, which runs with the audio, so only when a track that is over is seen to be changes.
 - A race that starts again stops the XA at once (`CDSYS_XAPauseForce`); retail fades it out as the level loads (`AUDIO_LOADING`).
+
+**Tiger Temple door (2026-10-28, NOT visually verified):** `instance::hazard::teeth` (`RB_Teeth_*`), `coll::doors` (`doorAccessFlags` and `RB_Teeth_LInC` as the karts and weapons read them), `weapon` (`Tick::opened_doors`, the door in `fly` and `RB_Potion_ThTick_InAir`). Intentional differences:
+- `RB_Teeth_OpenDoor` plays its sound (0x75) at once; ours plays on the door's next tick, as it is the thread's to emit (`Tick::sounds`), and a weapon's hit is applied after the tick.
+- A weapon's distance from the door's plane (the test of `RB_Teeth_LInC` that decides whether the hitbox stops it) is taken at the weapon's own position. Retail reads `sps->Input1.pos`, which the search of a moving explosive does not obviously set; not checked.

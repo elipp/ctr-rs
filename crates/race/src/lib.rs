@@ -458,6 +458,7 @@ impl Race {
                                 driver: &kart.driver,
                                 gte: &mut kart.coll.gte,
                                 potion,
+                                doors: &doors,
                             },
                             level,
                             &bodies,
