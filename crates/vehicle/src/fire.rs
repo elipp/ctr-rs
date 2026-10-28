@@ -2,8 +2,8 @@
 //! time) and raises the speed cap that goes with them, and lights the exhaust
 //! fire (`turbo`) or restarts it.
 //!
-//! Not modelled: the sound, which only has the audio cooldown for state. The
-//! ghost tape is not recorded either.
+//! The sound is reported ([`Effect::FireAudio`]) where the reference plays it; its cooldown is
+//! the listener's, as the reference's C oracle never runs it. The ghost tape is not recorded.
 
 use math::mips;
 
@@ -27,6 +27,23 @@ const FIRE_SIZE_BASE: i32 = 5;
 const FIRE_SIZE_MAX: i32 = 8;
 const RUMBLE_CHANNEL: u8 = 8;
 const RUMBLE_FORCE: u8 = 0x7f;
+
+/// `VEH_FIRE_AUDIO_SFX`: the sound of a boost, which does not play again within its cooldown.
+pub const AUDIO_SFX: u8 = 0xd;
+pub const AUDIO_COOLDOWN_MS: i16 = 0xf0;
+/// `VEH_FIRE_VOICELINE_HIGH_BOOST_ID` and its priority: a big boost makes the driver cheer.
+pub const BIG_BOOST_VOICELINE: u8 = 0x10;
+pub const VOICELINE_PRIORITY: u8 = 0x10;
+
+/// `VehFire_Audio`, without its cooldown: the volume and distortion of the sound of a boost of
+/// `fire_level`, louder and lower the bigger, and whether the driver cheers.
+pub fn audio(fire_level: i32) -> (u8, u8, bool) {
+    match fire_level {
+        ..0x40 => (0x80, 0x94, false),
+        0x40..0x80 => (0xc0, 0x80, false),
+        _ => (0xff, 0x6c, true),
+    }
+}
 
 /// `VehFire_Increment(driver, reserves, type, fireLevel)`
 pub fn increment(
@@ -53,6 +70,7 @@ pub fn increment(
 
     // A fire that burns is reused; its pop (a short hidden spell) marks every boost
     // but a turbo pad's, which is one long boost.
+    let player = d.actions_flag_set & actions::BOT == 0;
     match &mut d.turbo {
         Some(t) => {
             if ty & turbo_type::TURBO_PAD == 0 {
@@ -61,8 +79,18 @@ pub fn increment(
             }
             t.fire_disappear_countdown = -1;
             t.alpha_scale = 0;
+            // One sound for a boost that goes on from the last tick (a turbo pad).
+            if player && d.actions_flag_set_prev_frame & actions::NEW_BOOST == 0 {
+                t.fire_audio_distort = 0;
+                effects.push(Effect::FireAudio { fire_level });
+            }
         }
-        None => d.turbo = Some(Turbo::new(ty & turbo_type::POWER_SLIDE_HANG_TIME != 0)),
+        None => {
+            d.turbo = Some(Turbo::new(ty & turbo_type::POWER_SLIDE_HANG_TIME != 0));
+            if player && d.kart_state != kart_state::CRASHING {
+                effects.push(Effect::FireAudio { fire_level });
+            }
+        }
     }
 
     let single = d.stats.single_turbo_speed as i32;
@@ -117,4 +145,61 @@ pub fn increment(
         a: RUMBLE_CHANNEL,
         b: RUMBLE_FORCE,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boosts(effects: &[Effect]) -> Vec<i32> {
+        effects
+            .iter()
+            .filter_map(|e| match *e {
+                Effect::FireAudio { fire_level } => Some(fire_level),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_boost_sounds_once_however_long_a_turbo_pad_holds_it() {
+        let mut d = Driver::new(0, 0);
+        let mut effects = vec![];
+        increment(&mut d, 0x100, turbo_type::TURBO_PAD, 0x80, &mut effects);
+        assert_eq!(boosts(&effects), [0x80]);
+        // The next tick on the pad: the last one boosted already.
+        d.actions_flag_set_prev_frame = d.actions_flag_set;
+        effects.clear();
+        increment(&mut d, 0x100, turbo_type::TURBO_PAD, 0x80, &mut effects);
+        assert!(boosts(&effects).is_empty());
+        // Off the pad and on again, it sounds again and the fire's roar starts low again.
+        d.actions_flag_set_prev_frame = 0;
+        d.turbo.as_mut().unwrap().fire_audio_distort = 9;
+        increment(&mut d, 0x100, turbo_type::TURBO_PAD, 0x80, &mut effects);
+        assert_eq!(boosts(&effects), [0x80]);
+        assert_eq!(d.turbo.unwrap().fire_audio_distort, 0);
+    }
+
+    #[test]
+    fn a_crashing_kart_lights_its_fire_quietly() {
+        let mut d = Driver::new(0, 0);
+        d.kart_state = kart_state::CRASHING;
+        let mut effects = vec![];
+        increment(
+            &mut d,
+            0x100,
+            turbo_type::START_LINE_BOOST,
+            0x20,
+            &mut effects,
+        );
+        assert!(d.turbo.is_some());
+        assert!(boosts(&effects).is_empty());
+    }
+
+    #[test]
+    fn a_bigger_boost_is_louder_and_lower_and_the_biggest_cheers() {
+        assert_eq!(audio(0x20), (0x80, 0x94, false));
+        assert_eq!(audio(0x40), (0xc0, 0x80, false));
+        assert_eq!(audio(0x100), (0xff, 0x6c, true));
+    }
 }

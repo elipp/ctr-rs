@@ -1,4 +1,4 @@
-//! The sound effects (`game/HOWL/HOWL_OtherFX.c`) and the engines'
+//! The sound effects (`game/HOWL/HOWL_OtherFX.c`, `HOWL_OtherFXRecycle.c`) and the engines'
 //! loops (`EngineAudio_*` of `HOWL_Engine.c`): what starts them on a channel, changes them as
 //! they play and stops them.
 
@@ -92,6 +92,30 @@ impl Howl {
         Some(Sound(stats.sound))
     }
 
+    /// `OtherFX_Modify`: `sound` plays on at `sfx`, if it still plays.
+    pub fn modify(&mut self, sound: Sound, sfx: Sfx) {
+        let Some(&fx) = self.other_fx.get(sound.id() as usize) else {
+            return;
+        };
+        let volume = self.fx_volume(&fx) * fx.volume as u32 * sfx.volume as u32;
+        let attr = Attr {
+            volume: channel::volume(volume >> 10, sfx.pan, self.stereo),
+            pitch: distorted(fx.pitch, sfx.distort, &DISTORT_OTHER_FX),
+            reverb: sfx.echo as u16,
+            ..Attr::default()
+        };
+        let edited = self
+            .channels
+            .edit(Kind::OtherFx, sound.0, update::DYNAMIC_ATTRS, &attr);
+        if let Some(channel) = edited {
+            let stats = self.channels.stats_mut(channel);
+            stats.echo = sfx.echo as u8;
+            stats.vol = sfx.volume;
+            stats.distort = sfx.distort;
+            stats.lr = sfx.pan;
+        }
+    }
+
     /// `OtherFX_Stop1`: the end of `sound`.
     pub fn stop(&mut self, sound: Sound) {
         self.channels
@@ -102,6 +126,31 @@ impl Howl {
     pub fn stop_id(&mut self, id: u16) {
         self.channels
             .destroy_matching(Kind::OtherFx, id as u32, 0xffff);
+    }
+
+    /// `OtherFX_RecycleNew`: what plays in `slot` becomes sound effect `id` at `sfx`. The same
+    /// sound plays on changed, another one starts in its place, and `None` stops it.
+    pub fn recycle(&mut self, slot: &mut Option<Sound>, id: Option<u16>, sfx: Sfx) {
+        if let Some(playing) = *slot
+            && Some(playing.id()) != id
+        {
+            self.stop(playing);
+            *slot = None;
+        }
+        let Some(id) = id else {
+            return;
+        };
+        match *slot {
+            None => *slot = self.play(id, AntiSpam::Off, sfx),
+            Some(playing) => self.modify(playing, sfx),
+        }
+    }
+
+    /// `OtherFX_RecycleMute`: what plays in `slot` stops.
+    pub fn recycle_mute(&mut self, slot: &mut Option<Sound>) {
+        if let Some(playing) = slot.take() {
+            self.stop(playing);
+        }
     }
 
     /// `EngineAudio_InitOnce`: engine loop `id` starts on a channel of its own, at `sfx`. False
@@ -253,6 +302,27 @@ mod tests {
         assert!(howl.play(1, AntiSpam::Reject, Sfx::FULL).is_some());
         assert!(howl.play(1, AntiSpam::Reject, Sfx::FULL).is_none());
         assert!(howl.play(1, AntiSpam::Off, Sfx::FULL).is_some());
+    }
+
+    #[test]
+    fn recycle_changes_the_sound_in_place_or_starts_another() {
+        let mut howl = howl();
+        let mut slot = None;
+        howl.recycle(&mut slot, Some(1), Sfx::FULL);
+        let first = slot.unwrap();
+        let quiet = Sfx {
+            volume: 10,
+            ..Sfx::FULL
+        };
+        howl.recycle(&mut slot, Some(1), quiet);
+        assert_eq!(slot, Some(first));
+        assert_eq!(howl.channels.stats(0).vol, 10);
+        howl.recycle(&mut slot, Some(0), Sfx::FULL);
+        assert_ne!(slot, Some(first));
+        assert_eq!(howl.channels.taken(), [1]);
+        howl.recycle(&mut slot, None, Sfx::FULL);
+        assert_eq!(slot, None);
+        assert!(howl.channels.taken().is_empty());
     }
 
     #[test]

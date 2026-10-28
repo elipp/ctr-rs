@@ -38,8 +38,8 @@ pub mod terrain_type {
     pub const SLOWDIRT: u8 = 20;
 }
 
-/// `struct Terrain`, without the particle emitters, skid sounds and bot data
-/// (none of which affect the simulation).
+/// `struct Terrain`, without the particle emitters, the rumble and bot data (none of which affect
+/// the simulation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Terrain {
     pub name: &'static str,
@@ -53,7 +53,10 @@ pub struct Terrain {
     pub ground_friction_scale: i32,
     pub turn_angle_scale: i32,
     pub turn_response_scale: i32,
-    /// The sound played when the kart leaves the ground offset (`sound`).
+    /// The loop of a kart skidding on it (`skidSound`), -1 for none.
+    pub skid_sound: i16,
+    /// The loop of a kart driving on it, or for a terrain with `ONESHOT_GROUND_SOUND` the sound
+    /// of the kart setting down (`sound`); -1 for none.
     pub sound: i16,
 }
 
@@ -69,6 +72,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: -1,
     },
     Terrain {
@@ -81,6 +85,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 18,
         sound: 24,
     },
     Terrain {
@@ -93,6 +98,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 18,
         sound: 24,
     },
     Terrain {
@@ -105,6 +111,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: 21,
     },
     Terrain {
@@ -117,6 +124,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: -1,
         sound: 25,
     },
     Terrain {
@@ -129,6 +137,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: -1,
     },
     Terrain {
@@ -141,6 +150,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 32,
         turn_angle_scale: 128,
         turn_response_scale: 32,
+        skid_sound: -1,
         sound: 22,
     },
     Terrain {
@@ -153,6 +163,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: 21,
     },
     Terrain {
@@ -165,6 +176,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 128,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 19,
         sound: -1,
     },
     Terrain {
@@ -177,6 +189,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 128,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 19,
         sound: 23,
     },
     Terrain {
@@ -189,6 +202,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: -1,
         sound: -1,
     },
     Terrain {
@@ -201,6 +215,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 18,
         sound: -1,
     },
     Terrain {
@@ -213,6 +228,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: 26,
     },
     Terrain {
@@ -225,6 +241,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: -1,
         sound: 25,
     },
     Terrain {
@@ -237,6 +254,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 512,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: -1,
         sound: 27,
     },
     Terrain {
@@ -249,6 +267,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: -1,
     },
     Terrain {
@@ -261,6 +280,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: -1,
     },
     Terrain {
@@ -273,6 +293,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: -1,
     },
     Terrain {
@@ -285,6 +306,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 17,
         sound: -1,
     },
     Terrain {
@@ -297,6 +319,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 18,
         sound: 24,
     },
     Terrain {
@@ -309,6 +332,7 @@ pub const TERRAINS: [Terrain; 21] = [
         ground_friction_scale: 256,
         turn_angle_scale: 256,
         turn_response_scale: 256,
+        skid_sound: 18,
         sound: 24,
     },
 ];

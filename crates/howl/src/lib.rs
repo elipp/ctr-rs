@@ -21,7 +21,7 @@ use std::path::Path;
 
 use loader::howl::{EngineFx, OtherFx};
 
-use channel::Channels;
+use channel::{Channels, Kind, Stats, update};
 pub use fx::{AntiSpam, NO_DISTORTION, Sound, crash_sound};
 use spu::{Samples, Spu};
 
@@ -72,6 +72,8 @@ pub struct Howl {
     pub(crate) count: u32,
     /// The game's frame (`frameTimer_MainFrame_ResetDB`), which the anti-spam measures by.
     pub frame: u32,
+    /// What `howl_PauseAudio` took off the channels (`channelStatsCurr`).
+    paused: Vec<Stats>,
     /// The output samples until the next vertical blank.
     until_vsync: u32,
 }
@@ -89,6 +91,7 @@ impl Howl {
             stereo: true,
             count: 0,
             frame: 0,
+            paused: Vec::new(),
             until_vsync: 0,
         }
     }
@@ -132,9 +135,52 @@ impl Howl {
         self.channels.update(&mut self.spu);
     }
 
-    /// `howl_StopAudio`: every sound stops but, unless `all_fx`, the menu's.
-    pub fn stop_all(&mut self, all_fx: bool) {
+    /// `howl_PauseAudio`: every sound stops, and is kept to start again with [`Howl::unpause`].
+    pub fn pause(&mut self) {
+        if !self.paused.is_empty() {
+            return;
+        }
+        for &channel in &self.channels.taken().to_vec() {
+            self.paused.push(*self.channels.stats(channel));
+            self.channels.destroy(channel);
+        }
+    }
+
+    /// `howl_UnPauseAudio`: what [`Howl::pause`] stopped starts again, each sound from its start,
+    /// on the free channels.
+    pub fn unpause(&mut self) {
+        if self.paused.is_empty() {
+            return;
+        }
+        for stats in std::mem::take(&mut self.paused) {
+            let echo = |attr| channel::Attr {
+                reverb: stats.echo as u16,
+                ..attr
+            };
+            let attr = match stats.kind {
+                Kind::OtherFx => match self.other_fx.get(stats.sound as u16 as usize) {
+                    Some(fx) => echo(self.other_fx_attr(fx, stats.vol, stats.lr, stats.distort)),
+                    None => continue,
+                },
+                Kind::EngineFx => match self.engine_fx.get(stats.sound as u16 as usize) {
+                    Some(fx) => echo(self.engine_fx_attr(fx, stats.vol, stats.lr, stats.distort)),
+                    None => continue,
+                },
+            };
+            let Some(channel) = self.channels.alloc(update::RESUME, &attr) else {
+                break;
+            };
+            *self.channels.stats_mut(channel) = stats;
+        }
+    }
+
+    /// `howl_StopAudio`: every sound stops but, unless `all_fx`, the menu's. With `erase_paused`,
+    /// what [`Howl::pause`] kept is gone too.
+    pub fn stop_all(&mut self, erase_paused: bool, all_fx: bool) {
         self.channels.destroy_all(all_fx);
+        if erase_paused {
+            self.paused.clear();
+        }
     }
 }
 
@@ -179,5 +225,24 @@ mod tests {
         // of that on the left, both 32768ths, then the master's 0x3fff, so about 4160.
         let loudest = out.iter().map(|&[l, _]| l.unsigned_abs()).max().unwrap();
         assert!((4_000..=4_200).contains(&loudest), "{loudest}");
+    }
+
+    #[test]
+    fn a_pause_stops_the_sounds_and_starts_them_again() {
+        let mut howl = howl();
+        let sound = howl.play(0, AntiSpam::Off, Sfx::FULL).unwrap();
+        howl.vsync();
+        howl.pause();
+        howl.pause();
+        assert!(howl.channels.taken().is_empty());
+        // A vertical blank lets its voice go, which takes a few samples.
+        howl.render(&mut [[0; 2]; 100]);
+        assert!(!howl.spu.playing(0));
+        howl.unpause();
+        howl.vsync();
+        assert_eq!(howl.channels.taken().len(), 1);
+        // The same sound, which can still be stopped.
+        howl.stop(sound);
+        assert!(howl.channels.taken().is_empty());
     }
 }
