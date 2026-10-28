@@ -2,8 +2,8 @@
 //! finish line does (the per-driver part of `PlayLevel_UpdateLapStats`).
 //!
 //! Not ported: the bots (their progress comes from their path), the lap times for the HUD, the
-//! final-lap sound and text, the confetti and the end-of-race menu, and dropping the held item
-//! of a driver that finished.
+//! final-lap sound and text, the end-of-race menu, and dropping the held item of a driver that
+//! finished. The confetti of a win is the viewer's (`client::confetti`).
 
 use loader::lev::Level;
 use math::{SVec3, mips};

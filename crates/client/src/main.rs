@@ -18,6 +18,7 @@ mod animation;
 mod assets;
 mod banner;
 mod command;
+mod confetti;
 mod crash;
 mod config;
 mod disc;

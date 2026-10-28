@@ -57,6 +57,7 @@ pub struct Drive {
     demo: DemoMode,
     camera: camera::CameraDc,
     weather: crate::weather::WeatherView,
+    confetti: crate::confetti::ConfettiView,
     previous_view: View,
     current_view: View,
 }
@@ -82,6 +83,7 @@ impl Drive {
         Drive {
             camera,
             weather: crate::weather::WeatherView::new(&track.0),
+            confetti: default(),
             previous_view: view,
             current_view: view,
             character,
@@ -92,6 +94,10 @@ impl Drive {
 
     pub(crate) fn weather(&self) -> &crate::weather::WeatherView {
         &self.weather
+    }
+
+    pub(crate) fn confetti(&self) -> &crate::confetti::ConfettiView {
+        &self.confetti
     }
 
     /// Our kart, as a race takes it.
@@ -144,6 +150,7 @@ impl Plugin for DrivePlugin {
                     crate::rain::draw,
                     crate::weather::set_width.before(crate::weather::draw),
                     crate::weather::draw,
+                    crate::confetti::draw,
                     crate::spider::draw_webs,
                     crate::spider::shadows,
                     crate::flash::show,
