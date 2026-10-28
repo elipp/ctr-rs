@@ -380,7 +380,19 @@ pub fn tick_among(
     collide::take_pending_damage(d, effects);
     let respawned = tick_to_coll_moved(d, coll, level, env, input, instances, effects);
     collide_drivers_stage(d, others, env, effects);
-    tick_from_coll_fixed(d, coll, level, env, respawned, effects)
+    let result = tick_from_coll_fixed(d, coll, level, env, respawned, effects);
+    after_logic(d, env, effects);
+    result
+}
+
+/// What runs after the weapons of a tick (whose hits land in their buckets, after the drivers'
+/// stages): the exhaust fire's thread (TURBO, after the weapons' buckets; it dies at the end of
+/// the frame's logic, in `PROC_CheckAllForDead`), and then the HUD's jump meter, in the frame's
+/// render, so that a fire it lights or feeds first ticks on the next frame. [`tick`] runs it;
+/// after a [`tick_all`], the caller does, once the weapons have hit.
+pub fn after_logic(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
+    crate::turbo::tick(d, env.elapsed_time_ms as i16, effects);
+    crate::jump_meter::update(d, env, effects);
 }
 
 /// A driver of a [`tick_all`].
@@ -392,7 +404,7 @@ pub struct Racer<'a> {
     pub effects: &'a mut Vec<Effect>,
 }
 
-/// One 30 Hz tick of all the drivers, in `MainFrame`'s order: each stage over every driver, in
+/// One 30 Hz tick of all the drivers (without [`after_logic`]), in `MainFrame`'s order: each stage over every driver, in
 /// the thread list's order, before the next stage. A driver bumps into the ones after it in the
 /// list (the original's sibling threads), which have run the stages before it and not those after.
 /// `feedback` times the bump sounds.
@@ -602,19 +614,11 @@ fn tick_from_coll_fixed(
         PhysState::Tumble => tumble::animate(d),
     }
 
-    // The thread buckets after the drivers': the exhaust fire's (dying at the end of the frame's
-    // logic, in `PROC_CheckAllForDead`),
-    crate::turbo::tick(d, env.elapsed_time_ms as i16, effects);
-
-    // the mask's own thread,
+    // The mask's own thread.
     stuck::mask_tick(d, env);
 
-    // and the shield's.
+    // The shield's.
     crate::shield::tick(d, env.timer, effects);
-
-    // The HUD's jump meter, which gives the hang-time turbo, runs in the frame's render, after
-    // all of the logic: a fire it lights or feeds first ticks on the next frame.
-    crate::jump_meter::update(d, env, effects);
 
     TickResult {
         mask_grab,

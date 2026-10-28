@@ -19,6 +19,9 @@
  *   N         prints the names of the driver fields, in order
  *   D <driver fields...>
  *             loads the driver (field order: `fields` below)
+ *   H <damageType>
+ *             a hit (VehPickState_NewState, no attacker) in the next tick, after
+ *             the drivers' stages, where the weapons' buckets land theirs
  *   I <reserves> <type> <fireLevel>
  *             a boost before the next tick's stages, where
  *             VehPickupItem_ShootOnCirclePress fires a turbo item
@@ -28,7 +31,7 @@
  *             a few values of the scratchpad
  *
  * Everything of the driver's states is the real code: driving, drifting,
- * spinning out, the crash and the V-shift freeze; only the stages that are
+ * spinning out, the crash, the V-shift freeze and a blast's tumble; only the stages that are
  * presentation are left out. The exhaust fire is the real VehTurbo.c too: its
  * thread is born in the TURBO bucket, ticks after the drivers' stages and dies
  * in PROC_CheckAllForDead, before the HUD's jump meter, as in MainFrame.
@@ -55,6 +58,8 @@ static char effects[1024];
 static int maskGrab;
 /* While the turbo thread ticks: its rumble is not ported. */
 static int inTurboTick;
+/* The damage type of the next tick's hit, or -1. */
+static int pendingHit = -1;
 
 /* The one turbo thread (one driver), in gGT.threadBuckets[TURBO] while it lives. */
 struct Thread turboThread;
@@ -161,6 +166,12 @@ void GhostTape_WriteBoosts(s32 addReserve, u32 type, s32 speedCap)
 {
 }
 
+/* A burn's smoke (VehFrame): no particles here, and none in the port. */
+struct Particle *Particle_Init(u32 param_1, struct IconGroup *ig, struct ParticleEmitter *emSet)
+{
+	return NULL;
+}
+
 b32 LOAD_IsOpen_RacingOrBattle(void)
 {
 	return 1;
@@ -171,7 +182,7 @@ void VehStuckProc_MaskGrab_Init(struct Thread *t, struct Driver *drv)
 	maskGrab = 1;
 }
 
-enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT_PENDING, TERRAIN1, TERRAIN2, TURBO_EXISTS, TURBO_HIDDEN };
+enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT, TERRAIN1, TERRAIN2, TURBO_EXISTS, TURBO_HIDDEN };
 
 struct Field
 {
@@ -190,7 +201,7 @@ struct Field
 
 static struct Field fields[] = {
 	F(d.driverID, U8), F(d.kartState, U8), F(d.simpTurnState, S8),
-	{ "phys_state", NULL, PHYS_STATE }, { "init_pending", NULL, INIT_PENDING },
+	{ "phys_state", NULL, PHYS_STATE }, { "init", NULL, INIT },
 	V3S32(d.posCurr), V3S32(d.posPrev), V3S32(d.velocity), V3S32(d.originToCenter),
 	F(d.collisionFlags, S16), F(d.stepFlagSet, S32), F(d.actionsFlagSet, S32), F(d.actionsFlagSetPrevFrame, S32),
 	F(d.currBlockTouching, QUAD), F(d.underDriver, QUAD), F(d.lastValid, QUAD),
@@ -243,7 +254,7 @@ static int terrainIndex(struct Terrain *t)
 	return (int)(t - data.MetaDataTerrain);
 }
 
-static void set_state(int state, int initPending)
+static void set_state(int state, int init)
 {
 	memset(d.funcPtrs, 0, sizeof(d.funcPtrs));
 	d.funcPtrs[DRIVER_FUNC_APPLY_FORCES] = VehPhysForce_OnApplyForces;
@@ -291,11 +302,34 @@ static void set_state(int state, int initPending)
 		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinStop_PhysAngular;
 		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SpinStop_Animate;
 		break;
+	case 7:
+		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehStuckProc_Tumble_Update;
+		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehStuckProc_Tumble_PhysLinear;
+		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehStuckProc_Tumble_PhysAngular;
+		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehStuckProc_Tumble_Animate;
+		break;
 	}
-	if (initPending)
+	/* The init to run: 1 the state's own, 3 a hit's spin-out, 4 a blast's tumble. */
+	if (init == 1)
 		d.funcPtrs[DRIVER_FUNC_INIT] = state == 3 ? VehPhysProc_PowerSlide_InitSetUpdate
 		                              : state == 4 ? VehPhysProc_SpinFirst_InitSetUpdate
 		                                           : VehPhysProc_Driving_Init;
+	else if (init == 3)
+		d.funcPtrs[DRIVER_FUNC_INIT] = VehPhysProc_SpinFirst_Init;
+	else if (init == 4)
+		d.funcPtrs[DRIVER_FUNC_INIT] = VehStuckProc_Tumble_Init;
+}
+
+static int current_init(void)
+{
+	DriverFunc init = d.funcPtrs[DRIVER_FUNC_INIT];
+	if (init == NULL)
+		return 0;
+	if (init == (DriverFunc)VehPhysProc_SpinFirst_Init)
+		return 3;
+	if (init == (DriverFunc)VehStuckProc_Tumble_Init)
+		return 4;
+	return 1;
 }
 
 static int current_state(void)
@@ -311,12 +345,14 @@ static int current_state(void)
 		return 5;
 	if (linear == (DriverFunc)VehPhysProc_SpinStop_PhysLinear)
 		return 6;
+	if (linear == (DriverFunc)VehStuckProc_Tumble_PhysLinear)
+		return 7;
 	return d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] == (DriverFunc)VehPhysProc_FreezeVShift_ReverseOneFrame ? 2 : 0;
 }
 
 static void load_driver(void)
 {
-	int state = 0, initPending = 0, turbo = 0, hidden = 0;
+	int state = 0, init = 0, turbo = 0, hidden = 0;
 	gGT.threadBuckets[TURBO].thread = NULL;
 	for (int i = 0; i < NUM_FIELDS; i++)
 	{
@@ -334,7 +370,7 @@ static void load_driver(void)
 		case U32: *(u32 *)p = v; break;
 		case QUAD: *(struct QuadBlock **)p = v < 0 ? NULL : &quads[v]; break;
 		case PHYS_STATE: state = v; break;
-		case INIT_PENDING: initPending = v; break;
+		case INIT: init = v; break;
 		case TERRAIN1: d.terrainMeta1 = &data.MetaDataTerrain[v]; break;
 		case TERRAIN2: d.terrainMeta2 = &data.MetaDataTerrain[v]; break;
 		case TURBO_EXISTS:
@@ -362,7 +398,8 @@ static void load_driver(void)
 		memset(&turboInst1, 0, sizeof(turboInst1));
 	}
 	d.heldItemID = HELD_ITEM_NONE;
-	set_state(state, initPending);
+	pendingHit = -1;
+	set_state(state, init);
 }
 
 static void print_driver(void)
@@ -382,7 +419,7 @@ static void print_driver(void)
 		case PHYS_STATE:
 			printf(" %d", current_state());
 			break;
-		case INIT_PENDING: printf(" %d", d.funcPtrs[DRIVER_FUNC_INIT] != NULL); break;
+		case INIT: printf(" %d", current_init()); break;
 		case TERRAIN1: printf(" %d", terrainIndex(d.terrainMeta1)); break;
 		case TERRAIN2: printf(" %d", terrainIndex(d.terrainMeta2)); break;
 		case TURBO_EXISTS: printf(" %d", gGT.threadBuckets[TURBO].thread != NULL); break;
@@ -513,6 +550,9 @@ int main(void)
 		case 'D':
 			load_driver();
 			break;
+		case 'H':
+			pendingHit = rd();
+			break;
 		case 'I':
 		{
 			int reserves = rd(), type = rd(), fireLevel = rd();
@@ -546,7 +586,12 @@ int main(void)
 					fn = VehPhysForce_TranslateMatrix;
 				fn(&thread, &d);
 			}
-			/* The buckets after the drivers': the turbo fire. */
+			/* The buckets after the drivers': a weapon's hit, then the turbo fire. */
+			if (pendingHit >= 0)
+			{
+				VehPickState_NewState(&d, pendingHit, NULL, 0);
+				pendingHit = -1;
+			}
 			if (gGT.threadBuckets[TURBO].thread != NULL)
 			{
 				/* Its GTE work only places the fire's instances; the port's fire does none, so

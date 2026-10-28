@@ -561,6 +561,10 @@ impl Race {
                 vehicle::cloud::init(victim, self.tick, &mut self.objects.random_number);
             }
         }
+        // The exhaust fires (after the weapons' buckets) and the HUD's jump meters.
+        for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
+            vehicle::sim::after_logic(&mut kart.driver, &env, effects);
+        }
         let racers = self.karts.len();
         for kart in &mut self.karts {
             vehicle::cloud::tick(
