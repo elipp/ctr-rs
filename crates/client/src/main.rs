@@ -43,6 +43,7 @@ mod projectile;
 
 mod props;
 mod rain;
+mod spider;
 mod remote;
 mod resources;
 mod scene;
@@ -72,7 +73,6 @@ pub(crate) use resources::*;
 pub(crate) use scene::*;
 
 fn main() {
-    maps::load();
     let track_id = 0;
     let config = config::Config::load();
     // The character driven last time.
@@ -124,6 +124,8 @@ fn main() {
         plugins
     };
     app.add_plugins(plugins);
+    // After the plugins, which set up the log that tells of a map that cannot be read.
+    maps::load();
     // Bevy's own font has no ä or ö: this one takes its place as the default.
     app.world_mut()
         .resource_mut::<Assets<Font>>()
@@ -154,6 +156,10 @@ fn main() {
         .add_systems(
             PostUpdate,
             wheels::update.before(TransformSystems::Propagate),
+        )
+        .add_systems(
+            PostUpdate,
+            kart::hide_parts.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         )
         .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(sky::SkyPlugin)

@@ -12,17 +12,19 @@ pub mod damage {
     pub const BLAST: u8 = 2;
     pub const SQUISH: u8 = 3;
     pub const BURN: u8 = 4;
+    /// What a plant's mouth does (the kart is eaten).
     pub const MASK_GRAB: u8 = 5;
 }
 
-const VOICELINE_COMMON_DAMAGE: u8 = 1;
+pub const VOICELINE_COMMON_DAMAGE: u8 = 1;
 const VOICELINE_VICTIM_LAUGH: u8 = 2;
 const VOICELINE_SQUISH: u8 = 4;
-const VOICELINE_PRIORITY: u8 = 0x10;
+pub const VOICELINE_PRIORITY: u8 = 0x10;
 
 const SPIN_NO_INPUT_TIMER: i16 = 0x3c0;
 const BLAST_NO_INPUT_TIMER: i16 = 0x960;
 const SQUISH_NO_INPUT_TIMER: i16 = 0xf0;
+const MASK_GRAB_NO_INPUT_TIMER: i16 = 0xd20;
 const SQUISH_TIMER: i16 = 0xf00;
 const BURN_NO_INPUT_TIMER: i16 = 0x780;
 const BURN_TIMER: i16 = 0xf00;
@@ -59,7 +61,16 @@ pub fn new_state(d: &mut Driver, damage: u8, effects: &mut Vec<Effect>) -> bool 
 
     let spin_out = match damage {
         damage::NONE => return true,
-        damage::MASK_GRAB => return false,
+        // The kart is eaten next tick, and nothing that was about to start it goes on.
+        damage::MASK_GRAB => {
+            d.no_input_timer = MASK_GRAB_NO_INPUT_TIMER;
+            d.pending_eaten = true;
+            d.pending_tumble = false;
+            d.pending_spin = false;
+            d.init_pending = false;
+            effects.push(voice(VOICELINE_COMMON_DAMAGE));
+            false
+        }
         // A kart that tumbles, or is about to, is not blasted again.
         damage::BLAST => {
             if d.kart_state == kart_state::BLASTED || d.pending_tumble {
@@ -172,6 +183,20 @@ mod tests {
         d.pending_tumble = false;
         d.kart_state = kart_state::BLASTED;
         assert!(!new_state(&mut d, damage::BLAST, &mut effects));
+    }
+
+    #[test]
+    fn a_plant_eats_the_kart_next_tick_and_nothing_else_starts() {
+        let mut d = driving();
+        let mut effects = Vec::new();
+        new_state(&mut d, damage::BLAST, &mut effects);
+        assert!(new_state(&mut d, damage::MASK_GRAB, &mut effects));
+        assert!(d.pending_eaten && !d.pending_tumble && !d.pending_spin && !d.init_pending);
+        assert_eq!(d.no_input_timer, MASK_GRAB_NO_INPUT_TIMER);
+        assert_eq!((d.kart_state, d.reserves), (kart_state::NORMAL, 0));
+        // Eaten: nothing else touches it until it is back.
+        d.kart_state = kart_state::MASK_GRABBED;
+        assert!(!new_state(&mut d, damage::SPIN, &mut effects));
     }
 
     #[test]

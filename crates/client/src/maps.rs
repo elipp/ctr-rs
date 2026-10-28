@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, Once};
 
+use bevy::log::warn;
 use map::Map;
 
 /// A map that is loaded.
@@ -52,7 +53,7 @@ pub fn load() {
                     path,
                     map: Box::leak(Box::new(map)),
                 }),
-                Err(e) => eprintln!("{}: {e}", path.display()),
+                Err(e) => warn!("{}: {e}", path.display()),
             }
         }
         maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));

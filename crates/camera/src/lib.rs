@@ -34,6 +34,15 @@ use vehicle::kart_state;
 
 pub use matrix::convert_rot_to_matrix;
 
+/// `VEH_STUCK_PLANT_CAMERA_*`: when the camera turns to the plant that ate the kart (the kart's
+/// timer is under this), and where it stands: a side and forward offset in the plant's space,
+/// above it, with the pitch it is turned down from.
+const PLANT_CAMERA_INIT_TIME: i32 = 2880;
+const PLANT_CAMERA_SIDE_OFFSET: i32 = 250;
+const PLANT_CAMERA_FORWARD_OFFSET: i32 = 750;
+const PLANT_CAMERA_Y_OFFSET: u16 = 0xc0;
+const PLANT_CAMERA_PITCH_BASE: i32 = 0x800;
+
 /// `CameraFlags` the follow camera uses.
 pub mod flags {
     pub const DIRECTION_CHANGED: u32 = 0x8;
@@ -145,6 +154,8 @@ pub struct CameraDc {
     pub pb_rot: SVec3,
     /// `transitionBlend`: how much of the chase camera the fly-in has blended in, 0 to 0x1000.
     transition_blend: i16,
+    /// The camera has turned to the plant that ate the kart (`EatenByPlant.boolInited`).
+    plant_looked: bool,
     coll: Collision,
 }
 
@@ -165,6 +176,7 @@ impl Default for CameraDc {
             pb_pos: SVec3::default(),
             pb_rot: SVec3::default(),
             transition_blend: 0,
+            plant_looked: false,
             coll: Collision::default(),
         }
     }
@@ -227,11 +239,58 @@ impl CameraDc {
         hit
     }
 
+    /// `VehStuckProc_PlantEaten_Animate`: half a second after a plant ate the kart (while the mask
+    /// grab's hold keeps the camera where it is), the camera goes to the plant's side and turns
+    /// to look at it. It does so once.
+    fn look_at_plant(&mut self, d: &Driver) {
+        if d.phys_state != vehicle::PhysState::PlantEaten {
+            self.plant_looked = false;
+            return;
+        }
+        let Some(plant) = d.plant_eating_me else {
+            return;
+        };
+        if self.plant_looked || d.no_input_timer as i32 >= PLANT_CAMERA_INIT_TIME {
+            return;
+        }
+        self.plant_looked = true;
+
+        let side = if plant.side {
+            -PLANT_CAMERA_SIDE_OFFSET
+        } else {
+            PLANT_CAMERA_SIDE_OFFSET
+        };
+        let ahead = [side, 0, PLANT_CAMERA_FORWARD_OFFSET];
+        // `RotTrans` by the plant's matrix.
+        let spot: [i32; 3] = std::array::from_fn(|row| {
+            let turned: i64 = (0..3)
+                .map(|col| plant.matrix.m[row][col] as i64 * ahead[col] as i64)
+                .sum();
+            plant.pos[row].wrapping_add((turned >> 12) as i32)
+        });
+        let y = (plant.pos[1] as u16).wrapping_add(PLANT_CAMERA_Y_OFFSET) as i16;
+        self.pb_pos = SVec3 {
+            x: spot[0] as i16,
+            y,
+            z: spot[2] as i16,
+        };
+        let dx = spot[0].wrapping_sub(plant.pos[0]);
+        let dz = spot[2].wrapping_sub(plant.pos[2]);
+        let dy = (y as i32).wrapping_sub(plant.pos[1]);
+        self.pb_rot.y = math::ratan2(dx, dz) as i16;
+        let dist = math::square_root0_stub(mips::add_lo(mips::mul_lo(dx, dx), mips::mul_lo(dz, dz)));
+        // (Only the low byte of the height is used: it is 192 above the plant.)
+        let pitch = math::ratan2(dy as u8 as i32, dist);
+        self.pb_rot.x = (PLANT_CAMERA_PITCH_BASE - pitch) as i16;
+        self.pb_rot.z = 0;
+    }
+
     /// `CAM_FollowDriver_Normal` (followed by what `CAM_ThTick` does after
     /// it): moves the camera after `d`.
     pub fn follow_driver(&mut self, d: &Driver, level: &Level, input: &Input) {
         let zoom = if input.far { FAR_CAM } else { NEAR_CAM };
         let elapsed = input.elapsed_time_ms;
+        self.look_at_plant(d);
 
         // Looking backwards, while R2 is held.
         let was_reverse = self.flags & flags::REVERSE != 0;

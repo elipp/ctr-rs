@@ -465,6 +465,7 @@ fn matches_reference_on_random_triangles() {
     };
     let empty = Level {
         instances: Vec::new(),
+        models: Vec::new(),
         spawn_delays: Vec::new(),
         position_paths: Vec::new(),
         paths: Vec::new(),

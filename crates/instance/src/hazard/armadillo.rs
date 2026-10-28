@@ -4,7 +4,7 @@
 use loader::lev::{InstDef, SVec3};
 use vehicle::{Matrix, Sound3D};
 
-use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
+use crate::{Contact, Context, Damage, Instance, Pose, Tick, interpolate};
 use vehicle::rotmat::rot_to_matrix;
 
 /// Ticks of rolling are counted in milliseconds of `elapsedTimeMS`: 32 a tick, up to `ROLL_TIME`.
@@ -89,13 +89,7 @@ impl Armadillo {
     }
 
     fn contact(&self) -> Contact {
-        Contact {
-            pos: self.pos,
-            damage: Damage::Spin,
-            hit_radius: HIT_RADIUS,
-            sound: HIT_SOUND,
-            shape: Shape::Sphere,
-        }
+        Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND)
     }
 
     /// One game tick. `frames` is the number of frames of its turn and roll animations. Where it
@@ -150,9 +144,17 @@ impl Armadillo {
 }
 
 impl Instance for Armadillo {
+    fn pose(&self) -> Option<Pose> {
+        Some(Pose {
+            pos: self.pos,
+            matrix: self.matrix,
+            animation: (self.anim_index, self.anim_frame),
+        })
+    }
+
     fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
         let vel = self.vel;
-        out.contacts.extend(self.tick(cx.frames));
+        out.contacts.extend(self.tick([cx.frames[0], cx.frames[1]]));
         // It squeaks as it turns back.
         if self.vel != vel {
             out.sounds.push(Sound3D {
@@ -174,7 +176,7 @@ mod tests {
         let level = [];
         let cx = Context {
             instance: 3,
-            frames: FRAMES,
+            frames: [FRAMES[0], FRAMES[1], 0, 0, 0, 0, 0, 0],
             ticks: 0,
             position_path: &level,
             roll_paths: &[],

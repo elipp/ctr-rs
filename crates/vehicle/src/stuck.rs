@@ -419,11 +419,7 @@ pub fn mask_grab_update(
     env: &Env,
     others: &[Vec3],
 ) -> bool {
-    d.no_input_timer = (d.no_input_timer as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
-    if d.no_input_timer < 0 {
-        d.no_input_timer = 0;
-    }
-    if d.no_input_timer != 0 {
+    if !count_down(d, env) {
         return false;
     }
 
@@ -432,9 +428,69 @@ pub fn mask_grab_update(
         mask.world_space = false;
         mask.scale = MASK_SCALE_NORMAL;
     }
+    put_back(d, coll, level, others);
+    true
+}
+
+/// The start of the updates of `VehStuckProc_MaskGrab_Update` and `PlantEaten_Update`: the timer
+/// that holds the kart runs down. Whether it has run out.
+fn count_down(d: &mut Driver, env: &Env) -> bool {
+    d.no_input_timer = (d.no_input_timer as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
+    if d.no_input_timer < 0 {
+        d.no_input_timer = 0;
+    }
+    d.no_input_timer == 0
+}
+
+/// The end of both: the kart goes back to the track, where it revs its engine as it falls.
+fn put_back(d: &mut Driver, coll: &mut Collision, level: &Level, others: &[Vec3]) {
     find_dest_pos(d, coll, level, d.last_valid, others);
     teleport_self(d, coll, level, RESPAWN_Y_OFFSET);
     rev_engine_init(d);
+}
+
+/// The parts of the plant that ate a kart that its camera needs (`Driver::plantEatingMe`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlantEater {
+    /// `matrix.t` of the plant's instance, in level units.
+    pub pos: [i32; 3],
+    /// Its `matrix`.
+    pub matrix: crate::Matrix,
+    /// `Plant::side`: which side of the plant the camera stands on.
+    pub side: bool,
+}
+
+/// `VehStuckProc_PlantEaten_Init`: what the init stage starts after a plant ate the kart (see
+/// [`crate::pick`]). The kart is out of sight, out of the race's reach and out of the sim's
+/// physics, as the mask grab's is, until the timer runs out.
+pub fn plant_eaten_init(d: &mut Driver) {
+    d.kart_state = kart_state::MASK_GRABBED;
+    d.phys_state = PhysState::PlantEaten;
+    d.init_pending = false;
+
+    d.turbo_meter_room_left = 0;
+    d.reserves = 0;
+    d.turbo_outside_timer = 0;
+    d.actions_flag_set &= !(actions::AIRBORNE | actions::HIGH_JUMP);
+
+    // The red beaker's cloud goes at once.
+    crate::cloud::dispel(d);
+    lose_wumpa(d, 2);
+}
+
+/// `VehStuckProc_PlantEaten_Update`: counts down, then puts the kart back on the track and starts
+/// the rev. Returns whether it did.
+pub fn plant_eaten_update(
+    d: &mut Driver,
+    coll: &mut Collision,
+    level: &Level,
+    env: &Env,
+    others: &[Vec3],
+) -> bool {
+    if !count_down(d, env) {
+        return false;
+    }
+    put_back(d, coll, level, others);
     true
 }
 
