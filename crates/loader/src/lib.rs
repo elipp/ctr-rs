@@ -11,3 +11,4 @@ pub mod scenery;
 pub mod texture;
 pub mod vram;
 pub mod water;
+pub mod xa;

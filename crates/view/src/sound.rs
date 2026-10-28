@@ -7,6 +7,10 @@
 //! changes and stops sounds in it, and Bevy plays the samples it renders ([`Mixer`]). Rendering
 //! is the engine's clock too (the SPU's vertical blank, when sounds start, change and end).
 //!
+//! The XA the sound engine asks for (the voice lines, the jingles of the race) is read from the
+//! disc and decoded on a thread of its own, as a track can span 24 MB of it, and handed back to
+//! play ([`stream_xa`]).
+//!
 //! Each level sets its reverb as it loads (`Audio_SetReverbMode` in `Music_LoadBanks`), which
 //! the sounds that echo (a kart in a tunnel) are heard through, and its song pack. Every tick the
 //! sound engine hears where the race is ([`howl::state`]) as of our kart, and plays the level's
@@ -28,6 +32,7 @@ use bevy::prelude::*;
 use howl::music::{AKU_SONG, UKA_SONG};
 use howl::state::{RaceAudio, State};
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
+use loader::disc::XaDisc;
 use loader::lev::Level;
 use race::{KartTick, Light, Race};
 use render::mesh::SCALE;
@@ -90,26 +95,37 @@ impl Plugin for SoundPlugin {
         app.add_audio_source::<Mixer>()
             .init_resource::<Kept>()
             .add_systems(Startup, start_mixer)
-            .add_systems(Update, level_audio);
+            .add_systems(Update, (level_audio, stream_xa));
     }
 }
 
-/// The sound engine, which the audio thread renders.
+/// The sound engine, which the audio thread renders, and the XA of the disc.
 #[derive(Resource)]
-pub struct Sounds(Arc<Mutex<Howl>>);
+pub struct Sounds {
+    howl: Arc<Mutex<Howl>>,
+    xa: Option<Arc<Mutex<XaDisc>>>,
+}
 
 impl Sounds {
-    /// The sounds of `KART.HWL` on the disc image at `path`. A disc without it plays none.
+    /// The sounds of `KART.HWL` and the XA on the disc image at `path`. A disc without them
+    /// plays none.
     pub fn load(path: &std::path::Path) -> Sounds {
         let howl = Howl::read(path).unwrap_or_else(|e| {
             warn!("no sounds: {}: {e}", path.display());
             Howl::new(Vec::new(), Vec::new(), Vec::new(), Vec::new())
         });
-        Sounds(Arc::new(Mutex::new(howl)))
+        let xa = loader::disc::open_xa(path)
+            .inspect_err(|e| warn!("no XA: {}: {e}", path.display()))
+            .ok()
+            .map(|(_, files)| Arc::new(Mutex::new(files)));
+        Sounds {
+            howl: Arc::new(Mutex::new(howl)),
+            xa,
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Howl> {
-        self.0.lock().unwrap()
+        self.howl.lock().unwrap()
     }
 
     /// `MainFrame_TogglePauseAudio(1)`: the pause stops every sound, to start again with the race.
@@ -134,7 +150,7 @@ impl Sounds {
 }
 
 fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds: Res<Sounds>) {
-    let mixer = mixers.add(Mixer(sounds.0.clone()));
+    let mixer = mixers.add(Mixer(sounds.howl.clone()));
     commands.spawn((AudioPlayer(mixer), PlaybackSettings::ONCE));
 }
 
@@ -146,6 +162,31 @@ fn level_audio(track: Res<Track>, sounds: Res<Sounds>) {
         sounds.set_level_reverb(track.1.0, None);
         sounds.set_level_music(track.1.0, None);
     }
+}
+
+/// `CDSYS_XAPauseAtEnd`, every frame (a pause's too): the XA that is over is, and the one that
+/// fades loses volume. The track the sound engine asked for is read and decoded on a thread, and
+/// plays once it is.
+fn stream_xa(sounds: Res<Sounds>) {
+    let request = {
+        let mut howl = sounds.lock();
+        howl.update_xa();
+        howl.take_xa_request()
+    };
+    let Some(request) = request else {
+        return;
+    };
+    let (howl, disc) = (sounds.howl.clone(), sounds.xa.clone());
+    std::thread::spawn(move || {
+        let sectors = disc.and_then(|disc| {
+            let read = disc.lock().unwrap().read(request.category, request.track);
+            read.inspect_err(|e| warn!("XA {:?}: {e}", request.track))
+                .ok()
+                .flatten()
+        });
+        let pcm = sectors.map(|sectors| loader::xa::decode(&sectors));
+        howl.lock().unwrap().start_xa(request.serial, pcm);
+    });
 }
 
 /// What Bevy plays: everything the sound engine renders, without end.
@@ -264,6 +305,7 @@ impl Sfx<'_> {
         let kept = &mut *self.kept;
         if tick < kept.tick || kept.engines.len() != drivers.len() {
             sounds.stop_all(true, true, true);
+            sounds.stop_xa();
             sounds.clear_voicelines();
             sounds.set_state(State::Traffic);
             *kept = Kept {
@@ -412,6 +454,7 @@ impl Sfx<'_> {
             lap: ours.lap_index,
             to_finish: ours.distance_to_finish_curr as i32,
             finished,
+            first: ours.driver_rank == 0,
             mask_song: mask.map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
         });
     }

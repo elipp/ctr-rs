@@ -7,7 +7,8 @@
 //! the sounds' time and passes what changed on to the voices (`howl_PlayAudio_Update`), so
 //! [`Howl::render`] is the clock of the sounds as the console's is.
 //!
-//! The voice lines ([`voiceline`]) grunt, and queue the lines they would speak.
+//! The voice lines ([`voiceline`]) grunt, or queue lines to speak, which the CD drive plays
+//! ([`xa`]) as it does the jingles of the race.
 //!
 //! The [`music`] is the songs of the level's song pack, which play their notes on the channels
 //! too; the states of a race ([`state`]) start, fade and stop them.
@@ -15,8 +16,8 @@
 //! The sounds that echo (a kart in a tunnel, [`Sfx::echo`]) are heard through the SPU's
 //! [`reverb`] as well, which each level sets ([`Howl::set_level_reverb`]).
 //!
-//! Not ported yet: the voice lines and the music of XA, the banks (every sample a sound effect,
-//! an engine or the music plays is loaded), and the volume options.
+//! Not ported yet: the banks (every sample a sound effect, an engine or the music plays is
+//! loaded), and the volume options.
 
 pub mod channel;
 pub mod fx;
@@ -26,11 +27,13 @@ pub mod spu;
 pub mod state;
 pub mod tables;
 pub mod voiceline;
+pub mod xa;
 
 use std::io;
 use std::path::Path;
 
 use loader::howl::{Cseq, EngineFx, OtherFx};
+use loader::xa::Xnf;
 
 use channel::{Channels, Kind, Stats, update};
 pub use fx::{AntiSpam, NO_DISTORTION, Sound, crash_sound};
@@ -96,6 +99,11 @@ pub struct Howl {
     reverb: u16,
     /// `audioState`: where the race is, none before it starts.
     pub(crate) state: Option<state::State>,
+    /// `desiredXA_RaceEndIndex`: the jingle of the race's end.
+    pub(crate) race_end_xa: u16,
+    /// The tracks of XA (`XA/ENG.XNF`), and what of them plays.
+    pub(crate) xnf: Xnf,
+    pub(crate) xa: xa::Xa,
     /// The output samples until the next vertical blank.
     until_vsync: u32,
 }
@@ -126,12 +134,16 @@ impl Howl {
             // `SetReverbMode(5)`, which the SPU's reverb already is: off, and not heard.
             reverb: REVERBS.len() as u16,
             state: None,
+            race_end_xa: 0,
+            xnf: Xnf::default(),
+            xa: xa::Xa::default(),
             until_vsync: 0,
         }
     }
 
     /// Reads `SOUNDS/KART.HWL` from the disc image at `path`: its sound effects, engines and
-    /// song packs, and the ADPCM of their samples (3 MB).
+    /// song packs, and the ADPCM of their samples (3 MB); and the index of its XA (whose tracks
+    /// whoever plays them reads, [`xa`]). A disc without XA plays none.
     pub fn read(path: &Path) -> io::Result<Howl> {
         let (mut disc, header) = loader::disc::open_howl(path)?;
         let mut packs = Vec::with_capacity(header.song_offsets.len());
@@ -147,7 +159,9 @@ impl Howl {
             };
             *slot = header.adpcm(&mut disc, sample)?.map(Vec::into_boxed_slice);
         }
-        Ok(Howl::new(header.other_fx, header.engine_fx, packs, samples))
+        let mut howl = Howl::new(header.other_fx, header.engine_fx, packs, samples);
+        howl.xnf = loader::disc::open_xa(path).map(|(xnf, _)| xnf).unwrap_or_default();
+        Ok(howl)
     }
 
     /// The sound effects, by number.
@@ -212,8 +226,9 @@ impl Howl {
     }
 
     /// `howl_PauseAudio`: every sound and song stops, and is kept to start again with
-    /// [`Howl::unpause`].
+    /// [`Howl::unpause`]. The XA fades out, for good.
     pub fn pause(&mut self) {
+        self.pause_xa();
         if !self.paused.is_empty() {
             return;
         }

@@ -3,22 +3,33 @@
 //! frame of the game.
 //!
 //! The music is silent at the traffic lights and starts after the green, the level's song or,
-//! while a mask is out, the mask's. It fades down for "FINAL LAP!" and up again, and plays 20
-//! beats a minute faster from then on; at the end of the race it fades out. The voice lines are
-//! on while racing, but not for the start of the last lap and the end of the race.
+//! while a mask is out, the mask's. It fades down for "FINAL LAP!" (a jingle of XA) and up again
+//! a second into it, and plays 20 beats a minute faster from then on; at the end of the race it
+//! fades out for the race's end, a jingle of a win or of a loss, and plays again from its start
+//! once that is over. The voice lines are on while racing, but not for the start of the last lap
+//! and the end of the race.
 //!
-//! There is no XA yet: the jingles the states would start are not heard, and the states that wait
-//! for one to end go on at once. A race starts at the lights, as the fly-in's state
-//! (`AUDIO_RACE_INTRO`) waits for its jingle and nothing else.
+//! A race starts at the lights, as the fly-in's state (`AUDIO_RACE_INTRO`) waits for its jingle
+//! and nothing else: the fly-in's jingle is not played.
+
+use loader::xa::Category;
 
 use crate::Howl;
 use crate::music::LEVEL_SONG;
+use crate::xa::XaState;
 
 /// How near the finish line the leader is for the start of the last lap to be near, in the
 /// units of `distanceToFinish`.
 const NEAR_FINISH: i32 = 9000;
 /// How much faster the music plays from "FINAL LAP!" on, in beats a minute.
 const LAST_LAP_TEMPO: i32 = 20;
+/// The music's XA: "FINAL LAP!", and the race's end when the driver wins and when it does not.
+const FINAL_LAP_XA: u16 = 6;
+const WIN_XA: u16 = 4;
+const LOSS_XA: u16 = 5;
+/// The music comes up again once "FINAL LAP!" has played this many blocks of the XA's time (a
+/// second).
+const FINAL_LAP_HEARD: i32 = 0xe1;
 
 /// `AUDIO_*`: where a race is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +63,8 @@ pub struct RaceAudio {
     pub lap: u8,
     pub to_finish: i32,
     pub finished: bool,
+    /// It is first (`driversInRaceOrder[0]`).
+    pub first: bool,
     /// The song of the mask that is out (`ACTION_MASK_WEAPON`, with `AKU_SONG` or `UKA_SONG`):
     /// [`crate::music::AKU_SONG`] or [`crate::music::UKA_SONG`].
     pub mask_song: Option<u16>,
@@ -71,12 +84,18 @@ impl Howl {
             }
             State::Racing => self.enable_voicelines(true),
             State::PreLastLap | State::LastLap => self.enable_voicelines(false),
-            State::FinalLap => self.lower_music(),
+            State::FinalLap => {
+                self.lower_music();
+                self.play_xa(Category::Music, FINAL_LAP_XA);
+            }
             State::PostLastLap => {
                 self.raise_music();
                 self.enable_voicelines(true);
             }
-            State::RaceEnd => self.fade_out_music(),
+            State::RaceEnd => {
+                self.fade_out_music();
+                self.play_xa(Category::Music, self.race_end_xa);
+            }
         }
         self.state = Some(state);
     }
@@ -108,10 +127,17 @@ impl Howl {
                     self.set_state(State::FinalLap);
                 }
             }
-            // As soon as "FINAL LAP!" (which has not played) is over.
+            // Up again a second into "FINAL LAP!", and on as soon as it is over.
             State::FinalLap => {
-                self.set_mask_song(race, 0);
-                self.set_state(State::PostLastLap);
+                let mut tempo = 0;
+                if self.xa.offset > FINAL_LAP_HEARD {
+                    self.raise_music();
+                    tempo = LAST_LAP_TEMPO;
+                }
+                self.set_mask_song(race, tempo);
+                if self.xa_state() == XaState::Idle {
+                    self.set_state(State::PostLastLap);
+                }
             }
             State::PostLastLap => {
                 self.set_mask_song(race, LAST_LAP_TEMPO);
@@ -122,11 +148,16 @@ impl Howl {
             }
             State::LastLap => {
                 if race.finished {
+                    self.race_end_xa = if race.first { WIN_XA } else { LOSS_XA };
                     self.set_state(State::RaceEnd);
                 }
             }
-            // As soon as the race's end (which has not played) is over.
-            State::RaceEnd => self.set_mask_song(race, 0),
+            // As soon as the race's end is over.
+            State::RaceEnd => {
+                if self.xa_state() == XaState::Idle {
+                    self.set_mask_song(race, 0);
+                }
+            }
         }
     }
 
@@ -198,7 +229,8 @@ mod tests {
         howl.update_state(&on_lap(2));
         assert_eq!(howl.state, Some(State::FinalLap));
         assert_eq!(howl.music_volume(), Some((190, 90)));
-        // "FINAL LAP!" is not heard: up again at once, and 20 beats a minute faster.
+        // Without the XA, "FINAL LAP!" is not heard: up again at once, and 20 beats a minute
+        // faster.
         howl.update_state(&on_lap(2));
         assert_eq!(howl.state, Some(State::PostLastLap));
         assert_eq!(howl.music_volume(), Some((190, 190)));
@@ -208,6 +240,69 @@ mod tests {
         howl.update_state(&near(2));
         assert_eq!(howl.state, Some(State::LastLap));
         assert!(!howl.voicelines.enabled);
+    }
+
+    /// Renders `frames` of output, and a frame of the game after them.
+    fn play(howl: &mut Howl, frames: usize) {
+        howl.render(&mut vec![[0; 2]; frames]);
+        howl.update_xa();
+    }
+
+    /// The XA asked for, read: `seconds` of a tone.
+    fn read(howl: &mut Howl, seconds: usize) {
+        let request = howl.take_xa_request().unwrap();
+        howl.start_xa(request.serial, Some(crate::xa::tests::tone(seconds)));
+    }
+
+    #[test]
+    fn final_lap_is_heard_and_the_last_lap_waits_for_it() {
+        let mut howl = racing();
+        howl.xnf = crate::xa::tests::xnf(100);
+        howl.update_state(&RaceAudio {
+            to_finish: 8_000,
+            ..on_lap(1)
+        });
+        howl.update_state(&on_lap(2));
+        assert_eq!(howl.state, Some(State::FinalLap));
+        assert_eq!(howl.xa_playing(), Some((Category::Music, FINAL_LAP_XA)));
+        read(&mut howl, 2);
+        howl.update_state(&on_lap(2));
+        assert_eq!(howl.music_volume(), Some((190, 90)));
+        // Down while it plays; a little over a second into it the music comes up again, and
+        // plays faster.
+        play(&mut howl, (FINAL_LAP_HEARD as usize + 1) * 256);
+        howl.update_state(&on_lap(2));
+        assert_eq!(howl.state, Some(State::FinalLap));
+        assert_eq!(howl.music_volume(), Some((90, 190)));
+        howl.update_state(&on_lap(2));
+        assert_eq!(howl.music_playing(), Some((LEVEL_SONG, 80)));
+        // Once it is over, the last lap.
+        play(&mut howl, 2 * 44_100 - (FINAL_LAP_HEARD as usize + 1) * 256);
+        howl.update_state(&on_lap(2));
+        assert_eq!(howl.state, Some(State::PostLastLap));
+    }
+
+    #[test]
+    fn the_end_of_the_race_is_a_win_or_a_loss_and_the_music_waits_for_it() {
+        for (first, jingle) in [(true, WIN_XA), (false, LOSS_XA)] {
+            let mut howl = racing();
+            howl.xnf = crate::xa::tests::xnf(100);
+            howl.state = Some(State::LastLap);
+            let finished = RaceAudio {
+                finished: true,
+                first,
+                ..on_lap(2)
+            };
+            howl.update_state(&finished);
+            assert_eq!(howl.xa_playing(), Some((Category::Music, jingle)));
+            read(&mut howl, 1);
+            play(&mut howl, 40_000);
+            howl.update_state(&finished);
+            assert_eq!(howl.music_playing(), None);
+            play(&mut howl, 4_100);
+            howl.update_state(&finished);
+            assert_eq!(howl.music_playing(), Some((LEVEL_SONG, 60)));
+        }
     }
 
     #[test]

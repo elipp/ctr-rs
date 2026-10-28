@@ -2,21 +2,24 @@
 //! without the game:
 //!
 //! ```text
-//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16 r0 0x45 e0 m0
+//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16 r0 0x45 e0 m0 xm6
 //! ```
 //!
 //! A number is a sound effect, played until its time is up (one that loops is stopped after two
 //! seconds). `e` and a number is an engine loop, revved from idle to the top and back over four
 //! seconds. `r` and a number is one of the game's reverbs (`SetReverbMode`, 5 or more for none),
 //! which the sounds after it echo in. `m` and a level's number (a `LevelId`) plays the level's
-//! song for 20 seconds, `a` and `u` and a level's number its Aku Aku and Uka Uka songs. The disc
-//! image is `CTR_BIN`, or `assets/ctr-u.bin`.
+//! song for 20 seconds, `a` and `u` and a level's number its Aku Aku and Uka Uka songs. `x` and
+//! a category (`m` the music, `e` the extra lines, `g` the drivers' lines) and a number plays
+//! that XA to its end. The disc image is `CTR_BIN`, or `assets/ctr-u.bin`.
 
 use std::io::Write;
 use std::path::PathBuf;
 
 use howl::music::{AKU_SONG, LEVEL_SONG, UKA_SONG};
+use howl::xa::XaState;
 use howl::{AntiSpam, Howl, Sfx};
+use loader::xa::Category;
 
 /// A sixtieth of a second of output: the engine is set again every one, as the game does.
 const BLANK: usize = howl::spu::RATE as usize / 60;
@@ -32,6 +35,7 @@ fn main() -> std::io::Result<()> {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
         });
     let mut howl = Howl::read(&disc)?;
+    let mut xa = loader::disc::open_xa(&disc).ok().map(|(_, files)| files);
     let mut sfx = Sfx::FULL;
     let mut frames = Vec::new();
     let mut blank = |howl: &mut Howl, n: usize| {
@@ -44,6 +48,31 @@ fn main() -> std::io::Result<()> {
             Some(hex) => u16::from_str_radix(hex, 16),
             None => s.parse(),
         };
+        if let Some(track) = arg.strip_prefix('x') {
+            let category = match track.as_bytes().first() {
+                Some(b'm') => Category::Music,
+                Some(b'e') => Category::Extra,
+                Some(b'g') => Category::Game,
+                _ => panic!("an XA category: m, e or g"),
+            };
+            let id = number(&track[1..]).expect("an XA number");
+            if !howl.play_xa(category, id) {
+                eprintln!("XA {arg} does not play");
+                continue;
+            }
+            let request = howl.take_xa_request().unwrap();
+            let read = xa
+                .as_mut()
+                .and_then(|xa| xa.read(category, request.track).ok());
+            let pcm = read.flatten().map(|sectors| loader::xa::decode(&sectors));
+            howl.start_xa(request.serial, pcm);
+            while howl.xa_state() != XaState::Idle {
+                blank(&mut howl, 1);
+                howl.update_xa();
+            }
+            blank(&mut howl, 12);
+            continue;
+        }
         if let Some(reverb) = arg.strip_prefix('r') {
             let reverb = number(reverb).expect("a reverb number");
             howl.set_reverb(reverb);
