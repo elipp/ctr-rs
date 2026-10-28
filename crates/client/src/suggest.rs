@@ -153,6 +153,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                         ],
                     ),
                     node(
+                        "crate-fixup",
+                        "Move the crates the level puts in the ground",
+                        &[
+                            leaf("on", "Move them"),
+                            leaf("off", "Draw them where the level has them"),
+                        ],
+                    ),
+                    node(
                         "colors",
                         "Vertex colors",
                         &[leaf("hi", "color_hi"), leaf("lo", "color_lo")],
@@ -162,6 +170,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf(
                 "viewer",
                 "Switch between the race and the fly-through viewer",
+            ),
+            node(
+                "crate",
+                "Crates",
+                &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
         ],
