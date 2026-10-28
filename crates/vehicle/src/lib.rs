@@ -508,6 +508,9 @@ pub struct Driver {
     pub invincible_timer: i32,
     /// `THREAD_FLAG_DISABLE_COLLISION` of the driver's thread: other karts pass through it.
     pub collision_disabled: bool,
+    /// `instSelf->matrix.t` as `DRIVER_FUNC_TRANSLATE_MATRIX` last left it ([`baked::inst_matrix`]
+    /// then): where the other karts find this one, until its next translate.
+    pub inst_pos: [i32; 3],
     pub button_used_to_start_drift: i16,
 
     pub rot_curr_x: i16,

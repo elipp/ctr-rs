@@ -42,7 +42,7 @@ use vehicle::scrub::SCRUBS;
 use vehicle::collide::Feedback;
 use vehicle::pick::damage;
 use vehicle::search::NoInstances;
-use vehicle::sim::{Racer, after_logic, spawn, tick_all};
+use vehicle::sim::{Racer, after_logic, spawn, start_tick, tick_all};
 use vehicle::stats::{CHARACTER_ENGINES, META_PHYS};
 use vehicle::terrain::TERRAINS;
 use vehicle::{Driver, Effect, Env, Input, MatrixArray, PhysState, audio_slot, buttons};
@@ -173,6 +173,9 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
     push!("inst.animFrame", d.anim_frame);
     push!("inst.scale.x", d.inst_scale_x);
     push!("inst.scale.y", d.inst_scale_y);
+    push!("inst.matrix.t[0]", d.inst_pos[0]);
+    push!("inst.matrix.t[1]", d.inst_pos[1]);
+    push!("inst.matrix.t[2]", d.inst_pos[2]);
     push!(
         "d.matrixArray",
         match d.matrix_array {
@@ -214,6 +217,13 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
     push!("d.jumpMeterTimer", d.jump_meter_timer);
     push!("d.forcedJumpType", d.forced_jump_type);
     push!("d.buttonUsedToStartDrift", d.button_used_to_start_drift);
+    push!("d.pendingDamageType", d.pending_damage_type);
+    push!("d.pendingDamageReasonByte", d.pending_damage_reason);
+    push!(
+        "d.pendingDamageAttacker",
+        d.pending_damage_attacker.map_or(-1, i64::from)
+    );
+    push!("d.invincibleTimer", d.invincible_timer);
     push!("d.rotCurr.x", d.rot_curr_x);
     push!("d.rotCurr.y", d.rot_curr_y);
     push!("d.rotCurr.z", d.rot_curr_z);
@@ -283,14 +293,15 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
     f
 }
 
-fn effect_line(e: &Effect, d: &Driver) -> String {
+/// `characters` are the run's drivers' characters, by `driver_id`.
+fn effect_line(e: &Effect, characters: &[usize]) -> String {
     match *e {
         Effect::Sound { id, echo } => format!(" S {id} {}", echo as u8),
         Effect::Voiceline {
             id,
-            driver_id: _,
+            driver_id,
             priority,
-        } => format!(" V {id} {} {priority}", d.character),
+        } => format!(" V {id} {} {priority}", characters[driver_id as usize]),
         Effect::JogCon {
             driver_id,
             pattern,
@@ -388,32 +399,62 @@ struct Frame {
     hit: Option<u8>,
 }
 
-impl Frame {
-    fn script(&self) -> String {
-        let boost = self
-            .boost
-            .map_or(String::new(), |(r, ty, level)| format!("I {r} {ty} {level}\n"));
-        let hit = self.hit.map_or(String::new(), |h| format!("H {h}\n"));
-        format!(
-            "{boost}{hit}X {} {} {} {} {} {} {} {} {}",
-            self.env.elapsed_time_ms,
-            self.env.elapsed_event_time,
-            self.env.timer,
-            self.env.end_of_race as u8,
-            self.input.buttons_held,
-            self.input.buttons_tapped,
-            self.input.stick_lx,
-            self.input.stick_ly,
-            self.input.stick_ry
-        )
-    }
-}
-
-/// A run: a kart of a character placed on a track, and the inputs it is driven with.
-struct Run {
+/// A kart of a run: its character, where it starts, and the inputs it is driven with.
+struct Kart {
     character: usize,
     driver: Driver,
     frames: Vec<Frame>,
+}
+
+/// A run: karts placed on a track, in the thread list's order (each one's `driver_id` is its
+/// place), all driven for the same ticks. The first kart's frames have the run's `env`.
+struct Run {
+    karts: Vec<Kart>,
+}
+
+impl Run {
+    fn ticks(&self) -> usize {
+        self.karts[0].frames.len()
+    }
+
+    /// The C driver's lines for tick `t`: the boosts and hits, then the tick.
+    fn tick_script(&self, t: usize) -> String {
+        let mut s = String::new();
+        for (j, k) in self.karts.iter().enumerate() {
+            let f = &k.frames[t];
+            if f.boost.is_none() && f.hit.is_none() {
+                continue;
+            }
+            writeln!(s, "P {j}").unwrap();
+            if let Some((r, ty, level)) = f.boost {
+                writeln!(s, "I {r} {ty} {level}").unwrap();
+            }
+            if let Some(h) = f.hit {
+                writeln!(s, "H {h}").unwrap();
+            }
+        }
+        let env = &self.karts[0].frames[t].env;
+        write!(
+            s,
+            "X {} {} {} {}",
+            env.elapsed_time_ms,
+            env.elapsed_event_time,
+            env.timer,
+            env.end_of_race as u8
+        )
+        .unwrap();
+        for k in &self.karts {
+            let i = &k.frames[t].input;
+            write!(
+                s,
+                " {} {} {} {} {}",
+                i.buttons_held, i.buttons_tapped, i.stick_lx, i.stick_ly, i.stick_ry
+            )
+            .unwrap();
+        }
+        s.push('\n');
+        s
+    }
 }
 
 /// Driving habits: how the sticks and buttons change over a run.
@@ -584,7 +625,7 @@ fn add_hits(rng: &mut Rng, frames: &mut [Frame]) {
 }
 
 fn driver_script(d: &Driver, character: usize) -> String {
-    let mut s = String::from("S");
+    let mut s = format!("P {}\nS", d.driver_id);
     let class = CHARACTER_ENGINES[character] as usize;
     for row in META_PHYS {
         write!(s, " {}", row[class]).unwrap();
@@ -601,14 +642,20 @@ fn driver_script(d: &Driver, character: usize) -> String {
     s
 }
 
-fn tick_line(d: &Driver, c: &Collision, effects: &[Effect], mask_grab: bool) -> String {
+fn tick_line(
+    d: &Driver,
+    c: &Collision,
+    effects: &[Effect],
+    mask_grab: bool,
+    characters: &[usize],
+) -> String {
     let mut o = String::new();
     for (_, v) in fields(d) {
         write!(o, " {v}").unwrap();
     }
     o.push_str(" |");
     for e in effects {
-        o.push_str(&effect_line(e, d));
+        o.push_str(&effect_line(e, characters));
     }
     let s = &c.sps;
     write!(
@@ -630,6 +677,13 @@ fn runs() -> usize {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(16)
+}
+
+fn multi_runs() -> usize {
+    std::env::var("VEHICLE_TICK_MULTI_RUNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6)
 }
 
 fn ticks() -> usize {
@@ -696,13 +750,47 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
             add_hits(&mut Rng((0x0b1a_57ed ^ ((i as u64) << 24)) | 1), &mut frames);
         }
         out.push(Run {
-            character,
-            driver,
-            frames,
+            karts: vec![Kart {
+                character,
+                driver,
+                frames,
+            }],
         });
+    }
+    // Two to four karts on the grid side by side, each driven its own way: they bump into each
+    // other, some with a turbo item burning (whose bump hurts), some hit.
+    for i in 0..multi_runs() {
+        let n = 2 + i % 3;
+        let karts = (0..n)
+            .map(|j| {
+                let character = rng.below(16) as usize;
+                let mut driver = Driver::new(j as u8, character);
+                driver.anim_num_frames = [30, 12, 20, 16, 24, 8, 8, 8];
+                spawn(&mut driver, coll, level, j);
+                let mut frames = if j % 2 == 1 {
+                    drifter_frames(rng, ticks())
+                } else {
+                    frames(rng, ticks())
+                };
+                let seed = ((i * MAX_KARTS + j) as u64) << 20;
+                add_turbo_items(&mut Rng((0x7e2b_90c1 ^ seed) | 1), &mut frames);
+                if (i + j) % 3 == 2 {
+                    add_hits(&mut Rng((0x3d5f_a417 ^ seed) | 1), &mut frames);
+                }
+                Kart {
+                    character,
+                    driver,
+                    frames,
+                }
+            })
+            .collect();
+        out.push(Run { karts });
     }
     out
 }
+
+/// The most karts a run has (the C driver's `MAX_KARTS`).
+const MAX_KARTS: usize = 4;
 
 /// A copy of a reference source with `edits` applied, for the places where
 /// ctr-native cannot be compared with the port as it is. Each edit must match
@@ -811,6 +899,8 @@ fn matches_reference_on_tracks() {
             "game/PROC.c",
             "game/UI/UI_Meter.c",
             "game/MATH/MATH_2_FastSqrt.c",
+            "game/MATH/MATH_0_Sin.c",
+            "game/Vector.c",
             "game/Vehicle/VehPhysForce.c",
             "game/Vehicle/VehPhysCrash.c",
             "game/Vehicle/VehPhysJoystick.c",
@@ -838,8 +928,8 @@ fn matches_reference_on_tracks() {
     // drifting, spinning, spin winding down, spin stopping, boosted by a drift,
     // fire burning, fire hidden by a new boost, on a turbo pad, turbo item boosting,
     // turbo item fired onto a burning fire, tumbling, hit with the fire burning, hit in the air,
-    // hit in a power slide, hit while spinning or tumbling)
-    let mut totals = [0u32; 23];
+    // hit in a power slide, hit while spinning or tumbling, karts in company, bumping, hurt by a bump)
+    let mut totals = [0u32; 26];
 
     for id in LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0 {
         let idx = BigIndex::level(LevelId(id), Lod::OnePlayer, LevFile::Lev);
@@ -853,53 +943,70 @@ fn matches_reference_on_tracks() {
         script.push_str(&extras_script(&level));
         script.push('\n');
         script.push_str(&tables_script());
+        script.push_str(&baked_script());
+        writeln!(script, "W {}", own_collision()).unwrap();
         for run in &runs {
-            script.push_str(&driver_script(&run.driver, run.character));
-            for f in &run.frames {
-                script.push_str(&f.script());
-                script.push('\n');
+            writeln!(script, "M {}", run.karts.len()).unwrap();
+            for k in &run.karts {
+                script.push_str(&driver_script(&k.driver, k.character));
+            }
+            for t in 0..run.ticks() {
+                script.push_str(&run.tick_script(t));
             }
         }
         let reference = run_reference(&exe, &script);
-        let total: usize = runs.iter().map(|r| r.frames.len()).sum();
+        let total = starts_line(&runs, runs.len());
         assert_eq!(
             reference.len(),
             total,
-            "level {id}: the C driver printed {} lines for {total} ticks",
+            "level {id}: the C driver printed {} lines for {total} kart ticks",
             reference.len()
         );
 
         // Rust side, with the same carried-over collision state: the C driver
-        // starts with a zeroed scratchpad.
-        let mut collision = Collision::default();
-        // `sdata->randomNumber`, which the C driver starts at 0 for every level.
+        // starts with a zeroed scratchpad. Each place in the thread list has its own
+        // (the C driver's are its one, unless `own_collision`).
+        let mut collisions: Vec<Collision> = (0..MAX_KARTS).map(|_| Collision::default()).collect();
+        // `sdata->randomNumber`, which the C driver starts at 0 for every level, and the bump
+        // sounds' timing, which it keeps for the level too.
         let mut random_number = 0;
+        let mut feedback = Feedback::default();
         let mut line = 0;
         let mut failures = 0;
         for (r, run) in runs.iter().enumerate() {
-            let mut d = run.driver.clone();
-            for (t, f) in run.frames.iter().enumerate() {
-                let mut effects = Vec::new();
-                if let Some((reserves, ty, level)) = f.boost {
-                    totals[17] += d.turbo.is_some() as u32;
-                    fire::increment(&mut d, reserves, ty, level, &mut effects);
+            let n = run.karts.len();
+            let mut ds: Vec<Driver> = run.karts.iter().map(|k| k.driver.clone()).collect();
+            let characters: Vec<usize> = ds.iter().map(|d| d.character as usize).collect();
+            'ticks: for t in 0..run.ticks() {
+                let env = &run.karts[0].frames[t].env;
+                let mut effects: Vec<Vec<Effect>> = vec![Vec::new(); n];
+                for (j, k) in run.karts.iter().enumerate() {
+                    if let Some((reserves, ty, level)) = k.frames[t].boost {
+                        totals[17] += ds[j].turbo.is_some() as u32;
+                        fire::increment(&mut ds[j], reserves, ty, level, &mut effects[j]);
+                    }
                 }
-                // A kart that was blasted draws which way its tumble plays, as its init will.
-                vehicle::tumble::roll_direction(&mut d, &mut random_number);
-                let result = tick_all(
-                    &mut [Racer {
-                        driver: &mut d,
-                        coll: &mut collision,
-                        input: &f.input,
-                        effects: &mut effects,
-                    }],
-                    &level,
-                    &f.env,
-                    &mut NoInstances,
-                    &mut Feedback::default(),
-                )
-                .remove(0);
-                if let Some(hit) = f.hit {
+                let results = {
+                    let mut racers: Vec<Racer> = ds
+                        .iter_mut()
+                        .zip(collisions.iter_mut())
+                        .zip(effects.iter_mut())
+                        .zip(&run.karts)
+                        .map(|(((driver, coll), effects), k)| Racer {
+                            driver,
+                            coll,
+                            input: &k.frames[t].input,
+                            effects,
+                        })
+                        .collect();
+                    start_tick(&mut racers, &mut random_number);
+                    tick_all(&mut racers, &level, env, &mut NoInstances, &mut feedback)
+                };
+                for (j, k) in run.karts.iter().enumerate() {
+                    let Some(hit) = k.frames[t].hit else {
+                        continue;
+                    };
+                    let d = &mut ds[j];
                     let air = d.actions_flag_set & vehicle::actions::TOUCH_GROUND == 0;
                     totals[19] += d.turbo.is_some() as u32;
                     totals[20] += air as u32;
@@ -911,59 +1018,76 @@ fn matches_reference_on_tracks() {
                             | PhysState::SpinStop
                             | PhysState::Tumble
                     ) as u32;
-                    vehicle::pick::new_state(&mut d, hit, &mut effects);
+                    vehicle::pick::new_state(d, hit, &mut effects[j]);
                 }
-                after_logic(&mut d, &f.env, &mut effects);
-                let got = tick_line(&d, &collision, &effects, result.mask_grab);
-                let want = reference[line].trim_end();
-                line += 1;
+                for (d, effects) in ds.iter_mut().zip(effects.iter_mut()) {
+                    after_logic(d, env, effects);
+                }
 
-                totals[0] += 1;
-                totals[1] += (d.actions_flag_set & vehicle::actions::TOUCH_GROUND == 0) as u32;
-                totals[2] += (d.phys_state == PhysState::SlamWall) as u32;
-                totals[3] += result.mask_grab as u32;
-                totals[4] += (d.speed_approx < -0x100) as u32;
-                totals[5] += (d.wall_rub_timer != 0) as u32;
-                totals[6] += (d.actions_flag_set & vehicle::actions::JUMP_STARTED != 0) as u32;
-                totals[7] += (d.phys_state == PhysState::FreezeVShift) as u32;
-                totals[8] += (d.phys_state == PhysState::PowerSlide) as u32;
-                totals[9] += (d.phys_state == PhysState::SpinFirst) as u32;
-                totals[10] += (d.phys_state == PhysState::SpinLast) as u32;
-                totals[11] += (d.phys_state == PhysState::SpinStop) as u32;
-                totals[12] +=
-                    (d.phys_state == PhysState::PowerSlide && d.num_boosts_success > 0) as u32;
-                totals[13] += d.turbo.is_some() as u32;
-                totals[14] += d.turbo.is_some_and(|t| t.hidden && t.fire_visibility_cooldown > 0) as u32;
-                totals[15] += (d.step_flag_set & vehicle::step_triggers::TURBO_PAD_MASK != 0) as u32;
-                totals[16] += (d.actions_flag_set & vehicle::actions::TURBO_ITEM != 0) as u32;
-                totals[18] += (d.phys_state == PhysState::Tumble) as u32;
+                for j in 0..n {
+                    let d = &ds[j];
+                    let mask_grab = results[j].mask_grab;
+                    let got = tick_line(d, &collisions[j], &effects[j], mask_grab, &characters);
+                    let want = reference[line].trim_end();
+                    line += 1;
 
-                if got.trim_start() != want.trim_start() {
-                    failures += 1;
-                    if failures <= 2 {
-                        let names: Vec<&str> = fields(&d).iter().map(|(n, _)| *n).collect();
-                        let rust: Vec<&str> = got.trim_start().split(' ').collect();
-                        let c: Vec<&str> = want.trim_start().split(' ').collect();
-                        let first = (0..names.len()).find(|&i| rust.get(i) != c.get(i));
-                        eprintln!(
-                            "level {id}, run {r} (character {}), tick {t}: MISMATCH at {}\n  rust: {}\n  ref:  {}",
-                            run.character,
-                            first.map_or("the effects or scratchpad".to_owned(), |i| format!(
-                                "{} (rust {}, ref {})",
-                                names[i], rust[i], c[i]
-                            )),
-                            got,
-                            want
-                        );
+                    totals[0] += 1;
+                    totals[1] += (d.actions_flag_set & vehicle::actions::TOUCH_GROUND == 0) as u32;
+                    totals[2] += (d.phys_state == PhysState::SlamWall) as u32;
+                    totals[3] += mask_grab as u32;
+                    totals[4] += (d.speed_approx < -0x100) as u32;
+                    totals[5] += (d.wall_rub_timer != 0) as u32;
+                    totals[6] += (d.actions_flag_set & vehicle::actions::JUMP_STARTED != 0) as u32;
+                    totals[7] += (d.phys_state == PhysState::FreezeVShift) as u32;
+                    totals[8] += (d.phys_state == PhysState::PowerSlide) as u32;
+                    totals[9] += (d.phys_state == PhysState::SpinFirst) as u32;
+                    totals[10] += (d.phys_state == PhysState::SpinLast) as u32;
+                    totals[11] += (d.phys_state == PhysState::SpinStop) as u32;
+                    totals[12] +=
+                        (d.phys_state == PhysState::PowerSlide && d.num_boosts_success > 0) as u32;
+                    totals[13] += d.turbo.is_some() as u32;
+                    totals[14] +=
+                        d.turbo.is_some_and(|t| t.hidden && t.fire_visibility_cooldown > 0) as u32;
+                    totals[15] +=
+                        (d.step_flag_set & vehicle::step_triggers::TURBO_PAD_MASK != 0) as u32;
+                    totals[16] += (d.actions_flag_set & vehicle::actions::TURBO_ITEM != 0) as u32;
+                    totals[18] += (d.phys_state == PhysState::Tumble) as u32;
+                    totals[23] += (n > 1) as u32;
+                    totals[24] +=
+                        (d.actions_flag_set & vehicle::actions::HUMAN_HUMAN_COLLISION != 0) as u32;
+                    totals[25] += (d.pending_damage_type != 0) as u32;
+
+                    // A scratchpad that the drivers share holds what the last of their searches
+                    // left, not any one driver's: then only the drivers and effects are compared.
+                    let shared = n > 1 && own_collision() & 1 == 0;
+                    let tail = |l: &str| if shared { l.rsplit_once(" | ").map_or(l, |(a, _)| a).to_owned() } else { l.to_owned() };
+                    if tail(got.trim_start()) != tail(want.trim_start()) {
+                        failures += 1;
+                        if failures <= 2 {
+                            let names: Vec<&str> = fields(d).iter().map(|(n, _)| *n).collect();
+                            let rust: Vec<&str> = got.trim_start().split(' ').collect();
+                            let c: Vec<&str> = want.trim_start().split(' ').collect();
+                            let first = (0..names.len()).find(|&i| rust.get(i) != c.get(i));
+                            eprintln!(
+                                "level {id}, run {r} ({n} karts), kart {j} (character {}), tick {t}: MISMATCH at {}\n  rust: {}\n  ref:  {}",
+                                run.karts[j].character,
+                                first.map_or("the effects or scratchpad".to_owned(), |i| format!(
+                                    "{} (rust {}, ref {})",
+                                    names[i], rust[i], c[i]
+                                )),
+                                got,
+                                want
+                            );
+                        }
+                        break 'ticks; // later ticks of this run would only repeat the divergence
                     }
-                    break; // later ticks of this run would only repeat the divergence
                 }
             }
             // After a mismatch, skip this run's remaining C lines.
             line = starts_line(&runs, r + 1);
         }
         eprintln!(
-            "level {id}: {} runs, {} ticks, {failures} runs diverge",
+            "level {id}: {} runs, {} kart ticks, {failures} runs diverge",
             runs.len(),
             total
         );
@@ -996,12 +1120,56 @@ fn matches_reference_on_tracks() {
         totals[18] > 0 && totals[19..23].iter().all(|&n| n > 0),
         "the runs do not cover hits in every state: {totals:?}"
     );
+    // Karts in company: bumping, and hurt by a bump into a kart whose turbo item burns.
+    assert!(
+        totals[24] > 0 && totals[25] > 0,
+        "the runs do not cover bumps and the damage of a bump: {totals:?}"
+    );
 }
 
-/// The first C output line of run `r` (the runs print one line per tick).
+/// The first C output line of run `r` (the runs print a line per kart per tick).
 fn starts_line(runs: &[Run], r: usize) -> usize {
     runs[..r.min(runs.len())]
         .iter()
-        .map(|run| run.frames.len())
+        .map(|run| run.ticks() * run.karts.len())
         .sum()
+}
+
+/// `VEHICLE_TICK_OWN_COLLISION`: which of the scratchpad (1) and the GTE (2) the C drivers keep
+/// one each of, as the port's karts do (3), rather than sharing the one as in retail (0).
+///
+/// By default each has a GTE of its own (2): retail's hazard wobble reads a rotation matrix that
+/// another kart's stages left in the GTE, which the port does not reproduce (see
+/// `docs/notes/DIVERGENCE.md`). The scratchpad is shared, as in retail; the port's own per kart
+/// gives the same drivers.
+fn own_collision() -> u8 {
+    std::env::var("VEHICLE_TICK_OWN_COLLISION")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2)
+}
+
+/// The animation tables (`G`), as authored: the C driver bakes them with `Vector_BakeMatrixTable`.
+fn baked_script() -> String {
+    let mut s = String::from("G");
+    for index in 1..20u8 {
+        let array = match index {
+            1 => MatrixArray::WheelieStart,
+            2 => MatrixArray::WheelieHold,
+            3 => MatrixArray::WheelieRecover,
+            4 => MatrixArray::CrashFall,
+            5 => MatrixArray::SquishRecover,
+            6 => MatrixArray::Blasted,
+            n => MatrixArray::Jump(n),
+        };
+        let entries = vehicle::baked::entries(array).unwrap_or(&[]);
+        write!(s, " {}", entries.len()).unwrap();
+        for e in entries {
+            for v in e.offset.iter().chain(&e.rot).chain(&e.scale) {
+                write!(s, " {v}").unwrap();
+            }
+        }
+    }
+    s.push('\n');
+    s
 }

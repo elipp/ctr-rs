@@ -806,6 +806,7 @@ pub fn translate_matrix(d: &mut Driver, gte: &mut Gte, effects: &mut Vec<Effect>
     );
     d.matrix_facing_dir = facing;
     crate::baked::update_matrix_animation(d);
+    d.inst_pos = crate::baked::inst_matrix(d).1;
 }
 
 #[cfg(test)]
