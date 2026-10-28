@@ -2,7 +2,8 @@
 //! Tiger Temple (`RB_FlameJet_Particles`), and the tires the plants of Papu's Pyramid spit
 //! (`emSet_PlantTires`). The ball's model is hidden by the game; what shows is the trail of sparks
 //! it leaves, in the level's `fireball` icon, which the jets' flames use too. The tires are the
-//! wheel icons of the racer, spinning.
+//! wheel icons of the racer, spinning. The shards of a beaker that bursts (`emSet_PotionShatter`)
+//! are the smoke icon, tinted the beaker's colour.
 //! Where the balls go and what sparks they leave is `instance::Objects`, how a spark moves and
 //! looks is `render::particles`; this only shows them.
 
@@ -14,6 +15,7 @@ use loader::dram::DramFile;
 use loader::icons::{Icon, parse_level_groups};
 use loader::vram::Vram;
 use render::mesh::SCALE;
+use weapon::mine::MineKind;
 use render::particles::{Particle, Rng, quarter_units_to_world};
 
 use crate::exhaust::{SCREEN_PIXEL_ASPECT, icon_image};
@@ -28,6 +30,9 @@ const SUBSTEPS: u32 = 1;
 
 /// The tires a plant spits at a time.
 const TIRES_A_SPIT: usize = 4;
+
+/// The shards a beaker bursts into (`RB_Explosion_InitPotion`).
+const SHARDS_A_SHATTER: usize = 5;
 
 /// A spark, and how far into its first tick it was born: it is drawn that much further on in
 /// its life than the tick it is in says, as one born earlier in the tick has lived longer.
@@ -59,6 +64,10 @@ pub struct Fire {
     sparks: Vec<Spark>,
     /// The tires the plants spat.
     tires: Vec<Spark>,
+    /// The shards of the beakers that burst.
+    shards: Vec<Spark>,
+    /// The size of the smoke icon the shards are, if there is one.
+    smoke: Option<(i32, i32)>,
     /// The heat the flame jets give off, oldest first: lenses that warp the picture (`heat`).
     pub(crate) heat: Vec<Spark>,
     rng: Rng,
@@ -82,6 +91,9 @@ pub struct FireSprites;
 #[derive(Component)]
 pub struct TireSprites;
 
+#[derive(Component)]
+pub struct ShardSprites;
+
 /// What the level has that these show: `emitters` fireballs and flame jets, and `plants`.
 pub struct Sources {
     pub emitters: usize,
@@ -92,6 +104,7 @@ pub struct Sources {
 pub fn spawn(
     sources: Sources,
     wheel_icons: &[Icon],
+    smoke_icon: Option<&Icon>,
     dram: &DramFile,
     vram: &Vram,
     commands: &mut Commands,
@@ -140,7 +153,14 @@ pub fn spawn(
         // A tire is opaque, where it has texels.
         commands.spawn((TireSprites, sprites(image, AlphaMode::Mask(0.5))));
     }
-    if icon.is_none() && wheels.is_empty() {
+    let mut smoke = None;
+    if let Some(icon) = smoke_icon {
+        let (image, w, h) = icon_image(icon, vram);
+        smoke = Some((w, h));
+        // The shards add to the picture.
+        commands.spawn((ShardSprites, sprites(image, AlphaMode::Add)));
+    }
+    if icon.is_none() && wheels.is_empty() && smoke.is_none() {
         return;
     }
     info!(
@@ -150,6 +170,8 @@ pub fn spawn(
     commands.insert_resource(Fire {
         sparks: Vec::new(),
         tires: Vec::new(),
+        shards: Vec::new(),
+        smoke,
         heat: Vec::new(),
         rng: Rng::new(0x1d87_2b41),
         width,
@@ -205,6 +227,7 @@ impl Fire {
     pub fn clear(&mut self) {
         self.sparks.clear();
         self.tires.clear();
+        self.shards.clear();
         self.heat.clear();
     }
 }
@@ -252,8 +275,26 @@ pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>, mut seen: L
             fire.tires.push(Spark::born(particle));
         }
     }
+    if fire.smoke.is_some() {
+        for burst in &sim.race.last_weapons.detonations {
+            let green = match burst.kind {
+                MineKind::GreenBeaker => true,
+                MineKind::RedBeaker => false,
+                _ => continue,
+            };
+            for _ in 0..SHARDS_A_SHATTER {
+                let particle = Particle::potion_shatter(burst.pos, green, &mut fire.rng);
+                fire.shards.push(Spark::born(particle));
+            }
+        }
+    }
     // (As in the game, a new spark is updated once in the tick it is born.)
-    for list in [&mut fire.sparks, &mut fire.tires, &mut fire.heat] {
+    for list in [
+        &mut fire.sparks,
+        &mut fire.tires,
+        &mut fire.shards,
+        &mut fire.heat,
+    ] {
         list.retain_mut(|s| {
             s.ticks += 1;
             s.particle.update() && s.ticks as f32 + s.lead < s.life
@@ -261,10 +302,11 @@ pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>, mut seen: L
     }
 }
 
-/// Lays the sparks and the tires out as camera-facing quads, between the last two ticks.
+/// Lays the sparks, the tires and the shards out as camera-facing quads, between the last two ticks.
 pub fn update(
     sprites: Query<&Mesh3d, With<FireSprites>>,
     tire_sprites: Query<&Mesh3d, With<TireSprites>>,
+    shard_sprites: Query<&Mesh3d, With<ShardSprites>>,
     cameras: Query<
         &Transform,
         (
@@ -296,6 +338,15 @@ pub fn update(
         let quads = lay_out(&fire.tires, right, up, t, |p| {
             let wheel = fire.wheels.get(p.icon_frame()?)?;
             Some((wheel.width, wheel.height, wheel.uv))
+        });
+        set_quads(&mut mesh, &quads.0, &quads.1, &quads.2);
+    }
+    if let Some(mesh) = shard_sprites.iter().next()
+        && let Some(mut mesh) = meshes.get_mut(&mesh.0)
+        && let Some((width, height)) = fire.smoke
+    {
+        let quads = lay_out(&fire.shards, right, up, t, |_| {
+            Some((width, height, [0.0, 0.0, 1.0, 1.0]))
         });
         set_quads(&mut mesh, &quads.0, &quads.1, &quads.2);
     }

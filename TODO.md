@@ -1,13 +1,11 @@
 # Unimplemented
-- the particles of a shattering potion (`emSet_PotionShatter`)
-- the flame jets' burning a mine in reach (`RB_Hazard_ThCollide_Generic_Alt`), and the real shading of their stone (`USE_SPECULAR_LIGHT`, `colorRGBA`'s far colour; `props::flame_jet_lit` is a guess: ambient plus the light's dot with the normals)
 - the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon
 - the other uses of a TNT crate on the head (`instTntRecv`): half the speed, the fire button ignored, the driving animation held at its middle frame
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
 - The crate depth bias is too much for Papy's Pyramid
-- the hazards' `ThCollide` (`RB_Seal_ThCollide`, `RB_Spider_ThCollide`: they let the thread-bucket collisions of weapons through), and hazards hurting bots
+- the hazards' `ThCollide` (`RB_Seal_ThCollide`, `RB_Spider_ThCollide`: they let the thread-bucket collisions of weapons through)
 - Spectate only mode
 - submerged in the mud in tiny arena looks off
 - While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled elsewhere.

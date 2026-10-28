@@ -389,6 +389,59 @@ pub const PLANT_TIRES: [Entry; 7] = [
     },
 ];
 
+/// `emSet_PotionShatter`: a shard of the cloud a beaker bursts into. It shoots up, and once it
+/// slows (`Particle_FuncPtr_PotionShatter`) it drifts off sideways, growing and fading. Its
+/// colour (axes 7 to 9) is the beaker's, set when it is born.
+pub const POTION_SHATTER: [Entry; 8] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x00a1,
+        lifespan: 20,
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 0,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 2,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 0x17,
+        axis: 1,
+        base: [1, 0xed8, -280],
+        random: [0, 400, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 5,
+        base: [0x1000, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 7,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 8,
+        base: [0xc800, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 9,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+];
+
 /// `emSet_fjHeat`: the shimmer of a Tiger Temple flame jet's heat. It is not drawn as a sprite
 /// (`Particle_Type` 1 puts it in the heat-warp list): the three radii (`ROT_X`, `ROT_Y` and
 /// `SCALE_X`) are those of the rings of the lens that `Torch_Main` warps the picture with.
@@ -485,6 +538,16 @@ pub struct Particle {
     pub icons: i32,
     /// A tire a plant spat, which bounces (`Particle_FuncPtr_SpitTire`).
     pub spit: Option<SpitTire>,
+    /// A shard of a beaker that burst (`Particle_FuncPtr_PotionShatter`).
+    pub shatter: Option<Shatter>,
+}
+
+/// What `Particle_FuncPtr_PotionShatter` needs: which colour fades, and its own source of
+/// randomness (retail draws from the game's `MixRNG_Scramble`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shatter {
+    pub green: bool,
+    pub rng: Rng,
 }
 
 /// What `Particle_FuncPtr_SpitTire` needs: the height of the plant it is `owner`'s, and its own
@@ -515,6 +578,7 @@ impl Particle {
             previous: [0; 3],
             icons: 0,
             spit: None,
+            shatter: None,
         };
         for entry in set {
             match *entry {
@@ -652,6 +716,46 @@ impl Particle {
         p
     }
 
+    /// One of the five shards of `RB_Explosion_InitPotion`, at the beaker's `position` (level
+    /// units): green for a green beaker, red for a red one.
+    pub fn potion_shatter(position: [i32; 3], green: bool, rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&POTION_SHATTER, rng);
+        for (axis, pos) in p.axes.iter_mut().zip(position) {
+            axis.start += pos * 0x100;
+        }
+        let (red, grn) = if green { (1, 0xc800) } else { (0xc800, 1) };
+        p.axes[axis::COLOR_R].start = red;
+        p.axes[axis::COLOR_G].start = grn;
+        p.axes[axis::COLOR_B].start = 1;
+        p.shatter = Some(Shatter {
+            green,
+            rng: Rng::new((rng.mix(0x7fff) | rng.mix(0x7fff) << 15) as u32),
+        });
+        p
+    }
+
+    /// `Particle_FuncPtr_PotionShatter`: once it has slowed on the way up it is blown sideways
+    /// and starts to grow, and from then on its colour fades.
+    fn potion_shatter_step(&mut self) {
+        let Some(shatter) = &mut self.shatter else { return };
+        if self.axes[axis::POS_Y].velocity < 0x578 && self.axes[axis::POS_X].velocity == 0 {
+            self.axes[axis::POS_X].velocity = (shatter.rng.mix(800) - 400) as i16;
+            self.axes[axis::POS_Z].velocity = (shatter.rng.mix(800) - 400) as i16;
+            self.axes[axis::SCALE_X].velocity = (shatter.rng.mix(0x100) + 0x100) as i16;
+        }
+        if self.axes[axis::POS_X].velocity == 0 {
+            return;
+        }
+        let fading = if shatter.green {
+            axis::COLOR_G
+        } else {
+            axis::COLOR_R
+        };
+        if self.axes[fading].start > 0 {
+            self.axes[fading].start -= 0x1200;
+        }
+    }
+
     /// `Particle_FuncPtr_SpitTire`: once it has fallen below the mouth it is thrown up again, in
     /// a new direction, three times. The third time it also shrinks away.
     fn spit_tire(&mut self) {
@@ -758,6 +862,7 @@ impl Particle {
             }
         }
         self.spit_tire();
+        self.potion_shatter_step();
         if self.color_flags & color_flags::DESTROY_ON_SCALE_EXPIRE != 0 {
             let small =
                 |flag, axis: usize| self.axis_flags & flag != 0 && self.axes[axis].start < 1;
@@ -880,16 +985,20 @@ impl Particle {
     /// The sprite's corners (top left, top right, bottom left, bottom right) as
     /// offsets from its centre across the screen, in quarter game units with y
     /// down, for an icon `width` by `height` texels (`Particle_RenderList`).
-    /// Only the rotated and scaled sprite is supported.
+    /// Only the scaled sprite, turned or not, is supported.
     pub fn corners(&self, width: i32, height: i32) -> Option<[[i32; 2]; 4]> {
-        let wanted = axis_flags::ROT_Y | axis_flags::SCALE_X;
-        if self.axis_flags
-            & (axis_flags::ROT_X | axis_flags::ROT_Y | axis_flags::SCALE_X | axis_flags::SCALE_Y)
-            != wanted
+        if self.axis_flags & (axis_flags::ROT_X | axis_flags::SCALE_Y) != 0
+            || self.axis_flags & axis_flags::SCALE_X == 0
         {
             return None;
         }
-        let (sin, cos) = math::sin_cos(self.axes[axis::ROT_Y].start as u32);
+        // (Without a rotation the sprite is not turned.)
+        let angle = if self.axis_flags & axis_flags::ROT_Y != 0 {
+            self.axes[axis::ROT_Y].start as u32
+        } else {
+            0
+        };
+        let (sin, cos) = math::sin_cos(angle);
         let scale = self.axes[axis::SCALE_X].start;
         let (c, s) = ((cos * scale) >> 12, (sin * scale) >> 12);
         // The GTE rotation matrix: x is stretched to twice the width.
@@ -988,6 +1097,25 @@ mod tests {
         }
         assert_eq!(tints, [54, 44, 34, 24, 14]);
         assert_eq!(scales, [1936, 2336, 2736, 3136, 3536]);
+    }
+
+    #[test]
+    fn a_shard_of_a_beaker_rises_then_drifts_growing_and_fades_its_colour() {
+        for green in [true, false] {
+            let mut p = Particle::potion_shatter([100, 50, -30], green, &mut Rng::new(3));
+            assert_eq!(p.rgb(), if green { [0, 0xc8, 0] } else { [0xc8, 0, 0] });
+            let mut ticks = 0;
+            while p.update() {
+                ticks += 1;
+            }
+            // It lives 20 ticks, and was blown sideways once it slowed.
+            assert_eq!(ticks, 20);
+            assert_ne!(p.velocity()[0], 0);
+            assert!(p.axes[axis::SCALE_X].start > 0x1000);
+            let [r, g, _] = p.rgb();
+            assert!(if green { g } else { r } < 0x20);
+            assert!(p.corners(16, 16).is_some());
+        }
     }
 
     #[test]
