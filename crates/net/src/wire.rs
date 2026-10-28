@@ -71,11 +71,14 @@ pub enum Message {
     /// away one that differs, as its race would not come out the same.
     /// `nick` is what the client wants to be called (empty for none, see `clean_nick`). Its `seq`
     /// is shared with [`Message::Nick`], so that the latest of either wins.
+    /// `spectator` is set by a client that only watches: it takes no slot among the players, and
+    /// is on the end of the race's roster, past the last of them.
     Hello {
         character: u8,
         seq: u32,
         build: u32,
         nick: String,
+        spectator: bool,
     },
     /// Reliable, client to host, at any time (a race included): the client is called `nick` from
     /// now on. The host passes it on in [`Message::Lobby`]. `seq` counts with the Hellos'.
@@ -86,7 +89,8 @@ pub enum Message {
     /// among the players; `characters` is the character of each slot, and `track` the `LevelId`
     /// the race is on, and `hash` the hash of its contents when it is a custom track (0 for the
     /// game's own), which a client that lacks it asks for with [`Message::Want`]. `roster` is the endpoint id of each slot (the host is 0), which the
-    /// clients connect to each other by.
+    /// clients connect to each other by. `characters` has the players only: a slot past them is a
+    /// spectator's, which plays no kart and sends no pads.
     Start {
         /// Which race this is (see [`Message::Restart`]): 0 for the first of the lobby. A start
         /// after a race that is over takes new players in, and the ones that left out.
@@ -120,8 +124,10 @@ pub enum Message {
     /// Reliable, host to each client: who is in the lobby and what each drives, the host first.
     /// It comes whenever that changes, in full, so a client that joins late catches up. Each
     /// is the endpoint id, the character and the nickname (empty for none).
+    /// The guests that only watch follow, as the endpoint id and the nickname.
     Lobby {
         players: Vec<([u8; 32], u8, String)>,
+        watching: Vec<([u8; 32], String)>,
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
@@ -313,6 +319,7 @@ mod tests {
                 seq: 3,
                 build: 1,
                 nick: "Penta".into(),
+                spectator: true,
             },
             Message::Nick {
                 seq: 4,
@@ -362,6 +369,7 @@ mod tests {
             },
             Message::Lobby {
                 players: vec![([1; 32], 4, String::new()), ([2; 32], 15, "Ripper".into())],
+                watching: vec![([3; 32], "Eyes".into())],
             },
             Message::Announce {
                 text: "Restarting in 5".into(),

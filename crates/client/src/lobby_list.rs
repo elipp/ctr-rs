@@ -11,7 +11,7 @@ use crate::lobby::Lobby;
 
 /// The column of rows, with the players it was built for.
 #[derive(Component)]
-struct List(Vec<(u8, String, String)>);
+struct List(Vec<(u8, String, String)>, Vec<(String, String)>);
 
 const FONT_SIZE: f32 = 16.0;
 const PING_FONT_SIZE: f32 = 12.0;
@@ -27,6 +27,11 @@ const FIRST_Y: f32 = 4.0;
 /// The lines from one row to the next: a little more than the leaderboard's, to make room for
 /// the names, which hang under the portraits.
 const SLOT: f32 = 29.0;
+
+/// The lines of retail's screen between the last portrait and the first who only watches (more
+/// than a row's own gap), and from one to the next.
+const WATCHER_GAP: f32 = 12.0;
+const WATCHER_LINE: f32 = 9.0;
 
 /// The ping of the player with a short key.
 #[derive(Component)]
@@ -57,13 +62,18 @@ fn build(
     } else {
         Vec::new()
     };
+    let watchers: Vec<(String, String)> = if lobby.is_waiting() {
+        lobby.watchers().map(|(n, k)| (n.to_string(), k.to_string())).collect()
+    } else {
+        Vec::new()
+    };
     for (entity, list) in &lists {
-        if list.0 == players {
+        if list.0 == players && list.1 == watchers {
             return;
         }
         commands.entity(entity).despawn();
     }
-    if players.is_empty() {
+    if players.is_empty() && watchers.is_empty() {
         return;
     }
     let portraits = match portraits {
@@ -116,7 +126,29 @@ fn build(
             .id();
         spawn_tags(&mut commands, portrait, name, key);
     }
-    commands.entity(column).insert(List(players));
+    // Those who only watch have no portrait: a line each, a little further down.
+    let below = FIRST_Y + players.len() as f32 * SLOT + WATCHER_GAP;
+    for (n, (name, _)) in watchers.iter().enumerate() {
+        commands.spawn((
+            Text::new(format!("{name} (spectator)")),
+            TextFont {
+                font_size: PING_FONT_SIZE.into(),
+                ..default()
+            },
+            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            BackgroundColor(BACKGROUND),
+            Node {
+                position_type: PositionType::Absolute,
+                left: hud::x(ICON_X),
+                top: hud::y(below + n as f32 * WATCHER_LINE),
+                padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(column),
+        ));
+    }
+    commands.entity(column).insert(List(players, watchers));
 }
 
 /// Puts a player's name on a portrait, at the bottom and centered, and the ping at the top right

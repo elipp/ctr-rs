@@ -5,7 +5,8 @@ use net::{EndpointId, Pad};
 
 /// A race that has started.
 pub struct Online {
-    /// Our player.
+    /// Our place in the roster: our player, or, past the last of them, a spectator's (see
+    /// [`Online::spectating`]).
     pub slot: usize,
     /// The character each slot drives, which sets its kart's stats.
     pub characters: Vec<u8>,
@@ -50,7 +51,7 @@ pub struct Online {
     /// answers once the pads that came in are taken.
     pub asked: Vec<usize>,
     /// The kart the camera follows: ours, or another's once we have finished (R1 and L1 change
-    /// it).
+    /// it). A spectator has none of its own: it is whichever it chose.
     pub watching: usize,
     /// The slots whose pads we stopped taking, having reported what we hold of them.
     pub frozen: Vec<bool>,
@@ -70,13 +71,27 @@ pub struct Desync {
 }
 
 impl Online {
+    /// Whether we only watch: the slot is past the players', and there is no kart of ours.
+    pub fn spectating(&self) -> bool {
+        self.slot >= self.characters.len()
+    }
+
+    /// The kart of the sim that the view is of, and the HUD: ours, or the one a spectator follows.
+    pub fn viewed(&self) -> usize {
+        if self.spectating() { self.watching } else { self.slot }
+    }
+
     /// A line for the HUD: where the race is, and how many ticks were played on a prediction, and how often (and how far back) a
     /// wrong one had to be put right.
     pub fn summary(&self, tick: u32, predicted: u32) -> String {
         let wait = if !self.go { " (waiting)" } else { "" };
+        let you = if self.spectating() {
+            format!("watching p{}", self.watching)
+        } else {
+            format!("you p{}", self.slot)
+        };
         let mut line = format!(
-            "NET {tick} you p{}/{}{wait}  predicting {predicted}  rollbacks {} ({} ticks)",
-            self.slot,
+            "NET {tick} {you}/{}{wait}  predicting {predicted}  rollbacks {} ({} ticks)",
             self.characters.len(),
             self.corrections,
             self.replayed,
