@@ -1,9 +1,10 @@
-//! Who is where in an online race, down the left of the screen under the times, as retail shows
-//! it: each player's portrait (`render::portraits`) in a black frame, with their place at its top
-//! right in the middle font, the leader on top. A row slides to its new place when the order
-//! changes, and one that gained a place sticks out for a moment. Our own place is orange and the
-//! others' white: retail's are all white, but online two players may drive the same character.
-//! The places and sizes are measured from retail screenshots.
+//! Who is where in an online race, down the left of the screen, as retail draws it
+//! (`UI_DrawRankedDrivers`): the places 1 to 4 in the small font, each over the portrait
+//! (`render::portraits`) of who holds it, which is half-transparent. The numbers stay on their
+//! lines and the portraits move: one slides to its new place when the order changes, and one
+//! that gained a place sticks out for a moment (retail's own slide, `UI_Lerp2D_Angular`, is not
+//! ported). As in retail, only the first four places are shown, and a place is red once that
+//! many karts have finished.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -31,38 +32,33 @@ struct Board {
     characters: Vec<u8>,
     /// The slots in the order of the race.
     order: Vec<usize>,
-    /// The distance from one row's top to the next, in logical pixels.
-    pitch: f32,
 }
 
-/// A row, which slides to its place when the order changes.
+/// A portrait, which slides to its place when the order changes.
 #[derive(Component)]
 struct Row {
     slot: usize,
-    /// Where the row is, in pixels from the top of the column.
+    /// Where the portrait is, in lines down from the first place's.
     y: f32,
     /// 1 right after the row gained a place, down to 0: how far it sticks out of the column.
     pop: f32,
 }
 
-/// The place number in a row.
+/// The number of a place, from 0.
 #[derive(Component)]
 struct PlaceLabel(usize);
 
-/// Where the column starts, in pixels and lines of retail's screen: under the times.
-const LEFT: f32 = 12.0;
-const TOP: f32 = 66.0;
+/// `UI_RANK_VISIBLE_ARCADE_COUNT`: the places shown.
+const VISIBLE: usize = 4;
 
-/// How far down the rows may go: above the big place at the bottom left. More players than fit
-/// at full size make the rows smaller.
-const BOTTOM: f32 = 176.0;
-
-/// The frame round a portrait, and the space between two rows, in pixels of retail's screen.
-const FRAME: f32 = 1.0;
-const GAP: f32 = 2.0;
-
-/// How far the place number is in from the portrait's right edge, and down from its top.
-const NUMBER_IN: Vec2 = Vec2::new(2.0, 1.0);
+/// Where the first place's portrait and number are on retail's screen (`UI_RANK_ICON_X`,
+/// `UI_RANK_ICON_BASE_Y`, `UI_RANK_TEXT_X`, `UI_RANK_TEXT_START_Y`), and the lines from one place
+/// to the next (`UI_RANK_TEXT_SLOT_HEIGHT`).
+const ICON_X: f32 = 20.0;
+const ICON_Y: f32 = 57.0;
+const TEXT_X: f32 = 52.0;
+const TEXT_Y: f32 = 56.0;
+const SLOT: f32 = 27.0;
 
 /// How fast a row closes in on its place (per second), how far a row that gained a place sticks
 /// out at first (in pixels of retail's screen), and how fast that goes (per second).
@@ -119,13 +115,6 @@ fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Hand
     atlas_image(portrait_atlas(&pack_icons(), vram), images)
 }
 
-/// How much smaller than retail's the rows of `players` are, to fit above the big place: 1 when
-/// they fit as they are.
-fn row_scale(players: usize) -> f32 {
-    let row = HEIGHT as f32 + 2.0 * FRAME + GAP;
-    ((BOTTOM - TOP) / (players as f32 * row)).min(1.0)
-}
-
 /// Puts the column up when a race has been built, and takes it down when there is none. (A level
 /// switch takes every node away, and a race on the new level builds it again.)
 fn build(
@@ -156,17 +145,12 @@ fn build(
         }
     };
     let players = online.characters.len();
-    let scale = row_scale(players);
-    // A pixel of retail's screen, at the rows' size.
-    let pixel = hud::PIXEL * scale;
-    let (across, down) = (|n: f32| Val::Px(n * pixel.x), |n: f32| Val::Px(n * pixel.y));
-    let pitch = (HEIGHT as f32 + 2.0 * FRAME + GAP) * pixel.y;
     let column = commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: hud::x(LEFT),
-                top: hud::y(TOP),
+                left: Val::ZERO,
+                top: Val::ZERO,
                 ..default()
             },
             Pickable::IGNORE,
@@ -174,63 +158,50 @@ fn build(
         .id();
     for slot in 0..players {
         let character = (online.characters[slot] as usize).min(ICON_IDS.len() - 1);
-        let row = commands
-            .spawn((
-                Row {
-                    slot,
-                    y: slot as f32 * pitch,
-                    pop: 0.0,
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(slot as f32 * pitch),
-                    left: Val::ZERO,
-                    border: UiRect::axes(across(FRAME), down(FRAME)),
-                    ..default()
-                },
-                BorderColor::all(Color::BLACK),
-                Pickable::IGNORE,
-                ChildOf(column),
-            ))
-            .id();
+        let y = slot as f32 * SLOT;
         commands.spawn((
-            ImageNode::new(portraits.clone()).with_rect(Rect::new(
-                0.0,
-                (character * HEIGHT) as f32,
-                WIDTH as f32,
-                ((character + 1) * HEIGHT) as f32,
-            )),
-            Node {
-                width: across(WIDTH as f32),
-                height: down(HEIGHT as f32),
-                ..default()
-            },
-            Pickable::IGNORE,
-            ChildOf(row),
-        ));
-        let gradient = if slot == online.slot {
-            Gradient::ORANGE
-        } else {
-            Gradient::WHITE
-        };
-        commands.spawn((
-            PlaceLabel(slot),
-            CtrText::new("", Font::Middle, gradient).fixed(pixel),
+            Row { slot, y, pop: 0.0 },
+            // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
+            ImageNode::new(portraits.clone())
+                .with_rect(Rect::new(
+                    0.0,
+                    (character * HEIGHT) as f32,
+                    WIDTH as f32,
+                    ((character + 1) * HEIGHT) as f32,
+                ))
+                .with_mode(NodeImageMode::Stretch),
             Node {
                 position_type: PositionType::Absolute,
-                right: across(NUMBER_IN.x),
-                top: down(NUMBER_IN.y),
+                left: hud::x(ICON_X),
+                top: hud::y(ICON_Y + y),
+                width: hud::x(WIDTH as f32),
+                height: hud::y(HEIGHT as f32),
                 ..default()
             },
             Pickable::IGNORE,
-            ChildOf(row),
+            ChildOf(column),
+        ));
+    }
+    // The numbers, over the portraits.
+    for place in 0..players.min(VISIBLE) {
+        commands.spawn((
+            PlaceLabel(place),
+            CtrText::new((place + 1).to_string(), Font::Middle, Gradient::WHITE)
+                .fixed(hud::PIXEL),
+            Node {
+                position_type: PositionType::Absolute,
+                left: hud::x(TEXT_X),
+                top: hud::y(TEXT_Y + place as f32 * SLOT),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(column),
         ));
     }
     commands.entity(column).insert(Board {
         names: online.names.clone(),
         characters: online.characters.clone(),
         order: (0..players).collect(),
-        pitch,
     });
 }
 
@@ -240,7 +211,7 @@ fn order(
     time: Res<Time<Real>>,
     mut boards: Query<&mut Board>,
     mut labels: Query<(&PlaceLabel, &mut CtrText)>,
-    mut rows: Query<(&mut Row, &mut Node)>,
+    mut rows: Query<(&mut Row, &mut Node, &mut Visibility)>,
 ) {
     let Ok(mut board) = boards.single_mut() else {
         return;
@@ -255,7 +226,7 @@ fn order(
             (rank < 0, rank, slot)
         });
         if slots != board.order {
-            for (mut row, _) in &mut rows {
+            for (mut row, ..) in &mut rows {
                 let place = |order: &[usize]| order.iter().position(|&s| s == row.slot);
                 if place(&slots) < place(&board.order) {
                     row.pop = 1.0;
@@ -264,40 +235,34 @@ fn order(
             board.order = slots;
         }
     }
-    for (PlaceLabel(slot), mut text) in &mut labels {
-        if let Some(place) = board.order.iter().position(|s| s == slot) {
-            let label = (place + 1).to_string();
-            if text.text != label {
-                text.text = label;
-            }
+    let finished = karts
+        .iter()
+        .filter(|k| k.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
+        .count();
+    for (PlaceLabel(place), mut text) in &mut labels {
+        let gradient = if *place < finished {
+            Gradient::RED
+        } else {
+            Gradient::WHITE
+        };
+        if text.gradient != gradient {
+            text.gradient = gradient;
         }
     }
     let dt = time.delta_secs();
     let follow = 1.0 - (-SLIDE_RATE * dt).exp();
-    for (mut row, mut node) in &mut rows {
+    for (mut row, mut node, mut visibility) in &mut rows {
         let Some(place) = board.order.iter().position(|&s| s == row.slot) else {
             continue;
         };
-        row.y += (place as f32 * board.pitch - row.y) * follow;
+        row.y += (place as f32 * SLOT - row.y) * follow;
         row.pop = (row.pop - POP_DECAY * dt).max(0.0);
-        node.top = Val::Px(row.y);
-        node.left = hud::x(row.pop * POP_DISTANCE);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rows_shrink_to_fit_above_the_place() {
-        assert_eq!(row_scale(1), 1.0);
-        assert_eq!(row_scale(3), 1.0);
-        let row = HEIGHT as f32 + 2.0 * FRAME + GAP;
-        for players in 4..=8 {
-            let scale = row_scale(players);
-            assert!(scale < 1.0);
-            assert!(players as f32 * row * scale <= BOTTOM - TOP + 0.001);
-        }
+        node.top = hud::y(ICON_Y + row.y);
+        node.left = hud::x(ICON_X + row.pop * POP_DISTANCE);
+        visibility.set_if_neq(if place < VISIBLE {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
