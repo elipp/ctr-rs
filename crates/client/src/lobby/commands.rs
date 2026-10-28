@@ -144,6 +144,7 @@ pub(super) fn run(
             | Action::DebugStall(_)
             | Action::DebugViewer
             | Action::DebugLevel(_)
+            | Action::DebugCrateBias(_)
             | Action::SetConfig(_) => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.

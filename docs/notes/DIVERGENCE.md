@@ -89,3 +89,9 @@ This file is for the places where the port _intentionally_ differs from the orig
 **Tiger Temple door (2026-10-28, NOT visually verified):** `instance::hazard::teeth` (`RB_Teeth_*`), `coll::doors` (`doorAccessFlags` and `RB_Teeth_LInC` as the karts and weapons read them), `weapon` (`Tick::opened_doors`, the door in `fly` and `RB_Potion_ThTick_InAir`). Intentional differences:
 - `RB_Teeth_OpenDoor` plays its sound (0x75) at once; ours plays on the door's next tick, as it is the thread's to emit (`Tick::sounds`), and a weapon's hit is applied after the tick.
 - A weapon's distance from the door's plane (the test of `RB_Teeth_LInC` that decides whether the hitbox stops it) is taken at the weapon's own position. Retail reads `sps->Input1.pos`, which the search of a moving explosive does not obviously set; not checked.
+
+**Crates placed inside the ground (2026-10-28, NOT visually verified):** the levels place some crates below the drawn ground. `client::props::crate_fixup` (`/debug level crate-fixup on|off`) raises the 38 worst of them (the ground is 8 or more units above the crate's base at its center, found with `ctr-query crates`) by that depth plus 15, the height the level gives its other crates. Retail draws them where the level puts them, cut by the ground. Known differences:
+- Only what is drawn moves. The sim and the hitbox stay where the level has the crate, so a fixed-up crate is hit from 23 to 42 units (level units) below where it shows; the hitbox radius is 76, so it is still hit from the same places, within that.
+- The lifts are by the ground at the crate's center. A crate on a slope may still be cut at a corner, which `CrateBias` (`/debug crate bias`, 100k) covers.
+- Hot Air Skyway's fruit crate #35 is left alone: it is inside hidden collision geometry, 82 units below the drawn ground, so it is probably not meant to be seen.
+- The lifts were not looked at in the game.

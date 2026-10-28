@@ -149,6 +149,7 @@ fn main() {
         .add_plugins(font::FontPlugin)
         .insert_resource(options)
         .init_resource::<MeshOptions>()
+        .init_resource::<CrateBias>()
         .insert_resource(LevelNumber(track_id))
         .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
@@ -192,6 +193,7 @@ fn main() {
                 switch_level,
                 props::roll,
                 props::spin_fruit,
+                props::set_crate_bias,
                 props::place_hazards,
                 fire::update,
             )
