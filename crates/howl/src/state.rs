@@ -9,8 +9,8 @@
 //! once that is over. The voice lines are on while racing, but not for the start of the last lap
 //! and the end of the race.
 //!
-//! A race starts at the lights, as the fly-in's state (`AUDIO_RACE_INTRO`) waits for its jingle
-//! and nothing else: the fly-in's jingle is not played.
+//! A race with a fly-in starts in `AUDIO_RACE_INTRO`: one of four jingles of XA plays over the
+//! fly-in, one after the other, and the lights' state follows once it is over.
 
 use loader::xa::Category;
 
@@ -23,6 +23,8 @@ use crate::xa::XaState;
 const NEAR_FINISH: i32 = 9000;
 /// How much faster the music plays from "FINAL LAP!" on, in beats a minute.
 const LAST_LAP_TEMPO: i32 = 20;
+/// The fly-in's jingles: the music's XA 0 to 3.
+const INTRO_JINGLES: u16 = 4;
 /// The music's XA: "FINAL LAP!", and the race's end when the driver wins and when it does not.
 const FINAL_LAP_XA: u16 = 6;
 const WIN_XA: u16 = 4;
@@ -34,6 +36,8 @@ const FINAL_LAP_HEARD: i32 = 0xe1;
 /// `AUDIO_*`: where a race is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
+    /// `AUDIO_RACE_INTRO`: the fly-in, with its jingle.
+    RaceIntro,
     /// `AUDIO_TRAFFIC`: the traffic lights count down.
     Traffic,
     /// `AUDIO_RACING`.
@@ -71,6 +75,12 @@ pub struct RaceAudio {
 }
 
 impl Howl {
+    /// A race is over, for the next one to come to its state even if it is the same (retail goes
+    /// by `AUDIO_LOADING` between them).
+    pub fn clear_state(&mut self) {
+        self.state = None;
+    }
+
     /// `Audio_SetState_Safe`: the race comes to `state`, if it was not there.
     pub fn set_state(&mut self, state: State) {
         if self.state == Some(state) {
@@ -78,6 +88,10 @@ impl Howl {
         }
         // `Audio_SetState`.
         match state {
+            State::RaceIntro => {
+                self.play_xa(Category::Music, self.race_intro_xa);
+                self.race_intro_xa = (self.race_intro_xa + 1) % INTRO_JINGLES;
+            }
             State::Traffic => {
                 self.stop_music();
                 self.stop_songs();
@@ -109,6 +123,12 @@ impl Howl {
         let (lap, laps) = (race.lap as i32, race.laps as i32);
         let near = race.to_finish < NEAR_FINISH;
         match state {
+            // As soon as the jingle is over.
+            State::RaceIntro => {
+                if self.xa_state() == XaState::Idle {
+                    self.set_state(State::Traffic);
+                }
+            }
             State::Traffic => {
                 if race.lights_out {
                     self.set_state(State::Racing);

@@ -31,7 +31,7 @@ struct MapMaterial {
 
 impl UiMaterial for MapMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://view/minimap.wgsl".into()
+        concat!("embedded://", env!("CARGO_PKG_NAME"), "/minimap.wgsl").into()
     }
 
     fn specialize(descriptor: &mut RenderPipelineDescriptor, _key: UiMaterialKey<Self>) {
