@@ -2,14 +2,15 @@
 //! it. A request (`Voiceline_RequestPlay`) either grunts at once, a sound effect of the
 //! character's, or is queued to be spoken, a line of XA (`Voiceline_Update`,
 //! `Voiceline_StartPlay`). A character says nothing for two seconds after its last, and a line
-//! waits for the one before it to end.
+//! waits for the one before it to end, and for the CD to be free.
 //!
-//! XA is not played yet: a line taken from the queue says nothing and holds the next back for a
-//! second, as when the CD cannot play it. Nor are the wrong-way lines of Aku Aku and Uka Uka
-//! here, or the lines of a boss race.
+//! Not ported: the wrong-way lines of Aku Aku and Uka Uka, and the lines of a boss race.
 
 use std::collections::VecDeque;
 
+use loader::xa::Category;
+
+use crate::xa::XaState;
 use crate::{AntiSpam, Howl, Sfx};
 
 /// `data.voiceID`: the set of lines a voice line picks from, by its number. Sets 0 and 1 have a
@@ -19,6 +20,10 @@ const VOICE_SETS: [u8; 24] = [
 ];
 /// The lines in each set of a character (`data.voiceData`).
 const SET_SIZES: [u32; 11] = [2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1];
+/// The lines of a character, of every set: its XA are this many after the character's before it.
+const LINES: u16 = 19;
+/// The character whose lines are out of order: its first set is its sixth again.
+const OUT_OF_ORDER: u8 = 10;
 /// The grunts of sets 0 and 1: the sound effect of the first character, the others after it.
 const GRUNTS: [u16; 2] = [0x1c, 0x2c];
 
@@ -30,8 +35,9 @@ const QUIET_FRAMES: u32 = 0x3c;
 /// The lines from this number on are often left unsaid: three times in four, seven in eight once
 /// the character has said one since its last lap.
 const OFTEN_UNSAID: u8 = 8;
-/// A line that does not play holds the next back for this many of the game's frames.
-const COOLDOWN_UNPLAYED: i16 = 30;
+/// A line holds the next back for this many of the game's frames, and a fifth of its sectors
+/// more if it plays.
+const COOLDOWN: i16 = 30;
 
 /// A line waiting to be spoken (`struct VoicelineItem`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +134,7 @@ impl Howl {
     }
 
     /// `Voiceline_Update`, once a frame of the game while racing: the newest line waiting starts
-    /// once the one before is over.
+    /// once the one before is over and the CD plays nothing.
     pub fn update_voicelines(&mut self) {
         let lines = &mut self.voicelines;
         if !lines.enabled {
@@ -140,18 +146,24 @@ impl Howl {
                 return;
             }
         }
-        if let Some(line) = lines.lines.pop_front() {
+        if self.xa.state != XaState::Idle {
+            return;
+        }
+        if let Some(line) = self.voicelines.lines.pop_front() {
             self.start_voiceline(line);
         }
     }
 
-    /// `Voiceline_StartPlay`: one of the lines of the set the line is in, picked at random.
+    /// `Voiceline_StartPlay`: one of the lines of the set the line is in, picked at random, plays.
     fn start_voiceline(&mut self, line: Line) {
         self.voicelines.speaking = line.character;
         let set = VOICE_SETS[line.voice as usize] as usize;
-        // Which of the set's lines: the XA to play, once it is played.
-        let _pick = self.next_rng() % SET_SIZES[set];
-        self.voicelines.cooldown = COOLDOWN_UNPLAYED;
+        let pick = self.next_rng() % SET_SIZES[set];
+        let id = line_xa(line.character, set, pick as u16);
+        self.voicelines.cooldown = COOLDOWN;
+        if self.play_xa(Category::Game, id) {
+            self.voicelines.cooldown += (self.xa_length(Category::Game, id) / 5) as i16;
+        }
     }
 
     /// `Voiceline_ToggleEnable`: lines are queued and spoken, or not, and those waiting go.
@@ -176,6 +188,20 @@ impl Howl {
     }
 }
 
+/// `data.voiceData`: the XA of [`Category::Game`] of line `pick` of set `set` of `character`.
+/// The first 8 sets have two lines, the others one.
+fn line_xa(character: u8, set: usize, pick: u16) -> u16 {
+    let line = if set < 8 {
+        set as u16 * 2 + pick
+    } else {
+        16 + set as u16 - 8
+    };
+    match (character, line) {
+        (OUT_OF_ORDER, 0 | 1) => line_xa(character, 5, line),
+        _ => character as u16 * LINES + line,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +219,7 @@ mod tests {
         let samples = vec![Some(vec![0u8; 64].into_boxed_slice())];
         let mut howl = Howl::new(vec![fx; 0x2e], Vec::new(), Vec::new(), samples);
         howl.frame = 1000;
+        howl.xnf = crate::xa::tests::xnf(50);
         howl
     }
 
@@ -225,16 +252,34 @@ mod tests {
         howl.request_voiceline(NO_GRUNT, 4, 16, false);
         let waiting: Vec<u8> = howl.voicelines.lines.iter().map(|l| l.character).collect();
         assert_eq!(waiting, [4, 3]);
-        // The newest starts; the next waits for its second.
+        // The newest starts, one of the two lines of set 4 of its character; the next waits for
+        // its second and a fifth of its 50 sectors, and for the CD to be free.
         howl.update_voicelines();
         assert_eq!(howl.voicelines.speaking, 4);
-        for _ in 0..COOLDOWN_UNPLAYED - 1 {
+        let (category, id) = howl.xa_playing().unwrap();
+        assert_eq!(category, Category::Game);
+        assert!([4 * 19 + 8, 4 * 19 + 9].contains(&id), "{id}");
+        assert_eq!(howl.voicelines.cooldown, COOLDOWN + 10);
+        for _ in 0..COOLDOWN + 10 {
             howl.update_voicelines();
         }
         assert_eq!(howl.voicelines.lines.len(), 1);
+        howl.stop_xa();
         howl.update_voicelines();
         assert!(howl.voicelines.lines.is_empty());
         assert_eq!(howl.voicelines.speaking, 3);
+    }
+
+    #[test]
+    fn each_character_has_its_own_lines() {
+        assert_eq!(line_xa(0, 0, 1), 1);
+        assert_eq!(line_xa(1, 8, 0), 19 + 16);
+        assert_eq!(line_xa(15, 10, 0), 303);
+        // Character 10's first set is its sixth's lines again.
+        assert_eq!(line_xa(10, 0, 0), 0xc8);
+        assert_eq!(line_xa(10, 1, 0), 0xc0);
+        assert_eq!(line_xa(10, 5, 1), 0xc9);
+        assert_eq!(line_xa(10, 10, 0), 0xd0);
     }
 
     #[test]

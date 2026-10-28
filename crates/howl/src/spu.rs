@@ -6,12 +6,14 @@
 //! There is no sound RAM: a voice's start address is the number of a sample of `KART.HWL`, and
 //! key on starts it at the sample's first block, where the loop goes back to as well until a block
 //! marks the loop's start (the SPU keeps the repeat address of whatever played before). A voice
-//! whose reverb bit is set is sent to the [`Reverb`] as well, at its volume.
+//! whose reverb bit is set is sent to the [`Reverb`] as well, at its volume. So is the CD's input
+//! (the XA, [`Cd`]) when its reverb is on.
 
 use loader::howl::{BLOCK_SIZE, SAMPLES_PER_BLOCK, block_flags, decode_block};
 
 use crate::reverb::Reverb;
 use crate::tables::GAUSS;
+use crate::xa::Cd;
 
 pub const VOICES: usize = 24;
 /// The output rate, samples a second; a pitch of 0x1000 plays a sample at this rate.
@@ -330,6 +332,8 @@ pub struct Spu {
     voices: [Voice; VOICES],
     samples: Samples,
     pub reverb: Reverb,
+    /// The CD's input: the XA.
+    pub cd: Cd,
     /// Left, right (`SpuSetCommonMasterVolume`).
     pub master: [i16; 2],
 }
@@ -340,6 +344,7 @@ impl Spu {
             voices: [Voice::default(); VOICES],
             samples,
             reverb: Reverb::default(),
+            cd: Cd::default(),
             // `howl_InitGlobals`.
             master: [0x3fff; 2],
         }
@@ -398,10 +403,19 @@ impl Spu {
         self.voices[voice].envelope.phase != Phase::Off
     }
 
-    /// `NativeAudio_MixFrame`: the next output sample, left and right.
+    /// `NativeAudio_MixFrame`: the next output sample, left and right: the CD's and the voices',
+    /// and what of them the reverb sends back.
     pub fn mix(&mut self) -> [i16; 2] {
         let mut mix = [0i32; 2];
         let mut send = [0i32; 2];
+        if let Some(frame) = self.cd.next() {
+            for side in 0..2 {
+                mix[side] += volume(frame[side], self.cd.volume[side], self.master[side]);
+                if self.cd.reverb {
+                    send[side] += master_volume(frame[side], self.cd.volume[side]);
+                }
+            }
+        }
         for voice in &mut self.voices {
             let Some(sample) = voice.play(&self.samples) else {
                 continue;
