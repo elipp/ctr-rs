@@ -32,9 +32,9 @@ const DEPTH: f32 = 100.0;
 /// Where the middle of the fruit is: right of the middle of the screen in pixels of retail's
 /// screen, and down from its top in lines. As in retail screenshots, right of the weapon and
 /// level with it. And how tall the fruit is, in logical pixels.
-pub const FRUIT_X: f32 = 63.0;
+pub const FRUIT_X: f32 = 68.0;
 pub const MIDDLE_Y: f32 = 19.0;
-const HEIGHT_PIXELS: f32 = 44.0;
+const HEIGHT_PIXELS: f32 = 50.0;
 
 /// Where the counter's "x" starts, right of the middle of the screen in pixels of retail's
 /// screen; the count grows to the right from there.
