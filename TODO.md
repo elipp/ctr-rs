@@ -1,20 +1,19 @@
-## Unimplemented
+# Unimplemented
 - the particles of a shattering potion (`emSet_PotionShatter`)
 - the Tiger Temple door that a shattering potion opens (`RB_Potion_OnShatter_TeethSearch`, and the open-door check in `RB_Potion_ThTick_InAir`)
+- the flame jets' heat particles (`RB_FlameJet_Particles`' `emSet_fjHeat`, 1P only: they go in the heat-warp list), their burning a mine in reach (`RB_Hazard_ThCollide_Generic_Alt`), and the real shading of their stone (`USE_SPECULAR_LIGHT`, `colorRGBA`'s far colour; `props::flame_jet_lit` is a guess: ambient plus the light's dot with the normals)
 - the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon
 - the other uses of a TNT crate on the head (`instTntRecv`): half the speed, the fire button ignored, the driving animation held at its middle frame
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
 - The crate depth bias is too much for Papy's Pyramid
-- The flower doesn't hurt on Papu's Pyramid
-- The spider is buggy and doesn't hurt 
-- Blizzard bluff seals don't move / hurt
+- the hazards' `ThCollide` (`RB_Seal_ThCollide`, `RB_Spider_ThCollide`: they let the thread-bucket collisions of weapons through), and hazards hurting bots
 - Spectate only mode
 - submerged in the mud in tiny arena looks off
+- While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled elsewhere.
+- Skyboxes have a hole in the top mid (probably a clear color issue?)
 
-  While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled
-  elsewhere.
 
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
@@ -42,3 +41,37 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 - The plan: `Objects::new` copies each crate's hitbox shape out of the level (centre 48 above the instance, radius 76; fruit 64 and 64). Blasts then look at `Objects` instead of walking the BSP (`coll::instance::instances_in_reach`), which changes the order crates break in (and so the RNG draws of fruit crates). A crate added at runtime is marked as not in the BSP and gets its own distance test against karts and weapons.
 - Not done: the viewer builds crate models once at load (`props.rs`, `CrateBody(i)`), so a runtime crate also needs an entity spawned.
 - the crates' shape in `Objects` (for a `/debug add crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
+
+# Bugs
+
+## Confirmed
+
+- With three players, changing track causes DESYNC (sometimes!!)
+- **Bevy reports a command on a despawned entity (heisenbug).** Seen on a peer after the host quit
+  mid-race (2026-10-26), not reproduced since:
+  `bevy_ecs::error::handler: Encountered an error in command <name>: Entity despawned: The entity
+  with ID 931v4 is invalid; its index now has generation 5`, then `WARN bevy_ecs::relationship:
+  The <name>(948v4) relationship on entity 951v5 relates to an entity that does not exist. The
+  invalid relationship has been removed.` The names are hidden: run with `--features debug`
+  (forwards to `bevy/debug`) to get the command and the component. Not fixed: turning the
+  `despawn()` calls into `try_despawn()` would only silence it.
+- other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
+
+## Maybe
+
+- Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
+- **A dropped red beaker did not exist on the tick after the throw.** The test
+  `a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it` (`crates/race/tests/weapons.rs`)
+  waited for the potion with `while mines().first().is_some_and(|m| m.state != Ground)`, which
+  stops at once when there is no mine yet, and then panicked on `mines()[0]` (index out of bounds,
+  len 0). It was fixed in the test (`is_none_or`), but it is not known why it started failing, or
+  whether it ever passed: the item-table commit (`b5d1e20`) does not touch the fire path. If the
+  throw really spawns the mine a tick late, check that `WEAPON_FIRE_REQUEST` (from
+  `item::request_fire`) is handled on the tick it is set, as the neighbouring potion test's
+  `debug_roll` and wait loop assume. Not checked on the commit before it.
+
+- The few usf boost pads in the game (Claude claims it's implemented)
+
+## Not a bug?
+- /race restart doesn't include any pending clients. Instead, one must /race stop and /race start
+

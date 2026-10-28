@@ -157,6 +157,10 @@ pub struct KartMotion {
     /// The ground shadow at the last two ticks.
     shadow_previous: Option<GroundShadow>,
     shadow_current: Option<GroundShadow>,
+    /// The kart is not drawn: a plant has eaten it (`HIDE_MODEL`).
+    hidden: bool,
+    /// The kart is burnt (`Driver::burnTimer`): its body and driver are black.
+    burnt: bool,
 }
 
 /// The furthest apart two ticks' frames of an animation can be and still be blended: an
@@ -181,6 +185,8 @@ impl KartMotion {
             previous_animation: (0, 0),
             shadow_previous: None,
             shadow_current: None,
+            hidden: false,
+            burnt: false,
         }
         .pushed(kart)
         .settled()
@@ -193,7 +199,14 @@ impl KartMotion {
         self.hazard_timer = d.hazard_timer;
         self.inst_scale = [d.inst_scale_x, d.inst_scale_y, d.inst_scale_z].map(i32::from);
         self.animation = (d.anim_index, d.anim_frame);
+        self.hidden = d.phys_state == vehicle::PhysState::PlantEaten;
+        self.burnt = d.burn_timer != 0;
         self
+    }
+
+    /// The kart is not drawn (a plant has eaten it).
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
     }
 
     /// No animation or shadow to blend from.
@@ -324,6 +337,8 @@ pub struct KartRig {
     parts: [Option<Handle<Mesh>>; PARTS],
     /// The blend on the mesh: two frames and the bits of how far between them.
     shown: Option<((u8, i16), (u8, i16), u32)>,
+    /// Whether the vertex colours are the burnt black ones.
+    burnt: bool,
 }
 
 /// The model of a kart at `placement`, in render layer `layer`, and its wheels. With a `motion`
@@ -387,6 +402,7 @@ fn spawn_body(
                 header: header.clone(),
                 parts,
                 shown: None,
+                burnt: false,
             },
         ));
     }
@@ -524,13 +540,68 @@ impl KartBuilder<'_, '_> {
 }
 
 /// Puts every kart where its sim has it, between the last two ticks.
-pub fn show(fixed: Res<Time<Fixed>>, mut karts: Query<(&mut Transform, &KartMotion)>) {
+pub fn show(
+    fixed: Res<Time<Fixed>>,
+    mut karts: Query<(&mut Transform, &mut Visibility, &KartMotion)>,
+) {
     let t = fixed.overstep_fraction();
-    for (mut transform, motion) in &mut karts {
+    for (mut transform, mut visibility, motion) in &mut karts {
+        let want = if motion.hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *visibility != want {
+            *visibility = want;
+        }
         let pose = motion.pose(t);
         transform.translation = pose.translation;
         transform.rotation = pose.rotation;
         transform.scale = pose.scale;
+    }
+}
+
+/// What marks a part that [`hide_parts`] hid with its kart.
+#[derive(Component)]
+pub struct HiddenWithKart;
+
+/// A kart that is not drawn (a plant ate it) takes everything that belongs to it along: its
+/// wheels, shadow, smoke, tire marks, mask and shield. This is the one place that says so; the
+/// parts only decide when they show otherwise. When the kart is back the parts show as they
+/// would (each decides that again on its next update).
+pub fn hide_parts(
+    mut commands: Commands,
+    karts: Query<&KartMotion>,
+    mut attached: Query<
+        (Entity, &Attached, &mut Visibility, Has<HiddenWithKart>),
+        Without<crate::wheels::Wheels>,
+    >,
+    mut wheels: Query<(
+        Entity,
+        &crate::wheels::Wheels,
+        &mut Visibility,
+        Has<HiddenWithKart>,
+    )>,
+) {
+    let mut hide = |entity: Entity, kart: Entity, visibility: &mut Visibility, hidden: bool| {
+        let Ok(motion) = karts.get(kart) else { return };
+        if motion.is_hidden() {
+            *visibility = Visibility::Hidden;
+            if !hidden {
+                commands.entity(entity).insert(HiddenWithKart);
+            }
+        } else if hidden {
+            *visibility = Visibility::Inherited;
+            commands.entity(entity).remove::<HiddenWithKart>();
+        }
+    };
+    for (entity, Attached(kart), mut visibility, hidden) in &mut attached {
+        hide(entity, *kart, &mut visibility, hidden);
+    }
+    // (The wheels belong to a kart that need not be a driven one, so they are not `Attached`,
+    // which the despawning goes by.)
+    for (entity, wheels, mut visibility, hidden) in &mut wheels {
+        hide(entity, wheels.kart(), &mut visibility, hidden);
     }
 }
 
@@ -544,6 +615,28 @@ pub fn animate(
 ) {
     let t = fixed.overstep_fraction();
     for (motion, mut rig) in &mut karts {
+        if rig.burnt != motion.burnt
+            && let Some(frame) = animation_pose(&rig.header, motion.animation.0, motion.animation.1)
+        {
+            // The colours are the same in every pose; a burnt kart has none.
+            let colors = mesh::model_vertices(
+                &rig.header,
+                &frame,
+                [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
+            );
+            for (handle, (_, colors)) in rig.parts.iter().zip(colors) {
+                let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) else {
+                    continue;
+                };
+                let colors = if motion.burnt {
+                    vec![[0.0, 0.0, 0.0, 1.0]; colors.len()]
+                } else {
+                    colors
+                };
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+            }
+            rig.burnt = motion.burnt;
+        }
         let (from, to, t) = motion.blend(t);
         let key = (from, to, t.to_bits());
         if rig.shown == Some(key) {

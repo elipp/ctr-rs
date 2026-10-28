@@ -6,7 +6,7 @@ use loader::lev::{InstDef, SVec3};
 use vehicle::rotmat::rot_to_matrix;
 use vehicle::{Matrix, Sound3D};
 
-use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
+use crate::{Contact, Context, Damage, Instance, Pose, Tick, interpolate};
 
 /// `betweenPoints_numFrames` and `rotSpeed` of a cart.
 const FRAMES_BETWEEN_POINTS: i16 = 8;
@@ -129,17 +129,19 @@ impl Minecart {
         self.rot_curr.x = interpolate(self.rot_curr.x, self.rot_desired.x, ROT_SPEED);
         self.matrix = rot_to_matrix(self.rot_curr);
 
-        Contact {
-            pos: self.pos,
-            damage: Damage::Squish,
-            hit_radius: HIT_RADIUS,
-            sound: 0,
-            shape: Shape::Cylinder,
-        }
+        Contact::cylinder(self.pos, Damage::Squish, HIT_RADIUS)
     }
 }
 
 impl Instance for Minecart {
+    fn pose(&self) -> Option<Pose> {
+        Some(Pose {
+            pos: self.pos,
+            matrix: self.matrix,
+            animation: (0, self.anim_frame),
+        })
+    }
+
     fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
         let contact = self.tick(cx.position_path, cx.frames[0]);
         let sound = Sound3D {
@@ -256,7 +258,7 @@ mod tests {
         let contact = cart.tick(&path, 10);
         assert_eq!(
             (contact.damage, contact.shape),
-            (Damage::Squish, Shape::Cylinder)
+            (Damage::Squish, crate::Shape::Cylinder)
         );
         assert!(contact.hits([cart.pos[0] + 100, cart.pos[1] + 1000, cart.pos[2]]));
     }

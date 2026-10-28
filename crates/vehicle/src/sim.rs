@@ -213,6 +213,7 @@ fn init_stage(d: &mut Driver) {
         PhysState::PowerSlide
         | PhysState::SpinFirst
         | PhysState::MaskGrab
+        | PhysState::PlantEaten
         | PhysState::RevEngine
         | PhysState::Tumble => d.init_pending = false,
         _ => driving_init(d),
@@ -256,7 +257,7 @@ fn update(d: &mut Driver, env: &Env, input: &Input, effects: &mut Vec<Effect>) {
         }
         PhysState::SlamWall | PhysState::SpinStop => {}
         // These start with their own updates, which have more to work with: see `tick_with`.
-        PhysState::MaskGrab | PhysState::RevEngine => {}
+        PhysState::MaskGrab | PhysState::PlantEaten | PhysState::RevEngine => {}
         PhysState::Tumble => tumble::update(d),
         PhysState::PowerSlide => powerslide::update(d, input, env, effects),
         PhysState::SpinFirst => spin::first_update(d),
@@ -447,6 +448,11 @@ fn tick_to_coll_moved(
     let mut respawned = false;
 
     // DRIVER_FUNC_INIT
+    if d.pending_eaten {
+        // (Its update runs this tick, as the tumble's does.)
+        d.pending_eaten = false;
+        stuck::plant_eaten_init(d);
+    }
     if d.pending_tumble {
         // (Its update runs this tick, unlike the spin-out's.)
         d.pending_tumble = false;
@@ -465,6 +471,9 @@ fn tick_to_coll_moved(
         match d.phys_state {
             // (There are no other drivers to keep the respawn off of.)
             PhysState::MaskGrab => respawned = stuck::mask_grab_update(d, coll, level, env, &[]),
+            PhysState::PlantEaten => {
+                respawned = stuck::plant_eaten_update(d, coll, level, env, &[])
+            }
             PhysState::RevEngine => stuck::rev_engine_update(d, env, effects),
             _ => update(d, env, input, effects),
         }
@@ -487,7 +496,7 @@ fn tick_to_coll_moved(
         PhysState::SpinFirst => spin::first_after_phys_linear(d),
         PhysState::SpinLast => spin::last_after_phys_linear(d),
         PhysState::SpinStop => spin::stop_after_phys_linear(d),
-        PhysState::MaskGrab => stuck::mask_grab_after_phys_linear(d),
+        PhysState::MaskGrab | PhysState::PlantEaten => stuck::mask_grab_after_phys_linear(d),
         PhysState::RevEngine => stuck::rev_engine_after_phys_linear(d),
         PhysState::Tumble => tumble::after_phys_linear(d),
         PhysState::Driving | PhysState::FreezeVShift => {}
@@ -504,11 +513,12 @@ fn tick_to_coll_moved(
             phys_angular(d, &mut coll.gte, env)
         }
         PhysState::Tumble => tumble::phys_angular(d, &mut coll.gte, env),
-        PhysState::RevEngine => {}
+        PhysState::RevEngine | PhysState::PlantEaten => {}
     }
 
-    // The rev has no forces and no collisions: the mask lowers the kart, or it stands still.
-    if d.phys_state != PhysState::RevEngine {
+    // The rev has no forces and no collisions: the mask lowers the kart, or it stands still. Nor
+    // has the kart in a plant.
+    if !matches!(d.phys_state, PhysState::RevEngine | PhysState::PlantEaten) {
         // DRIVER_FUNC_APPLY_FORCES
         on_apply_forces(d, coll, env, level, effects);
 
@@ -533,7 +543,7 @@ fn collide_drivers_stage(
     env: &Env,
     effects: &mut Vec<Effect>,
 ) {
-    if d.phys_state != PhysState::RevEngine {
+    if !matches!(d.phys_state, PhysState::RevEngine | PhysState::PlantEaten) {
         collide_drivers(d, others, env, effects);
     }
 }
@@ -548,7 +558,7 @@ fn tick_from_coll_fixed(
     effects: &mut Vec<Effect>,
 ) -> TickResult {
     let mut mask_grab = false;
-    if d.phys_state != PhysState::RevEngine {
+    if !matches!(d.phys_state, PhysState::RevEngine | PhysState::PlantEaten) {
         // DRIVER_FUNC_COLL_FIXED
         mask_grab = fixed_player_search(d, coll, level, env, effects);
         if mask_grab && env.respawns {
@@ -573,8 +583,10 @@ fn tick_from_coll_fixed(
         }
     }
 
-    // DRIVER_FUNC_TRANSLATE_MATRIX
-    translate_matrix(d, &mut coll.gte, effects);
+    // DRIVER_FUNC_TRANSLATE_MATRIX (the kart in a plant is not drawn)
+    if d.phys_state != PhysState::PlantEaten {
+        translate_matrix(d, &mut coll.gte, effects);
+    }
 
     // DRIVER_FUNC_ANIMATE
     match d.phys_state {
@@ -584,6 +596,8 @@ fn tick_from_coll_fixed(
         PhysState::SpinLast => frame::last_spin(d),
         PhysState::SpinStop => spin::stop_animate(d),
         PhysState::MaskGrab => stuck::mask_grab_animate(d, env, effects),
+        // (Its animation only moves the camera to look at the plant.)
+        PhysState::PlantEaten => {}
         PhysState::RevEngine => stuck::rev_engine_animate(d, env, effects),
         PhysState::Tumble => tumble::animate(d),
     }

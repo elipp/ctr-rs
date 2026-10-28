@@ -340,6 +340,8 @@ impl Plugin for DrivePlugin {
                     debug_actions,
                     crate::projectile::place,
                     crate::rain::draw,
+                    crate::spider::draw_webs,
+                    crate::spider::shadows,
                     crate::flash::show,
                     hud,
                     wumpa_hud,
@@ -347,7 +349,7 @@ impl Plugin for DrivePlugin {
                     reserves_hud,
                 )
                     .chain()
-                    .run_if(driving),
+                    .distributive_run_if(driving),
             )
             .add_systems(
                 Update,

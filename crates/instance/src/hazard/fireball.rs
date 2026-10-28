@@ -5,7 +5,7 @@ use loader::lev::InstDef;
 
 use vehicle::Sound3D;
 
-use crate::{Contact, Context, Damage, Instance, Shape, Tick};
+use crate::{Contact, Context, Damage, Instance, Tick};
 
 /// Milliseconds a tick lasts (`elapsedTimeMS`).
 const TICK_MS: i16 = 32;
@@ -98,13 +98,7 @@ impl Fireball {
                     prev_y,
                     vel_y: vel_y as i16,
                 },
-                contact: Contact {
-                    pos: self.pos,
-                    damage: Damage::Burn,
-                    hit_radius: HIT_RADIUS,
-                    sound: 0,
-                    shape: Shape::Sphere,
-                },
+                contact: Contact::sphere(self.pos, Damage::Burn, HIT_RADIUS, 0),
             });
         }
 
@@ -162,7 +156,7 @@ mod tests {
     fn it_whooshes_as_it_shoots_up() {
         let cx = Context {
             instance: 0,
-            frames: [0; 2],
+            frames: [0; crate::ANIMATIONS],
             ticks: 0,
             position_path: &[],
             roll_paths: &[],

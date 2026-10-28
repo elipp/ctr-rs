@@ -271,6 +271,8 @@ pub enum PhysState {
     SpinStop,
     /// `VehStuckProc_MaskGrab_*`: the mask carries the kart off to the track.
     MaskGrab,
+    /// `VehStuckProc_PlantEaten_*`: out of sight in a plant until the timer runs out.
+    PlantEaten,
     /// `VehStuckProc_RevEngine_*`: held still (or lowered by the mask) while the
     /// engine revs, until the kart may drive.
     RevEngine,
@@ -580,6 +582,10 @@ pub struct Driver {
     pub pending_spin: bool,
     /// Likewise for `VehStuckProc_Tumble_Init` (a blast).
     pub pending_tumble: bool,
+    /// Likewise for `VehStuckProc_PlantEaten_Init` (the mouth of a plant).
+    pub pending_eaten: bool,
+    /// The plant that is eating the kart (`plantEatingMe`), for the camera to look at.
+    pub plant_eating_me: Option<stuck::PlantEater>,
     /// The Aku Aku / Uka Uka mask thread that is a child of the driver's thread, if any.
     pub mask: Option<stuck::MaskHead>,
     /// The shield bubble thread that is a child of the driver's thread, if any (`instBubbleHold`

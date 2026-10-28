@@ -277,8 +277,12 @@ impl Minimap {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Level {
     pub instances: Vec<InstDef>,
-    /// How long each armadillo waits before it first moves (`ptrSpawnType1`'s spawn array), in
-    /// ticks, indexed by the digit its instance name ends in.
+    /// Where the level's models are in the payload (`ptrModelsPtrArray`): the ones the code
+    /// finds by their `id`, like the shadow of the spiders.
+    pub models: Vec<u32>,
+    /// `ptrSpawnType1`'s spawn array: how long each armadillo waits before it first moves, in
+    /// ticks, indexed by the digit its instance name ends in; the plants have two halfwords each
+    /// (a cooldown and a side), at twice that digit.
     pub spawn_delays: Vec<u16>,
     /// The fly-in of the start of a race; none on tracks without one (the battle arenas).
     pub fly_in: Option<FlyIn>,
@@ -372,6 +376,8 @@ const LEVEL_MESH_INFO: usize = 0x0;
 const LEVEL_SKYBOX: usize = 0x4;
 const LEVEL_NUM_INSTANCES: usize = 0xc;
 const LEVEL_INSTANCES: usize = 0x10;
+const LEVEL_NUM_MODELS: usize = 0x14;
+const LEVEL_MODELS: usize = 0x18;
 const INST_DEF_SIZE: usize = 0x40;
 const LEVEL_SPAWN_TYPE_1: usize = 0x134;
 const LEVEL_NUM_POSITION_PATHS: usize = 0x138;
@@ -458,10 +464,11 @@ impl Level {
         }))
     }
 
-    /// The delays of `ST1_SPAWN`: ten halfwords at most, one for each digit a name can end in.
+    /// The halfwords of `ST1_SPAWN`: twenty at most. The armadillos take one for each digit a name
+    /// can end in, the plants two (a cooldown and a side).
     fn parse_spawn_delays(p: &Payload) -> io::Result<Vec<u16>> {
         const ST1_SPAWN: usize = 1;
-        const DIGITS: usize = 10;
+        const DIGITS: usize = 20;
         let Some(at) = (match p.u32(LEVEL_SPAWN_TYPE_1)? {
             0 => None,
             at => Some(at as usize),
@@ -517,6 +524,15 @@ impl Level {
                 })
             })
         })
+    }
+
+    fn parse_models(p: &Payload) -> io::Result<Vec<u32>> {
+        let count = p.u32(LEVEL_NUM_MODELS)? as usize;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let at = p.ptr(LEVEL_MODELS, "models")?;
+        p.array(at, count, 4, |p, at| p.u32(at))
     }
 
     fn parse_instances(p: &Payload) -> io::Result<Vec<InstDef>> {
@@ -708,6 +724,7 @@ impl Level {
 
         Ok(Self {
             instances: Self::parse_instances(&p)?,
+            models: Self::parse_models(&p)?,
             spawn_delays: Self::parse_spawn_delays(&p)?,
             fly_in: Self::parse_fly_in(&p)?,
             position_paths: Self::parse_position_paths(&p)?,

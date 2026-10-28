@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 const MAGIC: &[u8; 8] = b"CTRMAP\0\0";
 
 /// The version of the format: changes with the structs that are saved in it.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// zstd's level for a map file: it is made once and sent many times.
 const COMPRESSION: i32 = 19;
@@ -137,6 +137,7 @@ mod tests {
             name: "tiny".into(),
             level: Level {
                 instances: Vec::new(),
+                models: Vec::new(),
                 spawn_delays: vec![1, 2],
                 fly_in: None,
                 position_paths: vec![vec![Default::default()]],
