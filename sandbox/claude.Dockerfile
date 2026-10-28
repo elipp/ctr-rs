@@ -27,9 +27,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # `CLAUDE_CONFIG_DIR` puts both `.claude/` and `.claude.json` (login, settings, history) in one
-# directory, which the run script keeps in a named volume.
+# directory, which the run script keeps in a named volume. `CARGO_HOME` is set because the base
+# image's (`/usr/local/cargo`) is not on a volume: the registry and git volumes are mounted under
+# `~/.cargo`, and cargo would not use them.
 ENV CLAUDE_CONFIG_DIR=/home/claude/.claude-state \
     DISABLE_AUTOUPDATER=1 \
+    CARGO_HOME=/home/claude/.cargo \
     CARGO_TARGET_DIR=/target \
     UV_PROJECT=/work/sandbox \
     UV_PROJECT_ENVIRONMENT=/venv \
