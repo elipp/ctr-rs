@@ -483,6 +483,7 @@ fn matches_reference_on_random_triangles() {
         scenery: Default::default(),
         config_flags: 0,
         jump_vertical_speed_cap: 0,
+        rain_buffer: Default::default(),
     };
     let mut rng = Rng(0x1234_5678_9abc_def1);
     compare(
