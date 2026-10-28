@@ -236,7 +236,11 @@ mod tests {
         // The quad blocks are passable at once, the hitbox only once it is open.
         assert_eq!(t.access_flags(), TEETH_ACCESS);
         assert!(!t.door(0).open);
+        // 3 frames up, and it is open on the tick that runs past the last (`RB_Teeth_ThTick`).
         let out = run(&mut t, 3, &[]);
+        assert_eq!(t.anim_frame, 3);
+        assert!(!t.door(0).open);
+        run(&mut t, 1, &[]);
         assert_eq!(t.anim_frame, 3);
         assert!(t.door(0).open);
         assert_eq!(out.sounds.len(), 1);
@@ -280,7 +284,7 @@ mod tests {
         let mut t = teeth();
         assert!(t.door(0).stops([100, 0, 250]));
         t.open();
-        run(&mut t, 3, &[]);
+        run(&mut t, 4, &[]);
         assert!(!t.door(0).stops([100, 0, 250]));
     }
 }

@@ -11,3 +11,5 @@ math = { path = "../math" }
 
 [dev-dependencies]
 hadris-iso = "2.5.0"
+# The level's objects, for the tick oracle's pickups.
+instance = { path = "../instance" }
