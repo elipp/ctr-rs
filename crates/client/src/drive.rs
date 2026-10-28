@@ -175,6 +175,7 @@ pub struct Drive {
     anim_num_frames: [u16; 8],
     demo: DemoMode,
     camera: camera::CameraDc,
+    weather: crate::weather::WeatherView,
     previous_view: View,
     current_view: View,
 }
@@ -199,12 +200,17 @@ impl Drive {
         let view = view_of(&camera);
         Drive {
             camera,
+            weather: crate::weather::WeatherView::new(&track.0),
             previous_view: view,
             current_view: view,
             character,
             anim_num_frames,
             demo: DemoMode::Off,
         }
+    }
+
+    pub(crate) fn weather(&self) -> &crate::weather::WeatherView {
+        &self.weather
     }
 
     /// Our kart, as a race takes it.
@@ -322,6 +328,7 @@ pub struct DrivePlugin;
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(crate::exhaust::Particles::new())
+            .init_gizmo_group::<crate::weather::WeatherGizmos>()
             .init_resource::<crate::flash::Flash>()
             .add_systems(Startup, spawn_hud)
             .add_systems(
@@ -340,6 +347,8 @@ impl Plugin for DrivePlugin {
                     debug_actions,
                     crate::projectile::place,
                     crate::rain::draw,
+                    crate::weather::set_width.before(crate::weather::draw),
+                    crate::weather::draw,
                     crate::spider::draw_webs,
                     crate::spider::shadows,
                     crate::flash::show,
@@ -574,6 +583,7 @@ fn drive_tick(
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
         drive.previous_view = drive.current_view;
+        drive.weather.freeze();
         for (mut motion, _, _) in &mut motions {
             motion.freeze();
         }
@@ -641,6 +651,7 @@ fn drive_tick(
         sim.restart(&track.0, &specs, own, lobby.online.is_some(), spectator);
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
+        drive.weather = crate::weather::WeatherView::new(&track.0);
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
 
@@ -933,6 +944,7 @@ fn drive_tick(
         sim.own = watching;
     }
     let kart = &sim.race.karts[watching];
+    let jumped = drive.camera.flags & camera::flags::DIRECTION_CHANGED != 0;
     drive
         .camera
         .follow_driver(&kart.driver, &track.0, &camera_input);
@@ -941,6 +953,7 @@ fn drive_tick(
     if sim.race.intro_ticks > 0 && fly_in_frame >= 0 {
         drive.camera.fly_in(&track.0, fly_in_frame);
     }
+    drive.weather.step(&track.0, &drive.camera, jumped);
 
     // The offsets of the others' karts fade as far as their players' pings call for.
     for (mut motion, slot, ours) in &mut motions {

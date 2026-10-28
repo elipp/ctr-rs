@@ -59,6 +59,7 @@ mod suggest;
 mod toast;
 mod tracker;
 mod weapon;
+mod weather;
 mod wheels;
 mod wumpa_icon;
 
