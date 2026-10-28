@@ -31,14 +31,27 @@ const TIRES_A_SPIT: usize = 4;
 
 /// A spark, and how far into its first tick it was born: it is drawn that much further on in
 /// its life than the tick it is in says, as one born earlier in the tick has lived longer.
-struct Spark {
-    particle: Particle,
+pub(crate) struct Spark {
+    pub(crate) particle: Particle,
     /// Ticks (a fraction of one) it has lived beyond the whole ticks it has been updated.
-    lead: f32,
+    pub(crate) lead: f32,
     /// Whole ticks it has been updated.
-    ticks: u32,
+    pub(crate) ticks: u32,
     /// How many ticks it lives, from birth to gone.
-    life: f32,
+    pub(crate) life: f32,
+}
+
+impl Spark {
+    /// A particle that was born this tick, at the start of its first.
+    fn born(particle: Particle) -> Spark {
+        let life = particle.frames_left as f32 + 1.0;
+        Spark {
+            particle,
+            lead: 0.0,
+            ticks: 0,
+            life,
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -46,6 +59,8 @@ pub struct Fire {
     sparks: Vec<Spark>,
     /// The tires the plants spat.
     tires: Vec<Spark>,
+    /// The heat the flame jets give off, oldest first: lenses that warp the picture (`heat`).
+    pub(crate) heat: Vec<Spark>,
     rng: Rng,
     width: i32,
     height: i32,
@@ -135,6 +150,7 @@ pub fn spawn(
     commands.insert_resource(Fire {
         sparks: Vec::new(),
         tires: Vec::new(),
+        heat: Vec::new(),
         rng: Rng::new(0x1d87_2b41),
         width,
         height,
@@ -189,6 +205,7 @@ impl Fire {
     pub fn clear(&mut self) {
         self.sparks.clear();
         self.tires.clear();
+        self.heat.clear();
     }
 }
 
@@ -221,13 +238,9 @@ pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>, mut seen: L
     }
     for flame in &sim.race.last.flames {
         let particle = Particle::flame_jet(flame.pos, flame.dir, flame.ticks, &mut fire.rng);
-        let life = particle.frames_left as f32 + 1.0;
-        fire.sparks.push(Spark {
-            particle,
-            lead: 0.0,
-            ticks: 0,
-            life,
-        });
+        let heat = Particle::flame_jet_heat(&particle, &mut fire.rng);
+        fire.sparks.push(Spark::born(particle));
+        fire.heat.push(Spark::born(heat));
     }
     for spit in &sim.race.last.spits {
         if fire.wheels.is_empty() {
@@ -236,17 +249,11 @@ pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>, mut seen: L
         for _ in 0..TIRES_A_SPIT {
             let particle =
                 Particle::plant_tire(spit.pos, spit.facing, fire.wheels.len(), &mut fire.rng);
-            let life = particle.frames_left as f32 + 1.0;
-            fire.tires.push(Spark {
-                particle,
-                lead: 0.0,
-                ticks: 0,
-                life,
-            });
+            fire.tires.push(Spark::born(particle));
         }
     }
     // (As in the game, a new spark is updated once in the tick it is born.)
-    for list in [&mut fire.sparks, &mut fire.tires] {
+    for list in [&mut fire.sparks, &mut fire.tires, &mut fire.heat] {
         list.retain_mut(|s| {
             s.ticks += 1;
             s.particle.update() && s.ticks as f32 + s.lead < s.life
