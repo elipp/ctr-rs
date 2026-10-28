@@ -63,6 +63,8 @@ pub struct Online {
 pub struct Desync {
     pub slot: usize,
     pub tick: u32,
+    /// The hashes that differed, if it was they that told.
+    pub hashes: Option<race::desync::Hashes>,
     /// Whether the player has been told of it (by a toast).
     pub told: bool,
 }
@@ -93,6 +95,7 @@ impl Online {
                 self.desync.push(Desync {
                     slot: m.slot,
                     tick: m.tick,
+                    hashes: m.hashes,
                     told: false,
                 });
             }
