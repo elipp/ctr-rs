@@ -143,6 +143,7 @@ mod tests {
                 position_paths: vec![vec![Default::default()]],
                 paths: Vec::new(),
                 skybox: None,
+                clear_colors: [None; 3],
                 quad_blocks: Vec::new(),
                 vertices: Vec::new(),
                 bsp: Vec::new(),
