@@ -3,7 +3,7 @@
 
 use loader::lev::PosRot;
 
-use crate::{Contact, Context, Damage, Instance, Shape, Tick};
+use crate::{Contact, Context, Damage, Instance, Tick};
 
 /// What `RB_Hazard_CollideWithDrivers` takes as the radius: a squared distance, 400 units.
 const HIT_RADIUS: u32 = 0x19000;
@@ -43,13 +43,9 @@ impl Instance for Drum {
         };
         self.point = (self.point + 1) % path.len();
         let at = Drum::frame(path, self.point).pos;
-        out.contacts.push(Contact {
-            pos: [at.x as i32, at.y as i32, at.z as i32],
-            damage: Damage::Squish,
-            hit_radius: HIT_RADIUS,
-            sound: 0,
-            shape: Shape::Sphere,
-        });
+        let pos = [at.x as i32, at.y as i32, at.z as i32];
+        out.contacts
+            .push(Contact::sphere(pos, Damage::Squish, HIT_RADIUS, 0));
     }
 }
 
@@ -68,7 +64,7 @@ mod tests {
         let paths = [path];
         let cx = Context {
             instance: 0,
-            frames: [0; 2],
+            frames: [0; crate::ANIMATIONS],
             ticks: 0,
             position_path: &[],
             roll_paths: &paths,

@@ -22,6 +22,8 @@ pub mod axis {
     pub const COLOR_R: usize = 7;
     pub const COLOR_G: usize = 8;
     pub const COLOR_B: usize = 9;
+    /// The frame of the icon group's icons, in 1/256 icons.
+    pub const ICON_FRAME: usize = 10;
     pub const COUNT: usize = 11;
 }
 
@@ -34,6 +36,7 @@ mod axis_flags {
     pub const COLOR_R: u16 = 0x80;
     pub const COLOR_G: u16 = 0x100;
     pub const COLOR_B: u16 = 0x200;
+    pub const ICON_FRAME: u16 = 0x400;
 }
 
 /// `ParticleSetColorFlags`
@@ -44,6 +47,9 @@ pub mod color_flags {
     pub const DRAW_MODE_MASK: u16 = 0x60;
     pub const DRAW_MODE_ADD: u16 = 0x20;
     pub const DRAW_MODE_SUBTRACT: u16 = 0x40;
+    /// The icon frame starts over when it runs past the last icon (it is `COLOR_G` for the
+    /// particles that have no colour axes).
+    pub const ICON_WRAP: u16 = 0x100;
     /// The sprite is eight times the size of the icon's texels (half of it is `texels << 4`
     /// instead of `<< 1`).
     pub const LARGE_QUAD: u16 = 0x400;
@@ -287,8 +293,100 @@ pub const FIREBALL: [Entry; 9] = [
     },
 ];
 
+/// `emSet_fjFire`: a lick of the fire of a Tiger Temple flame jet. It starts a little off the
+/// nozzle in x and z, shrinks as it goes and fades out within seven ticks.
+pub const FLAME_JET_FIRE: [Entry; 7] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x00a1,
+        lifespan: 7,
+    },
+    Entry::Axis {
+        flags: 0x1b,
+        axis: 0,
+        base: [-0x40, -0x320, 0],
+        random: [0x80, 0x640, 0],
+    },
+    Entry::Axis {
+        flags: 0x1b,
+        axis: 2,
+        base: [-0x40, -0x320, 0],
+        random: [0x80, 0x640, 0],
+    },
+    Entry::Axis {
+        flags: 5,
+        axis: 1,
+        base: [-0x40, 0, 1],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 0x1a,
+        axis: 4,
+        base: [0, 0x10, 0],
+        random: [0x800, 0x10, 0],
+    },
+    Entry::Axis {
+        flags: 0xb,
+        axis: 5,
+        base: [0x4e2, 0x100, 0],
+        random: [0x80, 0, 0],
+    },
+    Entry::Axis {
+        flags: 0xd,
+        axis: 7,
+        base: [0x8000, 0, -0x800],
+        random: [0x5f00, 0, 0],
+    },
+];
+
+/// `emSet_PlantTires`: a tire (one of the wheel icons, spinning) that a plant spits out. It
+/// leaves the mouth sideways and falls; `Particle_FuncPtr_SpitTire` bounces it off the ground.
+pub const PLANT_TIRES: [Entry; 7] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x0121,
+        lifespan: 0x50,
+    },
+    Entry::Axis {
+        flags: 0x13,
+        axis: 0,
+        base: [1, -0x320, 0],
+        random: [0, 0x640, 0],
+    },
+    Entry::Axis {
+        flags: 0x13,
+        axis: 2,
+        base: [1, -0x320, 0],
+        random: [0, 0x640, 0],
+    },
+    Entry::Axis {
+        flags: 0x17,
+        axis: 1,
+        base: [1, -0x640, -0x320],
+        random: [0, 0x320, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 5,
+        base: [0x1000, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 0x1a,
+        axis: 4,
+        base: [0, 0xc0, 0],
+        random: [0x400, 0x40, 0],
+    },
+    Entry::Axis {
+        flags: 0xa,
+        axis: 10,
+        base: [0, 0x100, 0],
+        random: [0xe00, 0, 0],
+    },
+];
+
 /// `MixRNG_Particles`' source: a stand-in for retail's `RngDeadCoed`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rng(u32);
 
 impl Rng {
@@ -320,6 +418,18 @@ pub struct Particle {
     pub frames_left: i16,
     /// Where the particle was a tick ago, for the ones drawn as lines.
     pub previous: [i32; 3],
+    /// How many icons its group has, which its icon frame runs through.
+    pub icons: i32,
+    /// A tire a plant spat, which bounces (`Particle_FuncPtr_SpitTire`).
+    pub spit: Option<SpitTire>,
+}
+
+/// What `Particle_FuncPtr_SpitTire` needs: the height of the plant it is `owner`'s, and its own
+/// source of randomness (retail draws from the game's `MixRNG_Scramble`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpitTire {
+    pub plant_y: i32,
+    pub rng: Rng,
 }
 
 /// How the sprite is combined with the picture behind it.
@@ -340,6 +450,8 @@ impl Particle {
             color_flags: 0,
             frames_left: 0,
             previous: [0; 3],
+            icons: 0,
+            spit: None,
         };
         for entry in set {
             match *entry {
@@ -393,6 +505,92 @@ impl Particle {
         }
         p.axes[axis::POS_Y].velocity = velocity_y;
         p
+    }
+
+    /// `RB_FlameJet_Particles`' fire: at the nozzle `position` (level units), drifting `dir`
+    /// (x and z, 1/256 units a tick) and flickering up and down with the game's `ticks`.
+    pub fn flame_jet(position: [i32; 3], dir: [i16; 2], ticks: u32, rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&FLAME_JET_FIRE, rng);
+        // It starts 50 units above the nozzle.
+        for (axis, pos) in p.axes.iter_mut().zip([position[0], position[1] + 0x32, position[2]]) {
+            axis.start += pos * 0x100;
+        }
+        p.axes[axis::POS_X].velocity = dir[0];
+        p.axes[axis::POS_Y].velocity = 0;
+        p.axes[axis::POS_Z].velocity = dir[1];
+        let sin = math::sin((ticks.wrapping_mul(0x100) + rng.mix(0x100) as u32) & 0xfff);
+        p.axes[axis::POS_Y].accel = (sin >> 4) as i16;
+        // Every other tick's flame turns the other way.
+        if ticks & 1 != 0 {
+            let spin = &mut p.axes[axis::ROT_Y];
+            spin.start = -spin.start;
+            spin.velocity = spin.velocity.wrapping_neg();
+        }
+        p
+    }
+
+    /// One of the four tires of `RB_Plant_ThTick_Eat`'s spit: at the plant's mouth, `facing` being
+    /// the x and z of the third column of its matrix. `icons` is how many wheel icons there are.
+    pub fn plant_tire(
+        plant: [i32; 3],
+        facing: [i16; 2],
+        icons: usize,
+        rng: &mut Rng,
+    ) -> Particle {
+        let mut p = Particle::new(&PLANT_TIRES, rng);
+        let [fx, fz] = facing.map(i32::from);
+        p.axes[axis::POS_X].start += (plant[0] + (fx * 9 >> 7)) * 0x100;
+        p.axes[axis::POS_Y].start += (plant[1] + 0x20) * 0x100;
+        p.axes[axis::POS_Z].start += (plant[2] + (fz * 9 >> 7)) * 0x100;
+        // Each horizontal axis keeps its own launch, with more to it along where it faces.
+        let launch = |rng: &mut Rng, f: i32| ((rng.mix(10) + 0x10) * f >> 12) * 0x100;
+        let x = launch(rng, fx);
+        let z = launch(rng, fz);
+        p.axes[axis::POS_X].velocity = p.axes[axis::POS_X].velocity.wrapping_add(x as i16);
+        p.axes[axis::POS_Z].velocity = p.axes[axis::POS_Z].velocity.wrapping_add(z as i16);
+        p.icons = icons as i32;
+        p.spit = Some(SpitTire {
+            plant_y: plant[1],
+            rng: Rng::new((rng.mix(0x7fff) | rng.mix(0x7fff) << 15) as u32),
+        });
+        p
+    }
+
+    /// `Particle_FuncPtr_SpitTire`: once it has fallen below the mouth it is thrown up again, in
+    /// a new direction, three times. The third time it also shrinks away.
+    fn spit_tire(&mut self) {
+        let Some(spit) = &mut self.spit else { return };
+        let mouth = spit.plant_y + 0x10;
+        if self.axes[axis::POS_Y].start >> 8 >= mouth {
+            return;
+        }
+        for a in [axis::POS_X, axis::POS_Z] {
+            self.axes[a].velocity = (spit.rng.mix(0x1640) - 0xb20) as i16;
+        }
+        let scale = &mut self.axes[axis::SCALE_X];
+        let up = match scale.start {
+            0x1000 => {
+                scale.start = 0xfff;
+                spit.rng.mix(0x12c0) + 0x1900
+            }
+            0xfff => {
+                scale.start = 0xffe;
+                spit.rng.mix(800) + 8000
+            }
+            0xffe => {
+                scale.velocity = -2047;
+                spit.rng.mix(800) + 6000
+            }
+            _ => return,
+        };
+        self.axes[axis::POS_Y].velocity = up as i16;
+        self.axes[axis::POS_Y].start = mouth << 8;
+    }
+
+    /// The icon of its group that it shows, if it steps through them.
+    pub fn icon_frame(&self) -> Option<usize> {
+        (self.axis_flags & axis_flags::ICON_FRAME != 0 && self.icons > 0)
+            .then(|| (self.axes[axis::ICON_FRAME].start >> 8).clamp(0, self.icons - 1) as usize)
     }
 
     /// `VehEmitter_Exhaust`: a puff at `position` (1/256 game units, relative
@@ -463,6 +661,7 @@ impl Particle {
                 a.velocity = a.velocity.wrapping_add(a.accel);
             }
         }
+        self.spit_tire();
         if self.color_flags & color_flags::DESTROY_ON_SCALE_EXPIRE != 0 {
             let small =
                 |flag, axis: usize| self.axis_flags & flag != 0 && self.axes[axis].start < 1;
@@ -485,6 +684,17 @@ impl Particle {
                 | channel(axis_flags::COLOR_B, axis::COLOR_B);
             if color < 0x800 {
                 return false;
+            }
+        }
+        // The icon frame wraps round, or stops at the first or the last icon.
+        if self.axis_flags & axis_flags::ICON_FRAME != 0 && self.icons > 0 {
+            let limit = self.icons << 8;
+            let frame = &mut self.axes[axis::ICON_FRAME].start;
+            let wrap = self.color_flags & color_flags::ICON_WRAP != 0;
+            if *frame < 0 {
+                *frame = if wrap { *frame + limit } else { 0 };
+            } else if *frame >= limit {
+                *frame = if wrap { *frame - limit } else { limit - 1 };
             }
         }
         true
@@ -734,6 +944,29 @@ mod tests {
 #[cfg(test)]
 mod spark_colour_tests {
     use super::*;
+
+    #[test]
+    fn a_spat_tire_bounces_three_times_and_is_gone() {
+        let mut rng = Rng::new(7);
+        let mut tire = Particle::plant_tire([100, 50, -30], [4096, 0], 14, &mut rng);
+        let mouth = 50 + 0x10;
+        assert_eq!(tire.icon_frame().map(|f| f < 14), Some(true));
+        let (mut bounces, mut last_up) = (0, false);
+        let mut ticks = 0;
+        while tire.update() {
+            ticks += 1;
+            assert!(ticks < 0x50, "it lives at most 80 ticks");
+            // A bounce puts it back at the mouth, going up.
+            let up = tire.axes[axis::POS_Y].velocity > 0;
+            if up && !last_up {
+                bounces += 1;
+                assert_eq!(tire.axes[axis::POS_Y].start >> 8, mouth);
+            }
+            last_up = up;
+        }
+        assert_eq!(bounces, 3);
+        assert!(tire.icon_frame().is_some_and(|f| f < 14));
+    }
 
     #[test]
     fn sparks_are_yellow() {

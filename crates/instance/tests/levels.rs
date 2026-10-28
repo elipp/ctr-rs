@@ -42,8 +42,58 @@ fn each_level_places_its_hazards() {
         for a in &h.armadillos {
             assert_eq!(level.instances[a.instance].model_name, "armadillo");
             // A turn and a roll animation.
-            assert_eq!(a.frames, [32, 10]);
+            assert_eq!(a.frames[..2], [32, 10]);
         }
+    }
+}
+
+#[test]
+fn the_pyramid_the_castle_and_polar_pass_place_their_hazards() {
+    for (id, spiders, seals, plants, model) in [
+        (LevelId::CORTEX_CASTLE.0, 5, 0, 0, "spider"),
+        (LevelId::POLAR_PASS.0, 0, 4, 0, "seal"),
+        (LevelId::PAPU_PYRAMID.0, 0, 0, 6, "plant"),
+    ] {
+        let Some((h, level)) = objects_of(id) else {
+            return;
+        };
+        assert_eq!(
+            [h.spiders.len(), h.seals.len(), h.plants.len()],
+            [spiders, seals, plants],
+            "level {id}"
+        );
+        let slots: Vec<_> = h.slots().collect();
+        let placed = slots
+            .iter()
+            .filter(|(i, _)| level.instances[*i].model_name == model)
+            .count();
+        assert_eq!(placed, spiders + seals + plants, "level {id}");
+        // Each has a pose to draw it with, and the animations its model has.
+        for (_, slot) in slots {
+            if matches!(
+                slot,
+                instance::Slot::Spider(_) | instance::Slot::Seal(_) | instance::Slot::Plant(_)
+            ) {
+                assert!(h.pose(slot).is_some());
+            }
+        }
+        // The plant model has the animations that the plant asks the length of.
+        assert!(h.plants.iter().all(|p| p.frames.iter().all(|&f| f > 0)));
+    }
+}
+
+#[test]
+fn the_new_hazards_run_and_hurt() {
+    for id in [
+        LevelId::CORTEX_CASTLE.0,
+        LevelId::POLAR_PASS.0,
+        LevelId::PAPU_PYRAMID.0,
+    ] {
+        let Some((mut h, _)) = objects_of(id) else {
+            return;
+        };
+        let contacts: usize = (0..600).map(|_| h.tick().contacts.len()).sum();
+        assert!(contacts > 0, "level {id}");
     }
 }
 
@@ -267,4 +317,21 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
         h.tick();
     }
     assert_eq!(h.crates[0].sim.scale, instance::pickup::crates::FULL_SCALE);
+}
+
+#[test]
+fn tiger_temple_places_its_flame_jets_and_they_burn() {
+    let Some((mut h, level)) = objects_of(LevelId::TIGER_TEMPLE.0) else {
+        return;
+    };
+    assert_eq!(h.flame_jets.len(), 3);
+    assert!(h
+        .flame_jets
+        .iter()
+        .all(|j| level.instances[j.instance].model_name == "flamejet"));
+    let burns = (0..600)
+        .flat_map(|_| h.tick().contacts)
+        .filter(|c| c.damage == instance::Damage::Burn)
+        .count();
+    assert!(burns > 0);
 }

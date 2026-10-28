@@ -380,6 +380,7 @@ pub(crate) fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     driving: Option<Res<drive::Drive>>,
+    wheel_icons: Res<WheelIcons>,
 ) {
     let level = &track.0;
     let data = mesh::level_mesh(
@@ -499,7 +500,11 @@ pub(crate) fn setup(
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();
     fire::spawn(
-        objects.fireballs.len(),
+        fire::Sources {
+            emitters: objects.fireballs.len() + objects.flame_jets.len(),
+            plants: objects.plants.len(),
+        },
+        &wheel_icons.0,
         &textures.dram,
         &textures.vram,
         &mut commands,
