@@ -1,5 +1,9 @@
 This file is for the places where the port _intentionally_ differs from the original: a different choice, a stand-in for something the engine cannot do, a retail quirk that is not reproduced. Something that is not implemented yet is not a divergence; it goes in `TODO.md`, and in the "Not ported" note of the module that would have it.
 
+**Adventure Mode (or any other mode than 1-8P Arcade) is not implemented
+
+**Bots are not implemented
+
 **Ground shadow (2026-10-20, uncommitted, NOT visually verified):** `vehicle::shadow` (cull + orientation), `render::shadow` (4 quads, atlas of global icons 0/1 `shadow1`/`shadow2`), `client::shadow` (subtractive mesh, race only). Known differences from `VehGroundShadow_Main`:
 - Camera-distance fade: retail only fades in the "small screen" case (the push buffer's screen-distance value is <= 0x100, which I read as split-screen). One player uses the fixed colour 0x1f1f1f, and so do we. The fade is not ported.
 - Texel blending: every visible texel is subtracted. Retail forces the tpage to subtractive, so only texels with the semi-transparency (STP) bit blend and the rest draw opaque. Not checked whether any shadow texels lack STP.
@@ -34,6 +38,7 @@ This file is for the places where the port _intentionally_ differs from the orig
 **Potions (2026-10-25, NOT visually verified):** `weapon::mine` (`MineKind::GreenBeaker`/`RedBeaker`: dropped and thrown, `RB_Potion_ThTick_InAir`, the hit of `RB_GenericMine_ThTick`), `vehicle::item` (`Launch::Potion`), `race` (Up/Down pick the throw), `client::projectile` (the `beakergreen`/`beakerred` models, the shatter). Intentional differences:
 - `RB_Potion_ThTick_InAir` goes on after it has shattered a potion and may shatter it again, which is a second, identical shatter on the same tick. We stop at the first.
 - The shatter (`RB_Explosion_InitPotion`) always faces the camera, at half size. In retail the shockwave model faces it only once `RB_Blowup_Init` has set the billboard bit on the shared model header (a crate blowing up earlier in the race), so a potion's shatter may not face it.
+- The five shards of a shatter (`emSet_PotionShatter`, `client::fire`) are cosmetic and use the renderer's own random generator, not `RngDeadCoed`, so their drift differs from retail's.
 - Keys: Up is E (or the D-pad), Down is S (or the D-pad); W is the gas, so it cannot be Up. Setting Down also makes a bomb's backward shot reachable from the keyboard, which it was not.
 
 **Sound effects (2026-10-27, NOT listened to):** `loader::howl` (`KART.HWL`: the tables, the banks, the SPU's ADPCM), `client::sound` (`OtherFX_Play_LowLevel`'s volume, pan and length; `PlaySound3D`'s distance and angle), played from `drive_tick`: the traffic lights' beeps and every kart's `Effect::Sound` and `Effect::DriverCrashing`. Intentional differences:

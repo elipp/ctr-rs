@@ -381,6 +381,7 @@ pub(crate) fn setup(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     driving: Option<Res<drive::Drive>>,
     wheel_icons: Res<WheelIcons>,
+    smoke_icon: Res<crate::SmokeIcon>,
 ) {
     let level = &track.0;
     let data = mesh::level_mesh(
@@ -505,6 +506,7 @@ pub(crate) fn setup(
             plants: objects.plants.len(),
         },
         &wheel_icons.0,
+        smoke_icon.0.as_ref(),
         &textures.dram,
         &textures.vram,
         &mut commands,

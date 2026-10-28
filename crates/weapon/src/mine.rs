@@ -16,7 +16,7 @@
 //! (`RB_Potion_ThTick_InAir`) and lies where it lands. A kart that touches one spins out, its
 //! screen flashes, and the beaker shatters, with no blast.
 //!
-//! Not ported: the red beaker's rain cloud, the shatter's particles, the afterimage that follows a mine dropped at speed, the bots' TNT, and
+//! Not ported: the red beaker's rain cloud, the afterimage that follows a mine dropped at speed, the bots' TNT, and
 //! a mine dropped on a crate holding the crate's regrowth back. Of the sounds, the TNT's on a head
 //! are here ([`Tick::sounds`]); the detonations' are their listener's.
 
