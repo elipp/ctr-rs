@@ -16,4 +16,5 @@ pub mod plant;
 pub mod roller;
 pub mod seal;
 pub mod spider;
+pub mod teeth;
 pub mod turtle;

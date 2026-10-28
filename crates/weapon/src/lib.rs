@@ -12,8 +12,9 @@
 //! and a burst that reaches one, sets it off.
 //!
 //! A weapon breaks the fruit and weapon crates it passes through, and so does its blast
-//! ([`Tick::crate_hits`], for the objects to deal with). Not ported: the temple teeth, the warpball it would meet, the thrown TNT a missile would be drawn
-//! away by. The sounds are their listener's to play: each projectile's loop in flight, and each
+//! ([`Tick::crate_hits`], for the objects to deal with). The Tiger Temple door opens when a weapon
+//! or a blast reaches it ([`Tick::opened_doors`]), and stops the weapons while it is shut. Not
+//! ported: the warpball it would meet, the thrown TNT a missile would be drawn away by. The sounds are their listener's to play: each projectile's loop in flight, and each
 //! explosion's. How the aim differs is in [`aim`].
 //!
 //! The projectiles keep what the sim needs. Their matrices (`inst->matrix`) are for drawing:
@@ -23,6 +24,7 @@
 pub mod aim;
 pub mod mine;
 
+use coll::doors::{Doors, TEETH_MODEL};
 use coll::instance::instances_in_reach;
 use coll::{Collision, model_id, search_flags};
 use gte::Gte;
@@ -300,6 +302,8 @@ pub struct Tick {
     pub detonations: Vec<mine::Detonation>,
     /// The crates the blasts reached, in the order they went off.
     pub crate_hits: Vec<CrateHit>,
+    /// The temple doors a weapon reached (`RB_Teeth_OpenDoor`): instances of the level.
+    pub opened_doors: Vec<usize>,
     /// The karts a blast went off on, whose screens flash white (`RB_Burst_CollThread`).
     pub flashes: Vec<usize>,
     /// The sounds of a TNT crate on a head. (The explosions' and the detonations' are their
@@ -471,9 +475,11 @@ impl Weapons {
         bodies: &[Body],
         elapsed_ms: i32,
         random_number: &mut i32,
+        doors: &Doors,
     ) -> Tick {
         let mut tick = std::mem::take(&mut self.pending);
         let mut coll = Collision::default();
+        coll.door_access_flags = doors.access;
         // The mines come first (their bucket does).
         self.tick_mines(&mut mine::Ctx {
             bodies,
@@ -481,6 +487,7 @@ impl Weapons {
             random_number,
             tick: &mut tick,
             level: Some(level),
+            doors,
             coll: &mut coll,
         });
         for i in 0..self.projectiles.len() {
@@ -496,7 +503,8 @@ impl Weapons {
                 &self.projectiles,
                 &self.mines,
                 elapsed_ms,
-                &mut tick.crate_hits,
+                doors,
+                &mut tick,
             );
             for j in step.missiles_hit {
                 self.projectiles[j].dead = true;
@@ -577,12 +585,26 @@ impl Tick {
         // (The squares are of whole radii: 0x80, 0x140 and 0x200.)
         let radius = radius_squared.isqrt() as i16;
         for instance in instances_in_reach(level, svec(pos, 0), radius, radius_squared) {
-            if CRATE_MODELS.contains(&level.instances[instance].model_id) {
+            let model_id = level.instances[instance].model_id;
+            if CRATE_MODELS.contains(&model_id) {
                 self.crate_hits.push(CrateHit {
                     instance,
                     model,
                     owner,
                 });
+            } else if model_id == TEETH_MODEL {
+                self.opened_doors.push(instance);
+            }
+        }
+    }
+
+    /// `RB_Potion_OnShatter_TeethSearch`: a beaker that shatters at `pos` opens the temple door
+    /// within `radius_squared`.
+    pub(crate) fn open_doors(&mut self, level: &Level, pos: [i32; 3], radius_squared: i32) {
+        let radius = radius_squared.isqrt() as i16;
+        for instance in instances_in_reach(level, svec(pos, 0), radius, radius_squared) {
+            if level.instances[instance].model_id == TEETH_MODEL {
+                self.opened_doors.push(instance);
             }
         }
     }
@@ -649,7 +671,8 @@ fn fly(
     all: &[Projectile],
     mines: &[mine::Mine],
     elapsed_ms: i32,
-    crate_hits: &mut Vec<CrateHit>,
+    doors: &Doors,
+    tick: &mut Tick,
 ) -> Step {
     p.time_alive = mips::add_lo(p.time_alive, elapsed_ms);
 
@@ -738,16 +761,23 @@ fn fly(
 
     if coll.sps.did_touch_hitbox != 0 {
         // The crates it passes through break (`RB_Hazard_CollLevInst`'s `LInC`).
-        if let Some(instance) = coll.sps.bsp_hitbox.and_then(|hit| hit.instance)
+        let instance = coll.sps.bsp_hitbox.and_then(|hit| hit.instance);
+        if let Some(instance) = instance
             && CRATE_MODELS.contains(&level.instances[instance].model_id)
         {
-            crate_hits.push(CrateHit {
+            tick.crate_hits.push(CrateHit {
                 instance,
                 model: p.model(),
                 owner: p.parent,
             });
         }
-        if hits_level_instance(level, coll) {
+        // A temple door that is shut stops it, and opens; one that is open lets it through.
+        if let Some(door) = instance.and_then(|i| doors.door(i)) {
+            if door.stops(p.pos) {
+                tick.opened_doors.push(door.instance);
+                return Step::explode();
+            }
+        } else if hits_level_instance(level, coll) {
             return Step::explode();
         }
     } else if coll.sps.did_touch_quadblock != 0 {

@@ -143,7 +143,7 @@ mod tests {
         assert_eq!(out.flames.len(), 1);
         let flame = out.flames[0];
         assert_eq!((flame.pos, flame.ticks), ([5, 6, 7], 7));
-        assert_eq!(flame.dir, [0, 4096 * 0x4b >> 5]);
+        assert_eq!(flame.dir, [0, ((4096 * 0x4b) >> 5) as i16]);
     }
 
     #[test]
