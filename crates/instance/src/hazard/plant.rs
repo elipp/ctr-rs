@@ -266,6 +266,7 @@ impl Instance for Plant {
             pos: self.pos,
             matrix: self.matrix,
             animation: (self.anim_index, self.anim_frame),
+            hidden: false,
         })
     }
 }
@@ -383,6 +384,7 @@ mod tests {
             ticks: 0,
             position_path: &[],
             roll_paths: &[],
+            blockers: &[],
         };
         let mut out = Tick::default();
         plant.caught(&cx, &mut out);

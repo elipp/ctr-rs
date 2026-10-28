@@ -92,7 +92,7 @@ fn the_new_hazards_run_and_hurt() {
         let Some((mut h, _)) = objects_of(id) else {
             return;
         };
-        let contacts: usize = (0..600).map(|_| h.tick().contacts.len()).sum();
+        let contacts: usize = (0..600).map(|_| h.tick(&[]).contacts.len()).sum();
         assert!(contacts > 0, "level {id}");
     }
 }
@@ -104,7 +104,7 @@ fn the_hazards_run_and_reach_for_drivers() {
     };
     let (mut contacts, mut sparks) = (0, 0);
     for _ in 0..300 {
-        let tick = h.tick();
+        let tick = h.tick(&[]);
         contacts += tick.contacts.len();
         sparks += tick.sparks.len();
     }
@@ -121,11 +121,11 @@ fn the_state_can_be_copied_and_run_on() {
         return;
     };
     for _ in 0..100 {
-        a.tick();
+        a.tick(&[]);
     }
     let mut b = a.clone();
     for _ in 0..200 {
-        assert_eq!(a.tick(), b.tick());
+        assert_eq!(a.tick(&[]), b.tick(&[]));
     }
     assert_eq!(a, b);
 }
@@ -137,7 +137,7 @@ fn a_roller_is_drawn_between_its_frame_and_the_next() {
     };
     let path = &level.paths[h.rollers[0].sim.path];
     assert_eq!(h.roller_frames(0), (path[0], path[1]));
-    h.tick();
+    h.tick(&[]);
     assert_eq!(h.roller_frames(0), (path[1], path[2]));
 }
 
@@ -206,7 +206,7 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
         );
         seen.insert(jump);
         assert_eq!(drive_through(&h, 0x1400), forced_jump::NONE);
-        h.tick();
+        h.tick(&[]);
     }
     assert_eq!(seen, [forced_jump::LOW, forced_jump::HIGH].into());
 }
@@ -314,7 +314,7 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
     drive_through(&mut h, &mut driver);
     assert_eq!(h.crates[0].sim.breaks, 1);
     for _ in 0..100 {
-        h.tick();
+        h.tick(&[]);
     }
     assert_eq!(h.crates[0].sim.scale, instance::pickup::crates::FULL_SCALE);
 }
@@ -330,7 +330,7 @@ fn tiger_temple_places_its_flame_jets_and_they_burn() {
         .iter()
         .all(|j| level.instances[j.instance].model_name == "flamejet"));
     let burns = (0..600)
-        .flat_map(|_| h.tick().contacts)
+        .flat_map(|_| h.tick(&[]).contacts)
         .filter(|c| c.damage == instance::Damage::Burn)
         .count();
     assert!(burns > 0);

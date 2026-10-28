@@ -1,6 +1,5 @@
 # Unimplemented
 - the particles of a shattering potion (`emSet_PotionShatter`)
-- the Tiger Temple door that a shattering potion opens (`RB_Potion_OnShatter_TeethSearch`, and the open-door check in `RB_Potion_ThTick_InAir`)
 - the flame jets' burning a mine in reach (`RB_Hazard_ThCollide_Generic_Alt`), and the real shading of their stone (`USE_SPECULAR_LIGHT`, `colorRGBA`'s far colour; `props::flame_jet_lit` is a guess: ambient plus the light's dot with the normals)
 - the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon
 - the other uses of a TNT crate on the head (`instTntRecv`): half the speed, the fire button ignored, the driving animation held at its middle frame
@@ -35,7 +34,7 @@ Online, a one-shot comes from the newest tick only, so a rollback does not take 
 - a kart is many entities: the body (the root, with `KartMotion`), the wheels, shadow, smoke, sparks, tire marks, mask and shield, which sit at the top level (they draw in world or camera space) and are tied to it by `Attached(kart)` (despawn, and `kart::hide_parts` for a kart that is not drawn). The wheels are tied by their own `kart` field, as `reap` despawns whatever is `Attached` to a kart without a slot, which the grid display's is. One parent with an identity transform that holds the body and every part would let Bevy's visibility and despawning do all of it, and give a single thing to spawn and to hide (`kart::KartBuilder::spawn` and the `spawn` of each part)
 
 ## To check
-- the heat shimmer of the flame jets (`heat.rs`, `heat.wgsl`, `Torch_Main`): it is a post-processing pass over the main camera's picture, so it warps what is in front of a lens too (retail's lens only covers what was drawn before it, by depth), and its size and aspect were worked out from the GTE setup, not seen
+- the heat shimmer of the flame jets (`heat.rs`, `heat.wgsl`, `Torch_Main`): it is a post-processing pass over the main camera's picture, so it warps what is in front of a lens too (retail's lens only covers what was drawn before it, by depth) (it looks right in the game)
 - the screen flash of a burst: whether retail's `animFrame == 1` lands on the tick our effect's first advance does, and whether the quad sits under the HUD as ours does
 
 ## Future?

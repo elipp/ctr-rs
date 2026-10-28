@@ -26,6 +26,7 @@ use hazard::plant::Plant;
 use hazard::roller::{self, Roller};
 use hazard::seal::Seal;
 use hazard::spider::Spider;
+use hazard::teeth::Teeth;
 use hazard::turtle::Turtle;
 use pickup::crates::{CrateBox, Kind};
 use pickup::fruit::Fruit;
@@ -172,6 +173,8 @@ pub struct Pose {
     pub matrix: Matrix,
     /// `animIndex` and `animFrame`.
     pub animation: (u8, i16),
+    /// The model is not drawn (`HIDE_MODEL`).
+    pub hidden: bool,
 }
 
 /// What a thread of an object can see besides itself.
@@ -187,6 +190,16 @@ pub struct Context<'a> {
     pub position_path: &'a [SVec3],
     /// `ptrSpawnType2_PosRot`, which the rollers follow.
     pub roll_paths: &'a [Vec<PosRot>],
+    /// The drivers and the mines, which the temple door looks for in its doorway.
+    pub blockers: &'a [Blocker],
+}
+
+/// A thing that a temple door looks for (`PROC_CollideHitboxWithBucket` over the players and the
+/// mines): its model, and where it is (`matrix.t`, in level units).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Blocker {
+    pub model: i16,
+    pub at: [i32; 3],
 }
 
 /// A touch of a hitbox: the driver, and the `Input1.modelID` of the search that reached it.
@@ -257,6 +270,7 @@ pub struct Objects {
     pub turtles: Vec<Placed<Turtle>>,
     pub spiders: Vec<Placed<Spider>>,
     pub seals: Vec<Placed<Seal>>,
+    pub teeth: Vec<Placed<Teeth>>,
     pub plants: Vec<Placed<Plant>>,
     pub fruit: Vec<Placed<Fruit>>,
     pub crates: Vec<Placed<CrateBox>>,
@@ -287,6 +301,7 @@ pub enum Slot {
     Turtle(usize),
     Spider(usize),
     Seal(usize),
+    Teeth(usize),
     Plant(usize),
     Fruit(usize),
     Crate(usize),
@@ -346,6 +361,7 @@ impl Objects {
             turtles: Vec::new(),
             spiders: Vec::new(),
             seals: Vec::new(),
+            teeth: Vec::new(),
             plants: Vec::new(),
             fruit: Vec::new(),
             crates: Vec::new(),
@@ -404,6 +420,11 @@ impl Objects {
                         });
                     }
                 }
+                "teeth" => objects.teeth.push(Placed {
+                    instance,
+                    sim: Teeth::new(def),
+                    frames: frames(),
+                }),
                 "plant" => {
                     // `ST1_SPAWN` has two halfwords for each plant: its cooldown and its side.
                     let entry = |i: usize| {
@@ -490,7 +511,12 @@ impl Objects {
 
     /// Every object, in the order their threads run (which the sim depends on). This and
     /// [`Objects::slots`] are where the kinds are listed.
-    pub fn each_object(&mut self, mut f: impl FnMut(Entry)) {
+    pub fn each_object(&mut self, f: impl FnMut(Entry)) {
+        self.each_object_seeing(&[], f);
+    }
+
+    /// [`Objects::each_object`], with `blockers` for the objects to see in their threads.
+    fn each_object_seeing(&mut self, blockers: &[Blocker], mut f: impl FnMut(Entry)) {
         let Objects {
             armadillos,
             fireballs,
@@ -501,6 +527,7 @@ impl Objects {
             turtles,
             spiders,
             seals,
+            teeth,
             plants,
             fruit,
             crates,
@@ -515,6 +542,7 @@ impl Objects {
             ticks: *ticks,
             position_path,
             roll_paths,
+            blockers,
         };
         each(armadillos, &cx, random_number, &mut f);
         each(fireballs, &cx, random_number, &mut f);
@@ -523,11 +551,36 @@ impl Objects {
         each(turtles, &cx, random_number, &mut f);
         each(spiders, &cx, random_number, &mut f);
         each(seals, &cx, random_number, &mut f);
+        each(teeth, &cx, random_number, &mut f);
         each(plants, &cx, random_number, &mut f);
         each(fruit, &cx, random_number, &mut f);
         each(crates, &cx, random_number, &mut f);
         each(rollers, &cx, random_number, &mut f);
         each(drums, &cx, random_number, &mut f);
+    }
+
+    /// `RB_Teeth_OpenDoor` for the door on `instance`, which a weapon reached.
+    pub fn open_door(&mut self, instance: usize) {
+        for door in &mut self.teeth {
+            if door.instance == instance {
+                door.sim.open();
+            }
+        }
+    }
+
+    /// The temple doors and `doorAccessFlags`, as the karts and weapons see them.
+    pub fn doors(&self) -> coll::doors::Doors {
+        coll::doors::Doors {
+            access: self
+                .teeth
+                .iter()
+                .fold(0, |flags, door| flags | door.sim.access_flags()),
+            teeth: self
+                .teeth
+                .iter()
+                .map(|door| door.sim.door(door.instance))
+                .collect(),
+        }
     }
 
     /// The plant that is the object of `instance`, as the kart it eats sees it.
@@ -547,15 +600,16 @@ impl Objects {
             .chain(slots_of(&self.turtles, Slot::Turtle))
             .chain(slots_of(&self.spiders, Slot::Spider))
             .chain(slots_of(&self.seals, Slot::Seal))
+            .chain(slots_of(&self.teeth, Slot::Teeth))
             .chain(slots_of(&self.plants, Slot::Plant))
             .chain(slots_of(&self.fruit, Slot::Fruit))
             .chain(slots_of(&self.crates, Slot::Crate))
     }
 
-    /// One game tick of every object.
-    pub fn tick(&mut self) -> Tick {
+    /// One game tick of every object. `blockers` are the drivers and the mines, in that order.
+    pub fn tick(&mut self, blockers: &[Blocker]) -> Tick {
         let mut tick = Tick::default();
-        self.each_object(|e| {
+        self.each_object_seeing(blockers, |e| {
             let first = tick.contacts.len();
             e.object.th_tick(&e.cx, &mut tick);
             for contact in &mut tick.contacts[first..] {
@@ -588,6 +642,7 @@ impl Objects {
             Slot::Turtle(i) => self.turtles[i].sim.pose(),
             Slot::Spider(i) => self.spiders[i].sim.pose(),
             Slot::Seal(i) => self.seals[i].sim.pose(),
+            Slot::Teeth(i) => self.teeth[i].sim.pose(),
             Slot::Plant(i) => self.plants[i].sim.pose(),
             Slot::Fruit(i) => self.fruit[i].sim.pose(),
             Slot::Crate(i) => self.crates[i].sim.pose(),
