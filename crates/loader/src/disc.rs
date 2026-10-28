@@ -104,16 +104,43 @@ pub fn open_bigfile_with<R: Read + Seek>(
 
     let image =
         IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
-    let start = image
-        .root_dir()
-        .iter(&image)
-        .entries()
-        .filter_map(Result::ok)
-        .find(|e| e.display_name().split(';').next() == Some("BIGFILE.BIG"))
-        .map(|e| e.header().extent.read())
+    let start = find(&image, "BIGFILE.BIG")
         .ok_or_else(|| invalid("BIGFILE.BIG not in the root directory".into()))?;
 
     let mut disc = open()?;
     let big = crate::bigfile::BigFile::open(&mut disc, start)?;
     Ok((disc, big))
+}
+
+/// Opens the disc image at `path` and reads the header of `SOUNDS/KART.HWL`.
+pub fn open_howl(path: &std::path::Path) -> io::Result<(Disc, crate::howl::Howl)> {
+    use hadris_iso::read::IsoImage;
+
+    let open = || RawSectorReader::new(std::fs::File::open(path).map(std::io::BufReader::new)?);
+    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+    let image =
+        IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
+    let start = find(&image, "SOUNDS/KART.HWL")
+        .ok_or_else(|| invalid("SOUNDS/KART.HWL not on the disc".into()))?;
+
+    let mut disc = open()?;
+    let howl = crate::howl::Howl::open(&mut disc, start)?;
+    Ok((disc, howl))
+}
+
+/// The first sector of the file at `path` (directories split by `/`, no version suffix).
+fn find<R: Read + Seek>(image: &hadris_iso::read::IsoImage<R>, path: &str) -> Option<u32> {
+    let mut dir = image.root_dir().iter(image);
+    let mut names = path.split('/').peekable();
+    while let Some(name) = names.next() {
+        let entry = dir
+            .entries()
+            .filter_map(Result::ok)
+            .find(|e| e.display_name().split(';').next() == Some(name))?;
+        if names.peek().is_none() {
+            return Some(entry.header().extent.read());
+        }
+        dir = image.open_dir(entry.as_dir_ref(image).ok()?);
+    }
+    None
 }
