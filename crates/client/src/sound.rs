@@ -307,7 +307,13 @@ impl Sfx<'_> {
             sounds.stop_all(true, true, true);
             sounds.stop_xa();
             sounds.clear_voicelines();
-            sounds.set_state(State::Traffic);
+            sounds.clear_state();
+            // A race with the fly-in starts with its jingle (`MainMain`'s stage 1).
+            sounds.set_state(if race.intro_ticks > 0 {
+                State::RaceIntro
+            } else {
+                State::Traffic
+            });
             *kept = Kept {
                 engines: vec![EngineSound::default(); drivers.len()],
                 boost_cooldowns: vec![0; drivers.len()],
