@@ -45,6 +45,8 @@ pub(crate) struct MeshOptions {
     pub(crate) cull: bool,
     /// The `color_lo` vertex colors instead of `color_hi`.
     pub(crate) low: bool,
+    /// Move the crates the level places in the ground to where they belong (`props::crate_fixup`).
+    pub(crate) crate_fixup: bool,
 }
 
 impl Default for MeshOptions {
@@ -53,7 +55,19 @@ impl Default for MeshOptions {
             hidden: false,
             cull: true,
             low: false,
+            crate_fixup: true,
         }
+    }
+}
+
+/// The constant depth bias that keeps a crate in front of the ground it sinks into (`/debug crate
+/// bias`; see `DEPTH_BIAS_PER_ORDER` for the unit).
+#[derive(Resource, Clone, Copy)]
+pub(crate) struct CrateBias(pub(crate) f32);
+
+impl Default for CrateBias {
+    fn default() -> Self {
+        CrateBias(100_000.0)
     }
 }
 

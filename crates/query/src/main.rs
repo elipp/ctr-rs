@@ -35,6 +35,11 @@ commands:
                                       turbo pads
   inst LEVEL [--name TEXT] [--at X Y Z --within R]
                                       the placed instances (crates, fruit, hazards)
+  crates [LEVEL] [--half N] [--height N] [--min N]
+                                      the crates (all levels without LEVEL) that are inside the
+                                      drawn ground: a surface cuts the crate between its base and
+                                      HEIGHT above (default 96), anywhere in a square of half side
+                                      HALF (default 40) around it, by at least MIN (default 4) at its center
   pads LEVEL                          each turbo pad's collision block, and the visible blocks
                                       with the same footprint (the ones that show the pad)
   icons [FIRST [LAST]]                which BIGFILE entries carry icons with global indices
@@ -393,6 +398,119 @@ fn footprint(q: &QuadBlock) -> [i16; 4] {
     [q.bbox.min.x, q.bbox.max.x, q.bbox.min.z, q.bbox.max.z]
 }
 
+/// The drawn triangles of the level in the xz plane, as three corners each.
+fn drawn_triangles(l: &Loaded) -> Vec<[[i32; 3]; 3]> {
+    let level = &l.level;
+    let mut out = Vec::new();
+    for q in &level.quad_blocks {
+        if render::mesh::is_collision_wall(q) {
+            continue;
+        }
+        let is_quad = q.vertex_index[2] != q.vertex_index[3];
+        for face in 0..if is_quad { 4 } else { 3 } {
+            if q.texture_mid[face] == 0 {
+                continue;
+            }
+            let mode = FaceMode::of(q, face);
+            let Some(slots) = face_polygon(face, mode).ok() else {
+                continue;
+            };
+            let at = |s: usize| {
+                let v = level.vertices[q.vertex_index[s] as usize].pos;
+                [v.x as i32, v.y as i32, v.z as i32]
+            };
+            let red = slots
+                .iter()
+                .any(|&s| level.vertices[q.vertex_index[s] as usize].color_hi[..3] == [255, 0, 0]);
+            if red {
+                continue;
+            }
+            out.push([at(slots[0]), at(slots[1]), at(slots[2])]);
+            out.push([at(slots[1]), at(slots[2]), at(slots[3])]);
+        }
+    }
+    out
+}
+
+/// The height of the triangle over (x, z), if it is over it.
+fn height_at(t: &[[i32; 3]; 3], x: i32, z: i32) -> Option<f64> {
+    let [a, b, c] = t.map(|v| [v[0] as f64, v[1] as f64, v[2] as f64]);
+    let (x, z) = (x as f64, z as f64);
+    let d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    if d.abs() < 1e-9 {
+        return None;
+    }
+    let u = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / d;
+    let v = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / d;
+    let w = 1.0 - u - v;
+    let e = -1e-6;
+    (u >= e && v >= e && w >= e).then(|| u * a[1] + v * b[1] + w * c[1])
+}
+
+fn sunk_crates(l: &Loaded, half: i32, height: i32, min: i32) {
+    let triangles = drawn_triangles(l);
+    let mut total = 0;
+    let mut sunk = Vec::new();
+    for (i, d) in l.level.instances.iter().enumerate() {
+        if !d.model_name.starts_with("crate") {
+            continue;
+        }
+        total += 1;
+        let (x, y, z) = (d.pos.x as i32, d.pos.y as i32, d.pos.z as i32);
+        // How far the highest surface in the crate's span over each sample is above its base,
+        // and how far the ground below the center is under it.
+        let (mut worst, mut center, mut below) = (i32::MIN, None, None::<i32>);
+        for (dx, dz) in [
+            (0, 0),
+            (-half, -half),
+            (half, -half),
+            (-half, half),
+            (half, half),
+            (0, -half),
+            (0, half),
+            (-half, 0),
+            (half, 0),
+        ] {
+            let mut top = None::<i32>;
+            for t in &triangles {
+                if let Some(h) = height_at(t, x + dx, z + dz) {
+                    let up = h.round() as i32 - y;
+                    if up > 0 && up < height {
+                        top = Some(top.map_or(up, |t: i32| t.max(up)));
+                    }
+                    if (dx, dz) == (0, 0) && up <= 0 {
+                        below = Some(below.map_or(-up, |b: i32| b.min(-up)));
+                    }
+                }
+            }
+            if let Some(up) = top {
+                worst = worst.max(up);
+                if (dx, dz) == (0, 0) {
+                    center = Some(up);
+                }
+            }
+        }
+        if center.is_some_and(|c| c >= min) {
+            sunk.push((i, d, worst, center, below));
+        }
+    }
+    println!(
+        "level {}: {} crates, {} inside the ground",
+        l.id.0,
+        total,
+        sunk.len()
+    );
+    for (i, d, worst, center, below) in sunk {
+        println!(
+            "  #{i} {:?} pos {} cut by up to {worst} (at the center {}; ground below the center {})",
+            d.model_name,
+            p(d.pos),
+            center.map_or("none".into(), |c| c.to_string()),
+            below.map_or("none".into(), |b| format!("{b} down")),
+        );
+    }
+}
+
 fn pads(l: &Loaded) {
     let blocks = &l.level.quad_blocks;
     for (i, pad) in blocks
@@ -642,6 +760,23 @@ fn run() -> Result<(), String> {
     }
     if matches!(command.as_str(), "portraits" | "weapons") {
         return hud_pictures(&command);
+    }
+    if command == "crates" {
+        let mut args = Args(args);
+        let half = args.option_number("--half")?.unwrap_or(40);
+        let height = args.option_number("--height")?.unwrap_or(96);
+        let min = args.option_number("--min")?.unwrap_or(4);
+        let levels: Vec<LevelId> = match args.0.first().filter(|a| !a.starts_with("--")) {
+            Some(level) => vec![level_id(level)?],
+            None => (0..=17).map(LevelId).collect(),
+        };
+        for id in levels {
+            match load(id) {
+                Ok(l) => sunk_crates(&l, half, height, min),
+                Err(e) => println!("level {}: {e}", id.0),
+            }
+        }
+        return Ok(());
     }
     let mut args = Args(args);
     let level = level_id(&args.positional("LEVEL")?)?;

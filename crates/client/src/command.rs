@@ -49,6 +49,8 @@ pub enum Action {
     DebugViewer,
     /// (Debug) Change how the level is built, or toast how it is (`None`).
     DebugLevel(Option<MeshSetting>),
+    /// (Debug) Set the depth bias of the crates, or toast it (`None`).
+    DebugCrateBias(Option<f32>),
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
     NetInfo,
     /// Set how the drawing eases the karts of the others after a rollback.
@@ -68,6 +70,8 @@ pub enum MeshSetting {
     Cull(bool),
     /// The `color_lo` vertex colors instead of `color_hi`.
     LowColors(bool),
+    /// Draw the crates that the level places in the ground where `props::crate_fixup` puts them.
+    CrateFixup(bool),
 }
 
 /// The first word of `text` and what follows it.
@@ -81,7 +85,7 @@ const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | spectate [add
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors|crate-fixup | crate bias <number>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 
@@ -200,9 +204,9 @@ impl Action {
         }
     }
 
-    /// `hidden on|off`, `cull on|off`, `colors hi|lo`, or nothing.
+    /// `hidden on|off`, `cull on|off`, `colors hi|lo`, `crate-fixup on|off`, or nothing.
     fn level(line: &str) -> Result<Action, String> {
-        const USAGE: &str = "Usage: /debug level hidden on|off | cull on|off | colors hi|lo";
+        const USAGE: &str = "Usage: /debug level hidden on|off | cull on|off | colors hi|lo | crate-fixup on|off";
         let (what, value) = word(line);
         let on_off = || match value {
             "on" => Ok(true),
@@ -213,6 +217,7 @@ impl Action {
             "" => None,
             "hidden" => Some(MeshSetting::Hidden(on_off()?)),
             "cull" => Some(MeshSetting::Cull(on_off()?)),
+            "crate-fixup" => Some(MeshSetting::CrateFixup(on_off()?)),
             "colors" => Some(MeshSetting::LowColors(match value {
                 "hi" => false,
                 "lo" => true,
@@ -261,6 +266,20 @@ impl Action {
             },
             "viewer" => Ok(Action::DebugViewer),
             "level" => Action::level(rest),
+            "crate" => {
+                const USAGE: &str = "Usage: /debug crate bias [number]";
+                let (what, value) = word(rest);
+                match (what, value) {
+                    ("bias", "") => Ok(Action::DebugCrateBias(None)),
+                    ("bias", v) => v
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                        .map(|v| Action::DebugCrateBias(Some(v)))
+                        .ok_or_else(|| USAGE.to_string()),
+                    _ => Err(USAGE.to_string()),
+                }
+            }
             "" => Err(DEBUG_USAGE.into()),
             _ => Err(format!("Unknown command: /debug {sub}\n{DEBUG_USAGE}")),
         }

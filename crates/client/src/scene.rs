@@ -167,10 +167,11 @@ pub(crate) fn switch_mode(
                 let on = |b| if b { "on" } else { "off" };
                 toasts.write(toast::Toast::new(
                     format!(
-                        "Level: hidden {}, cull {}, colors {}",
+                        "Level: hidden {}, cull {}, colors {}, crate fixup {}",
                         on(mesh_options.hidden),
                         on(mesh_options.cull),
                         if mesh_options.low { "lo" } else { "hi" },
+                        on(mesh_options.crate_fixup),
                     ),
                     3000,
                 ));
@@ -201,6 +202,7 @@ pub(crate) fn switch_mode(
                         MeshSetting::Hidden(on) => mesh.hidden = on,
                         MeshSetting::Cull(on) => mesh.cull = on,
                         MeshSetting::LowColors(low) => mesh.low = low,
+                        MeshSetting::CrateFixup(on) => mesh.crate_fixup = on,
                     }
                     "Level rebuilt"
                 }
@@ -376,6 +378,7 @@ pub(crate) fn setup(
     textures: Res<Textures>,
     mut images: ResMut<Assets<Image>>,
     mesh_options: Res<MeshOptions>,
+    crate_bias: Res<crate::CrateBias>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
@@ -497,6 +500,9 @@ pub(crate) fn setup(
         &mut meshes,
         &mut materials,
         &mut subtract_materials,
+        crate_bias.0,
+        track.1,
+        mesh_options.crate_fixup,
     );
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();
