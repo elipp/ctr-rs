@@ -1,18 +1,26 @@
 //! `RB_Snowball_ThTick`: the snowball of Blizzard Bluff and the barrels of Sewer Speedway roll
-//! along a path recorded in the level file, one point a tick, forwards and then backwards.
+//! along a path recorded in the level file, one point a tick, forwards and then backwards. A
+//! barrel rumbles as it rolls; the snowball is silent, as retail looks for the model of another
+//! snowball (`DYNAMIC_SNOWBALL`, where Blizzard Bluff has `TEMP_SNOWBALL`).
 
 use loader::lev::PosRot;
+
+use vehicle::Sound3D;
 
 use crate::{Contact, Context, Damage, Instance, Shape, Tick};
 
 /// `RB_FindDriverCollision`'s radius: a squared distance, 256 units.
 const HIT_RADIUS: u32 = 0x10000;
+/// The barrel's rumble as it rolls.
+const BARREL_SFX: u8 = 0x74;
 
 /// A snowball or a barrel: which of the level's recorded paths it follows (the digit its instance
 /// name ends in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Roller {
     pub path: usize,
+    /// A barrel, not a snowball.
+    pub barrel: bool,
 }
 
 /// The point of the path a roller is at `tick` ticks after it was born: `pointIndex` runs to twice
@@ -42,7 +50,15 @@ impl Instance for Roller {
     fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
         let path = &cx.roll_paths[self.path];
         let frame = frame_index(path.len(), cx.ticks).expect("a path of two points or more");
-        out.contacts.push(contact(&path[frame]));
+        let contact = contact(&path[frame]);
+        if self.barrel {
+            let sound = Sound3D {
+                id: BARREL_SFX,
+                pos: contact.pos,
+            };
+            out.loops.push((cx.instance, sound));
+        }
+        out.contacts.push(contact);
     }
 }
 

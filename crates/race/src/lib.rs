@@ -411,6 +411,8 @@ impl Race {
             .enumerate()
         {
             if let Some(launch) = vehicle::item::shoot_on_circle_press(&mut kart.driver, effects) {
+                let p = kart.driver.pos_curr;
+                let kart_at = [p.x >> 8, p.y >> 8, p.z >> 8];
                 let kind = match launch {
                     vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
                     vehicle::item::Launch::Missile => weapon::Kind::Missile,
@@ -438,7 +440,9 @@ impl Race {
                             &bodies,
                             env.elapsed_time_ms,
                         );
-                        vehicle::item::launch_effects(&kart.driver, launch, effects);
+                        // Heard from the crate or beaker, or the kart if it went off at once.
+                        let at = self.weapons.mines().last().map_or(kart_at, |m| m.pos);
+                        vehicle::item::launch_effects(&kart.driver, launch, at, effects);
                         continue;
                     }
                 };
@@ -448,7 +452,8 @@ impl Race {
                     .weapons
                     .launch(kind, slot, &kart.driver, &bodies, gte, backward)
                 {
-                    vehicle::item::launch_effects(&kart.driver, launch, effects);
+                    let at = self.weapons.projectiles().last().map_or(kart_at, |p| p.pos);
+                    vehicle::item::launch_effects(&kart.driver, launch, at, effects);
                     kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
                 }
             }

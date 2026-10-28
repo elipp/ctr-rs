@@ -67,6 +67,7 @@ mod tests {
             .collect();
         let paths = [path];
         let cx = Context {
+            instance: 0,
             frames: [0; 2],
             ticks: 0,
             position_path: &[],

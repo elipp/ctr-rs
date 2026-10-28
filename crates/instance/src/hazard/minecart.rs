@@ -3,8 +3,8 @@
 //! three carts are spread over the path by the digit their names end in.
 
 use loader::lev::{InstDef, SVec3};
-use vehicle::Matrix;
 use vehicle::rotmat::rot_to_matrix;
+use vehicle::{Matrix, Sound3D};
 
 use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
 
@@ -13,6 +13,8 @@ const FRAMES_BETWEEN_POINTS: i16 = 8;
 const ROT_SPEED: i32 = 0x20;
 /// `RB_FindDriverCollision`'s radius: a squared distance, 256 units.
 const HIT_RADIUS: u32 = 0x10000;
+/// The rumble of a minecart as it rolls.
+const RUMBLE_SFX: u8 = 0x72;
 
 fn s16(v: i32) -> i16 {
     v as i16
@@ -139,7 +141,13 @@ impl Minecart {
 
 impl Instance for Minecart {
     fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
-        out.contacts.push(self.tick(cx.position_path, cx.frames[0]));
+        let contact = self.tick(cx.position_path, cx.frames[0]);
+        let sound = Sound3D {
+            id: RUMBLE_SFX,
+            pos: contact.pos,
+        };
+        out.loops.push((cx.instance, sound));
+        out.contacts.push(contact);
     }
 }
 

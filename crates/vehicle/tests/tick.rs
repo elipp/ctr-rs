@@ -272,6 +272,8 @@ fn effect_line(e: &Effect, d: &Driver) -> String {
         Effect::FireAudio { .. } => String::new(),
         // Nor does it run the emitter or the turbo fire, which keep the loops going.
         Effect::Recycle { .. } => String::new(),
+        // The weapons are not the oracle's.
+        Effect::Sound3D(..) => String::new(),
     }
 }
 

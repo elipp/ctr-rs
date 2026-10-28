@@ -303,6 +303,8 @@ pub enum Effect {
     /// `VehFire_Audio(driver, fireLevel)`: a boost's sound, louder and lower the bigger the boost
     /// (see [`fire::audio`]). Its cooldown (`VehFire_AudioCooldown`) is the listener's.
     FireAudio { fire_level: i32 },
+    /// `PlaySound3D(id, weaponInst)`: a sound of what the kart sent off, heard from it.
+    Sound3D(Sound3D),
     /// `OtherFX_RecycleNew(&driverAudioPtrs[slot], id, flags)`: the kart's loop `slot`
     /// ([`audio_slot`]) plays sound `id` at `volume`, `distort` (0x80 its own pitch) and `pan`
     /// (0x80 the middle), the same sound changed as it plays; `None` stops it.
@@ -314,6 +316,14 @@ pub enum Effect {
         pan: u8,
         echo: bool,
     },
+}
+
+/// `PlaySound3D(id, inst)`: sound effect `id` heard from `pos` (an instance's `matrix.t`, in level
+/// units), louder the nearer the camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sound3D {
+    pub id: u8,
+    pub pos: [i32; 3],
 }
 
 /// The kart's loops (`driverAudioPtrs`), by what plays in them.

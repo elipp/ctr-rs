@@ -6,7 +6,7 @@
 //! place (`MixRNG_Scramble() % 12`), not the item sets by place that retail rolls from.
 
 use crate::fire::{self, turbo_type};
-use crate::{Driver, Effect, actions, kart_state, rain_cloud, stuck};
+use crate::{Driver, Effect, Sound3D, actions, kart_state, rain_cloud, stuck};
 
 /// `HELD_ITEM_*`
 pub mod held {
@@ -215,8 +215,9 @@ const VOICELINE_PRIORITY: u8 = 0x10;
 const RUMBLE_FRAMES: u8 = 8;
 const RUMBLE_FORCE: u8 = 0x7f;
 
-/// What firing a [`Launch`] makes the driver feel and say, once the weapon is away.
-pub fn launch_effects(d: &Driver, launch: Launch, effects: &mut Vec<Effect>) {
+/// What firing a [`Launch`] makes the driver feel and say, once the weapon is away, and the
+/// sound of the weapon, heard from where it is (`at`, in level units).
+pub fn launch_effects(d: &Driver, launch: Launch, at: [i32; 3], effects: &mut Vec<Effect>) {
     // Dropping a mine does not shake the pad.
     if !matches!(launch, Launch::Mine | Launch::Potion) {
         effects.push(Effect::ShockFreq {
@@ -235,10 +236,7 @@ pub fn launch_effects(d: &Driver, launch: Launch, effects: &mut Vec<Effect>) {
         Launch::Missile => (MISSILE_SOUND, MISSILE_VOICELINE),
         Launch::Mine | Launch::Potion => (MINE_SOUND, MINE_VOICELINE),
     };
-    effects.push(Effect::Sound {
-        id,
-        echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
-    });
+    effects.push(Effect::Sound3D(Sound3D { id, pos: at }));
     effects.push(Effect::Voiceline {
         id: voice,
         driver_id: d.driver_id,
