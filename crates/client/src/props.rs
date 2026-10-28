@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use instance::{Objects, Slot};
 use loader::dram::DramFile;
 use loader::lev::Level;
+use loader::level::LevelId;
 use loader::model::{Model, ModelHeader};
 use loader::vram::Vram;
 use race::rollback::Rollback;
@@ -222,12 +223,100 @@ pub fn spin_fruit(
     }
 }
 
-/// Constant depth bias (see `DEPTH_BIAS_PER_ORDER`) that keeps a crate in front of the ground it sinks into.
-const CRATE_DEPTH_BIAS: f32 = 4_000_000.0;
+/// How far to raise instance `n` of a level, in level units, when the level places a crate inside
+/// the ground (see DIVERGENCE.md). Only what is drawn moves; the sim keeps the crate where the
+/// level has it.
+///
+/// Each is how far the drawn ground is above the crate's base at its center (`ctr-query crates`)
+/// plus 15, which is how high the level puts its other crates. Crates the ground only cuts at a
+/// corner, on a slope, are left to `CrateBias`.
+fn crate_fixup(level: LevelId, n: usize) -> i16 {
+    match (level.0, n) {
+        // Dingo Canyon.
+        (0, 33) => 38,
+        (0, 37 | 47) => 26,
+        // Dragon Mines.
+        (1, 7) => 23,
+        // Blizzard Bluff: the weapon crates over quad blocks 881 and 882 (ids 878 and 877) sit at
+        // 339 in ground at 360.
+        (2, 23..=26) => 36,
+        (2, 36) => 34,
+        // Crash Cove.
+        (3, 11) => 23,
+        (3, 12) => 25,
+        // Tiger Temple.
+        (4, 6) => 24,
+        (4, 7) => 27,
+        // Papu's Pyramid.
+        (5, 15) => 24,
+        (5, 16) => 25,
+        // Roo's Tubes.
+        (6, 29) => 23,
+        (6, 31) => 32,
+        // Sewer Speedway.
+        (8, 27) => 28,
+        // Mystery Caves.
+        (9, 8) => 29,
+        (9, 9) => 27,
+        (9, 13 | 14) => 23,
+        (9, 15) => 42,
+        // Polar Pass.
+        (12, 10) => 32,
+        // Oxide Station.
+        (13, 7) => 24,
+        (13, 24) => 26,
+        // Tiny Arena.
+        (15, 7) => 31,
+        (15, 28 | 31) => 23,
+        _ => 0,
+    }
+}
 
 /// A placed crate (its index among `Objects::crates`).
 #[derive(Component)]
 pub struct CrateBody(pub usize);
+
+/// `/debug crate bias`: sets the depth bias of every crate's materials, and what the next level gets.
+pub(crate) fn set_crate_bias(
+    mut actions: MessageReader<crate::command::Action>,
+    mut bias: ResMut<crate::CrateBias>,
+    bodies: Query<&Children, With<CrateBody>>,
+    parts: Query<&MeshMaterial3d<StandardMaterial>>,
+    subtract_parts: Query<&MeshMaterial3d<crate::SubtractMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut subtract_materials: ResMut<Assets<crate::SubtractMaterial>>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+) {
+    for action in actions.read() {
+        let crate::command::Action::DebugCrateBias(value) = action else {
+            continue;
+        };
+        let Some(value) = *value else {
+            toasts.write(crate::toast::Toast::new(
+                format!("Crate depth bias: {}", bias.0),
+                3000,
+            ));
+            continue;
+        };
+        bias.0 = value;
+        for child in bodies.iter().flat_map(|c| c.iter()) {
+            if let Ok(m) = parts.get(child)
+                && let Some(mut m) = materials.get_mut(&m.0)
+            {
+                m.depth_bias = value;
+            }
+            if let Ok(m) = subtract_parts.get(child)
+                && let Some(mut m) = subtract_materials.get_mut(&m.0)
+            {
+                m.base.depth_bias = value;
+            }
+        }
+        toasts.write(crate::toast::Toast::new(
+            format!("Crate depth bias set to {value}"),
+            2000,
+        ));
+    }
+}
 
 /// Sizes the crates as the sim says: gone when hit, growing back after a while.
 pub fn pose_crates(
@@ -354,6 +443,9 @@ pub fn spawn(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
+    crate_bias: f32,
+    level_id: LevelId,
+    fix_crates: bool,
 ) {
     // Which object of which kind moves an instance.
     let by_instance: HashMap<usize, Slot> = objects.slots().collect();
@@ -484,10 +576,18 @@ pub fn spawn(
                 )),
             ),
             // A crate's model hangs off a body that shrinks when it is hit and grows back.
-            Some(&Slot::Crate(i)) => (
-                Transform::default(),
-                Some(body(commands, transform, CrateBody(i))),
-            ),
+            Some(&Slot::Crate(i)) => {
+                let mut pos = inst.pos;
+                if fix_crates {
+                    pos.y += crate_fixup(level_id, n);
+                }
+                let fixed = Transform::from_translation(Vec3::from(to_world(pos)))
+                    .with_rotation(rotation);
+                (
+                    Transform::default(),
+                    Some(body(commands, fixed, CrateBody(i))),
+                )
+            }
             // What the sim moves or animates hangs off a body that is placed each tick.
             Some(&slot) if objects.pose(slot).is_some() => {
                 let parent = body(commands, transform, HazardBody(hazards.0.len()));
@@ -543,7 +643,7 @@ pub fn spawn(
         let crate_base;
         let base = if matches!(by_instance.get(&n), Some(Slot::Crate(_))) {
             crate_base = StandardMaterial {
-                depth_bias: CRATE_DEPTH_BIAS,
+                depth_bias: crate_bias,
                 ..base.clone()
             };
             &crate_base

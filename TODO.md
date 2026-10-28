@@ -4,13 +4,12 @@
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
-- The crate depth bias is too much for Papy's Pyramid
 - the hazards' `ThCollide` (`RB_Seal_ThCollide`, `RB_Spider_ThCollide`: they let the thread-bucket collisions of weapons through)
-- Spectate only mode
 - submerged in the mud in tiny arena looks off
 - While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled elsewhere.
 - Skyboxes have a hole in the top mid (probably a clear color issue?)
-
+- Weather effects
+- Grass/possibly other particle effects
 
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
@@ -60,7 +59,6 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 
 ## Maybe
 
-- Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
 - **A dropped red beaker did not exist on the tick after the throw.** The test
   `a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it` (`crates/race/tests/weapons.rs`)
   waited for the potion with `while mines().first().is_some_and(|m| m.state != Ground)`, which
