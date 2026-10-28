@@ -26,6 +26,10 @@ use crate::toast::Toast;
 pub enum Action {
     CreateLobby,
     JoinLobby(Ticket),
+    /// Join a lobby to watch its races, not to drive in them.
+    SpectateLobby(Ticket),
+    /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
+    ToggleSpectator,
     CloseLobby,
     /// Delete the maps other players sent us (`maps::purge`).
     PurgeCache,
@@ -73,7 +77,7 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
-const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
+const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
@@ -121,6 +125,11 @@ impl Action {
             "join" => rest
                 .parse()
                 .map(Action::JoinLobby)
+                .map_err(|e| format!("Not a lobby address: {e}")),
+            "spectate" if rest.is_empty() => Ok(Action::ToggleSpectator),
+            "spectate" => rest
+                .parse()
+                .map(Action::SpectateLobby)
                 .map_err(|e| format!("Not a lobby address: {e}")),
             "close" => Ok(Action::CloseLobby),
             "" => Err(LOBBY_USAGE.into()),

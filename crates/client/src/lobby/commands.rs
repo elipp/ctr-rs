@@ -33,9 +33,13 @@ pub(super) fn copy_to_clipboard(text: String) {
 /// Why `action` cannot be done now, if it cannot.
 pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
     Some(match action {
-        Action::CreateLobby | Action::JoinLobby(_) if lobby.is_open() => {
+        Action::CreateLobby | Action::JoinLobby(_) | Action::SpectateLobby(_) if lobby.is_open() => {
             "Close the lobby first (/lobby close)"
         }
+        Action::ToggleSpectator if !lobby.is_open() || !lobby.joined => {
+            "Only a guest of a lobby can do that (the host drives)"
+        }
+        Action::ToggleSpectator if lobby.online.is_some() => "Not during a race",
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::PurgeCache if lobby.online.is_some() => "Not during a race",
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
@@ -81,6 +85,17 @@ pub(super) fn run(
             Action::JoinLobby(ticket) => {
                 lobby.join(ticket.clone(), drive.character as u8, &config.nickname);
                 "Joining lobby..."
+            }
+            Action::SpectateLobby(ticket) => {
+                lobby.spectate(ticket.clone(), &config.nickname);
+                "Joining lobby to watch..."
+            }
+            Action::ToggleSpectator => {
+                if lobby.toggle_spectator() {
+                    "You will watch the next race"
+                } else {
+                    "You will drive in the next race"
+                }
             }
             Action::CloseLobby => {
                 lobby.close();

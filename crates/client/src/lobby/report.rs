@@ -44,7 +44,7 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
                 );
             }
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
-            Event::Lobby { players, you } => roster = Some((players, you)),
+            Event::Lobby { players, spectators, you } => roster = Some((players, spectators, you)),
             Event::Announce(text) => {
                 toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
@@ -109,7 +109,7 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
                     desync: Vec::new(),
                     won: false,
                     gone: vec![false; characters_len],
-                    watching: slot,
+                    watching: if slot < characters_len { slot } else { 0 },
                     asked: Vec::new(),
                     frozen: vec![false; characters_len],
                     lefts: Vec::new(),
@@ -209,13 +209,21 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
         lobby.close();
         return;
     }
-    if let Some((players, you)) = roster {
-        let labels = net::display_names(
+    if let Some((players, spectators, you)) = roster {
+        // The names are told apart among everyone in the lobby, those who only watch too.
+        let mut labels = net::display_names(
             &players
                 .iter()
+                .chain(&spectators)
                 .map(|p| (p.id, p.nick.as_str()))
                 .collect::<Vec<_>>(),
         );
+        let watching = labels.split_off(players.len());
+        lobby.watchers = spectators
+            .iter()
+            .zip(watching)
+            .map(|(p, label)| (label, p.id.fmt_short().to_string()))
+            .collect();
         let members: Vec<Member> = players
             .iter()
             .zip(labels)
@@ -226,7 +234,7 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
                 character: p.character,
             })
             .collect();
-        for p in &players {
+        for p in players.iter().chain(&spectators) {
             lobby.nicks.insert(p.id, p.nick.clone());
         }
         // A guest that has just joined meets the lobby as it is, which is not news.
