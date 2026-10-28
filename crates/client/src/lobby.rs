@@ -891,13 +891,13 @@ fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
     }
 }
 
-/// Whether a toast shows each rollback (`/net rollbacks on|off`).
+/// Whether a toast shows each rollback (`/net rollbacks on|off`); off to start with.
 #[derive(Resource)]
 pub struct RollbackToasts(bool);
 
 impl Default for RollbackToasts {
     fn default() -> RollbackToasts {
-        RollbackToasts(true)
+        RollbackToasts(false)
     }
 }
 

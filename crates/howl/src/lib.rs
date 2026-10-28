@@ -101,6 +101,8 @@ pub struct Howl {
     pub(crate) state: Option<state::State>,
     /// `desiredXA_RaceEndIndex`: the jingle of the race's end.
     pub(crate) race_end_xa: u16,
+    /// `desiredXA_RaceIntroIndex`: the jingle of the next fly-in, 0 to 3, one after the other.
+    pub(crate) race_intro_xa: u16,
     /// The tracks of XA (`XA/ENG.XNF`), and what of them plays.
     pub(crate) xnf: Xnf,
     pub(crate) xa: xa::Xa,
@@ -135,6 +137,7 @@ impl Howl {
             reverb: REVERBS.len() as u16,
             state: None,
             race_end_xa: 0,
+            race_intro_xa: 0,
             xnf: Xnf::default(),
             xa: xa::Xa::default(),
             until_vsync: 0,
