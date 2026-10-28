@@ -94,6 +94,11 @@ const MASK_GRAB_SCALE_FULL_TIME: i16 = 721;
 /// and Penta. The rest get Uka Uka.
 const GOOD_GUYS: [u8; 5] = [0, 3, 6, 7, 13];
 
+/// `VehPickupItem_MaskBoolGoodGuy`: Aku Aku looks after `character`, not Uka Uka.
+pub fn good_guy(character: u8) -> bool {
+    GOOD_GUYS.contains(&character)
+}
+
 const REV_MASK_GRAB_HEIGHT_TRIGGER: i32 = 0x1000;
 const REV_MASK_RELEASE_HEIGHT: i32 = 0x4000;
 const REV_MASK_DESCENT_STEP: i32 = 0x200;
@@ -231,7 +236,7 @@ fn use_mask(d: &mut Driver) {
             mask.fading = false;
         }
         None => {
-            let good_guy = GOOD_GUYS.contains(&d.character);
+            let good_guy = good_guy(d.character);
             d.mask = Some(MaskHead {
                 duration,
                 scale: MASK_SCALE_NORMAL,
