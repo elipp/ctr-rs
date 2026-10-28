@@ -909,7 +909,7 @@ fn drive_tick(
         .map(|kart| pose_of(&kart.driver).translation)
         .collect();
     let ear = drive.current_view.transform();
-    sfx.tick(tick, &sim.race, &ticks, sim.own, &places, &ear);
+    sfx.tick(tick, &sim.race, &track.0, &ticks, sim.own, &places, &ear);
 }
 
 /// The debug commands that change our kart: `/debug set weapon <N>` drops what we hold and rolls

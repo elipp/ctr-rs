@@ -14,8 +14,8 @@ pub mod pickup;
 use loader::dram::DramFile;
 use loader::lev::{InstDef, Level, PosRot, SVec3};
 use loader::model::Model;
-use vehicle::Driver;
 use vehicle::search::Instances;
+use vehicle::{Driver, Sound3D};
 
 use hazard::armadillo::Armadillo;
 use hazard::drum::Drum;
@@ -93,6 +93,8 @@ pub trait Instance {
 /// What a thread of an object can see besides itself.
 #[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
+    /// The instance of the level that the object moves (an index into `Level::instances`).
+    pub instance: usize,
     /// The frames of the first two animations of the object's model (`INSTANCE_GetNumAnimFrames`).
     pub frames: [i32; 2],
     /// The ticks run: `gGT->timer`.
@@ -127,6 +129,11 @@ pub struct Tick {
     pub contacts: Vec<Contact>,
     /// The sparks the fireballs left.
     pub sparks: Vec<Spark>,
+    /// The sounds the objects played (`PlaySound3D`).
+    pub sounds: Vec<Sound3D>,
+    /// The loops the objects keep going (`PlaySound3D_Flags`), by the instance that plays each:
+    /// a loop is in every tick it plays.
+    pub loops: Vec<(usize, Sound3D)>,
 }
 
 /// All the objects of a level.
@@ -192,6 +199,7 @@ fn each<T: Instance>(
             instance: placed.instance,
             object: &mut placed.sim,
             cx: Context {
+                instance: placed.instance,
                 frames: placed.frames,
                 ..*cx
             },
@@ -298,9 +306,10 @@ impl Objects {
                     if let Some(path) = digit(def)
                         .filter(|&p| level.paths.get(p).is_some_and(|path| path.len() > 1))
                     {
+                        let barrel = def.model_name == "barrel";
                         objects.rollers.push(Placed {
                             instance,
-                            sim: Roller { path },
+                            sim: Roller { path, barrel },
                             frames: [0; 2],
                         });
                     }
@@ -334,6 +343,7 @@ impl Objects {
             ticks,
         } = self;
         let cx = Context {
+            instance: 0,
             frames: [0; 2],
             ticks: *ticks,
             position_path,

@@ -2,7 +2,7 @@
 //! and rolls back, over and over.
 
 use loader::lev::{InstDef, SVec3};
-use vehicle::Matrix;
+use vehicle::{Matrix, Sound3D};
 
 use crate::{Contact, Context, Damage, Instance, Shape, Tick, interpolate};
 use vehicle::rotmat::rot_to_matrix;
@@ -18,6 +18,8 @@ const FULL_TURN: i16 = 0x1000;
 /// `RB_CheckHazardCollisions(armInst, t, 1, 0x2400, 0x71)`: a squared distance of 96 units.
 const HIT_RADIUS: u32 = 0x2400;
 const HIT_SOUND: i32 = 0x71;
+/// The squeak of an armadillo turning back.
+const TURN_SFX: u8 = 0x70;
 
 /// The model's animations (`INSTANCE_GetNumAnimFrames`).
 pub mod anim {
@@ -149,7 +151,15 @@ impl Armadillo {
 
 impl Instance for Armadillo {
     fn th_tick(&mut self, cx: &Context, out: &mut Tick) {
+        let vel = self.vel;
         out.contacts.extend(self.tick(cx.frames));
+        // It squeaks as it turns back.
+        if self.vel != vel {
+            out.sounds.push(Sound3D {
+                id: TURN_SFX,
+                pos: self.pos,
+            });
+        }
     }
 }
 
@@ -158,6 +168,35 @@ mod tests {
     use super::*;
 
     const FRAMES: [i32; 2] = [32, 10];
+
+    #[test]
+    fn it_squeaks_as_it_turns_back() {
+        let level = [];
+        let cx = Context {
+            instance: 3,
+            frames: FRAMES,
+            ticks: 0,
+            position_path: &level,
+            roll_paths: &[],
+        };
+        let mut a = Armadillo::new(&def(0x400), 0);
+        let vel = a.vel;
+        let mut out = Tick::default();
+        let mut ticks = 0;
+        while out.sounds.is_empty() {
+            a.th_tick(&cx, &mut out);
+            ticks += 1;
+            assert!(ticks < 1000);
+        }
+        assert_eq!(a.vel, vel.map(|v| -v));
+        assert_eq!(
+            out.sounds,
+            [Sound3D {
+                id: TURN_SFX,
+                pos: a.pos
+            }]
+        );
+    }
 
     fn def(yaw: i16) -> InstDef {
         InstDef {

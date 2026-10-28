@@ -14,22 +14,40 @@
 //! its tick keeps going ([`Effect::Recycle`]); retail gives the AIs none, and the other karts
 //! have none here either.
 
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source};
 use bevy::prelude::*;
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
+use loader::lev::Level;
 use race::{KartTick, Light, Race};
 use render::mesh::SCALE;
 use vehicle::calc::map_to_range;
 use vehicle::engine_sound::{EngineSound, EngineVoice, FarVoice};
 use vehicle::stats::CHARACTER_ENGINES;
-use vehicle::{Driver, Effect, actions, audio_slot, fire};
+use vehicle::{Driver, Effect, Sound3D, actions, audio_slot, fire};
+use weapon::mine::MineKind;
 
 /// `DotLights_AudioAndVideo`: a red light comes on, and the green.
 const RED_LIGHT_SFX: u16 = 0x45;
 const GREEN_LIGHT_SFX: u16 = 0x46;
+/// `RB_CrateWeapon_ThCollide`: the item roulette spins.
+const ROULETTE_SFX: u16 = 0x5d;
+/// A crate breaks; a wumpa fruit of the level is picked up.
+const CRATE_BREAK_SFX: u8 = 0x3c;
+const FRUIT_SFX: u8 = 0x43;
+/// `RB_MovingExplosive_Explode`: a bomb goes off; a missile or a shot shield.
+const BOMB_EXPLODE_SFX: u8 = 0x49;
+const MISSILE_EXPLODE_SFX: u8 = 0x4c;
+/// `RB_GenericMine_ThDestroy` and the like: a TNT crate goes off; a Nitro crate or a beaker shatters.
+const TNT_EXPLODE_SFX: u8 = 0x3d;
+const SHATTER_SFX: u8 = 0x3f;
+/// `RB_MovingExplosive_ThTick`: a bomb rolls, a missile flies, a shot shield rolls.
+const BOMB_ROLL_SFX: u8 = 0x48;
+const MISSILE_FLY_SFX: u8 = 0x4b;
+const SHIELD_ROLL_SFX: u8 = 0x59;
 /// `PLAYLEVEL_FINAL_LAP_SOUND`: the leading player starts a lap (or finishes the last).
 const LAP_SFX: u16 = 0x66;
 /// `Audio_Update1`: the player finishes first.
@@ -179,6 +197,14 @@ struct Kept {
     loops: [Option<Sound>; 4],
     /// By slot: `VehFire_AudioCooldown`, in milliseconds.
     boost_cooldowns: Vec<i16>,
+    /// The loops of the level's objects (by instance) and of the weapons in flight (by id).
+    object_loops: HashMap<usize, Option<Sound>>,
+    weapon_loops: HashMap<u32, Option<Sound>>,
+    /// The breaks of each crate, and whether each fruit is gone, as last heard.
+    crate_breaks: Vec<u32>,
+    fruit_taken: Vec<bool>,
+    /// `ROLLING_ITEM`: our item roulette spins, and with it its sound.
+    rolling: bool,
     /// The last tick heard: a race that starts again starts everything again.
     tick: u32,
 }
@@ -191,8 +217,9 @@ pub struct Sfx<'w> {
 }
 
 impl Sfx<'_> {
-    /// What tick `tick` of `race` asks to be heard: the traffic light that came on, the engines,
-    /// each kart's sounds (`karts`, by slot), our kart's loops, and our laps. Ours (`own`) play
+    /// What tick `tick` of `race` (on `level`) asks to be heard: the traffic light that came on,
+    /// the engines, each kart's sounds (`karts`, by slot), our kart's loops, our
+    /// laps and item roulette, and the sounds of the objects and the weapons. Ours (`own`) play
     /// in the middle, the others' are heard from where they are (`places`, in world space, by
     /// slot) by the camera `ear`. A race that starts again first stops every sound.
     #[allow(clippy::too_many_arguments)]
@@ -200,6 +227,7 @@ impl Sfx<'_> {
         &mut self,
         tick: u32,
         race: &Race,
+        level: &Level,
         karts: &[KartTick],
         own: usize,
         places: &[Vec3],
@@ -245,8 +273,13 @@ impl Sfx<'_> {
                 places.get(slot).and_then(|&at| heard(ear, at))
             };
             for effect in &kart.effects {
-                // The loops are ours alone.
+                // The loops are ours alone, and what a kart sends off is heard from where it is.
                 match *effect {
+                    Effect::Sound3D(sound) => {
+                        let echo = driver.actions_flag_set & actions::ENGINE_ECHO != 0;
+                        play_3d(&mut sounds, ear, &sound, echo);
+                        continue;
+                    }
                     Effect::Recycle {
                         slot: loop_slot,
                         id,
@@ -311,7 +344,159 @@ impl Sfx<'_> {
                 sounds.play(WIN_SFX, AntiSpam::Off, howl::Sfx::FULL);
             }
         }
+
+        // The item roulette spins from a weapon crate's break until the item is picked
+        // (`RB_CrateWeapon_ThCollide`, `UI_RenderFrame_Racing`).
+        let rolling = ours.item_roll_timer != 0;
+        if rolling && !kept.rolling {
+            sounds.play(ROULETTE_SFX, AntiSpam::Off, howl::Sfx::FULL);
+        } else if !rolling && kept.rolling {
+            sounds.stop_id(ROULETTE_SFX);
+        }
+        kept.rolling = rolling;
+
+        // The objects and the weapons are heard from the camera, as the echo of our kart.
+        let echo = ours.actions_flag_set & actions::ENGINE_ECHO != 0;
+        objects(&mut sounds, kept, race, level, ear, echo);
     }
+}
+
+/// The sounds of the level's objects and of the weapons in flight, heard by the camera `ear`.
+fn objects(
+    sounds: &mut Howl,
+    kept: &mut Kept,
+    race: &Race,
+    level: &Level,
+    ear: &Transform,
+    echo: bool,
+) {
+    let place = |instance: usize| {
+        let pos = level.instances[instance].pos;
+        [pos.x as i32, pos.y as i32, pos.z as i32]
+    };
+
+    // A crate breaks (`RB_Crate*_ThCollide`), and a fruit is picked up (`RB_Fruit_LInC`). What
+    // was broken or taken before a new race or level is not heard.
+    let crates = &race.objects.crates;
+    if kept.crate_breaks.len() != crates.len() {
+        kept.crate_breaks = crates.iter().map(|c| c.sim.breaks).collect();
+    }
+    for (placed, heard) in crates.iter().zip(&mut kept.crate_breaks) {
+        if placed.sim.breaks != *heard {
+            *heard = placed.sim.breaks;
+            let sound = Sound3D {
+                id: CRATE_BREAK_SFX,
+                pos: place(placed.instance),
+            };
+            play_3d(sounds, ear, &sound, echo);
+        }
+    }
+    let fruit = &race.objects.fruit;
+    if kept.fruit_taken.len() != fruit.len() {
+        kept.fruit_taken = fruit.iter().map(|f| f.sim.collected).collect();
+    }
+    for (placed, heard) in fruit.iter().zip(&mut kept.fruit_taken) {
+        if placed.sim.collected && !*heard {
+            let sound = Sound3D {
+                id: FRUIT_SFX,
+                pos: place(placed.instance),
+            };
+            play_3d(sounds, ear, &sound, echo);
+        }
+        *heard = placed.sim.collected;
+    }
+
+    // What the objects and the weapons played, and how the weapons went off.
+    let weapons = &race.last_weapons;
+    let explosions = weapons.explosions.iter().map(|e| Sound3D {
+        id: match e.kind {
+            weapon::Kind::Bomb => BOMB_EXPLODE_SFX,
+            weapon::Kind::Missile | weapon::Kind::Shield => MISSILE_EXPLODE_SFX,
+        },
+        pos: e.pos,
+    });
+    let detonations = weapons.detonations.iter().map(|d| Sound3D {
+        id: match d.kind {
+            MineKind::Tnt => TNT_EXPLODE_SFX,
+            MineKind::Nitro | MineKind::GreenBeaker | MineKind::RedBeaker => SHATTER_SFX,
+        },
+        pos: d.pos,
+    });
+    let played = race.last.sounds.iter().chain(&weapons.sounds).copied();
+    for sound in played.chain(explosions).chain(detonations) {
+        play_3d(sounds, ear, &sound, echo);
+    }
+
+    // The loops: the objects' each tick they send one, the weapons' while they fly.
+    let objects = race.last.loops.iter().copied();
+    keep_loops(sounds, &mut kept.object_loops, objects, ear, echo);
+    let flying = race.weapons.projectiles().iter().map(|p| {
+        let id = match p.kind {
+            weapon::Kind::Bomb => BOMB_ROLL_SFX,
+            weapon::Kind::Missile => MISSILE_FLY_SFX,
+            weapon::Kind::Shield => SHIELD_ROLL_SFX,
+        };
+        (p.id, Sound3D { id, pos: p.pos })
+    });
+    keep_loops(sounds, &mut kept.weapon_loops, flying, ear, echo);
+}
+
+/// `PlaySound3D`: `sound` heard by the camera `ear` from where it is, if it is near enough.
+fn play_3d(sounds: &mut Howl, ear: &Transform, sound: &Sound3D, echo: bool) {
+    if let Some((volume, pan)) = heard(ear, level_at(sound.pos)) {
+        let sfx = howl::Sfx {
+            volume,
+            distort: NO_DISTORTION,
+            pan,
+            echo,
+        };
+        sounds.play(sound.id as u16, AntiSpam::CutRecent, sfx);
+    }
+}
+
+/// `PlaySound3D_Flags` for each of `wanted`, by its owner: the owner's loop plays its sound, heard
+/// by the camera `ear` from where it is. Out of hearing a loop goes on as it was, and the loop of
+/// an owner with none this tick stops.
+fn keep_loops<K: Copy + Eq + std::hash::Hash>(
+    sounds: &mut Howl,
+    loops: &mut HashMap<K, Option<Sound>>,
+    wanted: impl Iterator<Item = (K, Sound3D)>,
+    ear: &Transform,
+    echo: bool,
+) {
+    let mut seen = Vec::new();
+    for (owner, sound) in wanted {
+        seen.push(owner);
+        let playing = loops.entry(owner).or_default();
+        if let Some(old) = *playing
+            && old.id() != sound.id as u16
+        {
+            sounds.stop(old);
+            *playing = None;
+        }
+        let Some((volume, pan)) = heard(ear, level_at(sound.pos)) else {
+            continue;
+        };
+        let sfx = howl::Sfx {
+            volume,
+            distort: NO_DISTORTION,
+            pan,
+            echo,
+        };
+        sounds.recycle(playing, Some(sound.id as u16), sfx);
+    }
+    loops.retain(|owner, playing| {
+        let kept = seen.contains(owner);
+        if !kept {
+            sounds.recycle_mute(playing);
+        }
+        kept
+    });
+}
+
+/// A place in level units, in world space.
+fn level_at([x, y, z]: [i32; 3]) -> Vec3 {
+    Vec3::new(x as f32, y as f32, z as f32) * SCALE
 }
 
 /// The engines after a tick: ours (`own`) as `EngineSound_Player` hears it, and the two other
@@ -437,6 +622,66 @@ mod tests {
         // 45 degrees behind the right is heard as 45 degrees in front of it.
         assert_eq!(pan(135.0), pan(45.0));
         assert_eq!(pan(180.0), CENTRE);
+    }
+
+    /// A sound engine whose sound effects all loop.
+    fn looping() -> Howl {
+        let fx = loader::howl::OtherFx {
+            flags: loader::howl::other_fx_flags::LOOPS,
+            volume: 255,
+            pitch: 0x1000,
+            sample: 0,
+            duration: 0,
+        };
+        let samples = vec![Some(vec![0u8; 64].into_boxed_slice())];
+        Howl::new(vec![fx; 0x80], Vec::new(), samples)
+    }
+
+    #[test]
+    fn an_owners_loop_plays_while_it_is_sent_and_stops_after() {
+        let mut sounds = looping();
+        let mut loops = HashMap::new();
+        let near = Sound3D {
+            id: 0x72,
+            pos: [0, 0, -1000],
+        };
+        keep_loops(
+            &mut sounds,
+            &mut loops,
+            [(7, near)].into_iter(),
+            &ear(),
+            false,
+        );
+        let playing = loops[&7].unwrap();
+        // Sent again, it plays on, changed.
+        let nearer = Sound3D {
+            pos: [0, 0, -500],
+            ..near
+        };
+        keep_loops(
+            &mut sounds,
+            &mut loops,
+            [(7, nearer)].into_iter(),
+            &ear(),
+            false,
+        );
+        assert_eq!(loops[&7], Some(playing));
+        // Out of hearing it is left as it was; a new one does not start there.
+        let far = Sound3D {
+            pos: [0, 0, -20_000],
+            ..near
+        };
+        keep_loops(
+            &mut sounds,
+            &mut loops,
+            [(7, far), (8, far)].into_iter(),
+            &ear(),
+            false,
+        );
+        assert_eq!((loops[&7], loops[&8]), (Some(playing), None));
+        // Not sent, it stops.
+        keep_loops(&mut sounds, &mut loops, std::iter::empty(), &ear(), false);
+        assert!(loops.is_empty());
     }
 
     #[test]
