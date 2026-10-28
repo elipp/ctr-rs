@@ -71,7 +71,7 @@ impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "minimap.wgsl");
         app.add_plugins(UiMaterialPlugin::<MapMaterial>::default())
-            .add_systems(Update, (build, show).chain());
+            .add_systems(Update, (build, show).chain().run_if(crate::drive::driving));
     }
 }
 

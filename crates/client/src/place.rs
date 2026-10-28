@@ -76,7 +76,7 @@ pub struct PlacePlugin;
 
 impl Plugin for PlacePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, show);
+        app.add_systems(Update, show.run_if(crate::drive::driving));
     }
 }
 

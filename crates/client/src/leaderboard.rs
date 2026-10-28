@@ -70,7 +70,7 @@ pub struct LeaderboardPlugin;
 
 impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, order).chain());
+        app.add_systems(Update, (build, order).chain().run_if(crate::drive::driving));
     }
 }
 

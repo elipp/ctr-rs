@@ -1,22 +1,12 @@
-//! Fly-through viewer for a track's geometry (textured).
+//! The client: the race on the keyboard, see `drive.rs`, and, with `/debug viewer`, a fly-through
+//! viewer for a track's geometry (textured). There are no command line options: the level is 0
+//! and the racer the one driven last time (`config.rs`), and `]` / Page Up and `[` / Page Down
+//! switch to the next and the previous level, `.` and `,` to the next and the previous racer. The
+//! disc image is `CTR_BIN` or `assets/ctr-u.bin`.
 //!
-//! `view [LEVEL_ID] [--lo] [--racer N | --no-racer]` — level id as in
-//! `loader::level::LevelId` (default 0); `--racer N` puts racer model N (0 Crash,
-//! 1 Cortex, ... as `GAME_CHARACTER_IDS`; default 0) at the first starting grid slot;
-//! `--lo` shows the `color_lo` vertex colours; `--no-cull` draws the level's back faces, which the game does not; `--show-hidden` keeps the
-//! blocks without textures and the faces with a pure red corner, which are hidden by default. The disc image is `CTR_BIN`
-//! or `assets/ctr-u.bin`.
-//!
-//! A collision probe from the camera is drawn and described on screen; see
-//! `probe.rs` for its keys.
-//!
-//! Controls: hold the right mouse button to look, WASD to move, Space/Shift
-//! up/down, Ctrl to go fast, mouse wheel to change the base speed.
-//!
-//! `--drive` drives the racer instead, see `drive.rs`.
-//!
-//! `]` / Page Up and `[` / Page Down switch to the next and the previous level; `.` and `,` to the
-//! next and the previous racer.
+//! The viewer: a collision probe from the camera is drawn and described on screen; see
+//! `probe.rs` for its keys. Hold the right mouse button to look, WASD to move, Space/Shift
+//! up/down, Ctrl to go fast.
 
 // Bevy systems take their parameters and `Query` filters as types, so both lints fire on them.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -96,9 +86,8 @@ struct LevelData {
 
 /// What a racer is made of: everything that comes from the character's own files. It can be
 /// loaded again without the level.
-#[derive(Default)]
 struct Character {
-    racer: Option<Model>,
+    racer: Model,
     /// The icons of the racer's wheel sprites (`tireAnim`); none for Oxide, who has no wheels.
     wheel_icons: Vec<Icon>,
     /// Global icons 0 and 1 of the racer's pack (`shadow1`, `shadow2`).
@@ -228,12 +217,8 @@ fn upload_shared(vram: &mut Vram, big: &loader::bigfile::BigFile, disc: &mut loa
     }
 }
 
-/// A racer from the disc: its model, and what its pack has of the kart's. Nothing for `None`
-/// (no racer).
-fn load_character(character: Option<u32>) -> Character {
-    let Some(character) = character else {
-        return Character::default();
-    };
+/// A racer from the disc: its model, and what its pack has of the kart's.
+fn load_character(character: u32) -> Character {
     let path = bigfile_path();
     let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let file = big
@@ -262,7 +247,7 @@ fn load_character(character: Option<u32>) -> Character {
         smoke_icon: group(1).and_then(|g| g.icons.first().cloned()),
         tiremark_icon: global(skid::TIREMARK_ICON),
         flame_models: flame::models(&pack).expect("racer pack has the turbo models"),
-        racer: Some(racer),
+        racer,
     }
 }
 
@@ -311,7 +296,7 @@ pub(crate) struct Textures {
 
 /// The racer model shown on the grid.
 #[derive(Resource)]
-struct Racer(Option<Model>);
+struct Racer(Model);
 
 #[derive(Resource)]
 struct WheelIcons(Vec<Icon>);
@@ -328,15 +313,25 @@ struct TiremarkIcon(Option<Icon>);
 #[derive(Resource)]
 struct FlameModels(Vec<Model>);
 
-#[derive(Resource)]
-struct LowColors(bool);
-
-/// The viewer's switches that are not about the data: `--show-hidden` and `--no-cull`.
-#[derive(Resource)]
-struct ShowHidden {
-    show_hidden: bool,
-    /// Whether the level's back faces are culled, as the game does.
+/// How the level's mesh is built (`/debug level`).
+#[derive(Resource, Clone, Copy)]
+struct MeshOptions {
+    /// Keep the blocks without textures and the faces with a pure red corner.
+    hidden: bool,
+    /// Cull the level's back faces, as the game does.
     cull: bool,
+    /// The `color_lo` vertex colors instead of `color_hi`.
+    low: bool,
+}
+
+impl Default for MeshOptions {
+    fn default() -> Self {
+        MeshOptions {
+            hidden: false,
+            cull: true,
+            low: false,
+        }
+    }
 }
 
 /// The racers in `GAME_CHARACTER_IDS` order.
@@ -359,11 +354,12 @@ const CHARACTERS: [&str; 16] = [
     "Oxide",
 ];
 
-/// What the command line asked for, to load the next level the same way.
+/// What to load the next level with.
 #[derive(Resource, Clone, Copy)]
 struct Options {
-    /// The character of the racer on the grid, none for `--no-racer`.
-    racer: Option<u32>,
+    /// The character of the racer on the grid.
+    racer: u32,
+    /// The race, or the viewer (`/debug viewer`).
     driving: bool,
 }
 
@@ -371,13 +367,24 @@ struct Options {
 #[derive(Resource)]
 struct LevelNumber(u32);
 
-/// The systems that build the scene, to run again for another level: `setup`, then the text overlay.
+/// The systems that build the scene, to run again for another level or the other mode: `setup`
+/// and the kart, then the text overlay of the mode.
 #[derive(Resource)]
-struct SceneSystems(Vec<bevy::ecs::system::SystemId>);
+struct SceneSystems {
+    common: Vec<bevy::ecs::system::SystemId>,
+    race: Vec<bevy::ecs::system::SystemId>,
+    viewer: Vec<bevy::ecs::system::SystemId>,
+}
+
+impl SceneSystems {
+    fn of(&self, driving: bool) -> Vec<bevy::ecs::system::SystemId> {
+        let mode = if driving { &self.race } else { &self.viewer };
+        self.common.iter().chain(mode).copied().collect()
+    }
+}
 
 /// A drive-mode state for `track`: the kart on its first starting slot.
-fn new_drive(track: &Track, racer: &Option<Model>, character: usize) -> drive::Drive {
-    let model = racer.as_ref().expect("--drive needs a racer");
+fn new_drive(track: &Track, model: &Model, character: usize) -> drive::Drive {
     let mut anim_num_frames = [0; 8];
     for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
         *n = anim.num_frames;
@@ -401,38 +408,12 @@ fn main() {
     maps::load();
     let track_id = 0;
     let config = config::Config::load();
-    // The character driven last time, unless the command line says otherwise.
-    let mut racer = Some(config.character.filter(|&c| (c as usize) < CHARACTERS.len()).unwrap_or(0));
-    let mut low = false;
-    let mut show_hidden = false;
-    let mut cull = true;
-    let mut driving = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--lo" => low = true,
-            "--drive" => driving = true,
-            "--show-hidden" => show_hidden = true,
-            "--no-cull" => cull = false,
-            "--no-racer" => racer = None,
-            "--racer" => {
-                racer = Some(
-                    args.next()
-                        .and_then(|n| n.parse().ok())
-                        .filter(|&n| n < 16)
-                        .expect("--racer takes a number below 16"),
-                )
-            }
-            n => {
-                panic!(
-                    "usage: view [--lo] [--show-hidden] [--no-cull] [--drive] [--racer N | --no-racer], got '{n}'"
-                )
-            }
-        }
-    }
-
-    let character = racer.unwrap_or(0) as usize;
-    let options = Options { racer, driving };
+    // The character driven last time.
+    let racer = config.character.filter(|&c| (c as usize) < CHARACTERS.len()).unwrap_or(0);
+    let options = Options {
+        racer,
+        driving: true,
+    };
     let LevelData { level, dram, vram } = load_level(track_id);
     let character_data = load_character(racer);
     let Shared {
@@ -446,21 +427,18 @@ fn main() {
     } = load_shared();
     let loaded = Track(level, LevelId(track_id));
     let textures = Textures { dram, vram };
-    let drive = driving.then(|| new_drive(&loaded, &character_data.racer, character));
+    let drive = new_drive(&loaded, &character_data.racer, racer as usize);
 
     // See the executor below: without a render thread, `CTR_EXECUTOR=multi` keeps the defaults.
     let single_threaded = std::env::var("CTR_EXECUTOR").as_deref() != Ok("multi");
     let mut app = App::new();
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: match options.racer {
-                Some(racer) => format!(
-                    "ctr-rs view: {}, {}",
-                    maps::name(track_id),
-                    CHARACTERS[racer as usize]
-                ),
-                None => format!("ctr-rs view: {}", maps::name(track_id)),
-            },
+            title: format!(
+                "ctr-rs: {}, {}",
+                maps::name(track_id),
+                CHARACTERS[racer as usize]
+            ),
             // The frame rate is `limit_frame_rate`'s.
             // present_mode: bevy::window::PresentMode::AutoNoVsync,
             ..default()
@@ -497,9 +475,8 @@ fn main() {
         .insert_resource(fonts)
         .add_plugins(font::FontPlugin)
         .insert_resource(options)
+        .init_resource::<MeshOptions>()
         .insert_resource(LevelNumber(track_id))
-        .insert_resource(LowColors(low))
-        .insert_resource(ShowHidden { show_hidden, cull })
         .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
         // .add_systems(Last, limit_frame_rate)
@@ -546,40 +523,46 @@ fn main() {
     character_data.insert(app.world_mut());
     app.insert_resource(config);
     let world = app.world_mut();
-    let mut scene_systems = vec![
-        world.register_system(setup),
-        world.register_system(spawn_kart),
-    ];
-    if let Some(drive) = drive {
-        scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
-        scene_systems.push(app.world_mut().register_system(lobby::spawn_waiting));
-        app.insert_resource(sound::Sounds::load(&bigfile_path()));
-        app.insert_resource(drive).add_plugins((
-            drive::DrivePlugin,
-            sound::SoundPlugin,
-            lobby::LobbyPlugin,
-            command::CommandPlugin,
-            pause::PausePlugin,
-            // The race's HUD. (A tuple of plugins holds 15 at most.)
-            (
-                leaderboard::LeaderboardPlugin,
-                lights::LightsPlugin,
-                place::PlacePlugin,
-                laps::LapsPlugin,
-                weapon::WeaponPlugin,
-                tracker::TrackerPlugin,
-                wumpa_icon::WumpaIconPlugin,
-                minimap::MinimapPlugin,
-                slide_meter::SlideMeterPlugin,
-                toast::ToastPlugin,
-            ),
-            config::ConfigPlugin,
-        ));
-    } else {
-        scene_systems.push(app.world_mut().register_system(probe::spawn_text));
-        app.add_plugins(probe::ProbePlugin).add_systems(Update, fly);
-    }
-    app.insert_resource(SceneSystems(scene_systems));
+    let scene_systems = SceneSystems {
+        common: vec![
+            world.register_system(setup),
+            world.register_system(spawn_kart),
+        ],
+        race: vec![
+            world.register_system(drive::spawn_hud),
+            world.register_system(lobby::spawn_waiting),
+        ],
+        viewer: vec![world.register_system(probe::spawn_text)],
+    };
+    // The systems of both modes are there all the time: the race's run with the `Drive` resource
+    // (`drive::driving`), the viewer's without it, and `/debug viewer` takes it away or gives it
+    // back (`switch_mode`).
+    app.insert_resource(sound::Sounds::load(&bigfile_path()));
+    app.insert_resource(drive).add_plugins((
+        drive::DrivePlugin,
+        sound::SoundPlugin,
+        lobby::LobbyPlugin,
+        command::CommandPlugin,
+        pause::PausePlugin,
+        // The race's HUD. (A tuple of plugins holds 15 at most.)
+        (
+            leaderboard::LeaderboardPlugin,
+            lights::LightsPlugin,
+            place::PlacePlugin,
+            laps::LapsPlugin,
+            weapon::WeaponPlugin,
+            tracker::TrackerPlugin,
+            wumpa_icon::WumpaIconPlugin,
+            minimap::MinimapPlugin,
+            slide_meter::SlideMeterPlugin,
+            toast::ToastPlugin,
+        ),
+        config::ConfigPlugin,
+        probe::ProbePlugin,
+    ));
+    app.add_systems(Update, fly.run_if(not(drive::driving)))
+        .add_systems(Update, switch_mode);
+    app.insert_resource(scene_systems);
     // The multi-threaded executor spawns and wakes a task per system; for a frame this light
     // those hand-offs cost more than the systems. `CTR_EXECUTOR=multi` brings it back.
     if single_threaded {
@@ -647,9 +630,6 @@ fn switch_level(world: &mut World) {
     let wanted = race_track
         .filter(|&track| track != current && !missing)
         .or(back.filter(|&track| track != current));
-    if options.racer.is_none() {
-        racer_step = 0;
-    }
     if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }
@@ -658,19 +638,15 @@ fn switch_level(world: &mut World) {
         let at = cycle.iter().position(|&n| n == current).unwrap_or(0) as i32;
         cycle[(at + level_step).rem_euclid(cycle.len() as i32) as usize]
     });
-    options.racer = options
-        .racer
-        .map(|r| (r as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32);
+    options.racer = (options.racer as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32;
     world.insert_resource(options);
-    if racer_step != 0
-        && let (Some(lobby), Some(racer)) = (world.get_resource::<lobby::Lobby>(), options.racer)
-    {
-        lobby.set_character(racer as u8);
-    }
-    if racer_step != 0
-        && let (Some(mut config), Some(racer)) = (world.get_resource_mut::<config::Config>(), options.racer)
-    {
-        config.set_character(racer);
+    if racer_step != 0 {
+        if let Some(lobby) = world.get_resource::<lobby::Lobby>() {
+            lobby.set_character(options.racer as u8);
+        }
+        if let Some(mut config) = world.get_resource_mut::<config::Config>() {
+            config.set_character(options.racer);
+        }
     }
     let character = (racer_step != 0).then(|| load_character(options.racer));
 
@@ -685,9 +661,7 @@ fn switch_level(world: &mut World) {
         }
         world.insert_resource(LevelNumber(id));
         restart_drive(world, options);
-        for system in world.resource::<SceneSystems>().0.clone() {
-            world.run_system(system).expect("scene system runs");
-        }
+        run_scene_systems(world, options);
     } else if let Some(character) = character {
         // Only the kart goes: the level stays, and the race starts again with the new racer.
         let kart = world
@@ -705,14 +679,89 @@ fn switch_level(world: &mut World) {
         spawn_kart(world);
     }
     for mut window in world.query::<&mut Window>().iter_mut(world) {
-        window.title = match options.racer {
-            Some(racer) => format!(
-                "ctr-rs view: {}, {}",
-                maps::name(id),
-                CHARACTERS[racer as usize]
-            ),
-            None => format!("ctr-rs view: {}", maps::name(id)),
+        window.title = format!(
+            "ctr-rs: {}, {}",
+            maps::name(id),
+            CHARACTERS[options.racer as usize]
+        );
+    }
+}
+
+/// Builds the scene of the level shown, in the mode of `options`.
+fn run_scene_systems(world: &mut World, options: Options) {
+    for system in world.resource::<SceneSystems>().of(options.driving) {
+        world.run_system(system).expect("scene system runs");
+    }
+}
+
+/// Builds the scene of the level shown again, in the mode of `options` (the race starts from
+/// the grid).
+fn rebuild_scene(world: &mut World, options: Options) {
+    let scene = world_scene(world);
+    despawn(world, scene);
+    restart_drive(world, options);
+    run_scene_systems(world, options);
+}
+
+/// `/debug viewer`: the race becomes the viewer with the probe, or the viewer the race again; and
+/// `/debug level`: how the level is built. The scene is built again, as for another level, and
+/// the systems of the mode that is over stop (`drive::driving`).
+fn switch_mode(
+    mut actions: MessageReader<command::Action>,
+    lobby: Res<lobby::Lobby>,
+    mesh_options: Res<MeshOptions>,
+    mut toasts: MessageWriter<toast::Toast>,
+    mut commands: Commands,
+) {
+    use command::{Action, MeshSetting};
+    for action in actions.read() {
+        let setting = match action {
+            Action::DebugViewer => None,
+            Action::DebugLevel(None) => {
+                let on = |b| if b { "on" } else { "off" };
+                toasts.write(toast::Toast::new(
+                    format!(
+                        "Level: hidden {}, cull {}, colors {}",
+                        on(mesh_options.hidden),
+                        on(mesh_options.cull),
+                        if mesh_options.low { "lo" } else { "hi" },
+                    ),
+                    3000,
+                ));
+                continue;
+            }
+            Action::DebugLevel(setting) => *setting,
+            _ => continue,
         };
+        // The scene is rebuilt: the race would start over.
+        if lobby.is_open() || lobby.online.is_some() {
+            toasts.write(
+                toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
+                    .color(Color::srgb(1.0, 0.4, 0.4)),
+            );
+            continue;
+        }
+        commands.queue(move |world: &mut World| {
+            let mut options = *world.resource::<Options>();
+            let said = match setting {
+                None => {
+                    options.driving = !options.driving;
+                    world.insert_resource(options);
+                    if options.driving { "Race" } else { "Viewer" }
+                }
+                Some(setting) => {
+                    let mut mesh = world.resource_mut::<MeshOptions>();
+                    match setting {
+                        MeshSetting::Hidden(on) => mesh.hidden = on,
+                        MeshSetting::Cull(on) => mesh.cull = on,
+                        MeshSetting::LowColors(low) => mesh.low = low,
+                    }
+                    "Level rebuilt"
+                }
+            };
+            rebuild_scene(world, options);
+            world.write_message(toast::Toast::new(said, 2000));
+        });
     }
 }
 
@@ -733,16 +782,19 @@ fn despawn(world: &mut World, entities: Vec<Entity>) {
     }
 }
 
-/// The kart on the grid of the level shown, and what it is driven with, when driving.
+/// The kart on the grid of the level shown, and what it is driven with, when driving; in the
+/// viewer there is no `Drive`.
 fn restart_drive(world: &mut World, options: Options) {
     if options.driving {
         let drive = new_drive(
             world.resource::<Track>(),
             &world.resource::<Racer>().0,
-            options.racer.unwrap_or(0) as usize,
+            options.racer as usize,
         );
         world.insert_resource(drive);
         world.insert_resource(exhaust::Particles::new());
+    } else {
+        world.remove_resource::<drive::Drive>();
     }
 }
 
@@ -877,8 +929,7 @@ fn setup(
     track: Res<Track>,
     textures: Res<Textures>,
     mut images: ResMut<Assets<Image>>,
-    low: Res<LowColors>,
-    show_hidden: Res<ShowHidden>,
+    mesh_options: Res<MeshOptions>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
@@ -889,9 +940,9 @@ fn setup(
         level,
         &textures.dram,
         &textures.vram,
-        low.0,
-        !show_hidden.show_hidden,
-        show_hidden.cull,
+        mesh_options.low,
+        !mesh_options.hidden,
+        mesh_options.cull,
     );
     info!(
         "{} turbo pad collision blocks, {} blocks that show them (those get the extra depth bias)",
@@ -931,10 +982,10 @@ fn setup(
         base_color_texture: Some(atlas),
         unlit: true,
         // The level winds its faces as the game's `NCLIP` test draws them (see `level_mesh`).
-        cull_mode: show_hidden
+        cull_mode: mesh_options
             .cull
             .then_some(bevy::render::render_resource::Face::Back),
-        double_sided: !show_hidden.cull,
+        double_sided: !mesh_options.cull,
         ..default()
     };
     let uvs = data.parts.iter().map(|p| p.uvs.clone()).collect();
@@ -1131,7 +1182,7 @@ fn spawn_kart_parts(
     driving: Option<Res<drive::Drive>>,
     mut builder: kart::KartBuilder,
 ) {
-    let Some(model) = &racer.0 else { return };
+    let model = &racer.0;
     let spawn = track.0.driver_spawns[0];
     let [x, y, z] = mesh::to_world(spawn.pos);
     let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;

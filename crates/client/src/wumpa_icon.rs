@@ -51,7 +51,7 @@ pub struct WumpaIconPlugin;
 
 impl Plugin for WumpaIconPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, show).chain());
+        app.add_systems(Update, (build, show).chain().run_if(crate::drive::driving));
     }
 }
 
