@@ -2,12 +2,13 @@
 //! without the game:
 //!
 //! ```text
-//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16
+//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16 r0 0x45 e0
 //! ```
 //!
 //! A number is a sound effect, played until its time is up (one that loops is stopped after two
 //! seconds). `e` and a number is an engine loop, revved from idle to the top and back over four
-//! seconds. The disc image is `CTR_BIN`, or `assets/ctr-u.bin`.
+//! seconds. `r` and a number is one of the game's reverbs (`SetReverbMode`, 5 or more for none),
+//! which the sounds after it echo in. The disc image is `CTR_BIN`, or `assets/ctr-u.bin`.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,7 +29,7 @@ fn main() -> std::io::Result<()> {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
         });
     let mut howl = Howl::read(&disc)?;
-    let sfx = Sfx::FULL;
+    let mut sfx = Sfx::FULL;
     let mut frames = Vec::new();
     let mut blank = |howl: &mut Howl, n: usize| {
         let at = frames.len();
@@ -40,6 +41,12 @@ fn main() -> std::io::Result<()> {
             Some(hex) => u16::from_str_radix(hex, 16),
             None => s.parse(),
         };
+        if let Some(reverb) = arg.strip_prefix('r') {
+            let reverb = number(reverb).expect("a reverb number");
+            howl.set_reverb(reverb);
+            sfx.echo = (reverb as usize) < howl::tables::REVERBS.len();
+            continue;
+        }
         if let Some(engine) = arg.strip_prefix('e') {
             let id = number(engine).expect("an engine number");
             howl.start_engine(

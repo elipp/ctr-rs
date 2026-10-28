@@ -1,5 +1,7 @@
 //! The tables of `data` the sound engine reads, and the SPU's own.
 
+use crate::reverb::{CLEAR_WORK_AREA, Mode};
+
 /// `data.volumeLR`: how much of a voice goes to a side, by the pan towards that side (the left
 /// side reads it at `255 - pan`). A quarter sine; the middle, 0x80, gives the left 179 and the
 /// right 181.
@@ -98,6 +100,29 @@ pub const DISTORT_OTHER_FX: [u32; 256] = [
     0x1D581, 0x1D80E, 0x1DA9E, 0x1DD32, 0x1DFC9, 0x1E264, 0x1E502, 0x1E7A5,
     0x1EA4A, 0x1ECF4, 0x1EFA1, 0x1F252, 0x1F507, 0x1F7BF, 0x1FA7C, 0x1FD3C,
 ];
+
+/// `data.reverbParams`: the game's reverbs, each a mode of the SPU's (its work area cleared) and
+/// how much of it is heard, left and right, in 32768ths.
+pub const REVERBS: [(u16, [i16; 2]); 5] = [
+    (CLEAR_WORK_AREA | Mode::Pipe as u16, [0x2dff; 2]),
+    (CLEAR_WORK_AREA | Mode::Room as u16, [0x4fff; 2]),
+    (CLEAR_WORK_AREA | Mode::StudioB as u16, [0x37ff; 2]),
+    (CLEAR_WORK_AREA | Mode::StudioB as u16, [0x37ff; 2]),
+    (CLEAR_WORK_AREA | Mode::StudioA as u16, [0x37ff; 2]),
+];
+
+/// `data.reverbMode`: the reverb ([`REVERBS`]) of each level before the intros
+/// (`INTRO_RACE_TODAY`), by `LevelId`; the game reads no further.
+#[rustfmt::skip]
+pub const LEVEL_REVERBS: [u8; 30] = [
+    2, 1, 0, 1, 1, 1, 3, 0, 3, 1, 1, 1, 4, 3, 4, 4, 1, 1, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+];
+
+/// `Audio_SetReverbMode`: the reverb of the levels past [`LEVEL_REVERBS`].
+pub const OTHER_LEVEL_REVERB: u8 = 4;
+
+/// `sdata->reverbModeBossID`: the reverb of a boss race, by `bossID`.
+pub const BOSS_REVERBS: [u8; 6] = [3, 1, 1, 0, 3, 3];
 
 /// The SPU's Gaussian interpolation (psx-spx, `s_gaussTable` of `platform/native_audio.c`): the
 /// weights, in 32768ths, of the four samples around where a voice is, by the 256ths of a sample

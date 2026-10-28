@@ -7,6 +7,9 @@
 //! the sounds' time and passes what changed on to the voices (`howl_PlayAudio_Update`), so
 //! [`Howl::render`] is the clock of the sounds as the console's is.
 //!
+//! The sounds that echo (a kart in a tunnel, [`Sfx::echo`]) are heard through the SPU's
+//! [`reverb`] as well, which each level sets ([`Howl::set_level_reverb`]).
+//!
 //! Not ported yet: the voice lines, the music, the banks (every sample a sound effect or an
 //! engine plays is loaded), and the volume options.
 
@@ -24,6 +27,7 @@ use loader::howl::{EngineFx, OtherFx};
 use channel::{Channels, Kind, Stats, update};
 pub use fx::{AntiSpam, NO_DISTORTION, Sound, crash_sound};
 use spu::{Samples, Spu};
+use tables::{BOSS_REVERBS, LEVEL_REVERBS, OTHER_LEVEL_REVERB, REVERBS};
 
 /// The output samples between two vertical blanks: 60 a second.
 const FRAMES_PER_VSYNC: u32 = spu::RATE / 60;
@@ -74,6 +78,8 @@ pub struct Howl {
     pub frame: u32,
     /// What `howl_PauseAudio` took off the channels (`channelStatsCurr`).
     paused: Vec<Stats>,
+    /// `curReverb`: one of [`REVERBS`], or their number for none.
+    reverb: u16,
     /// The output samples until the next vertical blank.
     until_vsync: u32,
 }
@@ -92,6 +98,8 @@ impl Howl {
             count: 0,
             frame: 0,
             paused: Vec::new(),
+            // `SetReverbMode(5)`, which the SPU's reverb already is: off, and not heard.
+            reverb: REVERBS.len() as u16,
             until_vsync: 0,
         }
     }
@@ -133,6 +141,41 @@ impl Howl {
     pub fn vsync(&mut self) {
         self.channels.run_timers();
         self.channels.update(&mut self.spu);
+    }
+
+    /// `SetReverbMode`: the reverb is the game's `reverb` ([`REVERBS`]); a number past them turns
+    /// it off. Another reverb starts silent.
+    pub fn set_reverb(&mut self, reverb: u16) {
+        let reverb = reverb.min(REVERBS.len() as u16);
+        if reverb == self.reverb {
+            return;
+        }
+        self.reverb = reverb;
+        let unit = &mut self.spu.reverb;
+        unit.depth = [0; 2];
+        unit.on = false;
+        if let Some(&(mode, depth)) = REVERBS.get(reverb as usize) {
+            unit.on = true;
+            unit.set_mode(mode);
+            unit.depth = depth;
+        }
+    }
+
+    /// `Audio_SetReverbMode`: the reverb of the level `level` (a `LevelId`), or in a boss race
+    /// that of the boss `boss` (a boss past the game's sets none). A level past
+    /// [`LEVEL_REVERBS`], a map's too, has [`OTHER_LEVEL_REVERB`].
+    pub fn set_level_reverb(&mut self, level: u32, boss: Option<usize>) {
+        let reverb = match boss {
+            Some(boss) => match BOSS_REVERBS.get(boss) {
+                Some(&reverb) => reverb,
+                None => return,
+            },
+            None => LEVEL_REVERBS
+                .get(level as usize)
+                .copied()
+                .unwrap_or(OTHER_LEVEL_REVERB),
+        };
+        self.set_reverb(reverb as u16);
     }
 
     /// `howl_PauseAudio`: every sound stops, and is kept to start again with [`Howl::unpause`].
@@ -188,6 +231,8 @@ impl Howl {
 mod tests {
     use super::*;
     use loader::howl::other_fx_flags;
+    use loader::level::LevelId;
+    use reverb::Mode;
 
     fn howl() -> Howl {
         // A second of a loud square wave that loops.
@@ -225,6 +270,49 @@ mod tests {
         // of that on the left, both 32768ths, then the master's 0x3fff, so about 4160.
         let loudest = out.iter().map(|&[l, _]| l.unsigned_abs()).max().unwrap();
         assert!((4_000..=4_200).contains(&loudest), "{loudest}");
+    }
+
+    #[test]
+    fn a_sound_that_echoes_is_heard_after_it_stops_where_the_level_has_a_reverb() {
+        // What is heard from a tenth of a second after the sound stops, for another tenth.
+        let tail = |level: Option<u32>, echo: bool| {
+            let mut howl = howl();
+            if let Some(level) = level {
+                howl.set_level_reverb(level, None);
+            }
+            let sound = howl.play(0, AntiSpam::Off, Sfx { echo, ..Sfx::FULL });
+            howl.render(&mut [[0; 2]; 4_410]);
+            howl.stop(sound.unwrap());
+            let mut out = [[0; 2]; 8_820];
+            howl.render(&mut out);
+            out[4_410..].iter().flatten().filter(|&&s| s != 0).count()
+        };
+        // Dingo Canyon's studio.
+        assert!(tail(Some(0), true) > 1_000);
+        assert_eq!(tail(Some(0), false), 0);
+        assert_eq!(tail(None, true), 0);
+    }
+
+    #[test]
+    fn each_level_has_its_reverb() {
+        let mut howl = howl();
+        howl.set_level_reverb(LevelId::BLIZZARD_BLUFF.0, None);
+        assert_eq!(howl.spu.reverb.mode(), Mode::Pipe);
+        assert_eq!(howl.spu.reverb.depth, [0x2dff; 2]);
+        // The levels past the table, and the maps' (the top bit set).
+        howl.set_level_reverb(LevelId::MAIN_MENU_LEVEL.0, None);
+        assert_eq!(howl.spu.reverb.mode(), Mode::StudioA);
+        howl.set_level_reverb(LevelId::DRAGON_MINES.0, None);
+        howl.set_level_reverb(0x8000_1234, None);
+        assert_eq!(howl.spu.reverb.mode(), Mode::StudioA);
+        // Pinstripe's, then a boss there is none of.
+        howl.set_level_reverb(0, Some(3));
+        assert_eq!(howl.spu.reverb.mode(), Mode::Pipe);
+        howl.set_level_reverb(0, Some(6));
+        assert_eq!(howl.spu.reverb.mode(), Mode::Pipe);
+        howl.set_reverb(5);
+        assert!(!howl.spu.reverb.on);
+        assert_eq!(howl.spu.reverb.depth, [0; 2]);
     }
 
     #[test]

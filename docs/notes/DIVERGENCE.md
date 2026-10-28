@@ -60,3 +60,7 @@ This file is for the places where the port _intentionally_ differs from the orig
 - The item roulette's spin is our kart's alone; retail's (`ROLLING_ITEM`) spins while any player's on the console rolls.
 - A launch is heard from the weapon just sent off, or from the kart for a mine that went off at once. The objects and weapons echo as our kart does, where retail takes the camera's quad block.
 - As in retail, the snowball of Blizzard Bluff is silent (retail looks for `DYNAMIC_SNOWBALL`, the level has `TEMP_SNOWBALL`), and so are the turtles (their sound waits for a timer value the wait ends before).
+
+**The echo of tunnels (2026-10-27, NOT listened to):** `howl::reverb` (the SPU's reverb unit of `platform/native_audio.c`: its ten modes, the 22.05 kHz work area and the filter in and out; the same output as the C, sample for sample, on a test signal in every mode), `Howl::set_reverb` and `set_level_reverb` (`SetReverbMode`, `Audio_SetReverbMode` with `data.reverbParams`, `data.reverbMode` and `reverbModeBossID`), set by `view::sound` as a track loads. Intentional differences:
+- A map's number (the top bit set) is past the levels' table, so a map has the reverb of the levels after it (studio A). Retail's `levelID` is signed and has no maps.
+- There are no boss races, so no boss's reverb is ever set.
