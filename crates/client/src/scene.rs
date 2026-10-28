@@ -552,6 +552,7 @@ pub(crate) fn setup(
                 projection.clone(),
                 Transform::default(),
                 drive::ChaseCamera::new(),
+                crate::heat::HeatWarp::default(),
             ))
             .with_child((
                 OverlayCamera,

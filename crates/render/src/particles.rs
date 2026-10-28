@@ -17,6 +17,10 @@ pub mod axis {
     pub const POS_Y: usize = 1;
     pub const POS_Z: usize = 2;
     pub const ROT_Y: usize = 4;
+    /// What a heat particle keeps the radii of the rings of its lens in.
+    pub const HEAT_RADIUS_0: usize = 3;
+    pub const HEAT_RADIUS_1: usize = 4;
+    pub const HEAT_RADIUS_2: usize = 5;
     pub const SCALE_X: usize = 5;
     pub const SCALE_Y: usize = 6;
     pub const COLOR_R: usize = 7;
@@ -385,6 +389,65 @@ pub const PLANT_TIRES: [Entry; 7] = [
     },
 ];
 
+/// `emSet_fjHeat`: the shimmer of a Tiger Temple flame jet's heat. It is not drawn as a sprite
+/// (`Particle_Type` 1 puts it in the heat-warp list): the three radii (`ROT_X`, `ROT_Y` and
+/// `SCALE_X`) are those of the rings of the lens that `Torch_Main` warps the picture with.
+pub const FLAME_JET_HEAT: [Entry; 9] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x00a1,
+        lifespan: 6,
+    },
+    Entry::Axis {
+        flags: 0x1b,
+        axis: 0,
+        base: [-0x40, -0x320, 0],
+        random: [0x80, 0x640, 0],
+    },
+    Entry::Axis {
+        flags: 0x1b,
+        axis: 2,
+        base: [-0x40, -0x320, 0],
+        random: [0x80, 0x640, 0],
+    },
+    Entry::Axis {
+        flags: 5,
+        axis: 1,
+        base: [-0x40, 0, 1],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 0xb,
+        axis: 3,
+        base: [0x1200, 1, 0],
+        random: [0x1000, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 4,
+        base: [1, 1, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 3,
+        axis: 5,
+        base: [1, 1, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 7,
+        base: [0x8000, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 8,
+        base: [0x8000, 0, 0],
+        random: [0, 0, 0],
+    },
+];
+
 /// `MixRNG_Particles`' source: a stand-in for retail's `RngDeadCoed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rng(u32);
@@ -505,6 +568,39 @@ impl Particle {
         }
         p.axes[axis::POS_Y].velocity = velocity_y;
         p
+    }
+
+    /// `RB_FlameJet_Particles`' heat: the lens that goes with `fire` (the flame particle that
+    /// was just born). It starts where the flame did, 16 units higher, and moves with it; its
+    /// three rings grow towards 0x4a, 0x46 and 0x44 units over the seven ticks it lives.
+    pub fn flame_jet_heat(fire: &Particle, rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&FLAME_JET_HEAT, rng);
+        for a in 0..3 {
+            p.axes[a].start += fire.axes[a].start;
+        }
+        p.axes[axis::POS_Y].start += 0x1000;
+        p.axes[axis::POS_X].velocity = fire.axes[axis::POS_X].velocity;
+        p.axes[axis::POS_Y].velocity = 0;
+        p.axes[axis::POS_Z].velocity = fire.axes[axis::POS_Z].velocity;
+        p.axes[axis::POS_Y].accel = fire.axes[axis::POS_Y].accel;
+        let size = p.axes[axis::HEAT_RADIUS_0].start;
+        p.axes[axis::HEAT_RADIUS_1].start = size - 0x400;
+        p.axes[axis::HEAT_RADIUS_2].start = size - 0x600;
+        for (axis, target) in [
+            (axis::HEAT_RADIUS_0, 0x4a00),
+            (axis::HEAT_RADIUS_1, 0x4600),
+            (axis::HEAT_RADIUS_2, 0x4400),
+        ] {
+            p.axes[axis].velocity = ((target - p.axes[axis].start) / 7) as i16;
+        }
+        p
+    }
+
+    /// The radii of the three rings of a heat particle's lens, in game units (the second byte of
+    /// the axes that hold them).
+    pub fn heat_radii(&self) -> [i32; 3] {
+        [axis::HEAT_RADIUS_0, axis::HEAT_RADIUS_1, axis::HEAT_RADIUS_2]
+            .map(|a| self.axes[a].start >> 8 & 0xff)
     }
 
     /// `RB_FlameJet_Particles`' fire: at the nozzle `position` (level units), drifting `dir`
@@ -966,6 +1062,28 @@ mod spark_colour_tests {
         }
         assert_eq!(bounces, 3);
         assert!(tire.icon_frame().is_some_and(|f| f < 14));
+    }
+
+    #[test]
+    fn the_heat_of_a_flame_jet_grows_its_three_rings_with_the_outer_one_widest() {
+        let mut rng = Rng::new(3);
+        let fire = Particle::flame_jet([10, 20, 30], [100, -50], 4, &mut rng);
+        let mut heat = Particle::flame_jet_heat(&fire, &mut rng);
+        let [a, b, c] = heat.heat_radii();
+        // Born between 18 and 34 units, the rings 4 and 6 units under it.
+        assert!((0x12..0x22).contains(&a), "{a:#x}");
+        assert_eq!((a - b, a - c), (4, 6));
+        // It starts 16 units over the flame and goes where it goes.
+        assert_eq!(heat.axes[axis::POS_Y].start - fire.axes[axis::POS_Y].start >> 8, 16 + (-0x40 >> 8));
+        assert_eq!(heat.velocity()[0], 100);
+        let mut ticks = 0;
+        while heat.update() {
+            ticks += 1;
+        }
+        // Seven ticks, and by then the rings are near 0x4a, 0x46 and 0x44.
+        assert_eq!(ticks, 6);
+        let [a, b, c] = heat.heat_radii();
+        assert!(a >= 0x40 && a <= 0x4a && b >= 0x3c && c >= 0x3a, "{a:#x} {b:#x} {c:#x}");
     }
 
     #[test]
