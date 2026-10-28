@@ -25,6 +25,7 @@ Coordinates are level units, as the viewer's probe prints them.
 
 commands:
   level LEVEL                         what the level has: counts, spawns, instance kinds
+  sky LEVEL                           the clear colors and the sky dome's vertex colors by height
   quad LEVEL INDEX                    everything about one quad block: flags, vertices, faces
   quad LEVEL --id BLOCK_ID            the same, picked by block id
   near LEVEL X Y Z [--within R]       the quad blocks over (X, Z), nearest to Y first;
@@ -225,6 +226,59 @@ fn quad_line(index: usize, q: &QuadBlock) -> String {
         flag_names(q.flags).join(" "),
         tags.join(" ")
     )
+}
+
+fn sky_summary(level: &Level) {
+    for (name, c) in ["top", "bottom", "gradient"].iter().zip(level.clear_colors) {
+        match c {
+            Some(c) => println!("clear color {name}: {c:?}"),
+            None => println!("clear color {name}: off"),
+        }
+    }
+    let Some(sky) = &level.skybox else {
+        println!("no skybox");
+        return;
+    };
+    // The rim of the dome's holes: edges that belong to a single triangle.
+    let mut edges: BTreeMap<(u16, u16), u32> = BTreeMap::new();
+    for t in sky.segments.iter().flatten() {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut rim: Vec<u16> = edges
+        .iter()
+        .filter(|(_, n)| **n == 1)
+        .flat_map(|(e, _)| [e.0, e.1])
+        .collect();
+    rim.sort_by_key(|&i| std::cmp::Reverse(sky.vertices[i as usize].pos.y));
+    rim.dedup();
+    println!("{} rim vertices, highest first (pos, color):", rim.len());
+    rim.sort_by_key(|&i| (std::cmp::Reverse(sky.vertices[i as usize].pos.y), i));
+    rim.dedup();
+    for &i in &rim {
+        let v = sky.vertices[i as usize];
+        println!("  {} {:?}", p(v.pos), v.color);
+    }
+    let ys: Vec<i32> = sky.vertices.iter().map(|v| v.pos.y as i32).collect();
+    let rs = sky.vertices.iter().map(|v| ((v.pos.x as f32).hypot(v.pos.z as f32)) as i32);
+    println!(
+        "y {}..{}, horizontal radius up to {}",
+        ys.iter().min().unwrap(),
+        ys.iter().max().unwrap(),
+        rs.max().unwrap()
+    );
+    let mut vertices = sky.vertices.clone();
+    vertices.sort_by_key(|v| std::cmp::Reverse(v.pos.y));
+    println!("{} sky vertices, highest first (y, color):", vertices.len());
+    let mut last = None;
+    for v in &vertices {
+        if last != Some((v.pos.y, v.color)) {
+            println!("  {} {:?}", v.pos.y, v.color);
+            last = Some((v.pos.y, v.color));
+        }
+    }
 }
 
 fn level_summary(l: &Loaded) {
@@ -800,6 +854,10 @@ fn run() -> Result<(), String> {
         "level" => {
             args.finish()?;
             level_summary(&l);
+        }
+        "sky" => {
+            args.finish()?;
+            sky_summary(&l.level);
         }
         "quad" => {
             let by_id = args.option_number("--id")?;
