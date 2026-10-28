@@ -94,6 +94,8 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
     reset_after_teleport(d);
 
     d.num_wumpas = 0;
+    // The race start's frames have translated the kart before anyone can bump into it.
+    d.inst_pos = crate::baked::inst_matrix(d).1;
 
     // Straight into driving (the original starts with the engine-revving
     // state of the traffic lights).
@@ -380,7 +382,19 @@ pub fn tick_among(
     collide::take_pending_damage(d, effects);
     let respawned = tick_to_coll_moved(d, coll, level, env, input, instances, effects);
     collide_drivers_stage(d, others, env, effects);
-    tick_from_coll_fixed(d, coll, level, env, respawned, effects)
+    let result = tick_from_coll_fixed(d, coll, level, env, respawned, effects);
+    after_logic(d, env, effects);
+    result
+}
+
+/// What runs after the weapons of a tick (whose hits land in their buckets, after the drivers'
+/// stages): the exhaust fire's thread (TURBO, after the weapons' buckets; it dies at the end of
+/// the frame's logic, in `PROC_CheckAllForDead`), and then the HUD's jump meter, in the frame's
+/// render, so that a fire it lights or feeds first ticks on the next frame. [`tick`] runs it;
+/// after a [`tick_all`], the caller does, once the weapons have hit.
+pub fn after_logic(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
+    crate::turbo::tick(d, env.elapsed_time_ms as i16, effects);
+    crate::jump_meter::update(d, env, effects);
 }
 
 /// A driver of a [`tick_all`].
@@ -392,10 +406,23 @@ pub struct Racer<'a> {
     pub effects: &'a mut Vec<Effect>,
 }
 
-/// One 30 Hz tick of all the drivers, in `MainFrame`'s order: each stage over every driver, in
-/// the thread list's order, before the next stage. A driver bumps into the ones after it in the
-/// list (the original's sibling threads), which have run the stages before it and not those after.
-/// `feedback` times the bump sounds.
+/// What a tick of all the drivers starts with, before [`tick_all`]: `VehPickupItem_ShootOnCirclePress`
+/// for all of them, where the hits the last bumps queued land, and then the draws of the init
+/// stage (`random_number` is `sdata->randomNumber`): the tumbles about to start pick their way,
+/// in the drivers' order.
+pub fn start_tick(racers: &mut [Racer], random_number: &mut i32) {
+    for r in racers.iter_mut() {
+        collide::take_pending_damage(r.driver, r.effects);
+    }
+    for r in racers.iter_mut() {
+        crate::tumble::roll_direction(r.driver, random_number);
+    }
+}
+
+/// One 30 Hz tick of all the drivers (after [`start_tick`], without [`after_logic`]), in
+/// `MainFrame`'s order: each stage over every driver, in the thread list's order, before the next
+/// stage. A driver bumps into the ones after it in the list (the original's sibling threads), which
+/// have run the stages before it and not those after. `feedback` times the bump sounds.
 pub fn tick_all(
     racers: &mut [Racer],
     level: &Level,
@@ -403,10 +430,6 @@ pub fn tick_all(
     instances: &mut dyn Instances,
     feedback: &mut Feedback,
 ) -> Vec<TickResult> {
-    // `VehPickupItem_ShootOnCirclePress`, for all first: the hits queued by the last bumps land.
-    for r in racers.iter_mut() {
-        collide::take_pending_damage(r.driver, r.effects);
-    }
     let respawned: Vec<bool> = racers
         .iter_mut()
         .map(|r| tick_to_coll_moved(r.driver, r.coll, level, env, r.input, instances, r.effects))
@@ -601,9 +624,6 @@ fn tick_from_coll_fixed(
         PhysState::RevEngine => stuck::rev_engine_animate(d, env, effects),
         PhysState::Tumble => tumble::animate(d),
     }
-
-    // The HUD's jump meter, which gives the hang-time turbo, runs after the drivers' tick.
-    crate::jump_meter::update(d, env, effects);
 
     // The mask's own thread.
     stuck::mask_tick(d, env);

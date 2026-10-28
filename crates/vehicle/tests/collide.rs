@@ -98,7 +98,7 @@ fn random_driver(rng: &mut Rng, id: u8, near: Option<&Driver>) -> Driver {
 }
 
 fn driver_line(i: usize, d: &Driver) -> String {
-    let at = baked::inst_matrix(d).1;
+    let at = d.inst_pos;
     let values = [
         i as i64,
         d.driver_id as i64,
@@ -189,6 +189,10 @@ fn matches_reference() {
             drivers[2].screen_offset_y = drivers[1].screen_offset_y;
             drivers[2].collision_disabled = false;
             drivers[1].collision_disabled = false;
+        }
+        // Each kart was last translated where it is.
+        for d in &mut drivers {
+            d.inst_pos = baked::inst_matrix(d).1;
         }
         let timer = rng.range(10, 1000);
         let last = timer - rng.range(0, 6);

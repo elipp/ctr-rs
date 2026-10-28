@@ -637,7 +637,7 @@ pub static BLASTED: LazyLock<[Entry; BLASTED_ENTRIES]> = LazyLock::new(|| {
 pub const BLASTED_ENTRIES: usize = 0x1b;
 
 /// The entries of an animation, if it is ported.
-fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
+pub fn entries(array: MatrixArray) -> Option<&'static [Entry]> {
     match array {
         MatrixArray::WheelieStart => Some(&WHEELIE_START),
         MatrixArray::WheelieHold => Some(&WHEELIE_HOLD),
