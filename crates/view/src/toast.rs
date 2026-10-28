@@ -1,6 +1,10 @@
 //! A reusable HUD event: write a [`Toast`] and its text shows for a while in a given colour,
 //! stacked under any other toasts that are still up, fading out over the last moments.
 //!
+//! A toast is in the game's font (`font.rs`), in capitals and a gradient of its colour, if the
+//! font has every character of it; one that has others (an address, a list of options) is in
+//! Bevy's.
+//!
 //! ```ignore
 //! fn system(mut toasts: MessageWriter<Toast>) {
 //!     toasts.write(Toast::new("Kart collisions on", 2000).color(Color::srgb(1.0, 0.8, 0.2)));
@@ -9,6 +13,9 @@
 //! ```
 
 use bevy::prelude::*;
+use render::font::{Font, Gradient};
+
+use crate::font::CtrText;
 
 /// How long the fade at the end of a toast takes.
 const FADE_MS: u64 = 300;
@@ -56,10 +63,36 @@ impl Toast {
         self
     }
 
+    #[expect(dead_code, reason = "the start lights were the only lowered toasts")]
     pub fn lowered(mut self, pixels: f32) -> Toast {
         self.lower = pixels;
         self
     }
+}
+
+/// How much darker the bottom of a toast's gradient is than its top: as the white of the menus.
+const GRADIENT_BOTTOM: f32 = 0xb0 as f32 / 0xff as f32;
+
+/// The game's gradient for a toast of `color`: the colour at the top, darker at the bottom.
+fn gradient(color: Color) -> Gradient {
+    let c = color.to_srgba();
+    let channels = |scale: f32| [c.red, c.green, c.blue].map(|v| (v * scale * 255.0).round() as u8);
+    Gradient {
+        top: channels(1.0),
+        bottom: channels(GRADIENT_BOTTOM),
+    }
+}
+
+/// Whether the game's font can write `text`: it has no character the font lacks.
+fn in_game_font(text: &str) -> bool {
+    !text.trim().is_empty() && text.chars().all(|c| c == ' ' || render::font::glyph(c).is_some())
+}
+
+/// The size of a texel of a toast in the game's font: the HUD's, or half of it for a small toast,
+/// so that a texel is still a whole number of pixels on most screens.
+fn texel_size(size: f32) -> Vec2 {
+    let halves = (size / DEFAULT_SIZE * 2.0).round().max(1.0);
+    crate::hud::PIXEL * halves / 2.0
 }
 
 /// The column that the toasts are stacked in.
@@ -116,41 +149,89 @@ fn show(
         .next()
         .unwrap_or_else(|| column(&mut commands));
     for toast in toasts.read() {
-        commands.spawn((
-            Showing {
-                until: time.elapsed() + std::time::Duration::from_millis(toast.millis),
-                color: toast.color,
-            },
-            Text::new(toast.text.clone()),
-            TextFont {
-                font_size: toast.size.into(),
-                ..default()
-            },
-            TextColor(toast.color),
-            Node {
-                margin: UiRect::top(Val::Px(toast.lower)),
-                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(BACKGROUND),
-            ChildOf(column),
-        ));
+        let shown = commands
+            .spawn((
+                Showing {
+                    until: time.elapsed() + std::time::Duration::from_millis(toast.millis),
+                    color: toast.color,
+                },
+                Node {
+                    margin: UiRect::top(Val::Px(toast.lower)),
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(BACKGROUND),
+                ChildOf(column),
+            ))
+            .id();
+        if in_game_font(&toast.text) {
+            commands.spawn((
+                CtrText::new(toast.text.clone(), Font::Middle, gradient(toast.color))
+                    .fixed(texel_size(toast.size)),
+                ChildOf(shown),
+            ));
+        } else {
+            commands.spawn((
+                Text::new(toast.text.clone()),
+                TextFont {
+                    font_size: toast.size.into(),
+                    ..default()
+                },
+                TextColor(toast.color),
+                ChildOf(shown),
+            ));
+        }
     }
 }
 
 fn expire(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    mut showing: Query<(Entity, &Showing, &mut TextColor, &mut BackgroundColor)>,
+    mut showing: Query<(Entity, &Showing, &mut BackgroundColor, &Children)>,
+    mut texts: Query<&mut TextColor>,
+    lines: Query<&Children, With<CtrText>>,
+    mut glyphs: Query<&mut ImageNode>,
 ) {
     let now = time.elapsed();
-    for (entity, showing, mut color, mut background) in &mut showing {
+    for (entity, showing, mut background, children) in &mut showing {
         let Some(left) = showing.until.checked_sub(now).filter(|d| !d.is_zero()) else {
             commands.entity(entity).despawn();
             continue;
         };
         let alpha = (left.as_millis() as f32 / FADE_MS as f32).min(1.0);
-        color.0 = showing.color.with_alpha(showing.color.alpha() * alpha);
         background.0 = BACKGROUND.with_alpha(BACKGROUND.alpha() * alpha);
+        for &child in children {
+            if let Ok(mut color) = texts.get_mut(child) {
+                color.0 = showing.color.with_alpha(showing.color.alpha() * alpha);
+            }
+            // The glyphs of the game's font carry the colour; the fade is their alpha.
+            for &glyph in lines.get(child).into_iter().flatten() {
+                if let Ok(mut image) = glyphs.get_mut(glyph) {
+                    image.color = Color::WHITE.with_alpha(alpha);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_game_font_takes_what_it_has() {
+        assert!(in_game_font("Race starts in 5"));
+        assert!(in_game_font("Lobby created! Join command copied"));
+        assert!(!in_game_font("Usage: /race start | restart | stop"));
+        assert!(!in_game_font("Rollback: 3 ticks (x2)"));
+        assert!(!in_game_font("two\nlines"));
+        assert!(!in_game_font(" "));
+    }
+
+    #[test]
+    fn white_is_the_menus_white() {
+        assert_eq!(gradient(Color::WHITE), Gradient::WHITE);
+        assert_eq!(texel_size(DEFAULT_SIZE), crate::hud::PIXEL);
+        assert_eq!(texel_size(16.0), crate::hud::PIXEL / 2.0);
     }
 }

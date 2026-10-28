@@ -3,6 +3,8 @@
 
 use loader::lev::InstDef;
 
+use vehicle::Sound3D;
+
 use crate::{Contact, Context, Damage, Instance, Shape, Tick};
 
 /// Milliseconds a tick lasts (`elapsedTimeMS`).
@@ -15,6 +17,8 @@ const GRAVITY: i16 = 10;
 const TERMINAL_SPEED: i16 = -200;
 /// One cycle, in milliseconds.
 const CYCLE_MS: i16 = 0xb40;
+/// The whoosh of a fireball shooting up out of the lava.
+const WHOOSH_SFX: u8 = 0x81;
 /// What the odd ones wait before they start, so that the fireballs are not in step.
 const ODD_DELAY_MS: i16 = 1440;
 /// How fast the spark rises per unit of the ball's speed, and its limit (1/256 units a tick).
@@ -121,6 +125,13 @@ impl Instance for Fireball {
             out.sparks.push(step.spark);
             out.contacts.push(step.contact);
         }
+        // A new cycle (the only tick that leaves the timer full): it shoots up with a whoosh.
+        if self.cycle_timer == CYCLE_MS {
+            out.sounds.push(Sound3D {
+                id: WHOOSH_SFX,
+                pos: self.pos,
+            });
+        }
     }
 }
 
@@ -145,6 +156,28 @@ mod tests {
             rot: SVec3::default(),
             model_id: 0,
         }
+    }
+
+    #[test]
+    fn it_whooshes_as_it_shoots_up() {
+        let cx = Context {
+            instance: 0,
+            frames: [0; 2],
+            ticks: 0,
+            position_path: &[],
+            roll_paths: &[],
+        };
+        let mut f = Fireball::new(&def("fireball#0"));
+        let mut whooshes = vec![];
+        for tick in 0..(CYCLE_MS / TICK_MS) as usize * 2 + 2 {
+            let mut out = Tick::default();
+            f.th_tick(&cx, &mut out);
+            if !out.sounds.is_empty() {
+                whooshes.push(tick);
+            }
+        }
+        // At the start-up tick, then once a cycle (90 ticks).
+        assert_eq!(whooshes, [0, 90, 180]);
     }
 
     #[test]

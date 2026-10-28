@@ -13,7 +13,8 @@
 //!
 //! A weapon breaks the fruit and weapon crates it passes through, and so does its blast
 //! ([`Tick::crate_hits`], for the objects to deal with). Not ported: the temple teeth, the warpball it would meet, the thrown TNT a missile would be drawn
-//! away by, and the sounds. How the aim differs is in [`aim`].
+//! away by. The sounds are their listener's to play: each projectile's loop in flight, and each
+//! explosion's. How the aim differs is in [`aim`].
 //!
 //! The projectiles keep what the sim needs. Their matrices (`inst->matrix`) are for drawing:
 //! a bomb rolls by [`Projectile::roll`] about the heading `rot_y` on the plane of `normal`, and a
@@ -301,6 +302,9 @@ pub struct Tick {
     pub crate_hits: Vec<CrateHit>,
     /// The karts a blast went off on, whose screens flash white (`RB_Burst_CollThread`).
     pub flashes: Vec<usize>,
+    /// The sounds of a TNT crate on a head. (The explosions' and the detonations' are their
+    /// listener's to play.)
+    pub sounds: Vec<vehicle::Sound3D>,
 }
 
 /// All the weapons in flight.

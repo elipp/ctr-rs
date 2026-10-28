@@ -3,7 +3,9 @@
 //! into a jump: a low one while it is fully down, a high one otherwise (`RB_Turtle_LInC`, which
 //! the kart's collision search calls when it reaches the turtle's hitbox: [`Turtle::linc`]).
 //!
-//! The turtles are put on different cycles by the digit their names end in.
+//! The turtles are put on different cycles by the digit their names end in. They are silent: the
+//! sound retail gives a turtle (0x7d) waits for its timer to reach a value that the wait ends
+//! before.
 
 use loader::lev::InstDef;
 use vehicle::{Driver, forced_jump};

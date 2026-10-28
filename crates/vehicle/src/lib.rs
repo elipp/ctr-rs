@@ -21,6 +21,8 @@ pub mod cloud;
 pub mod collide;
 pub mod crash;
 pub mod demo;
+pub mod emitter_sound;
+pub mod engine_sound;
 pub mod exhaust;
 pub mod fire;
 pub mod fixed;
@@ -298,6 +300,38 @@ pub enum Effect {
     DriverCrashing { echo: bool, volume: u8 },
     /// `cameraDC[driver_id].flags |= CAMERA_FLAG_FIRE_SPEED_ZOOM`: a boost pulls the camera back.
     CameraFireSpeedZoom { driver_id: u8 },
+    /// `VehFire_Audio(driver, fireLevel)`: a boost's sound, louder and lower the bigger the boost
+    /// (see [`fire::audio`]). Its cooldown (`VehFire_AudioCooldown`) is the listener's.
+    FireAudio { fire_level: i32 },
+    /// `PlaySound3D(id, weaponInst)`: a sound of what the kart sent off, heard from it.
+    Sound3D(Sound3D),
+    /// `OtherFX_RecycleNew(&driverAudioPtrs[slot], id, flags)`: the kart's loop `slot`
+    /// ([`audio_slot`]) plays sound `id` at `volume`, `distort` (0x80 its own pitch) and `pan`
+    /// (0x80 the middle), the same sound changed as it plays; `None` stops it.
+    Recycle {
+        slot: u8,
+        id: Option<u8>,
+        volume: u8,
+        distort: u8,
+        pan: u8,
+        echo: bool,
+    },
+}
+
+/// `PlaySound3D(id, inst)`: sound effect `id` heard from `pos` (an instance's `matrix.t`, in level
+/// units), louder the nearer the camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sound3D {
+    pub id: u8,
+    pub pos: [i32; 3],
+}
+
+/// The kart's loops (`driverAudioPtrs`), by what plays in them.
+pub mod audio_slot {
+    pub const SKID: u8 = 0;
+    pub const GROUND: u8 = 1;
+    pub const WALL: u8 = 2;
+    pub const TURBO: u8 = 3;
 }
 
 impl Driver {
@@ -376,6 +410,9 @@ pub struct Driver {
     pub turbo_meter_room_left: i16,
     pub wall_rub_timer: i16,
     pub wall_rub_speed_limit: i16,
+    /// `engineVol`: the wall rub's volume, 0 to 255, which swells while the kart scrapes a wall
+    /// and fades after (see [`emitter_sound`]).
+    pub engine_vol: i16,
 
     /// `angle`: the direction of travel; `rot_curr_w` is the render rotation's
     /// spin component.

@@ -62,7 +62,10 @@ fn icon_at(dram: &DramFile, at: u32) -> io::Result<Icon> {
 /// Parses the flat icon array of the `LevTexLookup` a pack starts with
 /// (`DecalGlobal_Store` files them by `global_index`).
 pub fn parse_icons(dram: &DramFile) -> io::Result<Vec<Icon>> {
-    let lookup = word(dram, 0)?;
+    icons_at(dram, word(dram, 0)?)
+}
+
+fn icons_at(dram: &DramFile, lookup: u32) -> io::Result<Vec<Icon>> {
     if lookup == 0 {
         return Ok(Vec::new());
     }
@@ -87,6 +90,11 @@ const LEVEL_TEX_LOOKUP: u32 = 0x3c;
 /// The icon groups of a level's own `LevTexLookup` (the fire of the fireballs, for one).
 pub fn parse_level_groups(lev: &DramFile) -> io::Result<Vec<IconGroup>> {
     groups_at(lev, word(lev, LEVEL_TEX_LOOKUP)?)
+}
+
+/// The flat icon array of a level's own `LevTexLookup` (the two halves of the minimap, for one).
+pub fn parse_level_icons(lev: &DramFile) -> io::Result<Vec<Icon>> {
+    icons_at(lev, word(lev, LEVEL_TEX_LOOKUP)?)
 }
 
 fn groups_at(dram: &DramFile, lookup: u32) -> io::Result<Vec<IconGroup>> {

@@ -3,11 +3,13 @@
 //! (one per pipe) show animation frames of the `turbo` models; this is the
 //! state that picks them, sizes them and fades them out.
 //!
-//! Not modelled: the sound and rumble, the driver's own transparency
+//! A player's fire roars as it burns ([`Effect::Recycle`] on [`audio_slot::TURBO`]).
+//!
+//! Not modelled: the rumble, the driver's own transparency
 //! (`alphaScale` halving while the fire burns), and the water split and
 //! reflection flags of the instances.
 
-use crate::{Driver, kart_state};
+use crate::{Driver, Effect, actions, audio_slot, kart_state};
 
 /// `Turbo`
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -25,6 +27,8 @@ pub struct Turbo {
     pub alpha_scale: u16,
     /// `HIDE_MODEL`
     pub hidden: bool,
+    /// `fireAudioDistort`: the roar rises a step a tick from the boost that lit or fed the fire.
+    pub fire_audio_distort: i16,
 }
 
 /// The frames of the animation (`STATIC_TURBO_EFFECT` .. `STATIC_TURBO_EFFECT7`).
@@ -38,6 +42,18 @@ const RESERVES_DISAPPEAR_THRESHOLD: i16 = 0x10;
 const ALPHA_FULL_MINUS_ONE: u16 = 0xfff;
 const FADE_FAST_STEP: u16 = 0x100;
 const FADE_SLOW_STEP: u16 = 0x40;
+
+/// `TURBO_AUDIO_SFX_ID`: the roar of the fire, at most this loud, and fading with the fire.
+const AUDIO_SFX: u8 = 0xe;
+const AUDIO_VOLUME_BASE: i32 = 0x100;
+const AUDIO_ALPHA_SHIFT: u32 = 4;
+const AUDIO_VOLUME_MAX: i32 = 0x82;
+/// Its distortion is this above `fire_audio_distort`, up to its own pitch, and rises to here.
+const AUDIO_DISTORT_STEP: i32 = 0x10;
+const AUDIO_DISTORT_MAX: i32 = 0x80;
+const AUDIO_DISTORT_RISE_LIMIT: i16 = 0xc0;
+/// The pan of the middle.
+const CENTRE: u8 = 0x80;
 
 /// Where the fire sits on the kart, in game units in the kart's frame
 /// (right, up, forward), for the pipe on the right and the one on the left;
@@ -76,8 +92,10 @@ impl Turbo {
 
 /// `VehTurbo_ThTick`, once per game tick after the driver. The fire is gone
 /// from `d.turbo` once its thread dies.
-pub fn tick(d: &mut Driver, elapsed_time_ms: i16) {
+pub fn tick(d: &mut Driver, elapsed_time_ms: i16, effects: &mut Vec<Effect>) {
     let Some(mut t) = d.turbo else { return };
+    let player = d.actions_flag_set & actions::BOT == 0;
+    let echo = d.actions_flag_set & actions::ENGINE_ECHO != 0;
 
     // The cooldown runs out, and the fire shows.
     t.fire_visibility_cooldown = t
@@ -91,6 +109,24 @@ pub fn tick(d: &mut Driver, elapsed_time_ms: i16) {
     t.fire_anim_index = (t.fire_anim_index + 1) % ANIM_FRAMES;
     if t.fire_disappear_countdown > 0 {
         t.fire_disappear_countdown -= 1;
+    }
+
+    if player {
+        let volume = (AUDIO_VOLUME_BASE - (t.alpha_scale >> AUDIO_ALPHA_SHIFT) as i32)
+            .clamp(0, AUDIO_VOLUME_MAX);
+        let distort =
+            (t.fire_audio_distort as i32 + AUDIO_DISTORT_STEP).clamp(0, AUDIO_DISTORT_MAX);
+        effects.push(Effect::Recycle {
+            slot: audio_slot::TURBO,
+            id: Some(AUDIO_SFX),
+            volume: volume as u8,
+            distort: distort as u8,
+            pan: CENTRE,
+            echo,
+        });
+        if t.fire_audio_distort < AUDIO_DISTORT_RISE_LIMIT {
+            t.fire_audio_distort += 1;
+        }
     }
 
     let stop = if matches!(
@@ -112,6 +148,16 @@ pub fn tick(d: &mut Driver, elapsed_time_ms: i16) {
     } else {
         t.alpha_scale > ALPHA_FULL_MINUS_ONE
     };
+    if stop && player {
+        effects.push(Effect::Recycle {
+            slot: audio_slot::TURBO,
+            id: None,
+            volume: 0,
+            distort: AUDIO_DISTORT_MAX as u8,
+            pan: CENTRE,
+            echo,
+        });
+    }
     d.turbo = (!stop).then_some(t);
 }
 
@@ -141,10 +187,10 @@ mod tests {
             ..Turbo::new(false)
         });
         for _ in 0..2 {
-            tick(&mut d, 32);
+            tick(&mut d, 32, &mut vec![]);
             assert!(d.turbo.unwrap().hidden);
         }
-        tick(&mut d, 32);
+        tick(&mut d, 32, &mut vec![]);
         assert!(!d.turbo.unwrap().hidden);
     }
 
@@ -155,7 +201,7 @@ mod tests {
         d.turbo = Some(Turbo::new(false));
         let mut ticks = 0;
         while d.turbo.is_some() {
-            tick(&mut d, 32);
+            tick(&mut d, 32, &mut vec![]);
             ticks += 1;
         }
         // 0x40 per tick up to 0x1000, and one more tick to notice.
@@ -165,11 +211,39 @@ mod tests {
         d.turbo = Some(Turbo::new(true));
         let mut ticks = 0;
         while d.turbo.is_some() {
-            tick(&mut d, 32);
+            tick(&mut d, 32, &mut vec![]);
             ticks += 1;
         }
         // One tick of countdown, then 0x100 per tick, and one more tick to notice.
         assert_eq!(ticks, 1 + 0x1000 / 0x100 + 1);
+    }
+
+    #[test]
+    fn the_roar_rises_from_the_boost_fades_with_the_fire_and_stops_with_it() {
+        let mut d = Driver::new(0, 0);
+        d.reserves = 5;
+        d.turbo = Some(Turbo::new(false));
+        let mut roars = vec![];
+        while d.turbo.is_some() {
+            let mut effects = vec![];
+            tick(&mut d, 32, &mut effects);
+            roars.extend(effects.into_iter().map(|e| match e {
+                Effect::Recycle {
+                    slot: audio_slot::TURBO,
+                    id,
+                    volume,
+                    distort,
+                    ..
+                } => (id, volume, distort),
+                _ => panic!("{e:?}"),
+            }));
+        }
+        assert_eq!(roars[0], (Some(AUDIO_SFX), 0x82, 0x10));
+        assert_eq!(roars[1], (Some(AUDIO_SFX), 0x82, 0x11));
+        // Fading 0x40 a tick, the volume comes down 4 a tick once under 0x82.
+        let (_, quieter, _) = roars[roars.len() - 3];
+        assert_eq!(quieter as i32, 0x100 - (0xfc0 >> 4));
+        assert_eq!(roars.last().unwrap().0, None);
     }
 
     #[test]
@@ -178,7 +252,7 @@ mod tests {
         d.reserves = 500;
         d.turbo = Some(Turbo::new(false));
         d.kart_state = kart_state::CRASHING;
-        tick(&mut d, 32);
+        tick(&mut d, 32, &mut vec![]);
         assert!(d.turbo.is_none());
     }
 }

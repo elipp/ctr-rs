@@ -104,6 +104,7 @@ fn terrain_table_matches_reference_source() {
             t.ground_friction_scale as i64,
             t.turn_angle_scale as i64,
             t.turn_response_scale as i64,
+            t.skid_sound as i64,
             t.sound as i64,
         ];
         let theirs = [
@@ -115,6 +116,7 @@ fn terrain_table_matches_reference_source() {
             number(e[8]),
             number(e[9]),
             number(e[10]),
+            number(e[12]),
             number(e[13]),
         ];
         assert_eq!(theirs, ours, "terrain {i} ({})", t.name);

@@ -1,0 +1,7 @@
+[package]
+name = "howl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+loader = { path = "../loader" }

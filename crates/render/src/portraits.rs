@@ -8,9 +8,9 @@ use loader::vram::Vram;
 use crate::hud_icons;
 use crate::mesh::Atlas;
 
-/// A portrait is 44x26 texels.
-pub const WIDTH: usize = 44;
-pub const HEIGHT: usize = 26;
+/// A portrait is 43x25 texels: `u1 - u0` by `v2 - v0`, what `UI_DrawDriverIcon` draws of it.
+pub const WIDTH: usize = 43;
+pub const HEIGHT: usize = 25;
 
 /// `MetaDataCharacters[character].iconID`: the global icon of each character's portrait, in
 /// character order (Crash ... Oxide). The order is not quite the character order: the icons were
@@ -20,9 +20,10 @@ pub const ICON_IDS: [i32; 16] = [
 ];
 
 /// All the portraits one above the other, character `n`'s at rows `n * HEIGHT` on (see
-/// [`hud_icons::strip`]).
+/// [`hud_icons::strip`]). The HUD draws them half-transparent, so the dark inside of a portrait's
+/// frame (its texels with the STP bit) shows the scene behind it, darkened.
 pub fn portrait_atlas(icons: &[Icon], vram: &Vram) -> Atlas {
-    hud_icons::strip(icons, vram, &ICON_IDS, WIDTH, HEIGHT)
+    hud_icons::strip_half_transparent(icons, vram, &ICON_IDS, WIDTH, HEIGHT)
 }
 
 #[cfg(test)]

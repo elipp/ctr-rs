@@ -130,7 +130,7 @@ pub struct KartTick {
 pub const START_LIGHTS_MS: i32 = 0xf00;
 
 /// The lights go out for good at this timer (`MainMain`'s floor).
-const LIGHTS_FLOOR_MS: i32 = -960;
+pub const LIGHTS_FLOOR_MS: i32 = -960;
 
 /// The ticks of the start-line fly-in (`CAM_StartOfRace`'s `transitionFrame`, 0xa5) and the one
 /// that ends it. The traffic lights only start to count when it is over.
@@ -153,6 +153,15 @@ const LIGHT_AT_MS: [(i32, Light); 4] = [
     (0x3c0, Light::Red3),
     (0, Light::Green),
 ];
+
+/// How many of the lights are on at `lights_ms` (`trafficLightsTimer`), the three reds first
+/// and then the green.
+pub fn lights_on(lights_ms: i32) -> usize {
+    LIGHT_AT_MS
+        .iter()
+        .filter(|&&(at, _)| lights_ms <= at)
+        .count()
+}
 
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
@@ -402,6 +411,8 @@ impl Race {
             .enumerate()
         {
             if let Some(launch) = vehicle::item::shoot_on_circle_press(&mut kart.driver, effects) {
+                let p = kart.driver.pos_curr;
+                let kart_at = [p.x >> 8, p.y >> 8, p.z >> 8];
                 let kind = match launch {
                     vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
                     vehicle::item::Launch::Missile => weapon::Kind::Missile,
@@ -429,7 +440,9 @@ impl Race {
                             &bodies,
                             env.elapsed_time_ms,
                         );
-                        vehicle::item::launch_effects(&kart.driver, launch, effects);
+                        // Heard from the crate or beaker, or the kart if it went off at once.
+                        let at = self.weapons.mines().last().map_or(kart_at, |m| m.pos);
+                        vehicle::item::launch_effects(&kart.driver, launch, at, effects);
                         continue;
                     }
                 };
@@ -439,7 +452,8 @@ impl Race {
                     .weapons
                     .launch(kind, slot, &kart.driver, &bodies, gte, backward)
                 {
-                    vehicle::item::launch_effects(&kart.driver, launch, effects);
+                    let at = self.weapons.projectiles().last().map_or(kart_at, |p| p.pos);
+                    vehicle::item::launch_effects(&kart.driver, launch, at, effects);
                     kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
                 }
             }
@@ -603,7 +617,10 @@ fn after_tick(
     // even when nobody sees the particles.
     let puffs = vehicle::exhaust::exhaust(driver);
     vehicle::skid::skidmarks(driver);
-    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16);
+    if driver.actions_flag_set & actions::BOT == 0 {
+        vehicle::emitter_sound::tick(driver, effects);
+    }
+    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16, effects);
     (landing, wall, puffs)
 }
 
@@ -664,5 +681,21 @@ impl rollback::Simulation for Race {
 
     fn checksum(&self) -> u64 {
         Race::checksum(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lights_come_on_one_by_one() {
+        assert_eq!(lights_on(START_LIGHTS_MS), 0);
+        assert_eq!(lights_on(0xb40 + 1), 0);
+        assert_eq!(lights_on(0xb40), 1);
+        assert_eq!(lights_on(0x780), 2);
+        assert_eq!(lights_on(1), 3);
+        assert_eq!(lights_on(0), 4);
+        assert_eq!(lights_on(LIGHTS_FLOOR_MS), 4);
     }
 }
