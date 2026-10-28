@@ -64,7 +64,12 @@ pub(super) fn finish(
 
 /// Keeps the clock of an online race with the others': it catches up after a hitch, and runs a bit
 /// slow while it is ahead of any of them (the ones behind do not hurry; they play on as they do).
-pub(super) fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
+/// Offline it runs as fast as the effects panel says (`/debug fx speed`).
+pub(super) fn pace(
+    lobby: Res<Lobby>,
+    fx: Option<Res<crate::fx::Effects>>,
+    mut time: ResMut<Time<Virtual>>,
+) {
     let running = lobby.online.as_ref().filter(|net| net.go);
     let max_delta = if running.is_some() {
         CATCH_UP
@@ -81,7 +86,10 @@ pub(super) fn pace(lobby: Res<Lobby>, mut time: ResMut<Time<Virtual>>) {
             .filter(|&(slot, _)| slot != net.slot)
             .fold(0.0_f32, |most, (_, &a)| most.max(a))
     });
-    let speed = (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST);
+    let speed = match &fx {
+        Some(fx) if lobby.online.is_none() => fx.speed,
+        _ => (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST),
+    };
     if time.relative_speed() != speed {
         time.set_relative_speed(speed);
     }

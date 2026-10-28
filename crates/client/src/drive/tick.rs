@@ -63,7 +63,7 @@ pub(super) fn drive_tick(
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
-    mut menu: ResMut<crate::pause::PauseMenu>,
+    mut hold: crate::fx::Hold,
     mut was_paused: Local<bool>,
     mut keys_held: Local<[bool; 4]>,
     mut demo_label: Query<&mut Text, With<DemoHud>>,
@@ -87,8 +87,9 @@ pub(super) fn drive_tick(
         return;
     }
 
-    // The pause menu stops the race, unless the race is everyone's.
-    let paused = menu.open && !online;
+    // The pause menu (or the effects panel's freeze) stops the race, unless the race is
+    // everyone's.
+    let paused = (hold.menu.open || hold.fx.holds()) && !online;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
         drive.previous_view = drive.current_view;
@@ -106,7 +107,7 @@ pub(super) fn drive_tick(
     // F5 records a demo from the grid (and saves it when pressed again), F6 plays the saved
     // one. R (or the menu's RESTART) is the grid without either. A demo is the inputs alone, so
     // every start puts everything, the objects too, back as it was at tick 0.
-    let picked = std::mem::take(&mut menu.restart);
+    let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = (keys.pressed(KeyCode::KeyR) || picked) && !online;
     // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
     // a frame can pass without a tick.
@@ -301,7 +302,7 @@ pub(super) fn drive_tick(
     // others get it as well. (A tick that waits plays the pad it already has.)
     if !spectating && sim.race.confirmed_until(own) <= tick {
         let held = sim.kart().held;
-        let pad = if online && menu.open {
+        let pad = if online && hold.menu.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if online {
@@ -467,7 +468,9 @@ pub(super) fn drive_tick(
     drive.weather.step(&track.0, &drive.camera, jumped);
     let ours = &sim.race.karts[sim.own].driver;
     let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
-    drive.confetti.step(&drive.camera, won);
+    drive
+        .confetti
+        .step(&drive.camera, hold.fx.confetti.apply(won));
 
     // The offsets of the others' karts fade as far as their players' pings call for.
     for (mut motion, slot, ours) in &mut motions {
@@ -517,7 +520,12 @@ pub(super) fn debug_actions(
             }
             continue;
         }
-        if !matches!(action, Action::DebugAddWeapon(_) | Action::DebugSetWumpa(_)) {
+        if !matches!(
+            action,
+            Action::DebugAddWeapon(_)
+                | Action::DebugSetWumpa(_)
+                | Action::DebugFx(crate::fx::Fx::Finish)
+        ) {
             continue;
         }
         if lobby.online.is_some() || !matches!(drive.demo, DemoMode::Off) {
@@ -536,6 +544,13 @@ pub(super) fn debug_actions(
             Action::DebugSetWumpa(count) => {
                 driver.num_wumpas = count as i8;
                 format!("(debug) wumpa set to {count}")
+            }
+            // As crossing the line last does, first of all (`PlayLevel_UpdateLapStats`). R puts
+            // the kart back on the grid, not finished.
+            Action::DebugFx(crate::fx::Fx::Finish) => {
+                driver.actions_flag_set |= vehicle::actions::RACE_FINISHED;
+                driver.driver_rank = 0;
+                "(debug) finished first".into()
             }
             _ => continue,
         };
