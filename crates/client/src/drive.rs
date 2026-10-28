@@ -553,7 +553,8 @@ fn drive_tick(
     mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
     smoothing: Res<crate::kart::Smoothing>,
     mut cues: Cues,
-    mut waited: Local<u32>,
+    // The ticks waited for a late player, and the buttons a spectator held last tick.
+    mut waits: Local<(u32, u32)>,
     mut sfx: crate::sound::Sfx,
 ) {
     let drive = &mut *drive;
@@ -633,11 +634,11 @@ fn drive_tick(
         restart = true;
     }
     if restart {
-        let (specs, own) = match &lobby.online {
-            Some(net) => (net.specs.clone(), net.slot),
-            None => (vec![drive.spec()], 0),
+        let (specs, own, spectator) = match &lobby.online {
+            Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
+            None => (vec![drive.spec()], 0, false),
         };
-        sim.restart(&track.0, &specs, own, lobby.online.is_some());
+        sim.restart(&track.0, &specs, own, lobby.online.is_some(), spectator);
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
@@ -667,6 +668,7 @@ fn drive_tick(
 
     let tick = sim.race.tick();
     let own = sim.own;
+    let spectating = lobby.online.as_ref().is_some_and(|net| net.spectating());
     let mut reports = Vec::new();
     if let Some(net) = lobby.online.as_mut() {
         // The pads of the others that came in since the last tick.
@@ -696,6 +698,9 @@ fn drive_tick(
                         })
                         .collect::<Vec<_>>(),
                 ));
+            } else {
+                // A spectator left: it made no pads, and the host waits for our word all the same.
+                reports.push((slot, 0, Vec::new()));
             }
         }
         // The host settled where the pads of a player that left end: everyone ends them there.
@@ -733,7 +738,7 @@ fn drive_tick(
     // rollback window) and predict the others further and further. It waits for them instead.
     let late: Vec<usize> = if online {
         (0..sim.race.players())
-            .filter(|&slot| slot != own)
+            .filter(|&slot| spectating || slot != own)
             .filter(|&slot| tick > sim.race.confirmed_until(slot).saturating_add(MAX_LEAD))
             .collect()
     } else {
@@ -741,7 +746,7 @@ fn drive_tick(
     };
     if !late.is_empty() {
         // (The host removes a player that stays silent: see `net::KICK_AFTER`.)
-        if *waited % WAIT_TOAST_TICKS == 0
+        if waits.0 % WAIT_TOAST_TICKS == 0
             && let Some(net) = lobby.online.as_ref()
         {
             let names: Vec<&str> = late
@@ -757,15 +762,22 @@ fn drive_tick(
                 .color(Color::srgb(1.0, 0.8, 0.2)),
             );
         }
-        *waited += 1;
+        waits.0 += 1;
         return;
     }
-    *waited = 0;
+    waits.0 = 0;
     // Which way R1 and L1 were tapped this tick, to change the kart the camera follows.
     let mut cycle = 0;
+    // A spectator has no pad to play, but its R1 and L1 pick the kart to follow all the same.
+    if spectating {
+        let held = read_input(&keys, &pads, waits.1).buttons_held;
+        let taps = held & !waits.1;
+        waits.1 = held;
+        cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
+    }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
     // others get it as well. (A tick that waits plays the pad it already has.)
-    if sim.race.confirmed_until(own) <= tick {
+    if !spectating && sim.race.confirmed_until(own) <= tick {
         let held = sim.kart().held;
         let pad = if online && menu.open {
             // The menu has the controls: the kart coasts.
@@ -888,10 +900,22 @@ fn drive_tick(
     if let Some(net) = lobby.online.as_mut() {
         let players = sim.race.players();
         let before = net.watching;
-        if !finished || net.watching >= players || net.gone[net.watching] {
+        if spectating {
+            // Any kart of the race that is still here, whenever.
+            if cycle != 0 || net.gone[net.watching] {
+                let step = if cycle == 0 { 1 } else { cycle };
+                for _ in 0..players {
+                    net.watching =
+                        (net.watching as i32 + step).rem_euclid(players as i32) as usize;
+                    if !net.gone[net.watching] {
+                        break;
+                    }
+                }
+            }
+        } else if !finished || net.watching >= players || net.gone[net.watching] {
             net.watching = own;
         }
-        if finished && cycle != 0 {
+        if !spectating && finished && cycle != 0 {
             for _ in 0..players {
                 net.watching = (net.watching as i32 + cycle).rem_euclid(players as i32) as usize;
                 if !net.gone[net.watching] {
@@ -904,6 +928,10 @@ fn drive_tick(
         }
     }
     let watching = lobby.online.as_ref().map_or(own, |net| net.watching);
+    // The HUD and the sounds follow the kart the spectator watches, as they follow ours.
+    if spectating {
+        sim.own = watching;
+    }
     let kart = &sim.race.karts[watching];
     drive
         .camera

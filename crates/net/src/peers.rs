@@ -26,17 +26,27 @@ pub(crate) struct Guest {
     pub(crate) hello: Option<(u32, u8)>,
     /// What it wants to be called, and the number of the Hello or Nick that said it.
     pub(crate) nick: (u32, String),
+    /// It only watches: no kart, no pads (from its Hello).
+    pub(crate) spectator: bool,
 }
 
 /// The race as agreed at the start.
 pub(crate) struct Plan {
-    /// The endpoint of each slot. The host is 0.
+    /// The endpoint of each slot. The host is 0, and the spectators come after the players.
     pub(crate) roster: Vec<EndpointId>,
+    /// How many of the roster race: the slots from here on are spectators.
+    pub(crate) players: usize,
 }
 
 impl Plan {
     pub(crate) fn slot_of(&self, id: EndpointId) -> Option<usize> {
         self.roster.iter().position(|&r| r == id)
+    }
+
+    /// Whether `id` is in the roster as a spectator: it sends no pads, so nothing is waited for
+    /// from it.
+    pub(crate) fn is_spectator(&self, id: EndpointId) -> bool {
+        self.slot_of(id).is_some_and(|slot| slot >= self.players)
     }
 }
 

@@ -39,27 +39,29 @@ pub struct Sim {
     pub race: Rollback<Race>,
     /// The objects at tick 0, to start a race over.
     start: Objects,
-    /// Our kart among the race's.
+    /// Our kart among the race's: the one the camera and the HUD follow (a spectator's changes).
     pub own: usize,
 }
 
 impl Sim {
     pub fn new(level: &Level, objects: Objects, specs: &[KartSpec]) -> Sim {
         Sim {
-            race: Sim::rollback(level, objects.clone(), specs, 0, false),
+            race: Sim::rollback(level, objects.clone(), specs, 0, false, false),
             start: objects,
             own: 0,
         }
     }
 
     /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` for a race of
-    /// a lobby, even if we are alone in it.
+    /// a lobby, even if we are alone in it. A `spectator` drives none: `own` is the kart it is
+    /// following, and no pad of it is waited for.
     fn rollback(
         level: &Level,
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
         online: bool,
+        spectator: bool,
     ) -> Rollback<Race> {
         let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
         // An online race starts with the ceremony; offline the kart drives off at once.
@@ -71,7 +73,7 @@ impl Sim {
         let rollback = Rollback::new(
             race,
             specs.len(),
-            (!specs.is_empty()).then_some(own),
+            (!specs.is_empty() && !spectator).then_some(own),
             ROLLBACK_WINDOW,
         );
         // Nobody to compare with alone.
@@ -82,10 +84,17 @@ impl Sim {
         }
     }
 
-    /// Puts the race back to tick 0 with the karts `specs`, ours being kart `own`; every object
-    /// is as it was at the start.
-    pub fn restart(&mut self, level: &Level, specs: &[KartSpec], own: usize, online: bool) {
-        self.race = Sim::rollback(level, self.start.clone(), specs, own, online);
+    /// Puts the race back to tick 0 with the karts `specs`, ours being kart `own` (or, for a
+    /// `spectator`, the one that is followed); every object is as it was at the start.
+    pub fn restart(
+        &mut self,
+        level: &Level,
+        specs: &[KartSpec],
+        own: usize,
+        online: bool,
+        spectator: bool,
+    ) {
+        self.race = Sim::rollback(level, self.start.clone(), specs, own, online, spectator);
         self.own = own;
     }
 
