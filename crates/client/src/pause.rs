@@ -88,9 +88,12 @@ impl Plugin for PausePlugin {
         app.init_resource::<PauseMenu>()
             .add_systems(
                 PreUpdate,
-                input.after(InputSystems).after(crate::command::capture),
+                input
+                    .after(InputSystems)
+                    .after(crate::command::capture)
+                    .run_if(crate::drive::driving),
             )
-            .add_systems(Update, show);
+            .add_systems(Update, show.run_if(crate::drive::driving));
     }
 }
 

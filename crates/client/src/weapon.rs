@@ -98,7 +98,7 @@ pub struct WeaponPlugin;
 
 impl Plugin for WeaponPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (show, shine).chain());
+        app.add_systems(Update, (show, shine).chain().run_if(crate::drive::driving));
     }
 }
 
