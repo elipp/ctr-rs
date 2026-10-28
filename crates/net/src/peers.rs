@@ -7,9 +7,9 @@ use std::time::Instant;
 use iroh::EndpointId;
 use iroh::endpoint::Connection;
 
-use crate::{KICK_AFTER, Ticket};
 use crate::conn::send_datagram;
 use crate::wire::{InputReceiver, InputSender, Message};
+use crate::{KICK_AFTER, Ticket};
 use crate::{Pad, Tick};
 
 #[derive(Clone)]
@@ -102,7 +102,11 @@ impl Link {
 /// well, so being silent is not enough: the one to blame is the one that is furthest back.) `own`
 /// is how far our pads go, and `guests` has for each player how far theirs go and when that
 /// last changed.
-pub(crate) fn stalled(own: Tick, guests: &[(EndpointId, Tick, Instant)], now: Instant) -> Vec<EndpointId> {
+pub(crate) fn stalled(
+    own: Tick,
+    guests: &[(EndpointId, Tick, Instant)],
+    now: Instant,
+) -> Vec<EndpointId> {
     let back = guests.iter().map(|&(_, next, _)| next).fold(own, Tick::min);
     guests
         .iter()
@@ -131,7 +135,10 @@ mod tests {
         let now = Instant::now();
         let long_ago = now - KICK_AFTER - Duration::from_secs(1);
         // The hung player is at 100; the one waiting for it went on to 160 and is silent as well.
-        assert_eq!(stalled(160, &[(a, 100, long_ago), (b, 160, long_ago)], now), [a]);
+        assert_eq!(
+            stalled(160, &[(a, 100, long_ago), (b, 160, long_ago)], now),
+            [a]
+        );
         // Silent for a moment only.
         assert!(stalled(160, &[(a, 100, now), (b, 160, long_ago)], now).is_empty());
         // Everyone is where the host is.

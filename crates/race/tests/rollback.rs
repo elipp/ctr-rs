@@ -339,7 +339,9 @@ fn a_player_who_leaves_ends_the_same_for_clients_that_had_different_amounts_of_i
             client.confirm(me, tick, pad_of(me, tick)).unwrap();
             // The other client's pad is a tick late.
             if tick > 0 {
-                client.confirm(other, tick - 1, pad_of(other, tick - 1)).unwrap();
+                client
+                    .confirm(other, tick - 1, pad_of(other, tick - 1))
+                    .unwrap();
             }
             let have = if me == 0 { 20 } else { 12 };
             if tick < have {
@@ -362,7 +364,9 @@ fn a_player_who_leaves_ends_the_same_for_clients_that_had_different_amounts_of_i
         for (me, client) in clients.iter_mut().enumerate() {
             let other = 1 - me;
             client.confirm(me, tick, pad_of(me, tick)).unwrap();
-            client.confirm(other, tick - 1, pad_of(other, tick - 1)).unwrap();
+            client
+                .confirm(other, tick - 1, pad_of(other, tick - 1))
+                .unwrap();
             client.advance(&());
         }
     }

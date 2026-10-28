@@ -146,7 +146,10 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     node(
                         "cull",
                         "Back faces",
-                        &[leaf("on", "Cull them, as the game does"), leaf("off", "Draw them")],
+                        &[
+                            leaf("on", "Cull them, as the game does"),
+                            leaf("off", "Draw them"),
+                        ],
                     ),
                     node(
                         "colors",
@@ -155,7 +158,10 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                 ],
             ),
-            leaf("viewer", "Switch between the race and the fly-through viewer"),
+            leaf(
+                "viewer",
+                "Switch between the race and the fly-through viewer",
+            ),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
         ],
     ),

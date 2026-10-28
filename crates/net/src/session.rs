@@ -15,7 +15,7 @@ use crate::conn::{
 use crate::peers::{Departure, Guest, Link, Plan, Role, stalled, start_over};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Ticket, Tick,
+    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Tick, Ticket,
     clean_nick,
 };
 
@@ -30,7 +30,13 @@ pub(crate) fn send_interval() -> tokio::time::Interval {
 /// A message on a stream of its own, which iroh delivers whole and in order.
 /// The host tells everyone, itself included, who is in the lobby: itself, then the guests that
 /// have said what they drive, in the order they joined.
-pub(crate) async fn tell_lobby(me: EndpointId, character: u8, nick: &str, guests: &[Guest], io: &Io) {
+pub(crate) async fn tell_lobby(
+    me: EndpointId,
+    character: u8,
+    nick: &str,
+    guests: &[Guest],
+    io: &Io,
+) {
     let players: Vec<Player> = std::iter::once(Player {
         id: me,
         character,
@@ -91,6 +97,8 @@ pub(crate) async fn run(
                 _ = endpoint.online() => {}
             }
             io.event(Event::Open(Ticket::of(&endpoint.addr())));
+            // The lobby has us in it from the start.
+            tell_lobby(me, character, &nick, &guests, &io).await;
         }
         Role::Join(ticket) => {
             let connection: Connection = tokio::select! {
@@ -98,7 +106,12 @@ pub(crate) async fn run(
                 connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
             };
             io.event(Event::Joined(ticket.id));
-            let hello = Message::Hello { character, seq: 0, build, nick: nick.clone() };
+            let hello = Message::Hello {
+                character,
+                seq: 0,
+                build,
+                nick: nick.clone(),
+            };
             send_reliably(&connection, &hello).await?;
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
@@ -618,14 +631,25 @@ pub(crate) async fn run(
                 .map(|(&slot, _)| slot)
                 .collect();
             for slot in settled {
-                let Some(d) = departures.remove(&slot) else { continue };
-                let left = Message::Left { epoch, slot: slot as u8, first: d.first, pads: d.pads.clone() };
+                let Some(d) = departures.remove(&slot) else {
+                    continue;
+                };
+                let left = Message::Left {
+                    epoch,
+                    slot: slot as u8,
+                    first: d.first,
+                    pads: d.pads.clone(),
+                };
                 for guest in &guests {
                     if plan.slot_of(guest.id).is_some() && !departed.contains(&guest.id) {
                         let _ = send_reliably(&guest.connection, &left).await;
                     }
                 }
-                io.event(Event::Left { slot, first: d.first, pads: d.pads });
+                io.event(Event::Left {
+                    slot,
+                    first: d.first,
+                    pads: d.pads,
+                });
             }
         }
 

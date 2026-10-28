@@ -259,7 +259,11 @@ fn level_summary(l: &Loaded) {
     println!(
         "paths: {} position paths of {:?} points, {} recorded paths of {:?} points",
         level.position_paths.len(),
-        level.position_paths.iter().map(Vec::len).collect::<Vec<_>>(),
+        level
+            .position_paths
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
         level.paths.len(),
         level.paths.iter().map(Vec::len).collect::<Vec<_>>(),
     );

@@ -77,8 +77,7 @@ const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const DEBUG_USAGE: &str =
-    "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 

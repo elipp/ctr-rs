@@ -171,7 +171,10 @@ fn checkpoint_times_follow_the_race() {
     }
     for slot in 0..players {
         let times = &race.splits[slot];
-        assert!(times.windows(2).all(|w| w[0] <= w[1]), "kart {slot}: {times:?}");
+        assert!(
+            times.windows(2).all(|w| w[0] <= w[1]),
+            "kart {slot}: {times:?}"
+        );
         if !times.is_empty() {
             assert_eq!(race.checkpoints[slot] as usize, times.len() + 1);
             let (number, time, behind) = race.last_split(slot).unwrap();
