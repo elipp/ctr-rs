@@ -65,6 +65,15 @@ struct View {
     roll: f32,
 }
 
+impl View {
+    /// The camera at this view, as `chase` places it (without the orbit of the debug keys).
+    fn transform(&self) -> Transform {
+        let mut transform = Transform::from_translation(self.eye).looking_at(self.target, Vec3::Y);
+        transform.rotate_local_z(self.roll * std::f32::consts::TAU);
+        transform
+    }
+}
+
 fn view_of(camera: &camera::CameraDc) -> View {
     let at = |x: i32, y: i32, z: i32| Vec3::new(x as f32, y as f32, z as f32) * SCALE;
     let p = camera.pb_pos;
@@ -119,9 +128,8 @@ const TICKS_PER_BEEP: u32 = 60;
 /// The pitch of the first player's beep; each next player is a major third higher.
 const BEEP_HZ: f32 = 440.0;
 
-/// What a tick can ask of the player's ears and eyes outside the sim. (The traffic lights are
-/// drawn by `lights.rs`; retail also plays a sound with each, `OtherFX` 0x45 for a red light and
-/// 0x46 for the green, which is not here yet.)
+/// What a tick can ask of the player's ears and eyes outside the sim. (The game's own sounds, the
+/// traffic lights' among them, are `sound.rs`'s.)
 #[derive(bevy::ecs::system::SystemParam)]
 struct Cues<'w, 's> {
     commands: Commands<'w, 's>,
@@ -533,6 +541,7 @@ fn drive_tick(
     smoothing: Res<crate::kart::Smoothing>,
     mut cues: Cues,
     mut waited: Local<u32>,
+    mut sfx: crate::sound::Sfx,
 ) {
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
@@ -891,6 +900,16 @@ fn drive_tick(
     each_motion(&sim, &mut motions, |motion, kart| motion.push(kart));
     drive.previous_view = drive.current_view;
     drive.current_view = view_of(&drive.camera);
+
+    // The tick's sounds, the other karts' heard from where the camera is now.
+    let places: Vec<Vec3> = sim
+        .race
+        .karts
+        .iter()
+        .map(|kart| pose_of(&kart.driver).translation)
+        .collect();
+    let ear = drive.current_view.transform();
+    sfx.tick(tick, &sim.race, &ticks, sim.own, &places, &ear);
 }
 
 /// The debug commands that change our kart: `/debug set weapon <N>` drops what we hold and rolls
