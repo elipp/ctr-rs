@@ -3,6 +3,11 @@
 //! taller than wide (`weapon::HUD_PIXEL_ASPECT`), and so are these: at 2 by 3, the 240 lines fill a
 //! window 720 pixels tall, and every texel is a whole number of pixels. Like the rest of the HUD,
 //! it keeps this size whatever the window's.
+//!
+//! Every picture of it is an `ImageNode` with `NodeImageMode::Stretch`. The default, `Auto`, draws
+//! the picture in its own proportions (square texels) and fits it, centered, into the node, so a
+//! node of a retail pixel's tall shape shows it flattened, with gaps above and below. (The game's
+//! fonts and the traffic lights were drawn that way for a while.)
 
 use bevy::prelude::*;
 
