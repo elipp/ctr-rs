@@ -19,6 +19,7 @@ bevy = { version = "0.20.0", features = [
 arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
 coll = { path = "../coll" }
 loader = { path = "../loader" }
+howl = { path = "../howl" }
 vehicle = { path = "../vehicle" }
 instance = { path = "../instance" }
 render = { path = "../render" }

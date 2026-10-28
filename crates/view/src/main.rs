@@ -54,6 +54,7 @@ mod shield;
 mod skid;
 mod slide_meter;
 mod sky;
+mod sound;
 mod subtract;
 mod suggest;
 mod toast;
@@ -552,8 +553,10 @@ fn main() {
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(lobby::spawn_waiting));
+        app.insert_resource(sound::Sounds::load(&bigfile_path()));
         app.insert_resource(drive).add_plugins((
             drive::DrivePlugin,
+            sound::SoundPlugin,
             lobby::LobbyPlugin,
             command::CommandPlugin,
             pause::PausePlugin,

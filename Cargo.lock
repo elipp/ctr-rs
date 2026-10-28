@@ -3790,6 +3790,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "howl"
+version = "0.1.0"
+dependencies = [
+ "loader",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7818,6 +7825,7 @@ dependencies = [
  "camera",
  "coll",
  "gte",
+ "howl",
  "instance",
  "loader",
  "map",
