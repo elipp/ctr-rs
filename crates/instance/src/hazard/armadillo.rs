@@ -89,7 +89,7 @@ impl Armadillo {
     }
 
     fn contact(&self) -> Contact {
-        Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND)
+        Contact::sphere(self.pos, Damage::Spin, HIT_RADIUS, HIT_SOUND).and_mines()
     }
 
     /// One game tick. `frames` is the number of frames of its turn and roll animations. Where it

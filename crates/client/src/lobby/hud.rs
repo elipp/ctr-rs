@@ -1,7 +1,7 @@
 //! The label for the players who wait for the host.
 
-use bevy::prelude::*;
 use super::Lobby;
+use bevy::prelude::*;
 
 /// The label for the players who wait for the host.
 #[derive(Component)]
@@ -42,4 +42,3 @@ pub(super) fn waiting(
         };
     }
 }
-

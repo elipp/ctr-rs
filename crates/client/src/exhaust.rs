@@ -367,9 +367,7 @@ pub fn update_sparks(
         let wanted = particles
             .list
             .iter()
-            .filter(|(of, p)| {
-                *of == slot.0 && p.is_line() && p.semi_transparent() != lines.solid
-            })
+            .filter(|(of, p)| *of == slot.0 && p.is_line() && p.semi_transparent() != lines.solid)
             .take(quads);
         for (n, (_, p)) in wanted.enumerate() {
             let world = |v: Vec3| v / 256.0 * SCALE;

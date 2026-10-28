@@ -3,8 +3,8 @@
 //! [`Objects`] is all of a level's, built from its definition and cloneable.
 //!
 //! There are two kinds. The [`hazard`]s hurt a driver in reach, or throw it: each tick says where
-//! one looks for a driver ([`Contact`]); what hurting one does (`VehPickState_NewState`) is not
-//! ported. The [`pickup`]s are collected or broken by a touch of their hitbox. What they have in
+//! one looks for a driver ([`Contact`]), and some set off a mine there ([`Mines`]); what hurting
+//! one does (`VehPickState_NewState`) and setting one off do are the race's. The [`pickup`]s are collected or broken by a touch of their hitbox. What they have in
 //! common is [`Instance`]: a thread that ticks, and what the kart's collision search does at the
 //! hitbox (`LInC`).
 
@@ -61,6 +61,19 @@ pub enum Shape {
     },
 }
 
+/// Whether a hazard looks for mines in its reach (the `MINE` thread bucket), and sets off the first
+/// it finds (`RB_Hazard_ThCollide_Generic`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mines {
+    /// It looks for drivers only (`RB_FindDriverCollision`, the plant while hungry).
+    Ignored,
+    /// When no driver is in reach, hurt or not (`RB_CheckHazardCollisions`, the spider and the
+    /// flame jet).
+    IfNoDriver,
+    /// It looks for mines and not for drivers (the plant while it grabs a driver it caught).
+    Only,
+}
+
 /// `RB_CheckHazardCollisions` or `RB_FindDriverCollision`: where a hazard looks for drivers this
 /// tick, and what a driver in reach gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +88,7 @@ pub struct Contact {
     /// The driver that was not spinning already also says its line for being hurt.
     pub voice: bool,
     pub shape: Shape,
+    pub mines: Mines,
     /// The instance of the level that looks (an index into `Level::instances`), which the objects
     /// do not fill in: [`Objects::tick`] does.
     pub instance: usize,
@@ -90,6 +104,7 @@ impl Contact {
             sound,
             voice: false,
             shape: Shape::Sphere,
+            mines: Mines::Ignored,
             instance: 0,
         }
     }
@@ -99,6 +114,14 @@ impl Contact {
         Contact {
             shape: Shape::Cylinder,
             ..Contact::sphere(pos, damage, hit_radius, 0)
+        }
+    }
+
+    /// The same, and a mine in reach when no driver is ([`Mines::IfNoDriver`]).
+    pub fn and_mines(self) -> Contact {
+        Contact {
+            mines: Mines::IfNoDriver,
+            ..self
         }
     }
 

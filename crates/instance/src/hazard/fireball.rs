@@ -98,7 +98,7 @@ impl Fireball {
                     prev_y,
                     vel_y: vel_y as i16,
                 },
-                contact: Contact::sphere(self.pos, Damage::Burn, HIT_RADIUS, 0),
+                contact: Contact::sphere(self.pos, Damage::Burn, HIT_RADIUS, 0).and_mines(),
             });
         }
 

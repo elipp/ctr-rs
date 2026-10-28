@@ -4,7 +4,7 @@
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
-- the hazards' `ThCollide` (`RB_Seal_ThCollide`, `RB_Spider_ThCollide`: they let the thread-bucket collisions of weapons through)
+- the bombs and missiles look for mines oldest first (`weapon::fly`), but a mine's thread goes to the front of the `MINE` bucket, so `RB_Hazard_CollideWithBucket` finds the newest first, as the hazards do (`race::set_off_mines`)
 - submerged in the mud in tiny arena looks off
 - While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled elsewhere.
 - Skyboxes have a hole in the top mid (probably a clear color issue?)

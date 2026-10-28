@@ -57,7 +57,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[
             leaf("create", "Open a lobby for others to join"),
             takes("join", "Join a lobby", "<address>"),
-            takes("spectate", "Watch the races of a lobby (no address: switch in this one)", "[address]"),
+            takes(
+                "spectate",
+                "Watch the races of a lobby (no address: switch in this one)",
+                "[address]",
+            ),
             leaf("close", "Leave the lobby, or close it if it is ours"),
         ],
     ),

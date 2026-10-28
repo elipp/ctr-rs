@@ -189,8 +189,8 @@ impl Weather {
         let smoothed_xy = camera_xy.wrapping_sub(correction) & XY_MASK;
         let smoothed_z = camera_z - ((camera_z - previous_z) >> 3);
 
-        let start_xy = (scroll_xy_start.wrapping_sub(smoothed_xy) & XY_MASK).wrapping_add(center_x)
-            & XY_MASK;
+        let start_xy =
+            (scroll_xy_start.wrapping_sub(smoothed_xy) & XY_MASK).wrapping_add(center_x) & XY_MASK;
         let end_xy =
             (scroll_xy_end.wrapping_sub(camera_xy) & XY_MASK).wrapping_add(center_x) & XY_MASK;
         let start_z = scroll_z_start - smoothed_z + center_z;

@@ -1,5 +1,12 @@
 //! Building the scene: the level, the kart and the cameras, and switching between them.
 
+use crate::subtract::SubtractMaterial;
+use crate::{
+    AnimState, CHARACTERS, FlyCamera, GameTick, LevelData, LevelNumber, MeshOptions, Options,
+    Racer, SceneSystems, SceneryState, Textures, Track, WaterState, WheelIcons, command, config,
+    drive, exhaust, fire, kart, load_character, load_level, lobby, maps, props, sky, subtract,
+    toast,
+};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
@@ -9,8 +16,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::level::LevelId;
 use loader::model::Model;
 use render::mesh::{self, PARTS, Part};
-use crate::subtract::SubtractMaterial;
-use crate::{AnimState, CHARACTERS, FlyCamera, GameTick, LevelData, LevelNumber, MeshOptions, Options, Racer, SceneSystems, SceneryState, Textures, Track, WaterState, WheelIcons, command, config, drive, exhaust, fire, kart, load_character, load_level, lobby, maps, props, sky, subtract, toast};
 
 /// A drive-mode state for `track`: the kart on its first starting slot.
 pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive::Drive {

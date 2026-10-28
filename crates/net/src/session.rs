@@ -717,7 +717,12 @@ pub(crate) async fn run(
             let players = 1 + ordered.len();
             ordered.extend(guests.iter().filter(|g| g.spectator));
             let characters: Vec<u8> = std::iter::once(character)
-                .chain(ordered.iter().take(players - 1).filter_map(|g| g.hello.map(|(_, c)| c)))
+                .chain(
+                    ordered
+                        .iter()
+                        .take(players - 1)
+                        .filter_map(|g| g.hello.map(|(_, c)| c)),
+                )
                 .collect();
             let roster: Vec<EndpointId> = std::iter::once(me)
                 .chain(ordered.iter().map(|g| g.id))

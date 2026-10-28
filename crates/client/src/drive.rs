@@ -915,8 +915,7 @@ fn drive_tick(
             if cycle != 0 || net.gone[net.watching] {
                 let step = if cycle == 0 { 1 } else { cycle };
                 for _ in 0..players {
-                    net.watching =
-                        (net.watching as i32 + step).rem_euclid(players as i32) as usize;
+                    net.watching = (net.watching as i32 + step).rem_euclid(players as i32) as usize;
                     if !net.gone[net.watching] {
                         break;
                     }
