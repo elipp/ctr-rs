@@ -16,11 +16,11 @@
 //! (`RB_Potion_ThTick_InAir`) and lies where it lands. A kart that touches one spins out, its
 //! screen flashes, and the beaker shatters, with no blast.
 //!
-//! Not ported: the red beaker's rain cloud, the shatter's particles, the Tiger Temple door that a
-//! shattering potion opens, the afterimage that follows a mine dropped at speed, the bots' TNT, and
+//! Not ported: the red beaker's rain cloud, the shatter's particles, the afterimage that follows a mine dropped at speed, the bots' TNT, and
 //! a mine dropped on a crate holding the crate's regrowth back. Of the sounds, the TNT's on a head
 //! are here ([`Tick::sounds`]); the detonations' are their listener's.
 
+use coll::doors::{Doors, TEETH_ACCESS};
 use coll::{Collision, model_id, search_flags};
 use gte::Gte;
 use loader::lev::{Level, SVec3, quad_flags};
@@ -86,6 +86,8 @@ const JUMPS_BASE: i32 = 8;
 /// `RB_Blowup_Init`'s reach for the karts, for Nitro and TNT; and for the other mines.
 const BLOWUP_REACH: i32 = 0x19000;
 const NITRO_BLOWUP_REACH: i32 = 0x4000;
+/// `RB_Potion_OnShatter_TeethSearch`'s reach (a radius of 0x140).
+const SHATTER_REACH: i32 = 0x19000;
 
 /// `s_tntTables`: the scale of a TNT crate on a head by the tick (`xz`, `y`), 90 of them, and then
 /// how high the head is by character (16 of them). The last tick's scale is the first heights, as
@@ -120,7 +122,7 @@ pub enum MineKind {
 
 impl MineKind {
     /// The `Input1.modelID` of what its blast, or its drop, hits.
-    pub(crate) fn model(self) -> i16 {
+    pub fn model(self) -> i16 {
         match self {
             MineKind::Tnt => model_id::TNT_CRATE,
             MineKind::Nitro => model_id::NITRO_CRATE,
@@ -212,7 +214,7 @@ pub struct Mine {
 }
 
 impl Mine {
-    pub(crate) fn is_dead(&self) -> bool {
+    pub fn is_dead(&self) -> bool {
         self.dead
     }
 
@@ -251,6 +253,8 @@ pub(crate) struct Ctx<'a> {
     /// What a beaker in the air looks at for the ground. (A test that has no level leaves a
     /// beaker in the air where it is.)
     pub level: Option<&'a Level>,
+    /// The temple doors, as of the start of the tick.
+    pub doors: &'a Doors,
     pub coll: &'a mut Collision,
 }
 
@@ -386,12 +390,14 @@ impl Weapons {
             let mut m = self.mines[me].clone();
             let mut random_number = 0;
             let mut tick = std::mem::take(&mut self.pending);
+            let doors = Doors::default();
             let mut c = Ctx {
                 bodies,
                 elapsed_ms,
                 random_number: &mut random_number,
                 tick: &mut tick,
                 level: Some(level),
+                doors: &doors,
                 coll: &mut coll,
             };
             self.destroy(me, &mut m, &mut c);
@@ -566,6 +572,9 @@ impl Weapons {
     fn go_off(&mut self, me: usize, m: &mut Mine, c: &mut Ctx) {
         if m.kind.is_beaker() {
             c.tick.detonations.push(Detonation::of(m, false));
+            if let Some(level) = c.level {
+                c.tick.open_doors(level, m.pos, SHATTER_REACH);
+            }
         } else {
             self.blowup(me, m, c);
         }
@@ -803,11 +812,27 @@ impl Weapons {
         let ground = sps.did_touch_quadblock != 0;
         let (hit_y, normal) = (sps.quad_block_coll.hit_pos.y as i32, sps.hit.plane.normal);
 
-        // (Retail goes on to look at the rest after this, and may shatter it twice.) The door of
-        // the Tiger Temple that a potion opens is not ported: it is a level instance like the rest.
-        if reacted || hitbox {
+        // (Retail goes on to look at the rest after this, and may shatter it twice.)
+        if reacted {
             self.destroy(me, m, c);
             return;
+        }
+        if hitbox {
+            // A closed temple door shatters it, and opens; an open one lets it through.
+            let door = sps
+                .bsp_hitbox
+                .and_then(|hit| hit.instance)
+                .and_then(|i| c.doors.door(i));
+            if let Some(door) = door {
+                if c.doors.access & TEETH_ACCESS == 0 {
+                    c.tick.opened_doors.push(door.instance);
+                    self.destroy(me, m, c);
+                    return;
+                }
+            } else {
+                self.destroy(me, m, c);
+                return;
+            }
         }
         if ground {
             vehicle::force::rot_axis_angle(&mut m.rot, &mut c.coll.gte, normal, 0);
@@ -953,6 +978,7 @@ mod tests {
                     random_number: &mut rng,
                     tick: &mut tick,
                     level: None,
+                    doors: &Doors::default(),
                     coll: &mut coll,
                 });
                 tick

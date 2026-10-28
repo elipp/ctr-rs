@@ -68,6 +68,7 @@ mod tests {
             ticks: 0,
             position_path: &[],
             roll_paths: &paths,
+            blockers: &[],
         };
         let mut drum = Drum::new("drum#0", 4);
         assert_eq!(drum.point, 2);

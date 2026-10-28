@@ -172,6 +172,7 @@ impl Instance for Spider {
             pos: self.pos,
             matrix: self.matrix,
             animation: (self.anim_index, self.anim_frame),
+            hidden: false,
         })
     }
 }

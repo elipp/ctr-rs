@@ -160,6 +160,7 @@ mod tests {
             ticks: 0,
             position_path: &[],
             roll_paths: &[],
+            blockers: &[],
         };
         let mut f = Fireball::new(&def("fireball#0"));
         let mut whooshes = vec![];

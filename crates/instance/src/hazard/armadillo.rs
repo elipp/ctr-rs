@@ -149,6 +149,7 @@ impl Instance for Armadillo {
             pos: self.pos,
             matrix: self.matrix,
             animation: (self.anim_index, self.anim_frame),
+            hidden: false,
         })
     }
 
@@ -180,6 +181,7 @@ mod tests {
             ticks: 0,
             position_path: &level,
             roll_paths: &[],
+            blockers: &[],
         };
         let mut a = Armadillo::new(&def(0x400), 0);
         let vel = a.vel;

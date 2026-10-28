@@ -24,6 +24,7 @@
 //! indices into [`Level`] here. `tests/reference.rs` checks this port against
 //! the C code on real tracks.
 
+pub mod doors;
 pub mod instance;
 
 use gte::{Gte, cmd, ctrl, data};
