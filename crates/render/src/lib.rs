@@ -18,4 +18,5 @@ pub mod shadow;
 pub mod shield;
 pub mod tracker;
 pub mod weapons;
+pub mod weather;
 pub mod wheels;

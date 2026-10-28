@@ -152,6 +152,7 @@ mod tests {
                 scenery: Default::default(),
                 config_flags: 7,
                 jump_vertical_speed_cap: 3,
+                rain_buffer: Default::default(),
             },
             dram,
             vram: vec![VramImage {
