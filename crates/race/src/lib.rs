@@ -458,13 +458,24 @@ impl Race {
                 }
             }
         }
+        // The objects that hurt a driver go on from there: a plant that ate one chews.
+        let mut hurt = Vec::new();
         for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
+            let first = hurt.len();
             before_tick(
                 &mut kart.driver,
                 &self.last,
                 &mut self.objects.random_number,
+                &mut hurt,
                 effects,
             );
+            // The plant that ate the kart is the one its camera looks at.
+            if let Some(&plant) = hurt.get(first) {
+                kart.driver.plant_eating_me = self.objects.plant_eater(plant);
+            }
+        }
+        for instance in hurt {
+            self.objects.caught(instance, &mut self.last);
         }
         let results = {
             let mut racers: Vec<Racer> = self
@@ -579,21 +590,36 @@ fn before_tick(
     driver: &mut Driver,
     objects: &instance::Tick,
     random_number: &mut i32,
+    hurt: &mut Vec<usize>,
     effects: &mut Vec<Effect>,
 ) {
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
     let (_, at) = vehicle::baked::inst_matrix(driver);
     for contact in objects.contacts.iter().filter(|c| c.hits(at)) {
+        // A plant has one mouthful: the first kart it hurts is the one it eats.
+        if contact.damage == instance::Damage::Eat && hurt.contains(&contact.instance) {
+            continue;
+        }
         let was_spinning = driver.kart_state == kart_state::SPINNING;
-        if vehicle::pick::new_state(driver, contact.damage as u8, effects)
-            && !was_spinning
-            && contact.sound != 0
-        {
+        if !vehicle::pick::new_state(driver, contact.damage as u8, effects) {
+            continue;
+        }
+        if contact.damage == instance::Damage::Eat {
+            hurt.push(contact.instance);
+        }
+        if !was_spinning && contact.sound != 0 {
             let echo = driver.actions_flag_set & actions::ENGINE_ECHO != 0;
             effects.push(Effect::Sound {
                 id: contact.sound as u8,
                 echo,
+            });
+        }
+        if !was_spinning && contact.voice {
+            effects.push(Effect::Voiceline {
+                id: vehicle::pick::VOICELINE_COMMON_DAMAGE,
+                driver_id: driver.driver_id,
+                priority: vehicle::pick::VOICELINE_PRIORITY,
             });
         }
     }
@@ -611,14 +637,19 @@ fn after_tick(
     // The pickup HUD gives the fruit that were picked up to the driver.
     vehicle::wumpa::hud_tick(driver, true, effects);
 
-    let landing = vehicle::sparks::landing(driver);
-    let wall = vehicle::sparks::wall(driver);
-    // The exhaust and the skid marks keep their state in the driver, so they run for every kart
-    // even when nobody sees the particles.
-    let puffs = vehicle::exhaust::exhaust(driver);
-    vehicle::skid::skidmarks(driver);
-    if driver.actions_flag_set & actions::BOT == 0 {
-        vehicle::emitter_sound::tick(driver, effects);
+    // A kart that a plant ate has no particle procedure (`DRIVER_FUNC_PARTICLES`, which is
+    // `VehEmitter_DriverMain` otherwise): no sparks, smoke, skid marks or ground sounds.
+    let (mut landing, mut wall, mut puffs) = (None, None, Vec::new());
+    if driver.phys_state != vehicle::PhysState::PlantEaten {
+        landing = vehicle::sparks::landing(driver);
+        wall = vehicle::sparks::wall(driver);
+        // The exhaust and the skid marks keep their state in the driver, so they run for every
+        // kart even when nobody sees the particles.
+        puffs = vehicle::exhaust::exhaust(driver);
+        vehicle::skid::skidmarks(driver);
+        if driver.actions_flag_set & actions::BOT == 0 {
+            vehicle::emitter_sound::tick(driver, effects);
+        }
     }
     vehicle::turbo::tick(driver, env.elapsed_time_ms as i16, effects);
     (landing, wall, puffs)

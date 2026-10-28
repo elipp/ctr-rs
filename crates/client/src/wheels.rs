@@ -23,6 +23,13 @@ pub struct Wheels {
     wheel_size: i32,
 }
 
+impl Wheels {
+    /// The kart they are the wheels of.
+    pub fn kart(&self) -> Entity {
+        self.kart
+    }
+}
+
 /// Wheel squares are pushed this many radii towards the camera when they are on
 /// the camera's side of the kart, so that the kart's body does not cut into them
 /// (retail sorts the sprites among the body's polygons by depth instead).

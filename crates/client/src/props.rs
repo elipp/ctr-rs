@@ -2,8 +2,9 @@
 //!
 //! Each is posed from its definition's position, angles (`ConvertRotToMatrix`) and scale. A
 //! model with an animation plays its first one over and over at the game tick. The ones that
-//! move by the game's code (the armadillos, the minecarts, the snowball and the barrels) are
-//! `instance::Objects`: that is ticked here, and these only show it. What the game moves by other
+//! move by the game's code (the armadillos, the minecarts, the spiders, the seals, the plants,
+//! the snowball and the barrels) are `instance::Objects`: that is ticked here, and these only
+//! show it. What the game moves by other
 //! code (bobbing crates, anything that reacts) stands still. The fruit spin on their own
 //! axis and bob, at a speed of our own (DIVERGENCE.md).
 
@@ -117,8 +118,8 @@ pub struct Props(Vec<Animated>);
 
 /// What a hazard shows of itself: its mesh, and where it was and is between ticks.
 struct Shown {
-    /// Its index among the hazards of its kind.
-    index: usize,
+    /// Where the sim keeps it.
+    slot: Slot,
     previous: (Vec3, Quat),
     current: (Vec3, Quat),
     header: ModelHeader,
@@ -156,22 +157,18 @@ impl Shown {
     }
 }
 
+/// The objects that move or animate by the sim and have a pose to show for it
+/// (`Objects::pose`): armadillos, minecarts, spiders, seals and plants.
 #[derive(Resource, Default)]
-pub struct Armadillos(Vec<Shown>);
-
-#[derive(Resource, Default)]
-pub struct Minecarts(Vec<Shown>);
+pub struct Hazards(Vec<Shown>);
 
 /// The turtles stay where they are placed; only their animation is the sim's.
 #[derive(Resource, Default)]
 pub struct Turtles(Vec<Shown>);
 
-/// The entity of a placed armadillo or minecart (its index in [`Armadillos`] or [`Minecarts`]).
+/// The entity of a placed hazard (its index in [`Hazards`]).
 #[derive(Component)]
-pub struct ArmadilloBody(usize);
-
-#[derive(Component)]
-pub struct MinecartBody(usize);
+pub struct HazardBody(usize);
 
 /// A placed wumpa fruit (its index among `Objects::fruit`), and the way it was placed.
 #[derive(Component)]
@@ -280,15 +277,44 @@ fn quat_of(matrix: &vehicle::Matrix) -> Quat {
 }
 
 /// The scale an object's init sets on its instance, replacing the level file's (`RB_Plant_Init`,
-/// `RB_CtrLetter_Init`, `RB_Snowball_LInB` which the barrels share, `RB_Baron_LInB`, `RB_Minecart_LInB`); the other
+/// `RB_CtrLetter_Init`, `RB_Snowball_LInB` which the barrels share, `RB_Baron_LInB`, `RB_Minecart_LInB`,
+/// `RB_Spider_LInB`, `RB_Seal_LInB`); the other
 /// placed models keep theirs. By model name.
 fn spawn_scale(model: &str) -> Option<i16> {
     match model {
         "plant" => Some(0x2800),
+        "spider" => Some(0x1c00),
+        "seal" => Some(0x2000),
         "c" | "t" | "r" => Some(0x1800),
         "snowball" | "barrel" | "drum" | "minecart" => Some(0x1000),
         _ => None,
     }
+}
+
+/// The light of `RB_FlameJet_ThTick` (`fjLightDir`), which the jet's stone is shaded with.
+const FLAME_JET_LIGHT: [i32; 3] = [0x8b8, 0xd6a, 0];
+/// How much of its colour the stone keeps in the dark.
+const FLAME_JET_AMBIENT: f32 = 0.4;
+
+/// The model of a flame jet with its colours lit. They are the faces' normals (a byte for each
+/// axis) and not colours: the game shades the model with a light that does not turn with it
+/// (`Vector_SpecLightNoSpin3D`, the light turned into the model's space by its angles `rot`).
+fn flame_jet_lit(header: &ModelHeader, rot: loader::lev::SVec3) -> ModelHeader {
+    let m = vehicle::rotmat::rot_to_matrix(rot).m;
+    // The matrix transposed, applied to the light.
+    let light: [f32; 3] = std::array::from_fn(|i| {
+        (0..3).map(|j| m[j][i] as i32 * FLAME_JET_LIGHT[j]).sum::<i32>() as f32 / 4096.0 / 4096.0
+    });
+    let mut lit = header.clone();
+    for color in &mut lit.colors {
+        let normal = [*color & 0xff, *color >> 8 & 0xff, *color >> 16 & 0xff]
+            .map(|c| c as u8 as i8 as f32 / 127.0);
+        let facing: f32 = normal.iter().zip(light).map(|(n, l)| n * l).sum();
+        let grey = (FLAME_JET_AMBIENT + (1.0 - FLAME_JET_AMBIENT) * facing.max(0.0)) * 128.0;
+        let grey = grey.round() as u32;
+        *color = grey | grey << 8 | grey << 16;
+    }
+    lit
 }
 
 /// The pose of a model at rest: its first animation's first frame, or its only frame.
@@ -322,8 +348,7 @@ pub fn spawn(
     let by_instance: HashMap<usize, Slot> = objects.slots().collect();
 
     let mut props = Props::default();
-    let mut armadillos = Armadillos::default();
-    let mut minecarts = Minecarts::default();
+    let mut hazards = Hazards::default();
     let mut turtles = Turtles::default();
     let mut banners = Banners::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
@@ -347,6 +372,13 @@ pub fn spawn(
             .or_insert_with(|| Model::parse_at(dram, inst.model).ok());
         let Some(header) = model.as_ref().and_then(|m| m.headers.first()) else {
             continue;
+        };
+        let lit;
+        let header = if inst.model_name == "flamejet" {
+            lit = flame_jet_lit(header, inst.rot);
+            &lit
+        } else {
+            header
         };
         let Some(frame) = rest_pose(header) else {
             continue;
@@ -412,8 +444,8 @@ pub fn spawn(
         let pose = (transform.translation, transform.rotation);
 
         // A hazard's model hangs off an entity that the systems below move.
-        let shown = |index| Shown {
-            index,
+        let shown = |slot| Shown {
+            slot,
             previous: pose,
             current: pose,
             header: header.clone(),
@@ -444,9 +476,10 @@ pub fn spawn(
                 Transform::default(),
                 Some(body(commands, transform, CrateBody(i))),
             ),
-            Some(&Slot::Armadillo(i)) => {
-                let parent = body(commands, transform, ArmadilloBody(i));
-                let mut s = shown(i);
+            // What the sim moves or animates hangs off a body that is placed each tick.
+            Some(&slot) if objects.pose(slot).is_some() => {
+                let parent = body(commands, transform, HazardBody(hazards.0.len()));
+                let mut s = shown(slot);
                 s.parts = spawn_parts(
                     data.parts,
                     &base,
@@ -458,28 +491,25 @@ pub fn spawn(
                     subtract_materials,
                     0,
                 );
-                armadillos.0.push(s);
+                hazards.0.push(s);
+                if let Slot::Spider(i) = slot {
+                    crate::spider::spawn_shadow(
+                        i,
+                        level,
+                        objects,
+                        dram,
+                        vram,
+                        commands,
+                        images,
+                        meshes,
+                        materials,
+                        subtract_materials,
+                    );
+                }
                 continue;
             }
-            Some(&Slot::Minecart(i)) => {
-                let parent = body(commands, transform, MinecartBody(i));
-                let mut s = shown(i);
-                s.parts = spawn_parts(
-                    data.parts,
-                    &base,
-                    Transform::default(),
-                    Some(parent),
-                    commands,
-                    meshes,
-                    materials,
-                    subtract_materials,
-                    0,
-                );
-                minecarts.0.push(s);
-                continue;
-            }
-            Some(&Slot::Turtle(i)) => {
-                let mut s = shown(i);
+            Some(&slot @ Slot::Turtle(_)) => {
+                let mut s = shown(slot);
                 s.parts = spawn_parts(
                     data.parts,
                     &base,
@@ -538,68 +568,56 @@ pub fn spawn(
         }
     }
     info!(
-        "{} placed models, {} animated, {} armadillos, {} minecarts, {} rollers, {} turtles",
+        "{} placed models, {} animated, {} hazards, {} rollers, {} turtles",
         level.instances.len(),
         props.0.len(),
-        armadillos.0.len(),
-        minecarts.0.len(),
+        hazards.0.len(),
         objects.rollers.len(),
         turtles.0.len()
     );
     commands.insert_resource(props);
-    commands.insert_resource(armadillos);
-    commands.insert_resource(minecarts);
+    commands.insert_resource(hazards);
     commands.insert_resource(turtles);
     commands.insert_resource(banners);
 }
 
-/// After a tick of the hazards: the armadillos and the minecarts take their new place and the
+/// After a tick of the hazards: the ones the sim moves or animates take their new place and the
 /// pose of the animation they play.
 pub fn pose_hazards(
     sim: Res<Sim>,
-    mut armadillos: ResMut<Armadillos>,
-    mut minecarts: ResMut<Minecarts>,
+    mut hazards: ResMut<Hazards>,
     mut turtles: ResMut<Turtles>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    let objects = &sim.race.objects;
     for t in &mut turtles.0 {
-        t.pose(
-            (0, sim.race.objects.turtles[t.index].sim.anim_frame),
-            &mut meshes,
-        );
+        if let Slot::Turtle(i) = t.slot {
+            t.pose((0, objects.turtles[i].sim.anim_frame), &mut meshes);
+        }
     }
-    for a in &mut armadillos.0 {
-        let h = &sim.race.objects.armadillos[a.index].sim;
-        a.moved(h.pos, &h.matrix());
-        a.pose((h.anim_index, h.anim_frame), &mut meshes);
-    }
-    for c in &mut minecarts.0 {
-        let h = &sim.race.objects.minecarts[c.index].sim;
-        c.moved(h.pos, &h.matrix());
-        c.pose((0, h.anim_frame), &mut meshes);
+    for h in &mut hazards.0 {
+        let Some(pose) = objects.pose(h.slot) else {
+            continue;
+        };
+        h.moved(pose.pos, &pose.matrix);
+        h.pose(pose.animation, &mut meshes);
     }
 }
 
-/// Puts the armadillos and the minecarts between their last two ticks.
+/// Puts the hazards between their last two ticks.
 pub fn place_hazards(
-    mut armadillos: Query<(&ArmadilloBody, &mut Transform), Without<MinecartBody>>,
-    mut minecarts: Query<(&MinecartBody, &mut Transform), Without<ArmadilloBody>>,
-    shown: (Res<Armadillos>, Res<Minecarts>),
+    mut bodies: Query<(&HazardBody, &mut Transform)>,
+    hazards: Res<Hazards>,
     fixed: Res<Time<Fixed>>,
 ) {
     let t = fixed.overstep_fraction();
-    let between = |s: &Shown, transform: &mut Transform| {
+    for (body, mut transform) in &mut bodies {
+        let s = &hazards.0[body.0];
         // The path of a minecart restarts with a jump, which must not be smoothed over.
         let jump = s.previous.0.distance(s.current.0) > 5.0;
         let from = if jump { s.current } else { s.previous };
         transform.translation = from.0.lerp(s.current.0, t);
         transform.rotation = from.1.slerp(s.current.1, t);
-    };
-    for (body, mut transform) in &mut armadillos {
-        between(&shown.0.0[body.0], &mut transform);
-    }
-    for (body, mut transform) in &mut minecarts {
-        between(&shown.1.0[body.0], &mut transform);
     }
 }
 

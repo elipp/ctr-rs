@@ -7,7 +7,7 @@ use loader::lev::PosRot;
 
 use vehicle::Sound3D;
 
-use crate::{Contact, Context, Damage, Instance, Shape, Tick};
+use crate::{Contact, Context, Damage, Instance, Tick};
 
 /// `RB_FindDriverCollision`'s radius: a squared distance, 256 units.
 const HIT_RADIUS: u32 = 0x10000;
@@ -37,13 +37,8 @@ pub fn frame_index(points: usize, tick: u32) -> Option<usize> {
 
 /// Where a roller at `frame` of its path looks for drivers, and what it does to one.
 pub fn contact(frame: &PosRot) -> Contact {
-    Contact {
-        pos: [frame.pos.x as i32, frame.pos.y as i32, frame.pos.z as i32],
-        damage: Damage::Squish,
-        hit_radius: HIT_RADIUS,
-        sound: 0,
-        shape: Shape::Sphere,
-    }
+    let pos = [frame.pos.x as i32, frame.pos.y as i32, frame.pos.z as i32];
+    Contact::sphere(pos, Damage::Squish, HIT_RADIUS, 0)
 }
 
 impl Instance for Roller {
