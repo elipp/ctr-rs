@@ -683,7 +683,6 @@ fn after_tick(
             vehicle::emitter_sound::tick(driver, effects);
         }
     }
-    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16, effects);
     (landing, wall, spray, puffs)
 }
 

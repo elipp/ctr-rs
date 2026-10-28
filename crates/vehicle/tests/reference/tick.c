@@ -19,6 +19,9 @@
  *   N         prints the names of the driver fields, in order
  *   D <driver fields...>
  *             loads the driver (field order: `fields` below)
+ *   I <reserves> <type> <fireLevel>
+ *             a boost before the next tick's stages, where
+ *             VehPickupItem_ShootOnCirclePress fires a turbo item
  *   X <elapsedMS> <elapsedEventTime> <timer> <endOfRace> <buttonsHeld>
  *     <buttonsTapped> <stickLX> <stickLY> <stickRY>
  *             runs one tick; prints the driver, the effects it requested and
@@ -26,10 +29,13 @@
  *
  * Everything of the driver's states is the real code: driving, drifting,
  * spinning out, the crash and the V-shift freeze; only the stages that are
- * presentation are left out.
+ * presentation are left out. The exhaust fire is the real VehTurbo.c too: its
+ * thread is born in the TURBO bucket, ticks after the drivers' stages and dies
+ * in PROC_CheckAllForDead, before the HUD's jump meter, as in MainFrame.
  */
 #include <stdarg.h>
 #include "../../../coll/tests/reference/level.h"
+#include <psx/gtereg.h>
 
 struct Thread thread;
 struct Instance inst;
@@ -47,6 +53,13 @@ struct CheckpointNode *restartPoints;
 
 static char effects[1024];
 static int maskGrab;
+/* While the turbo thread ticks: its rumble is not ported. */
+static int inTurboTick;
+
+/* The one turbo thread (one driver), in gGT.threadBuckets[TURBO] while it lives. */
+struct Thread turboThread;
+struct Instance turboInst1, turboInst2;
+struct Turbo turboObj;
 
 static void effect(const char *fmt, ...)
 {
@@ -84,6 +97,8 @@ void GAMEPAD_JogCon1(struct Driver *drv, s32 val, u16 timeMS)
 
 void GAMEPAD_ShockFreq(struct Driver *drv, s32 frame, s32 val)
 {
+	if (inTurboTick)
+		return;
 	effect(" F %d %d %d", drv->driverID, frame, val);
 }
 
@@ -92,10 +107,54 @@ void GAMEPAD_ShockForce1(struct Driver *drv, s32 frame, s32 val)
 	effect(" G %d %d %d", drv->driverID, frame, val);
 }
 
-/* The turbo fire is a thread with instances; it is presentation, and not ported. */
+/* The turbo fire's thread and its two instances (VehFire_Increment's is the only birth here). */
 struct Instance *INSTANCE_BirthWithThread(s32 modelID, const char *name, s32 poolType, s32 bucket, void *funcThTick, s32 objSize, struct Thread *parent)
 {
-	return NULL;
+	memset(&turboThread, 0, sizeof(turboThread));
+	memset(&turboInst1, 0, sizeof(turboInst1));
+	memset(&turboObj, 0, sizeof(turboObj));
+	turboThread.object = &turboObj;
+	turboThread.inst = &turboInst1;
+	turboThread.funcThTick = funcThTick;
+	turboInst1.thread = &turboThread;
+	gGT.threadBuckets[TURBO].thread = &turboThread;
+	return &turboInst1;
+}
+
+struct Instance *INSTANCE_Birth3D(struct Model *m, const char *name, struct Thread *th)
+{
+	memset(&turboInst2, 0, sizeof(turboInst2));
+	turboInst2.thread = th;
+	return &turboInst2;
+}
+
+void INSTANCE_Death(struct Instance *inst)
+{
+}
+
+/* The fire's roar (slot 3 of the driver's sounds); id -1 stops it. */
+void OtherFX_RecycleNew(u32 *soundID_Count, u32 newSoundID, u32 modifyFlags)
+{
+	effect(" R %d %u %u %u", (s32)newSoundID, (modifyFlags >> HOWL_SFX_VOLUME_SHIFT) & 0xff,
+	       (modifyFlags >> HOWL_SFX_DISTORTION_SHIFT) & 0xff, (modifyFlags >> HOWL_SFX_ECHO_SHIFT) & 1);
+}
+
+/* VehFire_Audio without its cooldown (patched in by the test): the port leaves that to the listener. */
+void TestFireAudio(int fireLevel)
+{
+	effect(" B %d", fireLevel);
+}
+
+/* PROC_CheckAllForDead for the turbo bucket. */
+static void turbo_check_dead(void)
+{
+	if (gGT.threadBuckets[TURBO].thread != NULL && (turboThread.flags & THREAD_FLAG_DEAD) != 0)
+	{
+		turboThread.funcThDestroy(&turboThread);
+		gGT.threadBuckets[TURBO].thread = NULL;
+		memset(&turboObj, 0, sizeof(turboObj));
+		memset(&turboInst1, 0, sizeof(turboInst1));
+	}
 }
 
 void GhostTape_WriteBoosts(s32 addReserve, u32 type, s32 speedCap)
@@ -112,7 +171,7 @@ void VehStuckProc_MaskGrab_Init(struct Thread *t, struct Driver *drv)
 	maskGrab = 1;
 }
 
-enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT_PENDING, TERRAIN1, TERRAIN2 };
+enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT_PENDING, TERRAIN1, TERRAIN2, TURBO_EXISTS, TURBO_HIDDEN };
 
 struct Field
 {
@@ -172,6 +231,9 @@ static struct Field fields[] = {
 	F(d.KartStates.Drifting.numFramesDrifting, S16), F(d.KartStates.Drifting.driftBoostTimeMS, S16),
 	F(d.KartStates.Drifting.driftTotalTimeMS, S16), F(d.KartStates.Drifting.numBoostsAttempted, S8),
 	F(d.KartStates.Drifting.numBoostsSuccess, S8),
+	{ "turbo", NULL, TURBO_EXISTS }, F(turboObj.fireAnimIndex, S16), F(turboObj.fireSize, S16),
+	F(turboObj.fireDisappearCountdown, S8), F(turboObj.fireVisibilityCooldown, S16), F(turboInst1.alphaScale, U16),
+	{ "turbo.hidden", NULL, TURBO_HIDDEN }, F(turboObj.fireAudioDistort, U8),
 };
 
 #define NUM_FIELDS ((int)(sizeof(fields) / sizeof(fields[0])))
@@ -254,7 +316,8 @@ static int current_state(void)
 
 static void load_driver(void)
 {
-	int state = 0, initPending = 0;
+	int state = 0, initPending = 0, turbo = 0, hidden = 0;
+	gGT.threadBuckets[TURBO].thread = NULL;
 	for (int i = 0; i < NUM_FIELDS; i++)
 	{
 		long long v = 0;
@@ -274,7 +337,29 @@ static void load_driver(void)
 		case INIT_PENDING: initPending = v; break;
 		case TERRAIN1: d.terrainMeta1 = &data.MetaDataTerrain[v]; break;
 		case TERRAIN2: d.terrainMeta2 = &data.MetaDataTerrain[v]; break;
+		case TURBO_EXISTS:
+			turbo = v;
+			if (turbo)
+			{
+				/* Born before the rest of its fields are read. */
+				INSTANCE_BirthWithThread(STATIC_TURBO_EFFECT, NULL, 0, TURBO, VehTurbo_ThTick, sizeof(struct Turbo), NULL);
+				turboThread.funcThDestroy = VehTurbo_ThDestroy;
+				turboObj.driver = &d;
+				turboObj.inst = INSTANCE_Birth3D(NULL, NULL, &turboThread);
+			}
+			break;
+		case TURBO_HIDDEN: hidden = v; break;
 		}
+	}
+	if (turbo)
+	{
+		turboInst1.flags = hidden ? HIDE_MODEL : 0;
+		turboInst2.alphaScale = turboInst1.alphaScale;
+	}
+	else
+	{
+		memset(&turboObj, 0, sizeof(turboObj));
+		memset(&turboInst1, 0, sizeof(turboInst1));
 	}
 	d.heldItemID = HELD_ITEM_NONE;
 	set_state(state, initPending);
@@ -300,6 +385,8 @@ static void print_driver(void)
 		case INIT_PENDING: printf(" %d", d.funcPtrs[DRIVER_FUNC_INIT] != NULL); break;
 		case TERRAIN1: printf(" %d", terrainIndex(d.terrainMeta1)); break;
 		case TERRAIN2: printf(" %d", terrainIndex(d.terrainMeta2)); break;
+		case TURBO_EXISTS: printf(" %d", gGT.threadBuckets[TURBO].thread != NULL); break;
+		case TURBO_HIDDEN: printf(" %d", (turboInst1.flags & HIDE_MODEL) != 0); break;
 		}
 	}
 }
@@ -426,6 +513,12 @@ int main(void)
 		case 'D':
 			load_driver();
 			break;
+		case 'I':
+		{
+			int reserves = rd(), type = rd(), fireLevel = rd();
+			VehFire_Increment(&d, reserves, type, fireLevel);
+			break;
+		}
 		case 'X':
 		{
 			gGT.elapsedTimeMS = rd();
@@ -438,7 +531,7 @@ int main(void)
 			pads.gamepad[d.driverID].stickLY = rd();
 			pads.gamepad[d.driverID].stickRY = rd();
 
-			effects[0] = 0;
+			/* (An 'I' before this tick leaves its effects in the line.) */
 			maskGrab = 0;
 			for (int i = 0; i < DRIVER_FUNC_COUNT; i++)
 			{
@@ -453,7 +546,19 @@ int main(void)
 					fn = VehPhysForce_TranslateMatrix;
 				fn(&thread, &d);
 			}
-			/* The HUD's jump meter gives the hang-time turbo, after the drivers' tick. */
+			/* The buckets after the drivers': the turbo fire. */
+			if (gGT.threadBuckets[TURBO].thread != NULL)
+			{
+				/* Its GTE work only places the fire's instances; the port's fire does none, so
+				 * the GTE goes on to the next tick as the drivers' stages left it. */
+				GTERegisters gte = gteRegs;
+				inTurboTick = 1;
+				VehTurbo_ThTick(&turboThread);
+				inTurboTick = 0;
+				gteRegs = gte;
+			}
+			turbo_check_dead();
+			/* The HUD's jump meter gives the hang-time turbo, in the frame's render after all that. */
 			UI_JumpMeter_Update(&d);
 
 			struct ScratchpadStruct *pad = (struct ScratchpadStruct *)(scratchpad + 0x108);
@@ -461,6 +566,7 @@ int main(void)
 			printf(" |%s | %d %d %u %d %d %d", effects, pad->hitFraction, pad->Input1.hitRadius, pad->collision.stepFlags,
 			       pad->boolDidTouchQuadblock, pad->numTrianglesTested, maskGrab);
 			printf("\n");
+			effects[0] = 0;
 			break;
 		}
 		}
