@@ -11,7 +11,7 @@ use crate::tables::VOLUME_LR;
 
 pub const CHANNELS: usize = VOICES;
 
-/// The envelope of the sound effects: full at once, held, and let go within 8
+/// The envelope of the sound effects and the engines: full at once, held, and let go within 8
 /// samples ([`crate::spu`] has the layout).
 pub const AD: u16 = 0x80ff;
 pub const SR: u16 = 0x1fc2;
@@ -42,6 +42,7 @@ pub mod flags {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
     #[default]
+    EngineFx,
     OtherFx,
 }
 
@@ -228,6 +229,18 @@ impl Channels {
         Some(channel)
     }
 
+    /// `Channel_DestroyAll_LowLevel`: the end of every channel but the menu's sound effects (0 to
+    /// 5, which ring out) unless `all_fx`.
+    pub fn destroy_all(&mut self, all_fx: bool) {
+        for channel in self.taken.clone() {
+            let stats = &self.stats[channel];
+            let menu = stats.kind == Kind::OtherFx && stats.sound as u16 <= 5;
+            if all_fx || !menu {
+                self.destroy(channel);
+            }
+        }
+    }
+
     /// The timers of `howl_PlayAudio_Update`: a vertical blank takes 5 off every sound that does
     /// not loop, and ends the ones whose time is up.
     pub fn run_timers(&mut self) {
@@ -392,6 +405,17 @@ mod tests {
         channels.destroy(channel);
         channels.update(&mut spu);
         assert_eq!(channels.updates, [0; CHANNELS]);
+    }
+
+    #[test]
+    fn the_menu_sounds_ring_out_unless_all_go() {
+        let mut channels = Channels::default();
+        sound(&mut channels, 1, 0, false);
+        sound(&mut channels, 0x45, 0, false);
+        channels.destroy_all(false);
+        assert_eq!(channels.taken(), [0]);
+        channels.destroy_all(true);
+        assert!(channels.taken().is_empty());
     }
 
     #[test]

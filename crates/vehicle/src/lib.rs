@@ -21,6 +21,7 @@ pub mod cloud;
 pub mod collide;
 pub mod crash;
 pub mod demo;
+pub mod engine_sound;
 pub mod exhaust;
 pub mod fire;
 pub mod fixed;
