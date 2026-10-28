@@ -377,7 +377,9 @@ impl Io {
 /// `build` is the version of the sim (`race::SIM_VERSION`): a guest with another is turned away.
 pub fn host(character: u8, nick: &str, build: u32) -> Session {
     let nick = clean_nick(nick);
-    spawn(move |endpoint, io| Box::pin(run(endpoint, io, Role::Host, character, nick, build, false)))
+    spawn(move |endpoint, io| {
+        Box::pin(run(endpoint, io, Role::Host, character, nick, build, false))
+    })
 }
 
 /// Joins the lobby of `ticket`, driving `character` and called `nick`.

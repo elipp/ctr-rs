@@ -262,7 +262,10 @@ fn sky_summary(level: &Level) {
         println!("  {} {:?}", p(v.pos), v.color);
     }
     let ys: Vec<i32> = sky.vertices.iter().map(|v| v.pos.y as i32).collect();
-    let rs = sky.vertices.iter().map(|v| ((v.pos.x as f32).hypot(v.pos.z as f32)) as i32);
+    let rs = sky
+        .vertices
+        .iter()
+        .map(|v| ((v.pos.x as f32).hypot(v.pos.z as f32)) as i32);
     println!(
         "y {}..{}, horizontal radius up to {}",
         ys.iter().min().unwrap(),

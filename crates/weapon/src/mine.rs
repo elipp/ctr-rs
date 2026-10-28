@@ -9,7 +9,8 @@
 //! one more sets the oldest off.
 //!
 //! Going off (`RB_Blowup_Init`) blasts every kart in reach and sets off the other mines near it,
-//! which go with no blast of their own (`RB_Hazard_ThCollide_Generic`).
+//! which go with no blast of their own (`RB_Hazard_ThCollide_Generic`). Some of the level's hazards
+//! set them off the same way ([`Weapons::set_off_mine`]).
 //!
 //! The potion (`STATIC_BEAKER_GREEN`, and the red one of a kart with 10 wumpa fruit) is a mine
 //! too: dropped, it lies where it fell; thrown (forward with Up, backward with Down) it flies
@@ -264,6 +265,12 @@ impl Weapons {
     /// The mines there are.
     pub fn mines(&self) -> &[Mine] {
         &self.mines
+    }
+
+    /// Something outside the weapons, such as a hazard, sets off mine `index` (an index into
+    /// [`Weapons::mines`], `RB_Hazard_ThCollide_Generic`). The next `tick` reports it.
+    pub fn set_off_mine(&mut self, index: usize) {
+        self.mines[index].set_off(&mut self.pending);
     }
 
     /// Whether kart `slot` has a TNT crate on its head, or on its way there (`instTntRecv`).

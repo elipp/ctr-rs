@@ -95,3 +95,5 @@ This file is for the places where the port _intentionally_ differs from the orig
 - The lifts are by the ground at the crate's center. A crate on a slope may still be cut at a corner, which `CrateBias` (`/debug crate bias`, 100k) covers.
 - Hot Air Skyway's fruit crate #35 is left alone: it is inside hidden collision geometry, 82 units below the drawn ground, so it is probably not meant to be seen.
 - The lifts were not looked at in the game.
+
+**Hazards setting off mines (2026-10-28):** `race::set_off_mines` (`RB_Hazard_ThCollide_Generic` from the seal, spider, armadillo, fireball, flame jet and plant). A mine that is set off stays in the `MINE` bucket until the frame ends, so in retail a second hazard that reaches it on the same tick stops at it and calls `RB_Hazard_ThCollide_Generic` again, which gives a second explosion and sound. We stop the search at it too, but nothing happens: the mine is already dead and `Mine::set_off` does nothing. What is left on the track is the same, and it is deterministic.

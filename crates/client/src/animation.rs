@@ -90,7 +90,11 @@ pub(crate) fn animate_scenery(
 }
 
 /// `CTR_CycleTex_LEV`, once per game tick.
-pub(crate) fn animate(mut state: ResMut<AnimState>, tick: Res<GameTick>, mut meshes: ResMut<Assets<Mesh>>) {
+pub(crate) fn animate(
+    mut state: ResMut<AnimState>,
+    tick: Res<GameTick>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
     let state = &mut *state;
     let mut dirty = vec![false; state.handles.len()];
     for (i, anim) in state.animations.iter().enumerate() {

@@ -55,7 +55,10 @@ impl Checks {
                 Some(Mismatch {
                     tick,
                     slot,
-                    hashes: Some(Hashes { ours: hash, theirs: other }),
+                    hashes: Some(Hashes {
+                        ours: hash,
+                        theirs: other,
+                    }),
                 })
             })
             .collect()
@@ -103,10 +106,24 @@ mod tests {
     fn a_hash_that_differs_names_the_player_whichever_side_is_late() {
         let mut a = Checks::new(3, 1);
         assert_eq!(a.theirs(2, 30, 5), None);
-        assert_eq!(a.mine(30, 6), vec![Mismatch { tick: 30, slot: 2, hashes: Some(Hashes { ours: 6, theirs: 5 }) }]);
+        assert_eq!(
+            a.mine(30, 6),
+            vec![Mismatch {
+                tick: 30,
+                slot: 2,
+                hashes: Some(Hashes { ours: 6, theirs: 5 })
+            }]
+        );
         assert_eq!(a.theirs(0, 60, 1), None);
         assert!(a.mine(60, 1).is_empty());
-        assert_eq!(a.theirs(2, 60, 2), Some(Mismatch { tick: 60, slot: 2, hashes: Some(Hashes { ours: 1, theirs: 2 }) }));
+        assert_eq!(
+            a.theirs(2, 60, 2),
+            Some(Mismatch {
+                tick: 60,
+                slot: 2,
+                hashes: Some(Hashes { ours: 1, theirs: 2 })
+            })
+        );
     }
 
     #[test]

@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+use crate::{
+    FlameModels, Racer, ShadowIcons, SmokeIcon, TiremarkIcon, WheelIcons, flame, font, maps, skid,
+};
 use bevy::prelude::*;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
@@ -11,7 +14,6 @@ use loader::lev::Level;
 use loader::level::LevelId;
 use loader::model::Model;
 use loader::vram::{Vram, parse_vram_file};
-use crate::{FlameModels, Racer, ShadowIcons, SmokeIcon, TiremarkIcon, WheelIcons, flame, font, maps, skid};
 
 /// `NITROS_OXIDE` in `GAME_CHARACTER_IDS` order.
 pub(crate) const NITROS_OXIDE: u32 = 15;
@@ -148,7 +150,11 @@ pub(crate) fn load_level(id: u32) -> LevelData {
 }
 
 /// The texture pages that every track shares (`shared.vrm`).
-pub(crate) fn upload_shared(vram: &mut Vram, big: &loader::bigfile::BigFile, disc: &mut loader::disc::Disc) {
+pub(crate) fn upload_shared(
+    vram: &mut Vram,
+    big: &loader::bigfile::BigFile,
+    disc: &mut loader::disc::Disc,
+) {
     let shared = big
         .read(disc, BigIndex::SHARED_MPK_VRM.get())
         .expect("read shared VRAM file");

@@ -278,7 +278,8 @@ impl CameraDc {
         let dz = spot[2].wrapping_sub(plant.pos[2]);
         let dy = (y as i32).wrapping_sub(plant.pos[1]);
         self.pb_rot.y = math::ratan2(dx, dz) as i16;
-        let dist = math::square_root0_stub(mips::add_lo(mips::mul_lo(dx, dx), mips::mul_lo(dz, dz)));
+        let dist =
+            math::square_root0_stub(mips::add_lo(mips::mul_lo(dx, dx), mips::mul_lo(dz, dz)));
         // (Only the low byte of the height is used: it is 192 above the plant.)
         let pitch = math::ratan2(dy as u8 as i32, dist);
         self.pb_rot.x = (PLANT_CAMERA_PITCH_BASE - pitch) as i16;

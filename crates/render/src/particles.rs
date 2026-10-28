@@ -877,8 +877,12 @@ impl Particle {
     /// The radii of the three rings of a heat particle's lens, in game units (the second byte of
     /// the axes that hold them).
     pub fn heat_radii(&self) -> [i32; 3] {
-        [axis::HEAT_RADIUS_0, axis::HEAT_RADIUS_1, axis::HEAT_RADIUS_2]
-            .map(|a| self.axes[a].start >> 8 & 0xff)
+        [
+            axis::HEAT_RADIUS_0,
+            axis::HEAT_RADIUS_1,
+            axis::HEAT_RADIUS_2,
+        ]
+        .map(|a| self.axes[a].start >> 8 & 0xff)
     }
 
     /// `RB_FlameJet_Particles`' fire: at the nozzle `position` (level units), drifting `dir`
@@ -886,7 +890,11 @@ impl Particle {
     pub fn flame_jet(position: [i32; 3], dir: [i16; 2], ticks: u32, rng: &mut Rng) -> Particle {
         let mut p = Particle::new(&FLAME_JET_FIRE, rng);
         // It starts 50 units above the nozzle.
-        for (axis, pos) in p.axes.iter_mut().zip([position[0], position[1] + 0x32, position[2]]) {
+        for (axis, pos) in p
+            .axes
+            .iter_mut()
+            .zip([position[0], position[1] + 0x32, position[2]])
+        {
             axis.start += pos * 0x100;
         }
         p.axes[axis::POS_X].velocity = dir[0];
@@ -905,12 +913,7 @@ impl Particle {
 
     /// One of the four tires of `RB_Plant_ThTick_Eat`'s spit: at the plant's mouth, `facing` being
     /// the x and z of the third column of its matrix. `icons` is how many wheel icons there are.
-    pub fn plant_tire(
-        plant: [i32; 3],
-        facing: [i16; 2],
-        icons: usize,
-        rng: &mut Rng,
-    ) -> Particle {
+    pub fn plant_tire(plant: [i32; 3], facing: [i16; 2], icons: usize, rng: &mut Rng) -> Particle {
         let mut p = Particle::new(&PLANT_TIRES, rng);
         let [fx, fz] = facing.map(i32::from);
         p.axes[axis::POS_X].start += (plant[0] + (fx * 9 >> 7)) * 0x100;
@@ -951,7 +954,9 @@ impl Particle {
     /// `Particle_FuncPtr_PotionShatter`: once it has slowed on the way up it is blown sideways
     /// and starts to grow, and from then on its colour fades.
     fn potion_shatter_step(&mut self) {
-        let Some(shatter) = &mut self.shatter else { return };
+        let Some(shatter) = &mut self.shatter else {
+            return;
+        };
         if self.axes[axis::POS_Y].velocity < 0x578 && self.axes[axis::POS_X].velocity == 0 {
             self.axes[axis::POS_X].velocity = (shatter.rng.mix(800) - 400) as i16;
             self.axes[axis::POS_Z].velocity = (shatter.rng.mix(800) - 400) as i16;
@@ -1337,7 +1342,10 @@ mod tests {
             offsets.push(p.position()[1] - plain.position()[1]);
         }
         assert!(offsets.iter().all(|&o| o == 1 || o == 0x200), "{offsets:?}");
-        assert!(offsets.contains(&1) && offsets.contains(&0x200), "{offsets:?}");
+        assert!(
+            offsets.contains(&1) && offsets.contains(&0x200),
+            "{offsets:?}"
+        );
     }
 
     fn puff(dark: bool) -> Particle {
@@ -1512,7 +1520,10 @@ mod spark_colour_tests {
         assert!((0x12..0x22).contains(&a), "{a:#x}");
         assert_eq!((a - b, a - c), (4, 6));
         // It starts 16 units over the flame and goes where it goes.
-        assert_eq!(heat.axes[axis::POS_Y].start - fire.axes[axis::POS_Y].start >> 8, 16 + (-0x40 >> 8));
+        assert_eq!(
+            heat.axes[axis::POS_Y].start - fire.axes[axis::POS_Y].start >> 8,
+            16 + (-0x40 >> 8)
+        );
         assert_eq!(heat.velocity()[0], 100);
         let mut ticks = 0;
         while heat.update() {
@@ -1521,7 +1532,10 @@ mod spark_colour_tests {
         // Seven ticks, and by then the rings are near 0x4a, 0x46 and 0x44.
         assert_eq!(ticks, 6);
         let [a, b, c] = heat.heat_radii();
-        assert!(a >= 0x40 && a <= 0x4a && b >= 0x3c && c >= 0x3a, "{a:#x} {b:#x} {c:#x}");
+        assert!(
+            a >= 0x40 && a <= 0x4a && b >= 0x3c && c >= 0x3a,
+            "{a:#x} {b:#x} {c:#x}"
+        );
     }
 
     #[test]

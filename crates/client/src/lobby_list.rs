@@ -63,7 +63,10 @@ fn build(
         Vec::new()
     };
     let watchers: Vec<(String, String)> = if lobby.is_waiting() {
-        lobby.watchers().map(|(n, k)| (n.to_string(), k.to_string())).collect()
+        lobby
+            .watchers()
+            .map(|(n, k)| (n.to_string(), k.to_string()))
+            .collect()
     } else {
         Vec::new()
     };

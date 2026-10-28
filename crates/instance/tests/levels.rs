@@ -325,10 +325,11 @@ fn tiger_temple_places_its_flame_jets_and_they_burn() {
         return;
     };
     assert_eq!(h.flame_jets.len(), 3);
-    assert!(h
-        .flame_jets
-        .iter()
-        .all(|j| level.instances[j.instance].model_name == "flamejet"));
+    assert!(
+        h.flame_jets
+            .iter()
+            .all(|j| level.instances[j.instance].model_name == "flamejet")
+    );
     let burns = (0..600)
         .flat_map(|_| h.tick(&[]).contacts)
         .filter(|c| c.damage == instance::Damage::Burn)

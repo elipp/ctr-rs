@@ -1,7 +1,7 @@
 //! The countdown before the host's race starts or starts over.
 
-use bevy::prelude::*;
 use super::Lobby;
+use bevy::prelude::*;
 
 /// The seconds of the countdown before the host's race starts, or starts over.
 pub(super) const COUNTDOWN_SECONDS: u32 = 5;
@@ -49,4 +49,3 @@ pub(super) fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
     }
     lobby.countdown = Some(c);
 }
-

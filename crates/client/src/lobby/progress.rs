@@ -1,8 +1,8 @@
 //! The race in progress: its end, the clock's pace and the rollback toasts.
 
-use bevy::prelude::*;
-use crate::toast::Toast;
 use super::{ANNOUNCE_COLOR, Lobby};
+use crate::toast::Toast;
+use bevy::prelude::*;
 
 /// The ticks we may be ahead of the others before the clock is slowed.
 pub(super) const LEAD_ALLOWED: f32 = 1.0;
@@ -27,7 +27,11 @@ pub(super) const AFTERMATH_SECONDS: u32 = 5;
 /// counted in ticks from the win, once the tick it happened on is settled, so that every client
 /// sees the same winner whatever it predicted, and ends at the same tick. The lobby stays, and
 /// the host can start another race.
-pub(super) fn finish(mut lobby: ResMut<Lobby>, sim: Res<crate::props::Sim>, mut toasts: MessageWriter<Toast>) {
+pub(super) fn finish(
+    mut lobby: ResMut<Lobby>,
+    sim: Res<crate::props::Sim>,
+    mut toasts: MessageWriter<Toast>,
+) {
     let Some(net) = lobby.online.as_mut().filter(|net| net.go && !net.fresh) else {
         return;
     };
@@ -129,4 +133,3 @@ pub(super) fn rollback_toasts(
     };
     toasts.write(Toast::new(text, 700).size(16.0).color(color));
 }
-
