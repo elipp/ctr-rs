@@ -4,7 +4,8 @@
 //!
 //! The music is silent at the traffic lights and starts after the green, the level's song or,
 //! while a mask is out, the mask's. It fades down for "FINAL LAP!" and up again, and plays 20
-//! beats a minute faster from then on; at the end of the race it fades out.
+//! beats a minute faster from then on; at the end of the race it fades out. The voice lines are
+//! on while racing, but not for the start of the last lap and the end of the race.
 //!
 //! There is no XA yet: the jingles the states would start are not heard, and the states that wait
 //! for one to end go on at once. A race starts at the lights, as the fly-in's state
@@ -68,9 +69,13 @@ impl Howl {
                 self.stop_music();
                 self.stop_songs();
             }
-            State::Racing | State::PreLastLap | State::LastLap => {}
+            State::Racing => self.enable_voicelines(true),
+            State::PreLastLap | State::LastLap => self.enable_voicelines(false),
             State::FinalLap => self.lower_music(),
-            State::PostLastLap => self.raise_music(),
+            State::PostLastLap => {
+                self.raise_music();
+                self.enable_voicelines(true);
+            }
             State::RaceEnd => self.fade_out_music(),
         }
         self.state = Some(state);
@@ -92,6 +97,7 @@ impl Howl {
             }
             State::Racing => {
                 self.set_mask_song(race, 0);
+                self.update_voicelines();
                 if laps > 2 && lap == laps - 2 && near {
                     self.set_state(State::PreLastLap);
                 }
@@ -109,6 +115,7 @@ impl Howl {
             }
             State::PostLastLap => {
                 self.set_mask_song(race, LAST_LAP_TEMPO);
+                self.update_voicelines();
                 if lap == laps - 1 && near {
                     self.set_state(State::LastLap);
                 }
@@ -166,9 +173,11 @@ mod tests {
         };
         howl.update_state(&lights);
         assert_eq!(howl.state, Some(State::Traffic));
-        // The green: from the next frame the level's song plays.
+        assert!(!howl.voicelines.enabled);
+        // The green: the drivers speak, and from the next frame the level's song plays.
         howl.update_state(&on_lap(0));
         assert_eq!(howl.state, Some(State::Racing));
+        assert!(howl.voicelines.enabled);
         assert_eq!(howl.music_playing(), None);
         howl.update_state(&on_lap(0));
         assert_eq!(howl.music_playing(), Some((LEVEL_SONG, 60)));
@@ -185,6 +194,7 @@ mod tests {
         assert_eq!(howl.state, Some(State::Racing));
         howl.update_state(&near(1));
         assert_eq!(howl.state, Some(State::PreLastLap));
+        assert!(!howl.voicelines.enabled);
         howl.update_state(&on_lap(2));
         assert_eq!(howl.state, Some(State::FinalLap));
         assert_eq!(howl.music_volume(), Some((190, 90)));
@@ -192,10 +202,12 @@ mod tests {
         howl.update_state(&on_lap(2));
         assert_eq!(howl.state, Some(State::PostLastLap));
         assert_eq!(howl.music_volume(), Some((190, 190)));
+        assert!(howl.voicelines.enabled);
         howl.update_state(&on_lap(2));
         assert_eq!(howl.music_playing(), Some((LEVEL_SONG, 80)));
         howl.update_state(&near(2));
         assert_eq!(howl.state, Some(State::LastLap));
+        assert!(!howl.voicelines.enabled);
     }
 
     #[test]
