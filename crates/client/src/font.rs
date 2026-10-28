@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
+use bevy::ui::widget::NodeImageMode;
 use bevy::window::PrimaryWindow;
 use render::font::{Font, FontAtlas, Gradient};
 
@@ -165,6 +166,9 @@ fn lay_out(
                         left + glyph.ink_width() as f32,
                         glyph.height as f32,
                     )),
+                    // Stretch: `Auto` would keep the glyph's own shape, with square texels, and
+                    // fit it into the node (see `hud.rs`).
+                    image_mode: NodeImageMode::Stretch,
                     ..ImageNode::new(image.clone())
                 },
                 Node {

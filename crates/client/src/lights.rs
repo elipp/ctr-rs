@@ -127,7 +127,8 @@ fn spawn(commands: &mut Commands, image: Handle<Image>) {
     for n in 0..LIGHTS {
         commands.spawn((
             Light(n),
-            ImageNode::new(image.clone()),
+            // Stretch, as for every picture of the HUD (see `hud.rs`).
+            ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch),
             Node {
                 width: hud::x(WIDTH as f32),
                 height: hud::y(HEIGHT as f32),
