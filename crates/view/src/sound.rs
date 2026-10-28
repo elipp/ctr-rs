@@ -7,6 +7,9 @@
 //! changes and stops sounds in it, and Bevy plays the samples it renders ([`Mixer`]). Rendering
 //! is the engine's clock too (the SPU's vertical blank, when sounds start, change and end).
 //!
+//! Each level sets its reverb as it loads (`Audio_SetReverbMode` in `Music_LoadBanks`), which
+//! the sounds that echo (a kart in a tunnel) are heard through.
+//!
 //! The engines loop (`EngineAudio_InitOnce`) at what `vehicle::engine_sound` makes of their
 //! karts each tick (`EngineAudio_Recalculate`): ours on our class's loop, and the two other
 //! karts nearest the camera on the two loops retail gives the AIs (`EngineSound_NearestAIs`).
@@ -29,6 +32,8 @@ use vehicle::engine_sound::{EngineSound, EngineVoice, FarVoice};
 use vehicle::stats::CHARACTER_ENGINES;
 use vehicle::{Driver, Effect, Sound3D, actions, audio_slot, fire};
 use weapon::mine::MineKind;
+
+use crate::Track;
 
 /// `DotLights_AudioAndVideo`: a red light comes on, and the green.
 const RED_LIGHT_SFX: u16 = 0x45;
@@ -80,7 +85,8 @@ impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<Mixer>()
             .init_resource::<Kept>()
-            .add_systems(Startup, start_mixer);
+            .add_systems(Startup, start_mixer)
+            .add_systems(Update, level_audio);
     }
 }
 
@@ -126,6 +132,13 @@ impl Sounds {
 fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds: Res<Sounds>) {
     let mixer = mixers.add(Mixer(sounds.0.clone()));
     commands.spawn((AudioPlayer(mixer), PlaybackSettings::ONCE));
+}
+
+/// `Music_LoadBanks`: a level that loads sets its reverb. There are no boss races.
+fn level_audio(track: Res<Track>, sounds: Res<Sounds>) {
+    if track.is_changed() {
+        sounds.lock().set_level_reverb(track.1.0, None);
+    }
 }
 
 /// What Bevy plays: everything the sound engine renders, without end.
