@@ -315,6 +315,9 @@ pub struct Level {
     /// barrels follow one each, picked by the digit their instance name ends in.
     pub paths: Vec<Vec<PosRot>>,
     pub skybox: Option<Skybox>,
+    /// The flat colors behind the sky (`clearColor`): the top half of the screen, the bottom half
+    /// and the glow gradient. `None` where the level does not enable them.
+    pub clear_colors: [Option<[u8; 3]>; 3],
     pub quad_blocks: Vec<QuadBlock>,
     pub vertices: Vec<LevVertex>,
     pub bsp: Vec<BspNode>,
@@ -411,6 +414,7 @@ const PATH_ENTRY_SIZE: usize = 8;
 const POS_ROT_SIZE: usize = 0xc;
 const LEVEL_DRIVER_SPAWN: usize = 0x6c;
 const LEVEL_CONFIG_FLAGS: usize = 0xdc;
+const LEVEL_CLEAR_COLORS: usize = 0x160;
 const LEVEL_RESTART_COUNT: usize = 0x148;
 const LEVEL_RESTART_PTR: usize = 0x14c;
 const LEVEL_JUMP_SPEED_CAP: usize = 0x18c;
@@ -424,6 +428,17 @@ const SKY_VERTEX_SIZE: usize = 12;
 const SKY_FACE_SIZE: usize = 8;
 
 impl Level {
+    fn parse_clear_colors(p: &Payload) -> io::Result<[Option<[u8; 3]>; 3]> {
+        let mut colors = [None; 3];
+        for (i, color) in colors.iter_mut().enumerate() {
+            let at = LEVEL_CLEAR_COLORS + i * 4;
+            if p.u8(at + 3)? != 0 {
+                *color = Some([p.u8(at)?, p.u8(at + 1)?, p.u8(at + 2)?]);
+            }
+        }
+        Ok(colors)
+    }
+
     fn parse_skybox(p: &Payload) -> io::Result<Option<Skybox>> {
         let Some(sky) = (match p.u32(LEVEL_SKYBOX)? {
             0 => None,
@@ -769,6 +784,7 @@ impl Level {
             position_paths: Self::parse_position_paths(&p)?,
             paths: Self::parse_paths(&p)?,
             skybox: Self::parse_skybox(&p)?,
+            clear_colors: Self::parse_clear_colors(&p)?,
             quad_blocks,
             vertices,
             bsp,

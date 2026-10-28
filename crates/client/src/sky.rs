@@ -6,7 +6,11 @@
 //! draws over it without clearing. Retail only draws the 4 of 8 segments nearest the heading; all
 //! 8 are drawn here, the depth buffer and the frustum do the rest.
 //!
-//! Not done: the glow gradients (`CAM_SkyboxGlow`, `Level::glowGradient`), the level's clear color.
+//! The hole at the top of the dome shows the level's top clear color (`CAM_ClearScreen` draws it
+//! behind everything); a level without one shows black, as the game's plain screen clear does.
+//!
+//! Not done: the glow gradients (`CAM_SkyboxGlow`, `Level::glowGradient`), and the clear colors'
+//! split between top and bottom that follows the camera pitch; the top color fills it all.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -36,6 +40,7 @@ pub fn spawn(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     sky: &Skybox,
+    clear: Option<[u8; 3]>,
     mut projection: PerspectiveProjection,
 ) {
     let mut positions = Vec::new();
@@ -47,7 +52,10 @@ pub fn spawn(
             let p = to_world(v.pos);
             radius = radius.max(Vec3::from(p).length());
             positions.push(p);
-            let [r, g, b] = v.color.map(|c| c as f32 / 255.0);
+            // Bytes of the framebuffer, like the clear color; the attribute is linear.
+            let [r, g, b, _] = Color::srgb_u8(v.color[0], v.color[1], v.color[2])
+                .to_linear()
+                .to_f32_array();
             colors.push([r, g, b, 1.0]);
         }
     }
@@ -74,12 +82,14 @@ pub fn spawn(
         })),
         RenderLayers::layer(SKY_LAYER),
     ));
+    let [r, g, b] = clear.unwrap_or_default();
     projection.far = projection.far.max(radius * 2.0);
     commands.spawn((
         SkyCamera,
         Camera3d::default(),
         Camera {
             order: -1,
+            clear_color: ClearColorConfig::Custom(Color::srgb_u8(r, g, b)),
             ..default()
         },
         Projection::Perspective(projection),
