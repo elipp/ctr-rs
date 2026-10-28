@@ -491,7 +491,6 @@ impl Race {
             before_tick(
                 &mut kart.driver,
                 &self.last,
-                &mut self.objects.random_number,
                 &mut hurt,
                 effects,
             );
@@ -516,6 +515,7 @@ impl Race {
                     effects,
                 })
                 .collect();
+            vehicle::sim::start_tick(&mut racers, &mut self.objects.random_number);
             vehicle::sim::tick_all(
                 &mut racers,
                 level,
@@ -624,13 +624,12 @@ impl Race {
 fn before_tick(
     driver: &mut Driver,
     objects: &instance::Tick,
-    random_number: &mut i32,
     hurt: &mut Vec<usize>,
     effects: &mut Vec<Effect>,
 ) {
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
-    let (_, at) = vehicle::baked::inst_matrix(driver);
+    let at = driver.inst_pos;
     for contact in objects.contacts.iter().filter(|c| c.hits(at)) {
         // A plant has one mouthful: the first kart it hurts is the one it eats.
         if contact.damage == instance::Damage::Eat && hurt.contains(&contact.instance) {
@@ -658,8 +657,6 @@ fn before_tick(
             });
         }
     }
-    // A kart that was blasted draws which way its tumble plays, as the init stage does.
-    vehicle::tumble::roll_direction(driver, random_number);
 }
 
 /// What a kart does after the stages of a tick. The sparks and the puffs are for the outside to

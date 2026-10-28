@@ -15,6 +15,13 @@
  *            turnResponseScale sound">         the terrain table
  *   A <8 x numFrames>                          the frames of the model's animations
  *   S <65 values>                              the engine class's constants
+ *   G <for each table after the first: numEntries x "offset rot scale" (3 each)>
+ *             the authored animation tables, which Vector_BakeMatrixTable bakes
+ *   W <mask>  each driver keeps a scratchpad (1) and a GTE (2) of its own, as the port's
+ *             `Collision` per kart does (3); 0: they share the one, as in retail
+ *   M <n>     the next run's number of drivers, linked in that order in the PLAYER
+ *             bucket (each bumps into the ones after it)
+ *   P <i>     the driver the commands below are for (0 to start with)
  *   C <characterID>                            the driver's character
  *   N         prints the names of the driver fields, in order
  *   D <driver fields...>
@@ -25,53 +32,145 @@
  *   I <reserves> <type> <fireLevel>
  *             a boost before the next tick's stages, where
  *             VehPickupItem_ShootOnCirclePress fires a turbo item
- *   X <elapsedMS> <elapsedEventTime> <timer> <endOfRace> <buttonsHeld>
- *     <buttonsTapped> <stickLX> <stickLY> <stickRY>
- *             runs one tick; prints the driver, the effects it requested and
- *             a few values of the scratchpad
+ *   X <elapsedMS> <elapsedEventTime> <timer> <endOfRace>
+ *     <n x "buttonsHeld buttonsTapped stickLX stickLY stickRY">
+ *             runs one tick of the run's drivers; prints a line for each: the
+ *             driver, the effects its stages requested and a few values of the
+ *             scratchpad as its searches left them
+ *
+ * MainFrame's order: VehPickupItem_ShootOnCirclePress lands the hits the last bumps
+ * queued, for all the drivers, then each stage runs over all of them before the next.
  *
  * Everything of the driver's states is the real code: driving, drifting,
  * spinning out, the crash, the V-shift freeze and a blast's tumble; only the stages that are
- * presentation are left out. The exhaust fire is the real VehTurbo.c too: its
- * thread is born in the TURBO bucket, ticks after the drivers' stages and dies
+ * presentation are left out. The exhaust fire is the real VehTurbo.c too: a
+ * driver's thread is born in the TURBO bucket, ticks after the drivers' stages and dies
  * in PROC_CheckAllForDead, before the HUD's jump meter, as in MainFrame.
  */
 #include <stdarg.h>
 #include "../../../coll/tests/reference/level.h"
 #include <psx/gtereg.h>
 
-struct Thread thread;
-struct Instance inst;
-struct Driver d;
+#define MAX_KARTS 4
+
+/* A driver: its thread, instance and model, its exhaust fire, and what the test keeps of it. */
+struct Kart
+{
+	struct Thread thread;
+	struct Instance inst;
+	struct Driver d;
+	struct Model model;
+	struct ModelHeader modelHeader;
+	struct ModelAnim *modelAnims[8];
+	struct ModelAnim modelAnimData[8];
+
+	/* The turbo thread, in gGT.threadBuckets[TURBO] while it lives. */
+	int turbo;
+	struct Thread turboThread;
+	struct Instance turboInst1, turboInst2;
+	struct Turbo turboObj;
+
+	char effects[1024];
+	int maskGrab;
+	/* The damage type of the next tick's hit, or -1. */
+	int pendingHit;
+	/* With `W 1`: the driver's own scratchpad and GTE. */
+	u8 scratchpad[CTR_SCRATCHPAD_SIZE];
+	GTERegisters gte;
+	/* The scratchpad's values as the driver's last search left them. */
+	int pad[5];
+};
+
+struct Kart karts[MAX_KARTS];
+/* The driver being run (or loaded). */
+static struct Kart *k = &karts[0];
+static int numKarts = 1;
+static int ownCollision;
+
 struct GameTracker gGT;
 struct Level level;
 struct GamepadSystem pads;
-struct Model model;
-/* The baked animation matrices are not ported; the C animation only needs somewhere to read them from. */
-struct MatrixND bakedDummy[256];
-struct ModelHeader modelHeader;
-struct ModelAnim *modelAnims[8];
-struct ModelAnim modelAnimData[8];
+/* The animation tables, authored (`G`) and baked in place. */
+struct MatrixND bakedTables[BAKED_GTE_MATRIX_COUNT][0x20];
 struct CheckpointNode *restartPoints;
 
-static char effects[1024];
-static int maskGrab;
-/* While the turbo thread ticks: its rumble is not ported. */
+/* While a turbo thread ticks: its rumble is not ported. */
 static int inTurboTick;
-/* The damage type of the next tick's hit, or -1. */
-static int pendingHit = -1;
-
-/* The one turbo thread (one driver), in gGT.threadBuckets[TURBO] while it lives. */
-struct Thread turboThread;
-struct Instance turboInst1, turboInst2;
-struct Turbo turboObj;
 
 static void effect(const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	vsnprintf(effects + strlen(effects), sizeof(effects) - strlen(effects), fmt, ap);
+	vsnprintf(k->effects + strlen(k->effects), sizeof(k->effects) - strlen(k->effects), fmt, ap);
 	va_end(ap);
+}
+
+static struct Kart *kart_of(struct Driver *drv)
+{
+	return &karts[((char *)drv - (char *)&karts[0].d) / sizeof(struct Kart)];
+}
+
+/* The TURBO bucket: the living turbo threads, in the drivers' order. */
+static void link_turbos(void)
+{
+	struct Thread **next = &gGT.threadBuckets[TURBO].thread;
+	for (int i = 0; i < MAX_KARTS; i++)
+	{
+		if (!karts[i].turbo)
+			continue;
+		*next = &karts[i].turboThread;
+		next = &karts[i].turboThread.siblingThread;
+	}
+	*next = NULL;
+}
+
+/* The PLAYER bucket: the run's drivers, in order. */
+static void link_drivers(void)
+{
+	gGT.threadBuckets[PLAYER].thread = &karts[0].thread;
+	for (int i = 0; i < MAX_KARTS; i++)
+		karts[i].thread.siblingThread = i + 1 < numKarts ? &karts[i + 1].thread : NULL;
+}
+
+static void read_pad(int *v)
+{
+	struct ScratchpadStruct *pad = (struct ScratchpadStruct *)(scratchpad + 0x108);
+	v[0] = pad->hitFraction;
+	v[1] = pad->Input1.hitRadius;
+	v[2] = (int)pad->collision.stepFlags;
+	v[3] = pad->boolDidTouchQuadblock;
+	v[4] = pad->numTrianglesTested;
+}
+
+/* Starts and ends a part of the tick that is the driver's own (`W 1` swaps its scratchpad
+ * and GTE in), and notes what its searches leave in the scratchpad. */
+static int padBefore[5];
+static void enter(struct Kart *kart)
+{
+	k = kart;
+	if (ownCollision & 1)
+		memcpy(scratchpad, k->scratchpad, sizeof(k->scratchpad));
+	if (ownCollision & 2)
+		gteRegs = k->gte;
+	read_pad(padBefore);
+}
+
+static void leave_searched(int searched)
+{
+	int after[5];
+	read_pad(after);
+	for (int i = 0; i < 5; i++)
+		if (searched || after[i] != padBefore[i])
+			k->pad[i] = after[i];
+	if (ownCollision & 1)
+		memcpy(k->scratchpad, scratchpad, sizeof(k->scratchpad));
+	if (ownCollision & 2)
+		k->gte = gteRegs;
+}
+
+static void leave(void)
+{
+	leave_searched(0);
 }
 
 int OtherFX_Play_LowLevel(u32 soundID, u8 boolAntiSpam, u32 flags)
@@ -88,6 +187,12 @@ int OtherFX_Play(u32 soundID, int flags)
 void OtherFX_Play_Echo(u32 soundID, int flags, int echoFlag)
 {
 	OtherFX_Play_LowLevel(soundID & 0xffff, flags & 0xff, echoFlag ? HOWL_SFX_DEFAULT_FLAGS | HOWL_SFX_ECHO_FLAG : HOWL_SFX_DEFAULT_FLAGS);
+}
+
+/* A bump's crash (VehPhysCrash). */
+void OtherFX_DriverCrashing(u32 boolEcho, u32 volume)
+{
+	effect(" C %u %u", boolEcho, volume);
 }
 
 void Voiceline_RequestPlay(u32 voiceID, u32 characterID, u32 priority)
@@ -115,22 +220,23 @@ void GAMEPAD_ShockForce1(struct Driver *drv, s32 frame, s32 val)
 /* The turbo fire's thread and its two instances (VehFire_Increment's is the only birth here). */
 struct Instance *INSTANCE_BirthWithThread(s32 modelID, const char *name, s32 poolType, s32 bucket, void *funcThTick, s32 objSize, struct Thread *parent)
 {
-	memset(&turboThread, 0, sizeof(turboThread));
-	memset(&turboInst1, 0, sizeof(turboInst1));
-	memset(&turboObj, 0, sizeof(turboObj));
-	turboThread.object = &turboObj;
-	turboThread.inst = &turboInst1;
-	turboThread.funcThTick = funcThTick;
-	turboInst1.thread = &turboThread;
-	gGT.threadBuckets[TURBO].thread = &turboThread;
-	return &turboInst1;
+	memset(&k->turboThread, 0, sizeof(k->turboThread));
+	memset(&k->turboInst1, 0, sizeof(k->turboInst1));
+	memset(&k->turboObj, 0, sizeof(k->turboObj));
+	k->turboThread.object = &k->turboObj;
+	k->turboThread.inst = &k->turboInst1;
+	k->turboThread.funcThTick = funcThTick;
+	k->turboInst1.thread = &k->turboThread;
+	k->turbo = 1;
+	link_turbos();
+	return &k->turboInst1;
 }
 
 struct Instance *INSTANCE_Birth3D(struct Model *m, const char *name, struct Thread *th)
 {
-	memset(&turboInst2, 0, sizeof(turboInst2));
-	turboInst2.thread = th;
-	return &turboInst2;
+	memset(&k->turboInst2, 0, sizeof(k->turboInst2));
+	k->turboInst2.thread = th;
+	return &k->turboInst2;
 }
 
 void INSTANCE_Death(struct Instance *inst)
@@ -153,13 +259,18 @@ void TestFireAudio(int fireLevel)
 /* PROC_CheckAllForDead for the turbo bucket. */
 static void turbo_check_dead(void)
 {
-	if (gGT.threadBuckets[TURBO].thread != NULL && (turboThread.flags & THREAD_FLAG_DEAD) != 0)
+	for (int i = 0; i < MAX_KARTS; i++)
 	{
-		turboThread.funcThDestroy(&turboThread);
-		gGT.threadBuckets[TURBO].thread = NULL;
-		memset(&turboObj, 0, sizeof(turboObj));
-		memset(&turboInst1, 0, sizeof(turboInst1));
+		struct Kart *kart = &karts[i];
+		if (kart->turbo && (kart->turboThread.flags & THREAD_FLAG_DEAD) != 0)
+		{
+			kart->turboThread.funcThDestroy(&kart->turboThread);
+			kart->turbo = 0;
+			memset(&kart->turboObj, 0, sizeof(kart->turboObj));
+			memset(&kart->turboInst1, 0, sizeof(kart->turboInst1));
+		}
 	}
+	link_turbos();
 }
 
 void GhostTape_WriteBoosts(s32 addReserve, u32 type, s32 speedCap)
@@ -179,10 +290,10 @@ b32 LOAD_IsOpen_RacingOrBattle(void)
 
 void VehStuckProc_MaskGrab_Init(struct Thread *t, struct Driver *drv)
 {
-	maskGrab = 1;
+	kart_of(drv)->maskGrab = 1;
 }
 
-enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT, TERRAIN1, TERRAIN2, TURBO_EXISTS, TURBO_HIDDEN };
+enum { S8, U8, S16, U16, S32, U32, QUAD, PHYS_STATE, INIT, TERRAIN1, TERRAIN2, TURBO_EXISTS, TURBO_HIDDEN, ATTACKER };
 
 struct Field
 {
@@ -191,7 +302,8 @@ struct Field
 	int type;
 };
 
-#define F(member, type) { #member, &(member), type }
+/* The addresses are the first driver's; the others' are as far into theirs. */
+#define F(member, type) { #member, &(karts[0].member), type }
 #define V3S16(v) F(v.x, S16), F(v.y, S16), F(v.z, S16)
 #define V3S32(v) F(v.x, S32), F(v.y, S32), F(v.z, S32)
 #define MAT(mat) \
@@ -220,6 +332,7 @@ static struct Field fields[] = {
 	F(d.Screen_OffsetY, S8), F(d.distanceFromGround, S16), F(d.reserved_0x40e, S16),
 	F(d.jumpSquishStretch, S16), F(d.jumpSquishStretch2, S16),
 	F(inst.animIndex, U8), F(inst.animFrame, S16), F(inst.scale.x, S16), F(inst.scale.y, S16),
+	F(inst.matrix.t[0], S32), F(inst.matrix.t[1], S32), F(inst.matrix.t[2], S32),
 	F(d.matrixArray, U8), F(d.matrixIndex, U8),
 	F(d.numWumpas, S8), F(d.accelConst, S8), F(d.turnConst, S8), F(d.turboConst, S8),
 	F(d.clockReceive, S16), F(d.hazardTimer, S16), F(d.rainCloudEffect, S16),
@@ -229,6 +342,8 @@ static struct Field fields[] = {
 	F(d.jump_TenBuffer, S16), F(d.jump_CooldownMS, S16), F(d.jump_CoyoteTimerMS, S16), F(d.jump_ForcedMS, S16),
 	F(d.jump_InitialVelY, S16), F(d.jump_HighJumpTimerMS, S16), F(d.jump_LandingBoost, S16),
 	F(d.numberOfJumps, S16), F(d.jumpMeter, S16), F(d.jumpMeterTimer, S16), F(d.forcedJumpType, U8), F(d.buttonUsedToStartDrift, S16),
+	F(d.pendingDamageType, U8), F(d.pendingDamageReasonByte, U8), { "d.pendingDamageAttacker", NULL, ATTACKER },
+	F(d.invincibleTimer, S32),
 	F(d.rotCurr.x, S16), F(d.rotCurr.y, S16), F(d.rotCurr.z, S16),
 	F(d.rotPrev.x, S16), F(d.rotPrev.y, S16), F(d.rotPrev.z, S16), F(d.rotPrev.w, S16),
 	MAT(d.matrixMovingDir), MAT(d.matrixFacingDir),
@@ -249,6 +364,11 @@ static struct Field fields[] = {
 
 #define NUM_FIELDS ((int)(sizeof(fields) / sizeof(fields[0])))
 
+static void *field(int i)
+{
+	return fields[i].p == NULL ? NULL : (char *)k + ((char *)fields[i].p - (char *)&karts[0]);
+}
+
 static int terrainIndex(struct Terrain *t)
 {
 	return (int)(t - data.MetaDataTerrain);
@@ -256,73 +376,73 @@ static int terrainIndex(struct Terrain *t)
 
 static void set_state(int state, int init)
 {
-	memset(d.funcPtrs, 0, sizeof(d.funcPtrs));
-	d.funcPtrs[DRIVER_FUNC_APPLY_FORCES] = VehPhysForce_OnApplyForces;
-	d.funcPtrs[DRIVER_FUNC_COLL_MOVED] = COLL_MOVED_PlayerSearch;
-	d.funcPtrs[DRIVER_FUNC_COLL_FIXED] = COLL_FIXED_PlayerSearch;
-	d.funcPtrs[DRIVER_FUNC_COLLIDE_DRIVERS] = VehPhysForce_CollideDrivers;
-	d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = VehPhysForce_TranslateMatrix;
-	d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysGeneral_JumpAndFriction;
-	d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_Driving_PhysLinear;
-	d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysGeneral_PhysAngular;
-	d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_Driving;
-	d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_Driving_Update;
+	memset(k->d.funcPtrs, 0, sizeof(k->d.funcPtrs));
+	k->d.funcPtrs[DRIVER_FUNC_APPLY_FORCES] = VehPhysForce_OnApplyForces;
+	k->d.funcPtrs[DRIVER_FUNC_COLL_MOVED] = COLL_MOVED_PlayerSearch;
+	k->d.funcPtrs[DRIVER_FUNC_COLL_FIXED] = COLL_FIXED_PlayerSearch;
+	k->d.funcPtrs[DRIVER_FUNC_COLLIDE_DRIVERS] = VehPhysForce_CollideDrivers;
+	k->d.funcPtrs[DRIVER_FUNC_TRANSLATE_MATRIX] = VehPhysForce_TranslateMatrix;
+	k->d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysGeneral_JumpAndFriction;
+	k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_Driving_PhysLinear;
+	k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysGeneral_PhysAngular;
+	k->d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_Driving;
+	k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_Driving_Update;
 	switch (state)
 	{
 	case 1:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SlamWall_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SlamWall_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SlamWall_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SlamWall_Animate;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SlamWall_Update;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SlamWall_PhysLinear;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SlamWall_PhysAngular;
+		k->d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SlamWall_Animate;
 		break;
 	case 2:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_FreezeVShift_Update;
-		d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysProc_FreezeVShift_ReverseOneFrame;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_FreezeVShift_Update;
+		k->d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] = VehPhysProc_FreezeVShift_ReverseOneFrame;
 		break;
 	case 3:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_PowerSlide_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_PowerSlide_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_PowerSlide_PhysAngular;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_PowerSlide_Update;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_PowerSlide_PhysLinear;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_PowerSlide_PhysAngular;
 		break;
 	case 4:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinFirst_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinFirst_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinFirst_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_Spinning;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinFirst_Update;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinFirst_PhysLinear;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinFirst_PhysAngular;
+		k->d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_Spinning;
 		break;
 	case 5:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinLast_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinLast_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinLast_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_LastSpin;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinLast_Update;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinLast_PhysLinear;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinLast_PhysAngular;
+		k->d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehFrameProc_LastSpin;
 		break;
 	case 6:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinStop_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinStop_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinStop_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SpinStop_Animate;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehPhysProc_SpinStop_Update;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehPhysProc_SpinStop_PhysLinear;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehPhysProc_SpinStop_PhysAngular;
+		k->d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehPhysProc_SpinStop_Animate;
 		break;
 	case 7:
-		d.funcPtrs[DRIVER_FUNC_UPDATE] = VehStuckProc_Tumble_Update;
-		d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehStuckProc_Tumble_PhysLinear;
-		d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehStuckProc_Tumble_PhysAngular;
-		d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehStuckProc_Tumble_Animate;
+		k->d.funcPtrs[DRIVER_FUNC_UPDATE] = VehStuckProc_Tumble_Update;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR] = VehStuckProc_Tumble_PhysLinear;
+		k->d.funcPtrs[DRIVER_FUNC_PHYS_ANGULAR] = VehStuckProc_Tumble_PhysAngular;
+		k->d.funcPtrs[DRIVER_FUNC_ANIMATE] = VehStuckProc_Tumble_Animate;
 		break;
 	}
 	/* The init to run: 1 the state's own, 3 a hit's spin-out, 4 a blast's tumble. */
 	if (init == 1)
-		d.funcPtrs[DRIVER_FUNC_INIT] = state == 3 ? VehPhysProc_PowerSlide_InitSetUpdate
+		k->d.funcPtrs[DRIVER_FUNC_INIT] = state == 3 ? VehPhysProc_PowerSlide_InitSetUpdate
 		                              : state == 4 ? VehPhysProc_SpinFirst_InitSetUpdate
 		                                           : VehPhysProc_Driving_Init;
 	else if (init == 3)
-		d.funcPtrs[DRIVER_FUNC_INIT] = VehPhysProc_SpinFirst_Init;
+		k->d.funcPtrs[DRIVER_FUNC_INIT] = VehPhysProc_SpinFirst_Init;
 	else if (init == 4)
-		d.funcPtrs[DRIVER_FUNC_INIT] = VehStuckProc_Tumble_Init;
+		k->d.funcPtrs[DRIVER_FUNC_INIT] = VehStuckProc_Tumble_Init;
 }
 
 static int current_init(void)
 {
-	DriverFunc init = d.funcPtrs[DRIVER_FUNC_INIT];
+	DriverFunc init = k->d.funcPtrs[DRIVER_FUNC_INIT];
 	if (init == NULL)
 		return 0;
 	if (init == (DriverFunc)VehPhysProc_SpinFirst_Init)
@@ -334,7 +454,7 @@ static int current_init(void)
 
 static int current_state(void)
 {
-	DriverFunc linear = d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR];
+	DriverFunc linear = k->d.funcPtrs[DRIVER_FUNC_PHYS_LINEAR];
 	if (linear == (DriverFunc)VehPhysProc_SlamWall_PhysLinear)
 		return 1;
 	if (linear == (DriverFunc)VehPhysProc_PowerSlide_PhysLinear)
@@ -347,17 +467,18 @@ static int current_state(void)
 		return 6;
 	if (linear == (DriverFunc)VehStuckProc_Tumble_PhysLinear)
 		return 7;
-	return d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] == (DriverFunc)VehPhysProc_FreezeVShift_ReverseOneFrame ? 2 : 0;
+	return k->d.funcPtrs[DRIVER_FUNC_JUMP_FRICTION] == (DriverFunc)VehPhysProc_FreezeVShift_ReverseOneFrame ? 2 : 0;
 }
 
 static void load_driver(void)
 {
 	int state = 0, init = 0, turbo = 0, hidden = 0;
-	gGT.threadBuckets[TURBO].thread = NULL;
+	k->turbo = 0;
+	link_turbos();
 	for (int i = 0; i < NUM_FIELDS; i++)
 	{
 		long long v = 0;
-		void *p = fields[i].p;
+		void *p = field(i);
 		if (scanf("%lld", &v) != 1)
 			exit(2);
 		switch (fields[i].type)
@@ -371,34 +492,35 @@ static void load_driver(void)
 		case QUAD: *(struct QuadBlock **)p = v < 0 ? NULL : &quads[v]; break;
 		case PHYS_STATE: state = v; break;
 		case INIT: init = v; break;
-		case TERRAIN1: d.terrainMeta1 = &data.MetaDataTerrain[v]; break;
-		case TERRAIN2: d.terrainMeta2 = &data.MetaDataTerrain[v]; break;
+		case TERRAIN1: k->d.terrainMeta1 = &data.MetaDataTerrain[v]; break;
+		case TERRAIN2: k->d.terrainMeta2 = &data.MetaDataTerrain[v]; break;
 		case TURBO_EXISTS:
 			turbo = v;
 			if (turbo)
 			{
 				/* Born before the rest of its fields are read. */
 				INSTANCE_BirthWithThread(STATIC_TURBO_EFFECT, NULL, 0, TURBO, VehTurbo_ThTick, sizeof(struct Turbo), NULL);
-				turboThread.funcThDestroy = VehTurbo_ThDestroy;
-				turboObj.driver = &d;
-				turboObj.inst = INSTANCE_Birth3D(NULL, NULL, &turboThread);
+				k->turboThread.funcThDestroy = VehTurbo_ThDestroy;
+				k->turboObj.driver = &k->d;
+				k->turboObj.inst = INSTANCE_Birth3D(NULL, NULL, &k->turboThread);
 			}
 			break;
 		case TURBO_HIDDEN: hidden = v; break;
+		case ATTACKER: k->d.pendingDamageAttacker = v < 0 ? NULL : &karts[v].d; break;
 		}
 	}
 	if (turbo)
 	{
-		turboInst1.flags = hidden ? HIDE_MODEL : 0;
-		turboInst2.alphaScale = turboInst1.alphaScale;
+		k->turboInst1.flags = hidden ? HIDE_MODEL : 0;
+		k->turboInst2.alphaScale = k->turboInst1.alphaScale;
 	}
 	else
 	{
-		memset(&turboObj, 0, sizeof(turboObj));
-		memset(&turboInst1, 0, sizeof(turboInst1));
+		memset(&k->turboObj, 0, sizeof(k->turboObj));
+		memset(&k->turboInst1, 0, sizeof(k->turboInst1));
 	}
-	d.heldItemID = HELD_ITEM_NONE;
-	pendingHit = -1;
+	k->d.heldItemID = HELD_ITEM_NONE;
+	k->pendingHit = -1;
 	set_state(state, init);
 }
 
@@ -406,7 +528,7 @@ static void print_driver(void)
 {
 	for (int i = 0; i < NUM_FIELDS; i++)
 	{
-		void *p = fields[i].p;
+		void *p = field(i);
 		switch (fields[i].type)
 		{
 		case S8: printf(" %d", *(s8 *)p); break;
@@ -420,10 +542,13 @@ static void print_driver(void)
 			printf(" %d", current_state());
 			break;
 		case INIT: printf(" %d", current_init()); break;
-		case TERRAIN1: printf(" %d", terrainIndex(d.terrainMeta1)); break;
-		case TERRAIN2: printf(" %d", terrainIndex(d.terrainMeta2)); break;
-		case TURBO_EXISTS: printf(" %d", gGT.threadBuckets[TURBO].thread != NULL); break;
-		case TURBO_HIDDEN: printf(" %d", (turboInst1.flags & HIDE_MODEL) != 0); break;
+		case TERRAIN1: printf(" %d", terrainIndex(k->d.terrainMeta1)); break;
+		case TERRAIN2: printf(" %d", terrainIndex(k->d.terrainMeta2)); break;
+		case TURBO_EXISTS: printf(" %d", k->turbo); break;
+		case TURBO_HIDDEN: printf(" %d", (k->turboInst1.flags & HIDE_MODEL) != 0); break;
+		case ATTACKER:
+			printf(" %d", k->d.pendingDamageAttacker == NULL ? -1 : kart_of(k->d.pendingDamageAttacker)->d.driverID);
+			break;
 		}
 	}
 }
@@ -431,6 +556,83 @@ static void print_driver(void)
 /* The offsets and sizes of the constants `data.metaPhys` describes, in its order. */
 static const int metaOffsets[65] = {GRAVITY_OFFSET, JUMP_OFFSET, PEDAL_FRICTION_PERPENDICULAR_OFFSET, PEDAL_FRICTION_FORWARD_OFFSET, NO_PEDAL_FRICTION_PERPENDICULAR_OFFSET, NO_PEDAL_FRICTION_FORWARD_OFFSET, BRAKE_FRICTION_OFFSET, DRIFT_CURVE_OFFSET, DRIFT_FRICTION_OFFSET, ACCEL_CLASS_STAT_OFFSET, ACCEL_RESERVES_OFFSET, SPEED_CLASS_STAT_OFFSET, ACCEL_SPEED_CLASS_STAT_OFFSET, SINGLE_TURBO_SPEED_OFFSET, SACRED_FIRE_SPEED_OFFSET, BACKWARD_SPEED_OFFSET, MASK_SPEED_OFFSET, DAMAGED_SPEED_OFFSET, TURN_RATE_OFFSET, BACKWARD_TURN_RATE_OFFSET, TURN_DECREASE_RATE_OFFSET, TURN_INPUT_DELAY_OFFSET, PRE_TURBO_OFFSET, TERMINAL_VELOCITY_OFFSET, TERRAIN_FRICTION_BOOST_OFFSET, STEER_ACCEL_STAGE4_FIRST_FRAME_OFFSET, STEER_ACCEL_STAGE2_FIRST_FRAME_OFFSET, STEER_ACCEL_STAGE2_FRAME_LENGTH_OFFSET, STEER_ACCEL_STAGE1_MAX_STEER_OFFSET, STEER_ACCEL_STAGE1_MIN_STEER_OFFSET, STEER_ACCEL_TURN_VEL_SCALE_OFFSET, STEER_ACCEL_TURN_VEL_LIMIT_OFFSET, MODEL_ROT_VEL_MAX_OFFSET, MODEL_ROT_VEL_MIN_OFFSET, MODEL_TURN_COUNTER_STEER_STRENGTH_OFFSET, MODEL_TURN_RETURN_STRENGTH_OFFSET, MODEL_TURN_NEGATIVE_RETURN_STRENGTH_OFFSET, MODEL_TURN_VELOCITY_LERP_OFFSET, TURN_RESIST_MIN_OFFSET, TURN_RESIST_MAX_OFFSET, STEER_VEL_DRIFT_SWITCH_WAY_OFFSET, STEER_VEL_DRIFT_STANDARD_OFFSET, DRIFT_TURN_BASE_OFFSET, DRIFT_TURN_STARTUP_SCALE_OFFSET, DRIFT_TURN_RAMP_FRAMES_OFFSET, DRIFT_FRAMES_TILL_SPINOUT_OFFSET, DRIFT_SPIN_RATE_ACCEL_OFFSET, DRIFT_SPIN_RATE_DECEL_OFFSET, DRIFT_CAMERA_SPIN_RATE_OFFSET, DRIFT_CAMERA_LERP_STEP_OFFSET, DRIFT_RELEASE_TURN_ASSIST_FRAMES_OFFSET, METAPHYS_33_OFFSET, METAPHYS_34_OFFSET, DRIFT_TURN_SAME_DIRECTION_ANGLE_OFFSET, DRIFT_TURN_OPPOSITE_DIRECTION_ANGLE_OFFSET, DRIFT_TURN_ANGLE_SCALE_OFFSET, TURBO_MAX_ROOM_OFFSET, TURBO_LOW_ROOM_WARNING_OFFSET, TURBO_FULL_BAR_RESERVE_GAIN_OFFSET, DRIFT_BOOST_DURATION_FRAMES_OFFSET, DRIFT_BOOST_AXIS_KICK_RATE_OFFSET, COLLISION_WEIGHT_OFFSET, SLOPE_FORWARD_SPEED_BONUS_OFFSET, SIDE_SPEED_CLAMP_OFFSET, PROTOTYPE_KEY_OFFSET};
 static const int metaSizes[65] = {2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2, 4};
+
+/* One tick of the run's drivers, in MainFrame's order. */
+static void run_tick(void)
+{
+	for (int j = 0; j < numKarts; j++)
+		karts[j].maskGrab = 0;
+
+	/* VehPickupItem_ShootOnCirclePress: the hits the last tick's bumps queued land. */
+	for (int j = 0; j < numKarts; j++)
+	{
+		struct Driver *drv = &karts[j].d;
+		enter(&karts[j]);
+		if (drv->pendingDamageType != 0)
+			VehPickState_NewState(drv, drv->pendingDamageType, drv->pendingDamageAttacker, drv->pendingDamageReasonByte);
+		leave();
+	}
+
+	/* Each stage over all the drivers, before the next. */
+	for (int i = 0; i < DRIVER_FUNC_COUNT; i++)
+	{
+		/* Audio and particles are not ported. */
+		if (i == DRIVER_FUNC_AUDIO || i == DRIVER_FUNC_PARTICLES)
+			continue;
+		for (int j = 0; j < numKarts; j++)
+		{
+			DriverFunc fn = karts[j].d.funcPtrs[i];
+			if (fn == NULL)
+				continue;
+			/* Driving_Init installs the real one again. */
+			if (i == DRIVER_FUNC_TRANSLATE_MATRIX)
+				fn = VehPhysForce_TranslateMatrix;
+			enter(&karts[j]);
+			fn(&k->thread, &k->d);
+			leave_searched(i == DRIVER_FUNC_COLL_MOVED || i == DRIVER_FUNC_COLL_FIXED);
+		}
+	}
+
+	/* The buckets after the drivers': the weapons' hits, then the turbo fires. */
+	for (int j = 0; j < numKarts; j++)
+	{
+		if (karts[j].pendingHit < 0)
+			continue;
+		enter(&karts[j]);
+		VehPickState_NewState(&k->d, k->pendingHit, NULL, 0);
+		k->pendingHit = -1;
+		leave();
+	}
+	for (struct Thread *th = gGT.threadBuckets[TURBO].thread; th != NULL; th = th->siblingThread)
+	{
+		/* Its GTE work only places the fire's instances; the port's fire does none, so
+		 * the GTE goes on to the next tick as the drivers' stages left it. */
+		enter(kart_of(((struct Turbo *)th->object)->driver));
+		GTERegisters gte = gteRegs;
+		inTurboTick = 1;
+		VehTurbo_ThTick(th);
+		inTurboTick = 0;
+		gteRegs = gte;
+		leave();
+	}
+	turbo_check_dead();
+	/* The HUD's jump meter gives the hang-time turbo, in the frame's render after all that. */
+	for (int j = 0; j < numKarts; j++)
+	{
+		enter(&karts[j]);
+		UI_JumpMeter_Update(&k->d);
+		leave();
+	}
+
+	for (int j = 0; j < numKarts; j++)
+	{
+		k = &karts[j];
+		print_driver();
+		printf(" |%s | %d %d %u %d %d %d\n", k->effects, k->pad[0], k->pad[1], (u32)k->pad[2], k->pad[3], k->pad[4],
+		       k->maskGrab);
+		k->effects[0] = 0;
+	}
+}
 
 int main(void)
 {
@@ -444,24 +646,34 @@ int main(void)
 	gGT.level1 = &level;
 	gGT.numPlyrCurrGame = 1;
 	level.ptr_mesh_info = &mesh;
-	/* The animations end where the real tables do; their contents only move the model's instance. */
+	/* The lengths of the real tables; `G` gives their contents. */
 	static const int bakedLengths[BAKED_GTE_MATRIX_COUNT] = {0, 0xb, 1, 9, 0x10, 0xf, 0x1b};
 	for (int i = 0; i < BAKED_GTE_MATRIX_COUNT; i++)
 	{
-		data.bakedGteMath[i].physEntry = bakedDummy;
+		data.bakedGteMath[i].physEntry = bakedTables[i];
 		data.bakedGteMath[i].numEntries = i < BAKED_GTE_MATRIX_JUMP_BASE ? bakedLengths[i] : 4;
 	}
-	thread.inst = &inst;
-	thread.modelIndex = DYNAMIC_PLAYER;
-	inst.thread = &thread;
-	d.instSelf = &inst;
-	inst.model = &model;
-	model.numHeaders = 1;
-	model.headers = &modelHeader;
-	modelHeader.numAnimations = 8;
-	modelHeader.ptrAnimations = modelAnims;
-	for (int i = 0; i < 8; i++)
-		modelAnims[i] = &modelAnimData[i];
+	for (int j = 0; j < MAX_KARTS; j++)
+	{
+		struct Kart *kart = &karts[j];
+		kart->thread.inst = &kart->inst;
+		kart->thread.object = &kart->d;
+		kart->thread.modelIndex = DYNAMIC_PLAYER;
+		/* THREAD_DRIVER_HIT_RADIUS, as VehBirth gives a driver's thread. */
+		kart->thread.driverHitRadius = 0x40;
+		kart->thread.driverHitRadiusSquared = 0x40 * 0x40;
+		kart->inst.thread = &kart->thread;
+		kart->d.instSelf = &kart->inst;
+		kart->inst.model = &kart->model;
+		kart->model.numHeaders = 1;
+		kart->model.headers = &kart->modelHeader;
+		kart->modelHeader.numAnimations = 8;
+		kart->modelHeader.ptrAnimations = kart->modelAnims;
+		for (int i = 0; i < 8; i++)
+			kart->modelAnims[i] = &kart->modelAnimData[i];
+		kart->pendingHit = -1;
+	}
+	link_drivers();
 
 	while (scanf(" %c", &cmd) == 1)
 	{
@@ -518,15 +730,62 @@ int main(void)
 				t->sound = rd();
 			}
 			break;
+		case 'G':
+			for (int i = 1; i < BAKED_GTE_MATRIX_COUNT; i++)
+			{
+				if (rd() != data.bakedGteMath[i].numEntries)
+					exit(3);
+				for (int j = 0; j < data.bakedGteMath[i].numEntries; j++)
+				{
+					MatrixNDAuthored *a = MatrixND_GetAuthored(&bakedTables[i][j]);
+					a->bakedOffset.x = rd();
+					a->bakedOffset.y = rd();
+					a->bakedOffset.z = rd();
+					a->authoredRot.x = rd();
+					a->authoredRot.y = rd();
+					a->authoredRot.z = rd();
+					a->authoredScale.x = rd();
+					a->authoredScale.y = rd();
+					a->authoredScale.z = rd();
+				}
+			}
+			{
+				/* At boot, long before the race's GTE work. */
+				GTERegisters gte = gteRegs;
+				Vector_BakeMatrixTable();
+				gteRegs = gte;
+			}
+			break;
+		case 'W':
+			ownCollision = rd();
+			break;
+		case 'M':
+			numKarts = rd();
+			if (numKarts < 1 || numKarts > MAX_KARTS)
+				exit(4);
+			link_drivers();
+			/* The drivers left out have no fire burning. */
+			for (int j = numKarts; j < MAX_KARTS; j++)
+				karts[j].turbo = 0;
+			link_turbos();
+			break;
+		case 'P':
+		{
+			int i = rd();
+			if (i < 0 || i >= MAX_KARTS)
+				exit(4);
+			k = &karts[i];
+			break;
+		}
 		case 'A':
 			for (int i = 0; i < 8; i++)
-				modelAnimData[i].numFrames = rd();
+				k->modelAnimData[i].numFrames = rd();
 			break;
 		case 'S':
 			for (int i = 0; i < 65; i++)
 			{
 				int v = rd();
-				u8 *p = (u8 *)&d + metaOffsets[i];
+				u8 *p = (u8 *)&k->d + metaOffsets[i];
 				if (metaSizes[i] == 1)
 					*p = v;
 				else if (metaSizes[i] == 2)
@@ -536,12 +795,8 @@ int main(void)
 			}
 			break;
 		case 'C':
-		{
-			int character = rd();
-			for (int i = 0; i < 8; i++)
-				data.characterIDs[i] = character;
+			data.characterIDs[k - karts] = rd();
 			break;
-		}
 		case 'N':
 			for (int i = 0; i < NUM_FIELDS; i++)
 				printf("%s%s", i ? " " : "", fields[i].name);
@@ -551,12 +806,12 @@ int main(void)
 			load_driver();
 			break;
 		case 'H':
-			pendingHit = rd();
+			k->pendingHit = rd();
 			break;
 		case 'I':
 		{
 			int reserves = rd(), type = rd(), fireLevel = rd();
-			VehFire_Increment(&d, reserves, type, fireLevel);
+			VehFire_Increment(&k->d, reserves, type, fireLevel);
 			break;
 		}
 		case 'X':
@@ -564,54 +819,20 @@ int main(void)
 			gGT.elapsedTimeMS = rd();
 			gGT.elapsedEventTime = rd();
 			gGT.timer = rd();
+			/* The port has the one frame counter (`Env::timer`) for both. */
+			gGT.frameTimer_MainFrame_ResetDB = gGT.timer;
 			gGT.gameMode1 = rd() ? END_OF_RACE : 0;
-			pads.gamepad[d.driverID].buttonsHeldCurrFrame = rd();
-			pads.gamepad[d.driverID].buttonsTapped = rd();
-			pads.gamepad[d.driverID].stickLX = rd();
-			pads.gamepad[d.driverID].stickLY = rd();
-			pads.gamepad[d.driverID].stickRY = rd();
-
+			for (int j = 0; j < numKarts; j++)
+			{
+				struct GamepadBuffer *pad = &pads.gamepad[karts[j].d.driverID];
+				pad->buttonsHeldCurrFrame = rd();
+				pad->buttonsTapped = rd();
+				pad->stickLX = rd();
+				pad->stickLY = rd();
+				pad->stickRY = rd();
+			}
 			/* (An 'I' before this tick leaves its effects in the line.) */
-			maskGrab = 0;
-			for (int i = 0; i < DRIVER_FUNC_COUNT; i++)
-			{
-				/* Audio and particles are not ported. */
-				if (i == DRIVER_FUNC_AUDIO || i == DRIVER_FUNC_PARTICLES)
-					continue;
-				DriverFunc fn = d.funcPtrs[i];
-				if (fn == NULL)
-					continue;
-				/* Driving_Init installs the real one again. */
-				if (i == DRIVER_FUNC_TRANSLATE_MATRIX)
-					fn = VehPhysForce_TranslateMatrix;
-				fn(&thread, &d);
-			}
-			/* The buckets after the drivers': a weapon's hit, then the turbo fire. */
-			if (pendingHit >= 0)
-			{
-				VehPickState_NewState(&d, pendingHit, NULL, 0);
-				pendingHit = -1;
-			}
-			if (gGT.threadBuckets[TURBO].thread != NULL)
-			{
-				/* Its GTE work only places the fire's instances; the port's fire does none, so
-				 * the GTE goes on to the next tick as the drivers' stages left it. */
-				GTERegisters gte = gteRegs;
-				inTurboTick = 1;
-				VehTurbo_ThTick(&turboThread);
-				inTurboTick = 0;
-				gteRegs = gte;
-			}
-			turbo_check_dead();
-			/* The HUD's jump meter gives the hang-time turbo, in the frame's render after all that. */
-			UI_JumpMeter_Update(&d);
-
-			struct ScratchpadStruct *pad = (struct ScratchpadStruct *)(scratchpad + 0x108);
-			print_driver();
-			printf(" |%s | %d %d %u %d %d %d", effects, pad->hitFraction, pad->Input1.hitRadius, pad->collision.stepFlags,
-			       pad->boolDidTouchQuadblock, pad->numTrianglesTested, maskGrab);
-			printf("\n");
-			effects[0] = 0;
+			run_tick();
 			break;
 		}
 		}
