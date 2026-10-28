@@ -278,6 +278,7 @@ mod tests {
         Howl::new(
             vec![fx(0), fx(other_fx_flags::LOOPS)],
             vec![engine],
+            Vec::new(),
             samples,
         )
     }

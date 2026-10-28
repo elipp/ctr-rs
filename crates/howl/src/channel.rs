@@ -44,6 +44,7 @@ pub enum Kind {
     #[default]
     EngineFx,
     OtherFx,
+    Music,
 }
 
 /// `struct ChannelAttr`: what a channel's voice plays.
@@ -70,6 +71,8 @@ pub struct Stats {
     pub vol: u8,
     pub distort: u8,
     pub lr: u8,
+    /// A note of the music: its pitch, or which drum (`drumIndex_pitchIndex`).
+    pub note: u8,
     /// How much longer it plays, in 300ths of a second.
     pub time_left: i16,
     /// The sound's number, and for a sound effect which start of it in the high half
@@ -229,13 +232,14 @@ impl Channels {
         Some(channel)
     }
 
-    /// `Channel_DestroyAll_LowLevel`: the end of every channel but the menu's sound effects (0 to
-    /// 5, which ring out) unless `all_fx`.
-    pub fn destroy_all(&mut self, all_fx: bool) {
+    /// `Channel_DestroyAll_LowLevel`: the end of every channel but the music's if `keep_music`,
+    /// and but the menu's sound effects (0 to 5, which ring out) unless `all_fx`.
+    pub fn destroy_all(&mut self, all_fx: bool, keep_music: bool) {
         for channel in self.taken.clone() {
             let stats = &self.stats[channel];
+            let music = stats.kind == Kind::Music;
             let menu = stats.kind == Kind::OtherFx && stats.sound as u16 <= 5;
-            if all_fx || !menu {
+            if !(keep_music && music) && (all_fx || !menu) {
                 self.destroy(channel);
             }
         }
@@ -412,9 +416,9 @@ mod tests {
         let mut channels = Channels::default();
         sound(&mut channels, 1, 0, false);
         sound(&mut channels, 0x45, 0, false);
-        channels.destroy_all(false);
+        channels.destroy_all(false, true);
         assert_eq!(channels.taken(), [0]);
-        channels.destroy_all(true);
+        channels.destroy_all(true, true);
         assert!(channels.taken().is_empty());
     }
 

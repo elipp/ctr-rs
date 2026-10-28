@@ -1,4 +1,4 @@
-//! `SOUNDS/KART.HWL`: the game's sound effects, and the samples of the sounds and the music
+//! `SOUNDS/KART.HWL`: the game's sound effects, and the samples and sequences of its music
 //! (`howl_LoadHeader`, `howl_ParseHeader`, `Bank_Alloc`, `Bank_AssignSpuAddrs`).
 //!
 //! ```text
@@ -17,6 +17,10 @@
 //! characters', the music's). A sample number is the same sample in every bank that has it, so
 //! here the banks only say where each sample is on the disc: [`Howl::adpcm`] reads it from the
 //! first bank that has it.
+//!
+//! A song pack ([`Cseq`], `howl_LoadSong`) is the music of a level: its instruments and drums (each
+//! a sample of the banks), and its songs, the level's, Aku Aku's and Uka Uka's, each of sequences
+//! of notes.
 
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -187,6 +191,28 @@ impl Howl {
         })
     }
 
+    /// `howl_LoadSong`: the song pack `song` (its first sector, then as many more as its size
+    /// says), or `None` if there is no such pack.
+    pub fn cseq<R: Read + Seek>(&self, disc: &mut R, song: u16) -> io::Result<Option<Cseq>> {
+        let Some(&offset) = self.song_offsets.get(song as usize) else {
+            return Ok(None);
+        };
+        let sector = USER_DATA_SIZE as usize;
+        let mut data = vec![0u8; sector];
+        let at = (self.start_sector as u64 + offset as u64) * USER_DATA_SIZE;
+        disc.seek(SeekFrom::Start(at))?;
+        disc.read_exact(&mut data)?;
+        let size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
+        if size > MAX_CSEQ_SIZE {
+            return Err(invalid(format!(
+                "song pack {song} is {size} bytes, more than the {MAX_CSEQ_SIZE} the game has room for"
+            )));
+        }
+        data.resize(size.div_ceil(sector).max(1) * sector, 0);
+        disc.read_exact(&mut data[sector..])?;
+        Cseq::parse(data).map(Some)
+    }
+
     /// The ADPCM of sample `sample`, or `None` if no bank has it.
     pub fn adpcm<R: Read + Seek>(&self, disc: &mut R, sample: u16) -> io::Result<Option<Vec<u8>>> {
         let Some(&Some(at)) = self.places.get(sample as usize) else {
@@ -196,6 +222,144 @@ impl Howl {
         disc.seek(SeekFrom::Start(at))?;
         disc.read_exact(&mut data)?;
         Ok(Some(data))
+    }
+}
+
+/// The room a song pack is loaded into (`sampleBlock1` and `tenSampleBlocks`).
+const MAX_CSEQ_SIZE: usize = 11 * USER_DATA_SIZE as usize;
+
+/// `struct SampleInstrument`: what a sequence plays its notes on, each at its own pitch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Instrument {
+    /// 0 to 255.
+    pub volume: u8,
+    /// The pitch of middle C (`basePitch`).
+    pub base_pitch: u16,
+    pub sample: u16,
+    /// Its envelope, as the SPU's two registers.
+    pub ad: u16,
+    pub sr: u16,
+}
+
+/// `struct SampleDrums`: a drum, which a note of drums picks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Drum {
+    /// 0 to 255.
+    pub volume: u8,
+    pub pitch: u16,
+    pub sample: u16,
+}
+
+/// A song of a pack (`CseqSongHeader`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Song {
+    /// Beats a minute, and ticks a beat (`tpqn`).
+    pub bpm: i16,
+    pub tpqn: i16,
+    pub sequences: Vec<Sequence>,
+}
+
+/// A sequence of a song (`SongNoteHeader`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sequence {
+    /// Its notes are drums rather than an instrument's.
+    pub drums: bool,
+    /// Where its notes start in [`Cseq::data`].
+    pub notes: usize,
+}
+
+/// A song pack (`CseqHeader`, `howl_ParseCseqHeader`):
+///
+/// ```text
+/// i32 size                           in bytes, this header too
+/// u8 numInstruments, u8 numDrums
+/// u16 numSongs
+/// SampleInstrument[numInstruments]   u8 1, u8 volume, u16 0, u16 basePitch, u16 sample, u16 ad,
+///                                    u16 sr
+/// SampleDrums[numDrums]              u8 1, u8 volume, u16 pitch, u16 sample, u16 0
+/// u16 songOffsets[numSongs]          from the songs' data, which starts 4-aligned after them
+/// ```
+///
+/// A song is `u8, u8 numSequences, i16 bpm, i16 tpqn, u16 sequenceOffsets[numSequences]`, and
+/// its sequences start 4-aligned after it, each at its offset: `u8 flags` (1 for drums), a `u8`
+/// that nothing reads, then its notes: a delay in ticks (7 bits a byte, the top bit set on all but the last), an
+/// opcode and what it takes, over and over.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cseq {
+    pub instruments: Vec<Instrument>,
+    pub drums: Vec<Drum>,
+    pub songs: Vec<Song>,
+    /// The pack as it was loaded, which the notes are read from.
+    pub data: Vec<u8>,
+}
+
+impl Cseq {
+    pub fn parse(data: Vec<u8>) -> io::Result<Cseq> {
+        let short = || invalid("a song pack ends early".into());
+        let byte = |at: usize| data.get(at).copied().ok_or_else(short);
+        let half = |at: usize| Ok::<_, io::Error>(u16::from_le_bytes([byte(at)?, byte(at + 1)?]));
+        let align = |at: usize| at.next_multiple_of(4);
+
+        let (instruments, drums, songs) = (byte(4)? as usize, byte(5)? as usize, half(6)?);
+        let mut at = 8;
+        let instruments = (0..instruments)
+            .map(|i| {
+                let at = at + i * 12;
+                Ok(Instrument {
+                    volume: byte(at + 1)?,
+                    base_pitch: half(at + 4)?,
+                    sample: half(at + 6)?,
+                    ad: half(at + 8)?,
+                    sr: half(at + 10)?,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        at += instruments.len() * 12;
+        let drums = (0..drums)
+            .map(|i| {
+                let at = at + i * 8;
+                Ok(Drum {
+                    volume: byte(at + 1)?,
+                    pitch: half(at + 2)?,
+                    sample: half(at + 4)?,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        at += drums.len() * 8;
+        let songs_at = align(at + songs as usize * 2);
+        let songs = (0..songs as usize)
+            .map(|i| {
+                let song = songs_at + half(at + i * 2)? as usize;
+                let count = byte(song + 1)? as usize;
+                let first = align(song + 6 + count * 2);
+                let sequences = (0..count)
+                    .map(|j| {
+                        let header = first + half(song + 6 + j * 2)? as usize;
+                        Ok(Sequence {
+                            drums: byte(header)? & 1 != 0,
+                            notes: header + 2,
+                        })
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(Song {
+                    bpm: half(song + 2)? as i16,
+                    tpqn: half(song + 4)? as i16,
+                    sequences,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(Cseq {
+            instruments,
+            drums,
+            songs,
+            data,
+        })
+    }
+
+    /// The samples its instruments and drums play.
+    pub fn samples(&self) -> impl Iterator<Item = u16> + '_ {
+        let instruments = self.instruments.iter().map(|i| i.sample);
+        instruments.chain(self.drums.iter().map(|d| d.sample))
     }
 }
 

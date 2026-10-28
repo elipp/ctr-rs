@@ -23,6 +23,7 @@
 
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
+- a map's music and reverb: it has none of its own, and gets no song and the reverb of the levels past the table. `ctr-map import` knows the track it was made over, whose song pack and reverb it could keep
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
 
 ## Chores

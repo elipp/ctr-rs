@@ -7,25 +7,31 @@
 //! the sounds' time and passes what changed on to the voices (`howl_PlayAudio_Update`), so
 //! [`Howl::render`] is the clock of the sounds as the console's is.
 //!
+//! The [`music`] is the songs of the level's song pack, which play their notes on the channels
+//! too; the states of a race ([`state`]) start, fade and stop them.
+//!
 //! The sounds that echo (a kart in a tunnel, [`Sfx::echo`]) are heard through the SPU's
 //! [`reverb`] as well, which each level sets ([`Howl::set_level_reverb`]).
 //!
-//! Not ported yet: the voice lines, the music, the banks (every sample a sound effect or an
-//! engine plays is loaded), and the volume options.
+//! Not ported yet: the voice lines and the music of XA, the banks (every sample a sound effect,
+//! an engine or the music plays is loaded), and the volume options.
 
 pub mod channel;
 pub mod fx;
+pub mod music;
 pub mod reverb;
 pub mod spu;
+pub mod state;
 pub mod tables;
 
 use std::io;
 use std::path::Path;
 
-use loader::howl::{EngineFx, OtherFx};
+use loader::howl::{Cseq, EngineFx, OtherFx};
 
 use channel::{Channels, Kind, Stats, update};
 pub use fx::{AntiSpam, NO_DISTORTION, Sound, crash_sound};
+use music::Music;
 use spu::{Samples, Spu};
 use tables::{BOSS_REVERBS, LEVEL_REVERBS, OTHER_LEVEL_REVERB, REVERBS};
 
@@ -61,14 +67,16 @@ impl Sfx {
     };
 }
 
-/// The sound engine: the sounds of `KART.HWL`, the channels they play on, and the SPU.
+/// The sound engine: the sounds and songs of `KART.HWL`, the channels they play on, and the SPU.
 pub struct Howl {
     pub(crate) spu: Spu,
     pub(crate) channels: Channels,
     pub(crate) other_fx: Vec<OtherFx>,
     pub(crate) engine_fx: Vec<EngineFx>,
-    /// `vol_FX` and `vol_Voice`.
+    pub(crate) music: Music,
+    /// `vol_FX`, `vol_Music` and `vol_Voice`.
     pub volume_fx: u8,
+    pub volume_music: u8,
     pub volume_voice: u8,
     /// `boolStereoEnabled`: in mono both sides play the same.
     pub stereo: bool,
@@ -80,19 +88,28 @@ pub struct Howl {
     paused: Vec<Stats>,
     /// `curReverb`: one of [`REVERBS`], or their number for none.
     reverb: u16,
+    /// `audioState`: where the race is, none before it starts.
+    pub(crate) state: Option<state::State>,
     /// The output samples until the next vertical blank.
     until_vsync: u32,
 }
 
 impl Howl {
-    /// `howl_InitGlobals`.
-    pub fn new(other_fx: Vec<OtherFx>, engine_fx: Vec<EngineFx>, samples: Samples) -> Howl {
+    /// `howl_InitGlobals`, with the song packs `packs` (`howl_songOffsets`).
+    pub fn new(
+        other_fx: Vec<OtherFx>,
+        engine_fx: Vec<EngineFx>,
+        packs: Vec<Cseq>,
+        samples: Samples,
+    ) -> Howl {
         Howl {
             spu: Spu::new(samples),
             channels: Channels::default(),
             other_fx,
             engine_fx,
+            music: Music::new(packs),
             volume_fx: 215,
+            volume_music: 175,
             volume_voice: 255,
             stereo: true,
             count: 0,
@@ -100,23 +117,29 @@ impl Howl {
             paused: Vec::new(),
             // `SetReverbMode(5)`, which the SPU's reverb already is: off, and not heard.
             reverb: REVERBS.len() as u16,
+            state: None,
             until_vsync: 0,
         }
     }
 
-    /// Reads `SOUNDS/KART.HWL` from the disc image at `path`: its sound effects and engines, and
-    /// the ADPCM of their samples.
+    /// Reads `SOUNDS/KART.HWL` from the disc image at `path`: its sound effects, engines and
+    /// song packs, and the ADPCM of their samples (3 MB).
     pub fn read(path: &Path) -> io::Result<Howl> {
         let (mut disc, header) = loader::disc::open_howl(path)?;
+        let mut packs = Vec::with_capacity(header.song_offsets.len());
+        for song in 0..header.song_offsets.len() as u16 {
+            packs.extend(header.cseq(&mut disc, song)?);
+        }
         let mut samples: Samples = vec![None; header.sample_sizes.len()];
         let used = header.other_fx.iter().map(|fx| fx.sample);
-        for sample in used.chain(header.engine_fx.iter().map(|fx| fx.sample)) {
+        let used = used.chain(header.engine_fx.iter().map(|fx| fx.sample));
+        for sample in used.chain(packs.iter().flat_map(Cseq::samples)) {
             let Some(slot @ None) = samples.get_mut(sample as usize) else {
                 continue;
             };
             *slot = header.adpcm(&mut disc, sample)?.map(Vec::into_boxed_slice);
         }
-        Ok(Howl::new(header.other_fx, header.engine_fx, samples))
+        Ok(Howl::new(header.other_fx, header.engine_fx, packs, samples))
     }
 
     /// The sound effects, by number.
@@ -137,9 +160,11 @@ impl Howl {
         }
     }
 
-    /// `howl_PlayAudio_Update`: the sounds' time runs, and the voices hear what changed.
+    /// `howl_PlayAudio_Update`: the sounds' time runs, the songs play on, and the voices hear
+    /// what changed.
     pub fn vsync(&mut self) {
         self.channels.run_timers();
+        self.run_songs();
         self.channels.update(&mut self.spu);
     }
 
@@ -178,19 +203,22 @@ impl Howl {
         self.set_reverb(reverb as u16);
     }
 
-    /// `howl_PauseAudio`: every sound stops, and is kept to start again with [`Howl::unpause`].
+    /// `howl_PauseAudio`: every sound and song stops, and is kept to start again with
+    /// [`Howl::unpause`].
     pub fn pause(&mut self) {
         if !self.paused.is_empty() {
             return;
         }
+        self.pause_songs(true);
         for &channel in &self.channels.taken().to_vec() {
             self.paused.push(*self.channels.stats(channel));
             self.channels.destroy(channel);
         }
     }
 
-    /// `howl_UnPauseAudio`: what [`Howl::pause`] stopped starts again, each sound from its start,
-    /// on the free channels.
+    /// `howl_UnPauseAudio`: what [`Howl::pause`] stopped starts again, each sound and note
+    /// from its start, on the free channels, and the songs go on. As in retail, after a pause
+    /// that stopped nothing the songs stay paused (in a race the engines always play).
     pub fn unpause(&mut self) {
         if self.paused.is_empty() {
             return;
@@ -209,18 +237,27 @@ impl Howl {
                     Some(fx) => echo(self.engine_fx_attr(fx, stats.vol, stats.lr, stats.distort)),
                     None => continue,
                 },
+                // Its own echo, the sequence's.
+                Kind::Music => match self.music_attr(stats.sound as usize, stats.note, stats.vol) {
+                    Some(attr) => attr,
+                    None => continue,
+                },
             };
             let Some(channel) = self.channels.alloc(update::RESUME, &attr) else {
                 break;
             };
             *self.channels.stats_mut(channel) = stats;
         }
+        self.pause_songs(false);
     }
 
-    /// `howl_StopAudio`: every sound stops but, unless `all_fx`, the menu's. With `erase_paused`,
-    /// what [`Howl::pause`] kept is gone too.
-    pub fn stop_all(&mut self, erase_paused: bool, all_fx: bool) {
-        self.channels.destroy_all(all_fx);
+    /// `howl_StopAudio`: every sound stops but, unless `all_fx`, the menu's; and with
+    /// `erase_music` the songs. With `erase_paused`, what [`Howl::pause`] kept is gone too.
+    pub fn stop_all(&mut self, erase_paused: bool, erase_music: bool, all_fx: bool) {
+        if erase_music {
+            self.stop_songs();
+        }
+        self.channels.destroy_all(all_fx, !erase_music);
         if erase_paused {
             self.paused.clear();
         }
@@ -254,7 +291,12 @@ mod tests {
             sample: 0,
             duration: 0,
         };
-        Howl::new(vec![fx], vec![], vec![Some(adpcm.into_boxed_slice())])
+        Howl::new(
+            vec![fx],
+            vec![],
+            vec![],
+            vec![Some(adpcm.into_boxed_slice())],
+        )
     }
 
     #[test]
