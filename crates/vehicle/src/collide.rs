@@ -83,8 +83,8 @@ fn closest(d: &Driver, others: &[&mut Driver]) -> Option<Search> {
         if other.collision_disabled {
             continue;
         }
-        // `inst->matrix.t`
-        let at = crate::baked::inst_matrix(other).1;
+        // `inst->matrix.t`: from the other kart's last translate, not where it is now.
+        let at = other.inst_pos;
         let dist = [pos[0] - at[0], pos[1] - at[1], pos[2] - at[2]];
 
         let mut sum = mips::mul_lo(dist[0], dist[0]);

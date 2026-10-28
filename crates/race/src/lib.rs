@@ -491,7 +491,6 @@ impl Race {
             before_tick(
                 &mut kart.driver,
                 &self.last,
-                &mut self.objects.random_number,
                 &mut hurt,
                 effects,
             );
@@ -505,11 +504,7 @@ impl Race {
         }
         // Then the mines in their reach, the ones dropped this tick too: the hazards' threads run
         // after the karts' in retail.
-        let karts: Vec<[i32; 3]> = self
-            .karts
-            .iter()
-            .map(|k| vehicle::baked::inst_matrix(&k.driver).1)
-            .collect();
+        let karts: Vec<[i32; 3]> = self.karts.iter().map(|k| k.driver.inst_pos).collect();
         set_off_mines(&self.last.contacts, &karts, &mut self.weapons);
         let results = {
             let mut racers: Vec<Racer> = self
@@ -524,6 +519,7 @@ impl Race {
                     effects,
                 })
                 .collect();
+            vehicle::sim::start_tick(&mut racers, &mut self.objects.random_number);
             vehicle::sim::tick_all(
                 &mut racers,
                 level,
@@ -568,6 +564,10 @@ impl Race {
             if hurt && hit.rain {
                 vehicle::cloud::init(victim, self.tick, &mut self.objects.random_number);
             }
+        }
+        // The exhaust fires (after the weapons' buckets) and the HUD's jump meters.
+        for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
+            vehicle::sim::after_logic(&mut kart.driver, &env, effects);
         }
         let racers = self.karts.len();
         for kart in &mut self.karts {
@@ -653,13 +653,12 @@ fn set_off_mines(
 fn before_tick(
     driver: &mut Driver,
     objects: &instance::Tick,
-    random_number: &mut i32,
     hurt: &mut Vec<usize>,
     effects: &mut Vec<Effect>,
 ) {
     // The hazards that reached the kart's instance in their last tick hurt it
     // (`RB_CheckHazardCollisions`): the spin-out starts on this tick.
-    let (_, at) = vehicle::baked::inst_matrix(driver);
+    let at = driver.inst_pos;
     let drivers = objects
         .contacts
         .iter()
@@ -691,8 +690,6 @@ fn before_tick(
             });
         }
     }
-    // A kart that was blasted draws which way its tumble plays, as the init stage does.
-    vehicle::tumble::roll_direction(driver, random_number);
 }
 
 /// What a kart does after the stages of a tick. The sparks and the puffs are for the outside to
@@ -720,7 +717,6 @@ fn after_tick(
             vehicle::emitter_sound::tick(driver, effects);
         }
     }
-    vehicle::turbo::tick(driver, env.elapsed_time_ms as i16, effects);
     (landing, wall, spray, puffs)
 }
 
@@ -854,7 +850,7 @@ mod tests {
     #[test]
     fn a_contact_that_only_looks_for_mines_hurts_no_kart() {
         let mut driver = Driver::default();
-        let (_, at) = vehicle::baked::inst_matrix(&driver);
+        let at = driver.inst_pos;
         let grab = Contact {
             mines: Mines::Only,
             ..Contact::sphere(at, Damage::Spin, 100 * 100, 0)
@@ -864,7 +860,7 @@ mod tests {
             ..Default::default()
         };
         let mut effects = Vec::new();
-        before_tick(&mut driver, &objects, &mut 0, &mut Vec::new(), &mut effects);
+        before_tick(&mut driver, &objects, &mut Vec::new(), &mut effects);
         assert!(!driver.pending_spin);
         assert!(effects.is_empty());
     }

@@ -841,6 +841,8 @@ fn a_seal_with_a_kart_in_reach_leaves_the_mine_be() {
         y: (y + 90) << 8,
         z: z << 8,
     };
+    // (Where the hazards find it.)
+    race.karts[0].driver.inst_pos = [x, y + 90, z];
     race.tick(&level, &fire_pads(1, false));
     assert_eq!(race.karts[0].driver.kart_state, kart_state::SPINNING);
     assert!(race.last_weapons.detonations.is_empty());
