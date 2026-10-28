@@ -8,7 +8,9 @@
 //! is the engine's clock too (the SPU's vertical blank, when sounds start, change and end).
 //!
 //! Each level sets its reverb as it loads (`Audio_SetReverbMode` in `Music_LoadBanks`), which
-//! the sounds that echo (a kart in a tunnel) are heard through.
+//! the sounds that echo (a kart in a tunnel) are heard through, and its song pack. Every tick the
+//! sound engine hears where the race is ([`howl::state`]) as of our kart, and plays the level's
+//! song (or a mask's) from the green light on.
 //!
 //! The engines loop (`EngineAudio_InitOnce`) at what `vehicle::engine_sound` makes of their
 //! karts each tick (`EngineAudio_Recalculate`): ours on our class's loop, and the two other
@@ -23,6 +25,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source};
 use bevy::prelude::*;
+use howl::music::{AKU_SONG, UKA_SONG};
+use howl::state::{RaceAudio, State};
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
 use loader::lev::Level;
 use race::{KartTick, Light, Race};
@@ -99,7 +103,7 @@ impl Sounds {
     pub fn load(path: &std::path::Path) -> Sounds {
         let howl = Howl::read(path).unwrap_or_else(|e| {
             warn!("no sounds: {}: {e}", path.display());
-            Howl::new(Vec::new(), Vec::new(), Vec::new())
+            Howl::new(Vec::new(), Vec::new(), Vec::new(), Vec::new())
         });
         Sounds(Arc::new(Mutex::new(howl)))
     }
@@ -116,10 +120,10 @@ impl Sounds {
     }
 
     /// `MainFrame_TogglePauseAudio(0)`: the end of the pause stops the sounds played in it, and
-    /// starts again the ones it stopped.
+    /// starts again the ones and the music it stopped.
     pub fn unpause(&self) {
         let mut sounds = self.lock();
-        sounds.stop_all(false, true);
+        sounds.stop_all(false, false, true);
         sounds.unpause();
     }
 
@@ -134,10 +138,13 @@ fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds
     commands.spawn((AudioPlayer(mixer), PlaybackSettings::ONCE));
 }
 
-/// `Music_LoadBanks`: a level that loads sets its reverb. There are no boss races.
+/// `Music_LoadBanks` and `Music_AsyncParseBanks`: a level that loads sets its reverb and loads
+/// its song pack. There are no boss races.
 fn level_audio(track: Res<Track>, sounds: Res<Sounds>) {
     if track.is_changed() {
-        sounds.lock().set_level_reverb(track.1.0, None);
+        let mut sounds = sounds.lock();
+        sounds.set_level_reverb(track.1.0, None);
+        sounds.set_level_music(track.1.0, None);
     }
 }
 
@@ -232,9 +239,10 @@ pub struct Sfx<'w> {
 impl Sfx<'_> {
     /// What tick `tick` of `race` (on `level`) asks to be heard: the traffic light that came on,
     /// the engines, each kart's sounds (`karts`, by slot), our kart's loops, our
-    /// laps and item roulette, and the sounds of the objects and the weapons. Ours (`own`) play
-    /// in the middle, the others' are heard from where they are (`places`, in world space, by
-    /// slot) by the camera `ear`. A race that starts again first stops every sound.
+    /// laps and item roulette, the sounds of the objects and the weapons, and where the race is
+    /// for the music. Ours (`own`) play in the middle, the others' are heard from where they are
+    /// (`places`, in world space, by slot) by the camera `ear`. A race that starts again first
+    /// stops every sound and the music, and is at the traffic lights.
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
@@ -255,7 +263,8 @@ impl Sfx<'_> {
         let mut sounds = self.sounds.lock();
         let kept = &mut *self.kept;
         if tick < kept.tick || kept.engines.len() != drivers.len() {
-            sounds.stop_all(true, true);
+            sounds.stop_all(true, true, true);
+            sounds.set_state(State::Traffic);
             *kept = Kept {
                 engines: vec![EngineSound::default(); drivers.len()],
                 boost_cooldowns: vec![0; drivers.len()],
@@ -274,6 +283,7 @@ impl Sfx<'_> {
             sounds.play(id, AntiSpam::Off, howl::Sfx::FULL);
         }
 
+        let finished = ours.actions_flag_set & actions::RACE_FINISHED != 0;
         for (slot, kart) in karts.iter().enumerate() {
             let Some(&driver) = drivers.get(slot) else {
                 continue;
@@ -371,6 +381,19 @@ impl Sfx<'_> {
         // The objects and the weapons are heard from the camera, as the echo of our kart.
         let echo = ours.actions_flag_set & actions::ENGINE_ECHO != 0;
         objects(&mut sounds, kept, race, level, ear, echo);
+
+        // `Audio_Update1`, as our kart is the human driver in the lead.
+        let mask = ours
+            .mask
+            .filter(|_| ours.actions_flag_set & actions::MASK_WEAPON != 0);
+        sounds.update_state(&RaceAudio {
+            lights_out: race.lights_ms < 1,
+            laps: race.laps,
+            lap: ours.lap_index,
+            to_finish: ours.distance_to_finish_curr as i32,
+            finished,
+            mask_song: mask.map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
+        });
     }
 }
 
@@ -647,7 +670,7 @@ mod tests {
             duration: 0,
         };
         let samples = vec![Some(vec![0u8; 64].into_boxed_slice())];
-        Howl::new(vec![fx; 0x80], Vec::new(), samples)
+        Howl::new(vec![fx; 0x80], Vec::new(), Vec::new(), samples)
     }
 
     #[test]
@@ -699,7 +722,12 @@ mod tests {
 
     #[test]
     fn the_mixer_plays_what_the_engine_renders_left_then_right() {
-        let howl = Arc::new(Mutex::new(Howl::new(Vec::new(), Vec::new(), Vec::new())));
+        let howl = Arc::new(Mutex::new(Howl::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )));
         let mut output = Mixer(howl).decoder();
         let samples: Vec<f32> = output.by_ref().take(4 * BLOCK).collect();
         assert_eq!(samples, vec![0.0; 4 * BLOCK]);

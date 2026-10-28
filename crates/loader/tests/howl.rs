@@ -64,3 +64,52 @@ fn kart_hwl_sounds() {
     assert_eq!(howl.other_fx[21].flags & other_fx_flags::LOOPS, 0);
     assert_ne!(howl.other_fx[24].flags & other_fx_flags::LOOPS, 0);
 }
+
+#[test]
+fn kart_hwl_songs() {
+    let path = common::disc_path();
+    if !path.exists() {
+        eprintln!(
+            "skipping: {} not found (set CTR_BIN to override)",
+            path.display()
+        );
+        return;
+    }
+    let (mut disc, howl) = open_howl(&path).expect("read KART.HWL");
+    assert_eq!(howl.song_offsets.len(), 33);
+    // How many bytes each opcode is with what it takes (`opcodeOffset`); 3 ends the song.
+    const SIZES: [usize; 11] = [1, 2, 2, 1, 2, 3, 2, 2, 2, 2, 2];
+    for pack in 0..howl.song_offsets.len() as u16 {
+        let cseq = howl.cseq(&mut disc, pack).unwrap().expect("a song pack");
+        // The level's song, and the masks' (but the menus' and the endings' packs).
+        assert!(pack >= 28 || cseq.songs.len() == 3, "pack {pack}");
+        for sample in cseq.samples() {
+            assert!(howl.adpcm(&mut disc, sample).unwrap().is_some());
+        }
+        for (i, song) in cseq.songs.iter().enumerate() {
+            for (j, sequence) in song.sequences.iter().enumerate() {
+                // Every sequence's notes are opcodes the game has, to the end of the song.
+                let mut at = sequence.notes;
+                loop {
+                    while cseq.data[at] & 0x80 != 0 {
+                        at += 1;
+                    }
+                    let opcode = cseq.data[at + 1] as usize;
+                    assert!(opcode < SIZES.len(), "pack {pack} song {i} sequence {j}");
+                    if opcode == 3 {
+                        break;
+                    }
+                    if opcode == 5 && sequence.drums {
+                        assert!((cseq.data[at + 2] as usize) < cseq.drums.len());
+                    }
+                    at += 1 + SIZES[opcode];
+                }
+            }
+        }
+    }
+    // Dingo Canyon's song, and Aku Aku's.
+    let dingo = howl.cseq(&mut disc, 0).unwrap().unwrap();
+    assert_eq!((dingo.songs[0].bpm, dingo.songs[0].tpqn), (148, 120));
+    assert_eq!(dingo.songs[0].sequences.len(), 6);
+    assert_eq!(dingo.songs[1].bpm, 156);
+}

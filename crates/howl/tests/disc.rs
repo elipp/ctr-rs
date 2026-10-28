@@ -86,3 +86,26 @@ fn the_loops_loop() {
         assert_ne!(fx[id].flags & other_fx_flags::LOOPS, 0, "sound {id:#x}");
     }
 }
+
+#[test]
+fn every_tracks_song_plays() {
+    let Some(mut howl) = howl() else {
+        return;
+    };
+    use howl::music::{AKU_SONG, LEVEL_SONG, UKA_SONG};
+    // The racing tracks, from Dingo Canyon to Turbo Track.
+    for level in 0..=17 {
+        for song in [LEVEL_SONG, AKU_SONG, UKA_SONG] {
+            howl.set_level_music(level, None);
+            howl.play_music(song, 0);
+            let mut out = vec![[0; 2]; 2 * howl::spu::RATE as usize];
+            howl.render(&mut out);
+            let loud = out
+                .iter()
+                .flatten()
+                .filter(|s| s.unsigned_abs() > 500)
+                .count();
+            assert!(loud > out.len() / 10, "level {level} song {song}: {loud}");
+        }
+    }
+}

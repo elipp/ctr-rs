@@ -2,17 +2,20 @@
 //! without the game:
 //!
 //! ```text
-//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16 r0 0x45 e0
+//! cargo run -p howl --example render -- out.wav 0x45 0x45 0x45 0x46 e0 e16 r0 0x45 e0 m0
 //! ```
 //!
 //! A number is a sound effect, played until its time is up (one that loops is stopped after two
 //! seconds). `e` and a number is an engine loop, revved from idle to the top and back over four
 //! seconds. `r` and a number is one of the game's reverbs (`SetReverbMode`, 5 or more for none),
-//! which the sounds after it echo in. The disc image is `CTR_BIN`, or `assets/ctr-u.bin`.
+//! which the sounds after it echo in. `m` and a level's number (a `LevelId`) plays the level's
+//! song for 20 seconds, `a` and `u` and a level's number its Aku Aku and Uka Uka songs. The disc
+//! image is `CTR_BIN`, or `assets/ctr-u.bin`.
 
 use std::io::Write;
 use std::path::PathBuf;
 
+use howl::music::{AKU_SONG, LEVEL_SONG, UKA_SONG};
 use howl::{AntiSpam, Howl, Sfx};
 
 /// A sixtieth of a second of output: the engine is set again every one, as the game does.
@@ -45,6 +48,21 @@ fn main() -> std::io::Result<()> {
             let reverb = number(reverb).expect("a reverb number");
             howl.set_reverb(reverb);
             sfx.echo = (reverb as usize) < howl::tables::REVERBS.len();
+            continue;
+        }
+        let song = match arg.as_bytes().first() {
+            Some(b'm') => Some(LEVEL_SONG),
+            Some(b'a') => Some(AKU_SONG),
+            Some(b'u') => Some(UKA_SONG),
+            _ => None,
+        };
+        if let Some(song) = song {
+            let level = number(&arg[1..]).expect("a level number");
+            howl.set_level_music(level as u32, None);
+            howl.play_music(song, 0);
+            blank(&mut howl, 20 * 60);
+            howl.stop_music();
+            blank(&mut howl, 12);
             continue;
         }
         if let Some(engine) = arg.strip_prefix('e') {
