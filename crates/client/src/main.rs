@@ -31,6 +31,7 @@ mod flash;
 mod fly;
 mod font;
 mod frame;
+mod fx;
 mod heat;
 mod hud;
 mod kart;
@@ -235,6 +236,7 @@ fn main() {
         lobby::LobbyPlugin,
         command::CommandPlugin,
         pause::PausePlugin,
+        fx::FxPlugin,
         // The race's HUD. (A tuple of plugins holds 15 at most.)
         (
             leaderboard::LeaderboardPlugin,

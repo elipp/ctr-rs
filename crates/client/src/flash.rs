@@ -25,6 +25,14 @@ pub struct Flash {
 }
 
 impl Flash {
+    /// The flash of a blast on our kart, now (`/debug fx flash`).
+    pub fn full(&mut self) {
+        *self = Flash {
+            previous: FULL,
+            current: FULL,
+        };
+    }
+
     /// `RB_Burst_DrawAll`: a burst that plays its second frame at `local` (level units, in the
     /// camera's axes: right, up, back) flashes the screen if it is right in front of the camera,
     /// the more the nearer the axis. It sets the fade, whatever it was.
