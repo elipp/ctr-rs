@@ -1,4 +1,4 @@
-//! The online lobby (`--drive`): `/lobby create` opens one and prints its address, `/lobby join <address>` (`command.rs`)
+//! The online lobby : `/lobby create` opens one and prints its address, `/lobby join <address>` (`command.rs`)
 //! joins one. The host's `/race start` starts the race, which is tick 0 for everyone. The connections themselves
 //! are `net`'s; this reports what happens to them and hands the race to `drive.rs`.
 //!
@@ -354,7 +354,8 @@ impl Plugin for LobbyPlugin {
                     pace,
                     waiting,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(crate::drive::driving),
             );
     }
 }
@@ -456,6 +457,8 @@ fn run(
             Action::DebugAddWeapon(_)
             | Action::DebugSetWumpa(_)
             | Action::DebugStall(_)
+            | Action::DebugViewer
+            | Action::DebugLevel(_)
             | Action::SetConfig(_) => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.

@@ -137,5 +137,5 @@ small per-kind plugins. That part is optional and can be done separately from th
 
 Stay on A for the current seven kinds. Take B if the projectile weapons (bombs, missiles, TNT, potions, the warp ball)
 land as placed objects, since that is where the kind list will grow. It is a contained change: `crates/instance/src/lib.rs`
-and a handful of lines in `crates/view/src/props.rs` and `explosion.rs`. Do it on a branch, run the `instance`, `race`
+and a handful of lines in `crates/client/srcprops.rs` and `explosion.rs`. Do it on a branch, run the `instance`, `race`
 and `view` tests plus the oracle, and compare `Rollback` timing.

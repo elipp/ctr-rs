@@ -5,8 +5,7 @@
 //!   [`net::NICK_MAX`] characters; none clears it). It can change at any time, in a race too, but
 //!   only every [`net::NICK_COOLDOWN`]
 //!
-//! The last character driven is kept too, and is the one the viewer starts with (`--racer` still
-//! wins).
+//! The last character driven is kept too, and is the one the client starts with.
 //!
 //! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, and its arm
 //! in [`apply`].

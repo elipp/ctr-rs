@@ -223,8 +223,8 @@ pub struct TrackerPlugin;
 impl Plugin for TrackerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Tracker>()
-            .add_systems(FixedUpdate, step)
-            .add_systems(Update, show);
+            .add_systems(FixedUpdate, step.run_if(crate::drive::driving))
+            .add_systems(Update, show.run_if(crate::drive::driving));
     }
 }
 
