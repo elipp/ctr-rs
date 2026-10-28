@@ -25,6 +25,7 @@ mod flash;
 mod fly;
 mod font;
 mod frame;
+mod heat;
 mod hud;
 mod kart;
 mod laps;
@@ -231,6 +232,7 @@ fn main() {
             tracker::TrackerPlugin,
             wumpa_icon::WumpaIconPlugin,
             minimap::MinimapPlugin,
+            heat::HeatPlugin,
             slide_meter::SlideMeterPlugin,
             toast::ToastPlugin,
         ),
