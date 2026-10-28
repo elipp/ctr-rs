@@ -143,15 +143,7 @@ impl Cues<'_, '_> {
 /// How long F7 and F8 freeze an online client for.
 const STALLS_MS: [u64; 2] = [500, 2000];
 
-/// The bar under the wumpa counter.
-#[derive(Component)]
-struct WumpaBar;
-
-/// The drift's boost timing bar: it fills as the boost window nears.
-#[derive(Component)]
-struct TurboBar;
-
-/// The boost reserves, as a number under the boost timing bar.
+/// The boost reserves, as a number at the bottom right.
 #[derive(Component)]
 struct ReservesHud;
 
@@ -336,10 +328,7 @@ impl Plugin for DrivePlugin {
                     hud,
                     wumpa_hud,
                     split_hud,
-                    wumpa_bar,
-                    turbo_bar,
                     reserves_hud,
-                    crate::bar::update,
                 )
                     .chain(),
             )
@@ -405,20 +394,6 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ),
         ],
     ));
-    let node = Node {
-        position_type: PositionType::Absolute,
-        bottom: Val::Px(40.0),
-        right: Val::Px(20.0),
-        width: Val::Px(220.0),
-        height: Val::Px(16.0),
-        ..default()
-    };
-    let turbo = crate::bar::spawn(
-        &mut commands,
-        node,
-        crate::bar::Bar::new(0.0, crate::bar::Bar::traffic_light()),
-    );
-    commands.entity(turbo).insert(TurboBar);
     commands.spawn((
         ReservesHud,
         Text::new(""),
@@ -434,7 +409,9 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
         },
     ));
     // The readouts for development go where the HUD of a race leaves room: the bottom left is
-    // the place's and the top right the lap's. These are above the boost bar, and under the lap.
+    // the place's and the top right the lap's. These are left of the minimap and the slide meter
+    // (the widest map reaches 100 pixels of retail's screen in from the right edge), and under
+    // the lap.
     commands.spawn((
         Hud,
         Text::new(""),
@@ -442,7 +419,7 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(64.0),
-            right: Val::Px(20.0),
+            right: hud::x(108.0),
             ..default()
         },
     ));
@@ -1120,36 +1097,6 @@ fn split_hud(
             text.0 = line.clone();
         }
         text_color.0 = color;
-    }
-}
-
-fn wumpa_bar(sim: Res<crate::props::Sim>, mut bars: Query<&mut crate::bar::Bar, With<WumpaBar>>) {
-    for mut bar in &mut bars {
-        let value = sim.driver().num_wumpas as f32 / 10.0;
-        // Only touch the bar when it changes, so its fill is not redone every frame.
-        if bar.value != value {
-            bar.value = value;
-        }
-    }
-}
-
-/// The boost timing bar, `MAX - current` of the drift's meter: empty outside a drift, full when
-/// the window of the boost is reached. While the engine revs (the grid, a mask grab) it shows
-/// the rev, which the sim keeps in the same meter.
-fn turbo_bar(sim: Res<crate::props::Sim>, mut bars: Query<&mut crate::bar::Bar, With<TurboBar>>) {
-    let d = sim.driver();
-    let max = (d.stats.turbo_max_room as i32) << 5;
-    let shown = d.phys_state == vehicle::PhysState::PowerSlide
-        || d.kart_state == vehicle::kart_state::ENGINE_REVVING;
-    let value = if shown && max > 0 {
-        ((max - d.turbo_meter_room_left as i32) as f32 / max as f32).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    for mut bar in &mut bars {
-        if bar.value != value {
-            bar.value = value;
-        }
     }
 }
 

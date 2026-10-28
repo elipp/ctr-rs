@@ -22,7 +22,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod banner;
-mod bar;
 mod command;
 mod config;
 mod drive;
@@ -53,6 +52,7 @@ mod remote;
 mod shadow;
 mod shield;
 mod skid;
+mod slide_meter;
 mod sky;
 mod subtract;
 mod suggest;
@@ -557,15 +557,19 @@ fn main() {
             lobby::LobbyPlugin,
             command::CommandPlugin,
             pause::PausePlugin,
-            leaderboard::LeaderboardPlugin,
-            lights::LightsPlugin,
-            place::PlacePlugin,
-            laps::LapsPlugin,
-            weapon::WeaponPlugin,
-            tracker::TrackerPlugin,
-            wumpa_icon::WumpaIconPlugin,
-            minimap::MinimapPlugin,
-            toast::ToastPlugin,
+            // The race's HUD. (A tuple of plugins holds 15 at most.)
+            (
+                leaderboard::LeaderboardPlugin,
+                lights::LightsPlugin,
+                place::PlacePlugin,
+                laps::LapsPlugin,
+                weapon::WeaponPlugin,
+                tracker::TrackerPlugin,
+                wumpa_icon::WumpaIconPlugin,
+                minimap::MinimapPlugin,
+                slide_meter::SlideMeterPlugin,
+                toast::ToastPlugin,
+            ),
             config::ConfigPlugin,
         ));
     } else {
