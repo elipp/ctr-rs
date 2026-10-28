@@ -22,7 +22,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod banner;
-mod bar;
 mod command;
 mod config;
 mod drive;
@@ -31,12 +30,19 @@ mod explosion;
 mod fire;
 mod flame;
 mod flash;
+mod font;
+mod hud;
 mod kart;
+mod laps;
 mod leaderboard;
+mod lights;
 mod lobby;
 mod maps;
 mod mask;
+mod minimap;
 mod names;
+mod pause;
+mod place;
 mod probe;
 mod projectile;
 
@@ -46,8 +52,11 @@ mod remote;
 mod shadow;
 mod shield;
 mod skid;
+mod slide_meter;
 mod sky;
+mod sound;
 mod subtract;
+mod suggest;
 mod toast;
 mod tracker;
 mod weapon;
@@ -127,6 +136,10 @@ struct Shared {
     projectiles: render::projectile::Models,
     /// The wumpa fruit of the counter, for a level that has none of its own.
     fruit_display: Model,
+    /// The menus' text.
+    fonts: font::Fonts,
+    /// The big digits of the place in a race.
+    digits: Vec<render::place::Digit>,
 }
 
 fn bigfile_path() -> PathBuf {
@@ -261,7 +274,23 @@ fn load_shared() -> Shared {
         .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(0).get())
         .expect("read racer pack");
     let pack = DramFile::parse(&pack).expect("parse racer pack");
+    // The fonts are in the texture pages every level shares.
+    let mut vram = Vram::default();
+    let shared = big
+        .read(&mut disc, BigIndex::SHARED_MPK_VRM.get())
+        .expect("read shared.vrm");
+    for image in parse_vram_file(&shared).expect("parse shared.vrm") {
+        vram.upload(&image).expect("upload shared.vrm");
+    }
+    let groups = parse_groups(&pack).expect("parse racer pack icons");
+    let font =
+        |f| render::font::FontAtlas::new(f, &groups, &vram).expect("racer pack has the fonts");
     Shared {
+        fonts: font::Fonts::new(
+            font(render::font::Font::Large),
+            font(render::font::Font::Middle),
+        ),
+        digits: render::place::digits(&pack).expect("racer pack has the big digits"),
         crate_explosion: render::explosion::model(&pack)
             .expect("racer pack has the crate explosion"),
         masks: render::mask::models(&pack).expect("racer pack has the masks"),
@@ -412,6 +441,8 @@ fn main() {
         shields,
         projectiles,
         fruit_display,
+        fonts,
+        digits,
     } = load_shared();
     let loaded = Track(level, LevelId(track_id));
     let textures = Textures { dram, vram };
@@ -453,6 +484,8 @@ fn main() {
             Font::from_bytes(include_bytes!("../../../assets/Inconsolata-Regular.ttf").to_vec()),
         )
         .expect("the default font can be replaced");
+    let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
+    app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
         .insert_resource(loaded)
         .insert_resource(textures)
@@ -461,6 +494,8 @@ fn main() {
         .insert_resource(shield::ShieldModels(Some(shields)))
         .insert_resource(wumpa_icon::FruitDisplay(fruit_display))
         .insert_resource(projectile::ProjectileModels::new(projectiles))
+        .insert_resource(fonts)
+        .add_plugins(font::FontPlugin)
         .insert_resource(options)
         .insert_resource(LevelNumber(track_id))
         .insert_resource(LowColors(low))
@@ -518,15 +553,26 @@ fn main() {
     if let Some(drive) = drive {
         scene_systems.push(app.world_mut().register_system(drive::spawn_hud));
         scene_systems.push(app.world_mut().register_system(lobby::spawn_waiting));
+        app.insert_resource(sound::Sounds::load(&bigfile_path()));
         app.insert_resource(drive).add_plugins((
             drive::DrivePlugin,
+            sound::SoundPlugin,
             lobby::LobbyPlugin,
             command::CommandPlugin,
-            leaderboard::LeaderboardPlugin,
-            weapon::WeaponPlugin,
-            tracker::TrackerPlugin,
-            wumpa_icon::WumpaIconPlugin,
-            toast::ToastPlugin,
+            pause::PausePlugin,
+            // The race's HUD. (A tuple of plugins holds 15 at most.)
+            (
+                leaderboard::LeaderboardPlugin,
+                lights::LightsPlugin,
+                place::PlacePlugin,
+                laps::LapsPlugin,
+                weapon::WeaponPlugin,
+                tracker::TrackerPlugin,
+                wumpa_icon::WumpaIconPlugin,
+                minimap::MinimapPlugin,
+                slide_meter::SlideMeterPlugin,
+                toast::ToastPlugin,
+            ),
             config::ConfigPlugin,
         ));
     } else {

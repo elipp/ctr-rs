@@ -1,6 +1,8 @@
 //! The weapon the driver holds, at the top middle of the screen (`UI_Weapon_DrawSelf`). While the
 //! roulette runs it shuffles through the weapons, a new one every other tick, and then shows
-//! the one the sim settled on, with the number of shots when there are several.
+//! the one the sim settled on, with the number of shots when there are several. The icons carry
+//! their own box, which the HUD draws half-transparent as retail does
+//! (`render::weapons::weapon_atlas`).
 //!
 //! A driver with 10 wumpa fruit is juiced up: a glow pulses behind the wumpa fruit (not the count) and, when
 //! there is a weapon, behind the weapon (`UI_Weapon_DrawBG`).
@@ -217,10 +219,8 @@ fn shine(
         &Shine,
         &mut ImageNode,
         &mut Visibility,
-        &mut Node,
         Option<&UiTargetCamera>,
     )>,
-    counter: Query<(&ComputedNode, &Text), With<crate::drive::WumpaHud>>,
     cameras: Query<(Entity, &Camera), With<Camera3d>>,
 ) {
     // The weapon's own system makes the pictures, on its first frame.
@@ -263,10 +263,13 @@ fn shine(
             Shine::Wumpa,
             size(
                 &Shine::Wumpa,
+                // Behind the fruit only, not the count.
                 Node {
-                    // (Behind the fruit; `right` follows it in the system below.)
-                    right: Val::Px(crate::wumpa_icon::CENTER.x - wumpa.x / 2.0),
-                    top: Val::Px(crate::wumpa_icon::CENTER.y - wumpa.y / 2.0),
+                    left: Val::Percent(50.0),
+                    margin: UiRect::left(Val::Px(
+                        crate::wumpa_icon::FRUIT_X * crate::hud::PIXEL.x - wumpa.x / 2.0,
+                    )),
+                    top: Val::Px(crate::wumpa_icon::MIDDLE_Y * crate::hud::PIXEL.y - wumpa.y / 2.0),
                     ..default()
                 },
             ),
@@ -282,22 +285,15 @@ fn shine(
         time.elapsed_secs() * FRAMES_PER_SECOND * THETA_STEP * if armed { 2.0 } else { 1.0 };
     // 1 to 2 over the colours at their dimmest, which the picture is made at.
     let pulse = shine_pulse(theta as u32) / 2.0;
-    let growth = counter
-        .single()
-        .map_or(0.0, |(node, text)| crate::wumpa_icon::growth(node, text));
     // The UI is drawn by the camera of the highest order, which is the fruit's own: the glows
     // would be drawn over the fruit and blend with it. They are drawn by the main camera instead,
     // under the cameras that draw the fruit (and the kart).
     let main = cameras.iter().find(|(_, c)| c.order == 0).map(|(e, _)| e);
-    for (entity, shine, mut image, mut visibility, mut node, target) in &mut glows {
+    for (entity, shine, mut image, mut visibility, target) in &mut glows {
         if let Some(main) = main
             && target.is_none_or(|t| t.0 != main)
         {
             commands.entity(entity).insert(UiTargetCamera(main));
-        }
-        if matches!(shine, Shine::Wumpa) {
-            // The glow is behind the fruit only, not the count: it goes where the fruit does.
-            node.right = Val::Px(crate::wumpa_icon::CENTER.x + growth - shine_size(shine).x / 2.0);
         }
         let up = match shine {
             Shine::Weapon => armed,

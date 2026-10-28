@@ -17,14 +17,15 @@
 //! screen flashes, and the beaker shatters, with no blast.
 //!
 //! Not ported: the red beaker's rain cloud, the shatter's particles, the Tiger Temple door that a
-//! shattering potion opens, the afterimage that follows a mine dropped at speed, the bots' TNT, a
-//! mine dropped on a crate holding the crate's regrowth back, and the sounds.
+//! shattering potion opens, the afterimage that follows a mine dropped at speed, the bots' TNT, and
+//! a mine dropped on a crate holding the crate's regrowth back. Of the sounds, the TNT's on a head
+//! are here ([`Tick::sounds`]); the detonations' are their listener's.
 
 use coll::{Collision, model_id, search_flags};
 use gte::Gte;
 use loader::lev::{Level, SVec3, quad_flags};
 use math::mips;
-use vehicle::{Driver, Matrix, kart_state, pick};
+use vehicle::{Driver, Matrix, Sound3D, kart_state, pick};
 
 use crate::{Body, CrateHit, Hit, Reason, Tick, WEAPON_REACT, Weapons, in_reach, svec};
 
@@ -73,6 +74,12 @@ const LAND_UNSET: i32 = 0x3fff;
 const SPIN_STEP: i16 = 0x100;
 /// `numFramesOnHead` at which it goes off: 3 seconds.
 const FUSE_TICKS: i16 = 0x5a;
+/// A TNT crate bounces up off the kart that hit it, lands on its head, and honks on these ticks
+/// of `numFramesOnHead`, faster towards the end.
+const TNT_HIT_SFX: u8 = 0x50;
+const TNT_ON_HEAD_SFX: u8 = 0x51;
+const TNT_HONK_SFX: u8 = 0x3e;
+const HONK_FRAMES: [i16; 6] = [0, 20, 40, 60, 70, 80];
 /// The jumps that do not shake it off (`jumpsRemaining` is 8 or 9).
 const JUMPS_BASE: i32 = 8;
 
@@ -527,6 +534,10 @@ impl Weapons {
                 if body.immune {
                     self.destroy(me, m, c);
                 } else {
+                    c.tick.sounds.push(Sound3D {
+                        id: TNT_HIT_SFX,
+                        pos: m.pos,
+                    });
                     m.pooled = false;
                     m.vel = [0, JUMP_VELOCITY, 0];
                     m.stop_fall_y = LAND_UNSET;
@@ -624,6 +635,10 @@ impl Weapons {
                 if m.scale_xz == HEAD_SCALE {
                     // It has landed.
                     let jumps = JUMPS_BASE - math::mix_rng_scramble(c.random_number) % 2;
+                    c.tick.sounds.push(Sound3D {
+                        id: TNT_ON_HEAD_SFX,
+                        pos: m.pos,
+                    });
                     m.state = State::Sitting {
                         target,
                         frames: 0,
@@ -720,6 +735,12 @@ impl Weapons {
             self.blowup(me, m, c);
             self.vanish(m);
             return;
+        }
+        if HONK_FRAMES.contains(&frames) {
+            c.tick.sounds.push(Sound3D {
+                id: TNT_HONK_SFX,
+                pos: m.pos,
+            });
         }
         frames += 1;
         let row = frames as usize * 2;
@@ -1016,11 +1037,26 @@ mod tests {
         let bodies = [body(1000, 0), body(10, 0)];
         let first = run(&mut weapons, &bodies, 1);
         assert_eq!(first[0].hits[0].damage, pick::damage::NONE);
+        assert_eq!(first[0].sounds[0].id, TNT_HIT_SFX);
         assert!(weapons.carries_tnt(1));
         // It flies up, comes down and sits for the fuse (90 ticks), then blows.
         let ticks = run(&mut weapons, &bodies, 200);
         let blown = ticks.iter().position(|t| !t.detonations.is_empty());
         assert!(blown.is_some_and(|n| (90..140).contains(&n)), "{blown:?}");
+        // It lands with a thud and honks six times, the honks closer together towards the end.
+        let sounds: Vec<(usize, u8)> = (ticks.iter().enumerate())
+            .flat_map(|(n, t)| t.sounds.iter().map(move |s| (n, s.id)))
+            .collect();
+        let landed = sounds[0].0;
+        assert_eq!(sounds[0].1, TNT_ON_HEAD_SFX);
+        let honks: Vec<usize> = sounds[1..]
+            .iter()
+            .map(|&(n, id)| {
+                assert_eq!(id, TNT_HONK_SFX);
+                n - landed
+            })
+            .collect();
+        assert_eq!(honks, [0, 20, 40, 60, 70, 80]);
         assert!(!weapons.carries_tnt(1));
         assert!(weapons.mines.is_empty());
     }

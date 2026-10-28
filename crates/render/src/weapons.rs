@@ -63,10 +63,11 @@ pub fn cell(icon_id: i32) -> Option<usize> {
 }
 
 /// All the weapon icons one above the other (see [`hud_icons::strip`]), in the order of
-/// [`ICON_IDS`].
+/// [`ICON_IDS`]. The HUD draws them half-transparent, so the dark box behind each item (its
+/// texels with the STP bit) shows the scene behind it, darkened.
 pub fn weapon_atlas(icons: &[Icon], vram: &Vram) -> Atlas {
     // As stored: HEIGHT wide and WIDTH tall.
-    let stored = hud_icons::strip(icons, vram, &ICON_IDS, HEIGHT, WIDTH);
+    let stored = hud_icons::strip_half_transparent(icons, vram, &ICON_IDS, HEIGHT, WIDTH);
     let mut rgba = vec![0u8; WIDTH * ICON_IDS.len() * HEIGHT * 4];
     for n in 0..ICON_IDS.len() {
         for y in 0..HEIGHT {
@@ -193,6 +194,18 @@ mod tests {
         assert!((shine_pulse(1024) - 2.0).abs() < 1e-5);
         assert!((shine_pulse(2048) - 1.0).abs() < 1e-5);
         assert!((shine_pulse(3072) - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn half_of_black_leaves_half_the_background() {
+        let [r, g, b, a] = hud_icons::half_transparent([0, 0, 0, 255]);
+        assert_eq!([r, g, b], [0, 0, 0]);
+        // Half of a background in gamma is 0.5^2.2 of its light.
+        assert_eq!(a, 200);
+        // White over black is the grey of half white.
+        let [w, _, _, a] = hud_icons::half_transparent([255; 4]);
+        let light = (w as f32 / 255.0).powf(2.2) * a as f32 / 255.0;
+        assert!((light - 0.5f32.powf(2.2)).abs() < 0.005, "{light}");
     }
 
     #[test]

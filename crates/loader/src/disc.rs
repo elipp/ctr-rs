@@ -104,16 +104,81 @@ pub fn open_bigfile_with<R: Read + Seek>(
 
     let image =
         IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
-    let start = image
-        .root_dir()
-        .iter(&image)
-        .entries()
-        .filter_map(Result::ok)
-        .find(|e| e.display_name().split(';').next() == Some("BIGFILE.BIG"))
-        .map(|e| e.header().extent.read())
+    let start = find(&image, "BIGFILE.BIG")
         .ok_or_else(|| invalid("BIGFILE.BIG not in the root directory".into()))?;
 
     let mut disc = open()?;
     let big = crate::bigfile::BigFile::open(&mut disc, start)?;
     Ok((disc, big))
+}
+
+/// Opens the disc image at `path` and reads the header of `SOUNDS/KART.HWL`.
+pub fn open_howl(path: &std::path::Path) -> io::Result<(Disc, crate::howl::Howl)> {
+    use hadris_iso::read::IsoImage;
+
+    let open = || RawSectorReader::new(std::fs::File::open(path).map(std::io::BufReader::new)?);
+    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+    let image =
+        IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
+    let start = find(&image, "SOUNDS/KART.HWL")
+        .ok_or_else(|| invalid("SOUNDS/KART.HWL not on the disc".into()))?;
+
+    let mut disc = open()?;
+    let howl = crate::howl::Howl::open(&mut disc, start)?;
+    Ok((disc, howl))
+}
+
+/// The XA audio of a disc image (`crate::xa`), its files read from their raw sectors.
+pub type XaDisc = crate::xa::XaFiles<std::io::BufReader<std::fs::File>>;
+
+/// Opens the disc image at `path` and reads the index of its XA audio, `XA/ENG.XNF`, and where
+/// each of the files it names is (`CdSearchFile`, as `CDSYS_SetXAToLang` looks them up).
+pub fn open_xa(path: &std::path::Path) -> io::Result<(crate::xa::Xnf, XaDisc)> {
+    use crate::xa::{Category, XaFiles, Xnf};
+    use hadris_iso::read::IsoImage;
+
+    let file = || std::fs::File::open(path).map(std::io::BufReader::new);
+    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+    let image = IsoImage::open(RawSectorReader::new(file()?)?)
+        .map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
+    let (start, size) = find_sized(&image, "XA/ENG.XNF")
+        .ok_or_else(|| invalid("XA/ENG.XNF not on the disc".into()))?;
+    let mut disc = RawSectorReader::new(file()?)?;
+    disc.seek(SeekFrom::Start(start as u64 * USER_DATA_SIZE))?;
+    let mut bytes = vec![0; size as usize];
+    disc.read_exact(&mut bytes)?;
+    let xnf = Xnf::parse(&bytes)?;
+
+    let starts = Category::ALL.map(|category| {
+        (0..xnf.files[category as usize])
+            .map_while(|n| find(&image, &format!("{}/S{n:02}.XA", category.dir())))
+            .collect()
+    });
+    Ok((xnf, XaFiles::new(file()?, starts)))
+}
+
+/// The first sector of the file at `path` (directories split by `/`, no version suffix).
+fn find<R: Read + Seek>(image: &hadris_iso::read::IsoImage<R>, path: &str) -> Option<u32> {
+    find_sized(image, path).map(|(start, _)| start)
+}
+
+/// The first sector and the size in bytes of the file at `path`.
+fn find_sized<R: Read + Seek>(
+    image: &hadris_iso::read::IsoImage<R>,
+    path: &str,
+) -> Option<(u32, u32)> {
+    let mut dir = image.root_dir().iter(image);
+    let mut names = path.split('/').peekable();
+    while let Some(name) = names.next() {
+        let entry = dir
+            .entries()
+            .filter_map(Result::ok)
+            .find(|e| e.display_name().split(';').next() == Some(name))?;
+        if names.peek().is_none() {
+            let header = entry.header();
+            return Some((header.extent.read(), header.data_len.read()));
+        }
+        dir = image.open_dir(entry.as_dir_ref(image).ok()?);
+    }
+    None
 }

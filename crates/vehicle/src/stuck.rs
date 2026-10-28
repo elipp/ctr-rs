@@ -7,8 +7,8 @@
 //! gives the start boost.
 //!
 //! Not ported: the animation of the kart (the crash fall, the wheelie of the
-//! rev: `matrix_array` stays as it was), the mask's sounds, the
-//! whistle and the particles. The mask's own motion is ([`MaskHead`], [`mask_tick`]),
+//! rev: `matrix_array` stays as it was), the mask's sounds and the
+//! particles. The mask's own motion is ([`MaskHead`], [`mask_tick`]),
 //! but not its model: the presentation draws it from [`MaskHead::shown`]. What the animation stage does to the simulation
 //! (the kart frozen at its last position, lifted by the mask) is ported.
 //!
@@ -101,6 +101,8 @@ const REV_START_BOOST_RESERVES: i32 = 960;
 const REV_SMALL_BOOST_FIRE_LEVEL: i32 = 0x20;
 const REV_BIG_BOOST_FIRE_LEVEL: i32 = 0x80;
 const REV_OVERREV_SFX: u8 = 0xf;
+/// `VEH_STUCK_MASK_GRAB_WHISTLE_FX`: a kart that fell far whistles as the mask comes down.
+const MASK_GRAB_WHISTLE_SFX: u8 = 0x55;
 const REV_FILL_STEP_MAX: i32 = 5000;
 const REV_STEP_MIN: i32 = 0x100;
 const REV_OVERREV_TIMEOUT: i16 = 192;
@@ -188,9 +190,11 @@ impl MaskHead {
     }
 }
 
-/// `KartStates.MaskGrab`, without the particles and the whistle.
+/// `KartStates.MaskGrab`, without the particles.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MaskGrab {
+    /// `boolWhistle`: the falling kart's whistle has played.
+    pub whistle: bool,
     /// The mask is lifting the kart, now that it has come down to it.
     pub lifting_player: bool,
     /// The kart fell a long way and is still falling: it is held in place for a while.
@@ -446,9 +450,16 @@ pub fn mask_grab_after_phys_linear(d: &mut Driver) {
 }
 
 /// `VehStuckProc_MaskGrab_Animate`, the parts that are not the animation: a kart that fell far
-/// stays where it was for a while, and the mask comes down to the kart and lifts it.
-pub fn mask_grab_animate(d: &mut Driver, env: &Env) {
+/// whistles and stays where it was for a while, and the mask comes down to the kart and lifts it.
+pub fn mask_grab_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
     if d.grab.still_falling {
+        if !d.grab.whistle && d.no_input_timer < MASK_DESCENT_TIME {
+            effects.push(Effect::Sound {
+                id: MASK_GRAB_WHISTLE_SFX,
+                echo: false,
+            });
+            d.grab.whistle = true;
+        }
         if d.no_input_timer >= CRASH_TIME {
             d.speed = 0;
             d.speed_approx = 0;
@@ -872,6 +883,27 @@ mod tests {
         }
         mask_tick(&mut d, &env);
         assert_eq!(d.mask, None);
+    }
+
+    #[test]
+    fn a_kart_that_fell_far_whistles_once_as_the_mask_comes_down() {
+        let mut d = kart();
+        let env = Env::default();
+        d.grab.still_falling = true;
+        d.no_input_timer = MASK_DESCENT_TIME;
+        let mut effects = vec![];
+        mask_grab_animate(&mut d, &env, &mut effects);
+        assert!(effects.is_empty());
+        d.no_input_timer = MASK_DESCENT_TIME - 32;
+        mask_grab_animate(&mut d, &env, &mut effects);
+        mask_grab_animate(&mut d, &env, &mut effects);
+        assert_eq!(
+            effects,
+            [Effect::Sound {
+                id: MASK_GRAB_WHISTLE_SFX,
+                echo: false
+            }]
+        );
     }
 
     #[test]
