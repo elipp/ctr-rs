@@ -45,7 +45,12 @@ pub fn half_transparent([r, g, b, _]: [u8; 4]) -> [u8; 4] {
         let light = (v as f32 / 255.0 / 2.0).powf(GAMMA) / alpha;
         (light.min(1.0).powf(1.0 / GAMMA) * 255.0).round() as u8
     };
-    [channel(r), channel(g), channel(b), (alpha * 255.0).round() as u8]
+    [
+        channel(r),
+        channel(g),
+        channel(b),
+        (alpha * 255.0).round() as u8,
+    ]
 }
 
 /// The same for icons found by their names: the ones with no global index (-1) cannot be found

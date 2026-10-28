@@ -157,6 +157,19 @@ struct Member {
 }
 
 impl Lobby {
+    /// The players in the lobby, as the last [`Event::Lobby`] said: the character, the name
+    /// (the nickname, or the short key without one) and the short key of each.
+    pub fn members(&self) -> impl Iterator<Item = (u8, &str, &str)> {
+        self.roster
+            .iter()
+            .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
+    }
+
+    /// Whether we are in a lobby and no race is on: the players wait.
+    pub fn is_waiting(&self) -> bool {
+        self.session.is_some() && self.online.is_none()
+    }
+
     /// Whether we are in a lobby (ours or another's), or creating one.
     pub fn is_open(&self) -> bool {
         self.session.is_some()
@@ -200,7 +213,7 @@ impl Lobby {
 
     /// Joins the lobby at `ticket`.
     pub fn join(&mut self, ticket: Ticket, character: u8, nick: &str) {
-        println!("joining {ticket}");
+        debug!("joining {ticket}");
         self.session = Some(net::join(ticket, character, nick, race::SIM_VERSION));
         self.joined = true;
         self.roster.clear();
@@ -311,7 +324,7 @@ fn copy_to_clipboard(text: String) {
             }
         });
         if let Err(e) = result {
-            eprintln!("could not copy to the clipboard: {e}");
+            warn!("could not copy to the clipboard: {e}");
         }
     });
 }
@@ -423,7 +436,7 @@ fn run(
             Action::PurgeCache => match maps::purge() {
                 Ok(0) => "The cache is empty",
                 Ok(n) => {
-                    println!("deleted {n} cached map(s)");
+                    debug!("deleted {n} cached map(s)");
                     toasts.write(Toast::new(format!("Deleted {n} cached map(s)"), 2500));
                     continue;
                 }
@@ -546,7 +559,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
-                println!(
+                info!(
                     "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nType /race start to start the race once the others have joined."
                 );
                 copy_to_clipboard(format!("/lobby join {ticket}"));
@@ -555,15 +568,15 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                         .color(Color::linear_rgb(0.4, 1.0, 0.4)),
                 );
             }
-            Event::PeerJoined(id) => println!("{} joined", id.fmt_short()),
+            Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
             Event::Lobby { players, you } => roster = Some((players, you)),
             Event::Announce(text) => {
                 toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
-            Event::Joined(id) => println!("joined the lobby of {}", id.fmt_short()),
+            Event::Joined(id) => debug!("joined the lobby of {}", id.fmt_short()),
             Event::Rtt { id, rtt } => rtts.push((id.fmt_short().to_string(), rtt)),
             Event::PeerLeft(id) => {
-                println!(
+                debug!(
                     "{} left{}",
                     id.fmt_short(),
                     if lobby.online.is_some() {
@@ -581,7 +594,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
                 track,
                 hash,
             } => {
-                println!(
+                debug!(
                     "race started: you are player {slot} of {}, characters {characters:?}, track {track:#x}",
                     characters.len()
                 );
@@ -644,7 +657,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             Event::Checksum { slot, tick, hash } => sums.push((slot, tick, hash)),
             Event::Blob { track, hash, bytes } => match maps::receive(track, hash, &bytes) {
                 Ok(()) => {
-                    println!("received map {track:#x} ({} bytes)", bytes.len());
+                    debug!("received map {track:#x} ({} bytes)", bytes.len());
                     got_map = Some(track);
                 }
                 Err(why) => map_failed = Some(format!("Could not use the map sent: {why}")),
@@ -654,11 +667,11 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
             }
             Event::NetInfo(peers) => {
                 let text = net_info_text(&peers);
-                println!("{text}");
+                debug!("{text}");
                 toasts.write(Toast::new(text, 8000).size(16.0));
             }
             Event::Failed(why) => {
-                println!("lobby failed: {why}");
+                warn!("lobby failed: {why}");
                 failed = Some(why);
             }
         }
@@ -704,7 +717,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     }
     if let Some(why) = map_failed {
         // The race cannot start without the map: the others would wait for us for good.
-        println!("{why}");
+        warn!("{why}");
         toasts.write(Toast::new(why, 6000).color(Color::srgb(1.0, 0.3, 0.3)));
         lobby.close();
         return;
@@ -774,9 +787,10 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
     if let Some(online) = &mut lobby.online {
         online.go |= go;
         // The pads of a player we reported on are not taken: the report is where they end.
-        online
-            .inbox
-            .extend(pads.into_iter().filter(|(slot, ..)| !online.frozen.get(*slot).copied().unwrap_or(false)));
+        online.inbox.extend(
+            pads.into_iter()
+                .filter(|(slot, ..)| !online.frozen.get(*slot).copied().unwrap_or(false)),
+        );
         for slot in gones {
             if !online.go {
                 // The sim has none of its pads yet, and takes none now.
@@ -801,7 +815,7 @@ fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>) {
         }
         for d in online.desync.iter_mut().filter(|d| !d.told) {
             d.told = true;
-            println!(
+            error!(
                 "DESYNC: the sim of player {} differs from ours at tick {}",
                 d.slot, d.tick
             );
@@ -850,7 +864,7 @@ fn finish(mut lobby: ResMut<Lobby>, sim: Res<crate::props::Sim>, mut toasts: Mes
         net.won = true;
         let name = net.labels.get(slot).map_or("?", String::as_str);
         let text = format!("Race finished, player {name} won");
-        println!("{text} (tick {tick})");
+        debug!("{text} (tick {tick})");
         toasts.write(Toast::new(text, AFTERMATH_SECONDS as u64 * 1000).color(ANNOUNCE_COLOR));
     }
     // The race is over when the last of the players still here crosses the line (the ones that

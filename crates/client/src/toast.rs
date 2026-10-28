@@ -85,7 +85,10 @@ fn gradient(color: Color) -> Gradient {
 
 /// Whether the game's font can write `text`: it has no character the font lacks.
 fn in_game_font(text: &str) -> bool {
-    !text.trim().is_empty() && text.chars().all(|c| c == ' ' || render::font::glyph(c).is_some())
+    !text.trim().is_empty()
+        && text
+            .chars()
+            .all(|c| c == ' ' || render::font::glyph(c).is_some())
 }
 
 /// The size of a texel of a toast in the game's font: the HUD's, or half of it for a small toast,

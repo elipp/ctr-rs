@@ -34,7 +34,10 @@ pub(crate) enum Heard {
     Ping(Duration),
     /// The connection closed: the number it has (see `Connection::stable_id`), and whether the
     /// host removed us ([`KICKED`]).
-    Closed { id: usize, kicked: bool },
+    Closed {
+        id: usize,
+        kicked: bool,
+    },
 }
 
 /// The clock that the stamps of the pings are read from. Only ours reads them.
@@ -44,15 +47,19 @@ pub(crate) fn stamp() -> u64 {
 }
 
 /// The connections without the repeats: a player can be in the lobby and the race both.
-pub(crate) fn distinct<'a>(connections: impl Iterator<Item = &'a Connection>) -> Vec<&'a Connection> {
+pub(crate) fn distinct<'a>(
+    connections: impl Iterator<Item = &'a Connection>,
+) -> Vec<&'a Connection> {
     let mut seen = HashSet::new();
-    connections
-        .filter(|c| seen.insert(c.stable_id()))
-        .collect()
+    connections.filter(|c| seen.insert(c.stable_id())).collect()
 }
 
 /// Reads the datagrams and the reliable messages of a connection until it closes.
-pub(crate) fn listen(connection: Connection, from: EndpointId, heard: UnboundedSender<(EndpointId, Heard)>) {
+pub(crate) fn listen(
+    connection: Connection,
+    from: EndpointId,
+    heard: UnboundedSender<(EndpointId, Heard)>,
+) {
     tokio::spawn(async move {
         loop {
             let message = tokio::select! {
@@ -67,7 +74,9 @@ pub(crate) fn listen(connection: Connection, from: EndpointId, heard: UnboundedS
             };
             match message {
                 // Answered here, where the connection is, and at once: the loop may be busy.
-                Some(Ok(Message::Ping { stamp })) => send_datagram(&connection, &Message::Pong { stamp }),
+                Some(Ok(Message::Ping { stamp })) => {
+                    send_datagram(&connection, &Message::Pong { stamp })
+                }
                 Some(Ok(Message::Pong { stamp: sent })) => {
                     let rtt = Duration::from_micros(stamp().saturating_sub(sent));
                     if heard.send((from, Heard::Ping(rtt))).is_err() {

@@ -2,6 +2,7 @@
 
 ## Maybe
 
+- Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
 - **A dropped red beaker did not exist on the tick after the throw.** The test
   `a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it` (`crates/race/tests/weapons.rs`)
   waited for the potion with `while mines().first().is_some_and(|m| m.state != Ground)`, which
@@ -13,16 +14,11 @@
   `debug_roll` and wait loop assume. Not checked on the commit before it.
 
 - The few usf boost pads in the game (Claude claims it's implemented)
-- Red beaker effect should slow down and give the bouncing animation. Maybe bigger cloud too
 
 ## Confirmed
 
+- With three players, changing track causes DESYNC (sometimes!!)
 - other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 
-## Not bugs
-
-- **Wumpa glow missing at 10 wumpa, and a shield that pops by itself.** Both are the end of the
-  race: crossing the finish line on the last lap sets `RACE_FINISHED`, which pops the shield
-  (`vehicle::shield::tick`, as `RB_ShieldDark_ThTick_Grow` does) and hides the glows
-  (`client/srcweapon.rs`, `shine`). Free drive used to have the three-lap limit too; it now has none
-  (`race::FREE_DRIVE_LAPS`), so only an online race ends.
+## Not a bug?
+- /race restart doesn't include any pending clients. Instead, one must /race stop and /race start

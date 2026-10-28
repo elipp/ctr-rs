@@ -27,6 +27,7 @@ mod laps;
 mod leaderboard;
 mod lights;
 mod lobby;
+mod lobby_list;
 mod maps;
 mod mask;
 mod minimap;
@@ -42,8 +43,8 @@ mod remote;
 mod shadow;
 mod shield;
 mod skid;
-mod slide_meter;
 mod sky;
+mod slide_meter;
 mod sound;
 mod subtract;
 mod suggest;
@@ -409,7 +410,10 @@ fn main() {
     let track_id = 0;
     let config = config::Config::load();
     // The character driven last time.
-    let racer = config.character.filter(|&c| (c as usize) < CHARACTERS.len()).unwrap_or(0);
+    let racer = config
+        .character
+        .filter(|&c| (c as usize) < CHARACTERS.len())
+        .unwrap_or(0);
     let options = Options {
         racer,
         driving: true,
@@ -547,6 +551,7 @@ fn main() {
         // The race's HUD. (A tuple of plugins holds 15 at most.)
         (
             leaderboard::LeaderboardPlugin,
+            lobby_list::LobbyListPlugin,
             lights::LightsPlugin,
             place::PlacePlugin,
             laps::LapsPlugin,

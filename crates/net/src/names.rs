@@ -68,6 +68,9 @@ mod tests {
         assert_eq!(names[0], format!("Penta#{}", short(a)));
         assert_eq!(names[1], format!("penta#{}", short(b)));
         assert_eq!(names[2], c.fmt_short().to_string());
-        assert_eq!(display_names(&[(a, "Penta"), (b, "Tiny")]), ["Penta", "Tiny"]);
+        assert_eq!(
+            display_names(&[(a, "Penta"), (b, "Tiny")]),
+            ["Penta", "Tiny"]
+        );
     }
 }

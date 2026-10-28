@@ -95,7 +95,10 @@ impl Plugin for SoundPlugin {
         app.add_audio_source::<Mixer>()
             .init_resource::<Kept>()
             .add_systems(Startup, start_mixer)
-            .add_systems(Update, (level_audio, stream_xa).run_if(crate::drive::driving));
+            .add_systems(
+                Update,
+                (level_audio, stream_xa).run_if(crate::drive::driving),
+            );
     }
 }
 
