@@ -3,7 +3,8 @@
 //! fire (`turbo`) or restarts it.
 //!
 //! The sound is reported ([`Effect::FireAudio`]) where the reference plays it; its cooldown is
-//! the listener's, as the reference's C oracle never runs it. The ghost tape is not recorded.
+//! the listener's (the C oracle compares the sound with its cooldown patched out). The ghost tape
+//! is not recorded.
 
 use math::mips;
 

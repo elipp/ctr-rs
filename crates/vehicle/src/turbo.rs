@@ -5,6 +5,8 @@
 //!
 //! A player's fire roars as it burns ([`Effect::Recycle`] on [`audio_slot::TURBO`]).
 //!
+//! Its death (`VehTurbo_ThDestroy`) ends a turbo item's boost (`ACTION_TURBO_ITEM`).
+//!
 //! Not modelled: the rumble, the driver's own transparency
 //! (`alphaScale` halving while the fire burns), and the water split and
 //! reflection flags of the instances.
@@ -158,6 +160,10 @@ pub fn tick(d: &mut Driver, elapsed_time_ms: i16, effects: &mut Vec<Effect>) {
             echo,
         });
     }
+    if stop {
+        // `VehTurbo_ThDestroy`: a turbo item's boost ends with its fire.
+        d.actions_flag_set &= !actions::TURBO_ITEM;
+    }
     d.turbo = (!stop).then_some(t);
 }
 
@@ -244,6 +250,25 @@ mod tests {
         let (_, quieter, _) = roars[roars.len() - 3];
         assert_eq!(quieter as i32, 0x100 - (0xfc0 >> 4));
         assert_eq!(roars.last().unwrap().0, None);
+    }
+
+    #[test]
+    fn a_turbo_item_boosts_until_its_fire_dies() {
+        let mut d = Driver::new(0, 0);
+        crate::fire::increment(
+            &mut d,
+            0x960,
+            crate::fire::turbo_type::FREEZE_RESERVES_ON_TURBO_PAD | crate::fire::turbo_type::TURBO_ITEM,
+            0x80,
+            &mut vec![],
+        );
+        assert_ne!(d.actions_flag_set & actions::TURBO_ITEM, 0);
+        tick(&mut d, 32, &mut vec![]);
+        assert_ne!(d.actions_flag_set & actions::TURBO_ITEM, 0);
+        d.kart_state = kart_state::CRASHING;
+        tick(&mut d, 32, &mut vec![]);
+        assert!(d.turbo.is_none());
+        assert_eq!(d.actions_flag_set & actions::TURBO_ITEM, 0);
     }
 
     #[test]

@@ -7,7 +7,7 @@ FROM rust:1-slim-trixie
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    bash build-essential ca-certificates curl git jq less openssh-client pkg-config procps ripgrep unzip libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev python3 \
+    bash build-essential ca-certificates curl git jq less openssh-client pkg-config procps ripgrep unzip libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev python3 gcc-multilib \
     && rm -rf /var/lib/apt/lists/*
 
 # Same uid as the host user, so files written to the mounted project are yours.
