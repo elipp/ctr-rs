@@ -130,6 +130,18 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
             } => pads.push((slot, first, p)),
             Event::Lead { slot, ahead } => leads.push((slot, ahead)),
             Event::Checksum { slot, tick, hash } => sums.push((slot, tick, hash)),
+            Event::ChecksumDropped {
+                from,
+                tick,
+                sent,
+                epoch,
+                planned,
+                linked,
+            } => warn!(
+                "dropped the hash of tick {tick} from {}: it is of race {sent}, ours is {epoch}; \
+                 in the roster: {planned}, linked: {linked}",
+                from.fmt_short()
+            ),
             Event::Blob { track, hash, bytes } => match maps::receive(track, hash, &bytes) {
                 Ok(()) => {
                     debug!("received map {track:#x} ({} bytes)", bytes.len());
@@ -290,9 +302,22 @@ pub(super) fn report(mut lobby: ResMut<Lobby>, mut toasts: MessageWriter<Toast>)
         }
         for d in online.desync.iter_mut().filter(|d| !d.told) {
             d.told = true;
+            let who = online.labels.get(d.slot).map_or("?", String::as_str);
+            let hashes = d.hashes.map_or_else(
+                || "(a pad is missing, not a hash)".to_string(),
+                |h| format!("ours {:016x}, theirs {:016x}", h.ours, h.theirs),
+            );
             error!(
-                "DESYNC: the sim of player {} differs from ours at tick {}",
-                d.slot, d.tick
+                "DESYNC: the sim of player {} ({who}) differs from ours at tick {}: {hashes}. \
+                 We are player {} of {}; track {:#x}, map hash {:#018x}; characters {:?}; players {:?}",
+                d.slot,
+                d.tick,
+                online.slot,
+                online.characters.len(),
+                online.track,
+                online.hash,
+                online.characters,
+                online.names,
             );
             toasts.write(
                 Toast::new(

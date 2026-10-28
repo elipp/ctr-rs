@@ -13,6 +13,15 @@ const KEPT: usize = 64;
 pub struct Mismatch {
     pub tick: u32,
     pub slot: usize,
+    /// Our hash of the tick and the player's, when the mismatch is of hashes.
+    pub hashes: Option<Hashes>,
+}
+
+/// Two hashes of a tick that differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hashes {
+    pub ours: u64,
+    pub theirs: u64,
 }
 
 /// The hashes of one race, ours and the others'.
@@ -41,8 +50,14 @@ impl Checks {
         self.theirs
             .iter()
             .enumerate()
-            .filter(|(_, theirs)| theirs.get(&tick).is_some_and(|&h| h != hash))
-            .map(|(slot, _)| Mismatch { tick, slot })
+            .filter_map(|(slot, theirs)| {
+                let &other = theirs.get(&tick).filter(|&&h| h != hash)?;
+                Some(Mismatch {
+                    tick,
+                    slot,
+                    hashes: Some(Hashes { ours: hash, theirs: other }),
+                })
+            })
             .collect()
     }
 
@@ -56,10 +71,12 @@ impl Checks {
         let theirs = self.theirs.get_mut(slot)?;
         theirs.insert(tick, hash);
         keep(theirs);
-        self.mine
-            .get(&tick)
-            .is_some_and(|&h| h != hash)
-            .then_some(Mismatch { tick, slot })
+        let &ours = self.mine.get(&tick).filter(|&&h| h != hash)?;
+        Some(Mismatch {
+            tick,
+            slot,
+            hashes: Some(Hashes { ours, theirs: hash }),
+        })
     }
 }
 
@@ -86,10 +103,10 @@ mod tests {
     fn a_hash_that_differs_names_the_player_whichever_side_is_late() {
         let mut a = Checks::new(3, 1);
         assert_eq!(a.theirs(2, 30, 5), None);
-        assert_eq!(a.mine(30, 6), vec![Mismatch { tick: 30, slot: 2 }]);
+        assert_eq!(a.mine(30, 6), vec![Mismatch { tick: 30, slot: 2, hashes: Some(Hashes { ours: 6, theirs: 5 }) }]);
         assert_eq!(a.theirs(0, 60, 1), None);
         assert!(a.mine(60, 1).is_empty());
-        assert_eq!(a.theirs(2, 60, 2), Some(Mismatch { tick: 60, slot: 2 }));
+        assert_eq!(a.theirs(2, 60, 2), Some(Mismatch { tick: 60, slot: 2, hashes: Some(Hashes { ours: 1, theirs: 2 }) }));
     }
 
     #[test]
