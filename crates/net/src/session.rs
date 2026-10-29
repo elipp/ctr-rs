@@ -253,7 +253,7 @@ pub(crate) async fn run(
                     }
                     io.event(Event::Announce(text));
                 },
-                Command::Character(c) => if plan.is_none() {
+                Command::Character(c) => if !racing {
                     character = c;
                     if matches!(role, Role::Host) {
                         tell_lobby(me, character, &nick, &guests, &io).await;
