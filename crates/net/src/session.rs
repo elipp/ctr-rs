@@ -13,6 +13,7 @@ use crate::conn::{
     Heard, RACE_IN_PROGRESS, dial, distinct, listen, send_datagram, send_reliably, stamp,
 };
 use crate::peers::{Departure, Guest, Link, Plan, Role, stalled, start_over};
+use crate::transfers::{Transfer, Transfers, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
     ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Tick, Ticket,
@@ -104,6 +105,9 @@ pub(crate) async fn run(
     // The custom tracks we can send, and the ones we asked the host for.
     let mut provided: HashMap<(u32, u64), Arc<Vec<u8>>> = HashMap::new();
     let mut fetching: HashSet<(u32, u64)> = HashSet::new();
+    // The host: the maps being sent, and the sends that ended.
+    let mut transfers = Transfers::default();
+    let (sent_tx, mut sent) = unbounded_channel::<Transfer>();
 
     match &role {
         Role::Host => {
@@ -208,6 +212,7 @@ pub(crate) async fn run(
                     }
                 }
             }
+            Some(transfer) = sent.recv() => transfers.finish(&transfer),
             Some(connection) = dialed.recv() => {
                 listen(connection.clone(), connection.remote_id(), heard_tx.clone());
                 unclaimed.push(connection);
@@ -220,8 +225,10 @@ pub(crate) async fn run(
                 Command::Provide { track, hash, bytes } => {
                     provided.insert((track, hash), bytes);
                 }
-                Command::Fetch { track, hash } => if let Some(connection) = &host_connection {
-                    fetching.insert((track, hash));
+                // Once: the host does not answer a second ask for a map that is on its way.
+                Command::Fetch { track, hash } => if let Some(connection) = &host_connection
+                    && fetching.insert((track, hash))
+                {
                     send_reliably(connection, &Message::Want { track, hash }).await?;
                 },
                 // The same players again: new links, and everyone ready before tick 0 once more.
@@ -490,18 +497,27 @@ pub(crate) async fn run(
                     Message::Want { track, hash } => if matches!(role, Role::Host)
                         && let Some(guest) = guests.iter().find(|g| g.id == from)
                     {
+                        let transfer = (from, track, hash);
                         let reply = match provided.get(&(track, hash)) {
                             Some(bytes) if bytes.len() <= MAX_BLOB => {
-                                Message::Blob { track, hash, bytes: bytes.to_vec() }
+                                match transfers.begin(transfer) {
+                                    Verdict::Send => Some(Message::Blob { track, hash, bytes: bytes.to_vec() }),
+                                    Verdict::Duplicate => None,
+                                    Verdict::Busy => Some(Message::NoBlob { track, hash }),
+                                }
                             }
-                            _ => Message::NoBlob { track, hash },
+                            _ => Some(Message::NoBlob { track, hash }),
                         };
-                        // On a stream of its own, which the loop does not wait for: the
-                        // guest takes its time to read it.
-                        let connection = guest.connection.clone();
-                        tokio::spawn(async move {
-                            let _ = send_reliably(&connection, &reply).await;
-                        });
+                        if let Some(reply) = reply {
+                            // On a stream of its own, which the loop does not wait for: the
+                            // guest takes its time to read it.
+                            let connection = guest.connection.clone();
+                            let sent_tx = sent_tx.clone();
+                            tokio::spawn(async move {
+                                let _ = send_reliably(&connection, &reply).await;
+                                let _ = sent_tx.send(transfer);
+                            });
+                        }
                     },
                     // Only what we asked for, and only from the host.
                     Message::Blob { track, hash, bytes } => {

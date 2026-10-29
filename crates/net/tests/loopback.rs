@@ -244,6 +244,41 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
 }
 
 #[test]
+fn asking_for_a_track_twice_brings_it_once() {
+    let host = net::host(3, "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
+
+    let bytes: Vec<u8> = (0..700_000u32).map(|i| (i * 31 >> 3) as u8).collect();
+    let (track, hash) = (0x8000_1234, 0xabcd_ef01);
+    host.provide(track, hash, std::sync::Arc::new(bytes));
+
+    guest.fetch(track, hash);
+    guest.fetch(track, hash);
+    wait_for(&guest, "the track", |e| matches!(e, Event::Blob { .. }));
+    // Neither a second copy nor a refusal follows.
+    let until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < until {
+        for event in guest.poll() {
+            assert!(
+                !matches!(event, Event::Blob { .. } | Event::BlobMissing { .. }),
+                "the second ask was answered"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
 fn a_guest_with_another_build_is_turned_away() {
     let host = net::host(3, "", BUILD);
     let mut ticket = None;

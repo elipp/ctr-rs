@@ -15,6 +15,7 @@ mod names;
 mod peers;
 mod session;
 mod ticket;
+mod transfers;
 pub mod wire;
 
 pub use iroh::EndpointId;
