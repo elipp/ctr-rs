@@ -2,7 +2,7 @@
 
 ctr-rs is and online-focused port of Crash Team Racing (PS1, 1999), written in Rust.
 
-It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native) project; it is used to verify the physics simulation and other mechanics remains as faithful to the original as possible. As we see it, the original CTR's controls are truly S-tier, and basically unmatched to this day. :D
+It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native) project; it is used to verify the physics simulation and other mechanics remains as faithful to the original as possible. As we see it, the original CTR's controls are truly S-tier, and basically unmatched to this day.
 
 ## What's here
 
@@ -12,7 +12,6 @@ It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native)
 - **The modding horizon is unlimited** - Modding ctr-native, while certainly possible, is quite difficult to get right.
 - **30 Hz simulation, hi-FPS rendering** - The game state advances at the original's 30 ticks a second, independent of the frame rate that is drawn.
 - **Rollback netcode with no local delay** - Players connect directly to each other with [iroh](https://github.com/n0-computer/iroh), if possible.
-- **The game's sound** - `crates/howl` emulates the PS1's SPU (ADPCM voices, ADSR envelopes, reverb) and plays the level's music and the voice lines from the disc.
 - **Custom tracks** - The `ctr-map` turns an xdelta patch of the disc into a `.ctrmap` file that the client can load through the lobby.
 
 ## Running it
