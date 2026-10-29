@@ -12,15 +12,12 @@
 ## Maps
 - a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
 - a map's music and reverb: it has none of its own, and gets no song and the reverb of the levels past the table. `ctr-map import` knows the track it was made over, whose song pack and reverb it could keep
-- `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
 
 ## Sound
 The sound effects and the engines play through the `howl` crate: an SPU as `ctr-native` emulates it (24 voices, ADPCM decoded as they play, the Gaussian interpolation, the ADSR envelopes) under the HOWL channels, so sounds can be changed and stopped as they play and the ones that loop do (`OtherFX_Modify`, `OtherFX_Stop1/2`, `OtherFX_RecycleNew/Mute`, `EngineAudio_*`, `howl_PauseAudio`). Our kart's ground, skid, wall-rub and turbo loops play (`vehicle::emitter_sound`, `turbo`), and the boost, the mask grab's whistle, the voice lines (`howl::voiceline`: a grunt, or a line of XA), the pause menu's, the lap's, the win's and the item roulette's. So do the level's objects (crates, wumpa fruit, armadillos, fireballs, minecarts, barrels: `instance::Tick::sounds` and `loops`) and the weapons (launches, flight loops, explosions, detonations, a TNT on a head), heard from where they are. The sounds that echo (a kart in a tunnel) go through the SPU's reverb (`howl::reverb`), in the level's mode (`Howl::set_level_reverb`). The music is the level's song pack (`howl::music`): its song from the green light on, a mask's while ours is out, quieter for "FINAL LAP!" and 20 faster after it, as the states of the race say (`howl::state`). The XA (`loader::xa`: `XA/ENG.XNF`, the tracks' sectors and their ADPCM; `howl::xa`: the CD's input of the SPU and the native path of `CDSYS`) plays the voice lines and the "FINAL LAP!" and race-end jingles, which the states wait for; the viewer reads the tracks on a thread. `cargo run -p howl --example render` renders sounds to a WAV (`r2` before them for a level's reverb, `m0` for a level's song, `xm6` for an XA). What is left, in order:
 1. the rest of the XA: the wrong-way lines of Aku Aku and Uka Uka (`Voiceline_Update`, `boolCanPlayWrongWaySFX`, which need the wrong-way state of the race), N. Tropy's lines at a time trial's end, and the loudness the talking masks' mouths follow (`XA_MaxSampleVal`). Not listened to in a race yet
 2. the level's ambience (`Level_AmbientSound`: `levAmbientSound` along `SpawnType2` 5 and 6, `Level_RandomFX`), and the rain of the red beaker's cloud 0x82 (`DropRain`)
 3. the volume options (`howl_VolumeSet`, `howl_ModeSet`)
-
-Online, a one-shot comes from the newest tick only, so a rollback does not take it back. The loops are sent again every tick (`Effect::Recycle`), and the engines set from the karts' state, so they put themselves right.
 
 ## Chores
 - remove any hex constants that aren't used as a bitmask; the particular values serve no purpose in the port
@@ -63,7 +60,7 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 
 ## Maybe
 
-- The few usf boost pads in the game (Claude claims it's implemented)
+- The few usf boost pads in the game
 
 - **A color band near the top of the sky on Crash Cove.** The sky dome has open holes, filled by
   the level's clear colors (`Level::clear_colors`, `CAM_ClearScreen`); we fill them with the top
@@ -78,4 +75,4 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 
 ## Not a bug?
 - /race restart doesn't include any pending clients. Instead, one must /race stop and /race start
-
+- `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
