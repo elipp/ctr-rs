@@ -1,5 +1,5 @@
-//! The maps of `assets/maps/*.ctrmap` (made by `ctr-map import`), which the viewer lists after the
-//! game's tracks. A map is a track under its own number (`Map::id`, with the top bit set); the
+//! The maps of `maps/*.ctrmap` (see `paths.rs`; made by `ctr-map import`), which the viewer lists
+//! after the game's tracks. A map is a track under its own number (`Map::id`, with the top bit set); the
 //! rest of the viewer takes that number for a `LevelId`.
 
 use std::path::PathBuf;
@@ -24,13 +24,13 @@ static MAPS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static LOADED: Once = Once::new();
 
 fn directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/maps")
+    crate::paths::maps()
 }
 
-/// Where the maps that other players sent are kept: unlike `assets/maps`, which is ours,
+/// Where the maps that other players sent are kept: unlike `maps`, which is ours,
 /// everything in it may go (`/cache purge`).
 fn cache_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/.cache/maps")
+    crate::paths::cached_maps()
 }
 
 /// Reads the maps there are, once. A file that is not a map is told of and left out.
@@ -84,7 +84,7 @@ pub fn file(id: u32) -> Option<(u64, Vec<u8>)> {
 }
 
 /// Takes in a map that was sent to us as the bytes of its file: it has to be the map `id` with
-/// this `hash`. It is saved to the cache (`assets/.cache/maps/`) and listed from then on.
+/// this `hash`. It is saved to the cache (`cache/maps/`) and listed from then on.
 pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
     let map = Map::from_bytes(bytes).map_err(|e| e.to_string())?;
     let got = (

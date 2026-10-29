@@ -74,9 +74,7 @@ pub(crate) struct Shared {
 }
 
 pub(crate) fn bigfile_path() -> PathBuf {
-    std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"))
+    crate::disc::path()
 }
 
 /// The model and the wheel sprites of a racer (none for Oxide, who has no wheels), for the
@@ -119,7 +117,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
     // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
     assert!(
         !map::is_map_id(id) || maps::get(id).is_some(),
-        "map {id:#x} is not in assets/maps"
+        "map {id:#x} is not in the maps folder"
     );
     if let Some(map) = maps::get(id) {
         // A map brings its own level and texture pages; the shared ones are the disc's.

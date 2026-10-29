@@ -5,7 +5,7 @@
 //! * `/lobby create`: open a lobby (`/lobby close` closes it)
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
-//! * `/cache purge`: delete the maps other players sent us (`assets/.cache/maps`)
+//! * `/cache purge`: delete the maps other players sent us (the `cache/maps` folder, see `paths.rs`)
 //! * `/race start`: start the race, once the others have joined (the host only)
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/net info`: how each peer is reached (direct or relay), the ping and the packets lost

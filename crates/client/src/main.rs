@@ -2,12 +2,15 @@
 //! viewer for a track's geometry (textured). There are no command line options: the level is 0
 //! and the racer the one driven last time (`config.rs`), and `]` / Page Up and `[` / Page Down
 //! switch to the next and the previous level, `.` and `,` to the next and the previous racer. The
-//! disc image is `CTR_BIN` or `assets/ctr-u.bin`.
+//! disc image is `CTR_BIN`, the `iso` of the config, or `assets/ctr-u.bin`
+//! in a debug build; on Windows a file dialog asks for it (see `disc.rs`).
 //!
 //! The viewer: a collision probe from the camera is drawn and described on screen; see
 //! `probe.rs` for its keys. Hold the right mouse button to look, WASD to move, Space/Shift
 //! up/down, Ctrl to go fast.
 
+// A release build on Windows has no console window; `crash.rs` tells of a panic instead.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 // Bevy systems take their parameters and `Query` filters as types, so both lints fire on them.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
@@ -15,7 +18,9 @@ mod animation;
 mod assets;
 mod banner;
 mod command;
+mod crash;
 mod config;
+mod disc;
 mod drive;
 mod exhaust;
 mod explosion;
@@ -38,6 +43,7 @@ mod mask;
 mod minimap;
 mod names;
 mod pause;
+mod paths;
 mod place;
 mod probe;
 mod projectile;
@@ -75,8 +81,10 @@ pub(crate) use resources::*;
 pub(crate) use scene::*;
 
 fn main() {
+    crash::install();
     let track_id = 0;
-    let config = config::Config::load();
+    let mut config = config::Config::load();
+    disc::locate(&mut config);
     // The character driven last time.
     let racer = config
         .character
