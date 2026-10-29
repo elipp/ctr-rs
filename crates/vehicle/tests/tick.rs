@@ -37,10 +37,10 @@ use loader::dram::DramFile;
 use loader::lev::{Level, SVec3};
 use loader::level::LevelId;
 use support::{Rng, build_driver, describe_level, run_reference};
-use vehicle::fire::{self, turbo_type};
-use vehicle::scrub::SCRUBS;
 use vehicle::collide::Feedback;
+use vehicle::fire::{self, turbo_type};
 use vehicle::pick::damage;
+use vehicle::scrub::SCRUBS;
 use vehicle::sim::{Racer, after_logic, spawn, start_tick, tick_all};
 use vehicle::stats::{CHARACTER_ENGINES, META_PHYS};
 use vehicle::terrain::TERRAINS;
@@ -286,8 +286,14 @@ fn fields(d: &Driver) -> Vec<(&'static str, i64)> {
     push!("turbo", d.turbo.is_some());
     push!("turboObj.fireAnimIndex", t.fire_anim_index);
     push!("turboObj.fireSize", t.fire_size);
-    push!("turboObj.fireDisappearCountdown", t.fire_disappear_countdown);
-    push!("turboObj.fireVisibilityCooldown", t.fire_visibility_cooldown);
+    push!(
+        "turboObj.fireDisappearCountdown",
+        t.fire_disappear_countdown
+    );
+    push!(
+        "turboObj.fireVisibilityCooldown",
+        t.fire_visibility_cooldown
+    );
     push!("turboInst1.alphaScale", t.alpha_scale);
     push!("turbo.hidden", t.hidden);
     push!("turboObj.fireAudioDistort", t.fire_audio_distort);
@@ -438,10 +444,7 @@ impl Run {
         write!(
             s,
             "X {} {} {} {}",
-            env.elapsed_time_ms,
-            env.elapsed_event_time,
-            env.timer,
-            env.end_of_race as u8
+            env.elapsed_time_ms, env.elapsed_event_time, env.timer, env.end_of_race as u8
         )
         .unwrap();
         for k in &self.karts {
@@ -752,11 +755,17 @@ fn make_runs(level: &Level, coll: &mut Collision, rng: &mut Rng) -> Vec<Run> {
         };
         // Every other pair of runs: one of each kind of driving gets turbo items.
         if i % 4 >= 2 {
-            add_turbo_items(&mut Rng((0x51ce_7a3b ^ ((i as u64) << 20)) | 1), &mut frames);
+            add_turbo_items(
+                &mut Rng((0x51ce_7a3b ^ ((i as u64) << 20)) | 1),
+                &mut frames,
+            );
         }
         // Every third run, of either kind of driving, with or without turbo items, gets hit.
         if i % 3 == 2 {
-            add_hits(&mut Rng((0x0b1a_57ed ^ ((i as u64) << 24)) | 1), &mut frames);
+            add_hits(
+                &mut Rng((0x0b1a_57ed ^ ((i as u64) << 24)) | 1),
+                &mut frames,
+            );
         }
         out.push(Run {
             karts: vec![Kart {
@@ -1051,7 +1060,13 @@ fn matches_reference_on_tracks() {
                         })
                         .collect();
                     start_tick(&mut racers, &mut random_number);
-                    tick_all(&mut racers, &level, env, &mut Pickups(&mut objects), &mut feedback)
+                    tick_all(
+                        &mut racers,
+                        &level,
+                        env,
+                        &mut Pickups(&mut objects),
+                        &mut feedback,
+                    )
                 };
                 for (j, k) in run.karts.iter().enumerate() {
                     let Some(hit) = k.frames[t].hit else {
@@ -1104,8 +1119,10 @@ fn matches_reference_on_tracks() {
                     totals[12] +=
                         (d.phys_state == PhysState::PowerSlide && d.num_boosts_success > 0) as u32;
                     totals[13] += d.turbo.is_some() as u32;
-                    totals[14] +=
-                        d.turbo.is_some_and(|t| t.hidden && t.fire_visibility_cooldown > 0) as u32;
+                    totals[14] += d
+                        .turbo
+                        .is_some_and(|t| t.hidden && t.fire_visibility_cooldown > 0)
+                        as u32;
                     totals[15] +=
                         (d.step_flag_set & vehicle::step_triggers::TURBO_PAD_MASK != 0) as u32;
                     totals[16] += (d.actions_flag_set & vehicle::actions::TURBO_ITEM != 0) as u32;
@@ -1119,7 +1136,13 @@ fn matches_reference_on_tracks() {
                     // A scratchpad that the drivers share holds what the last of their searches
                     // left, not any one driver's: then only the drivers and effects are compared.
                     let shared = n > 1 && own_collision() & 1 == 0;
-                    let tail = |l: &str| if shared { l.rsplit_once(" | ").map_or(l, |(a, _)| a).to_owned() } else { l.to_owned() };
+                    let tail = |l: &str| {
+                        if shared {
+                            l.rsplit_once(" | ").map_or(l, |(a, _)| a).to_owned()
+                        } else {
+                            l.to_owned()
+                        }
+                    };
                     if tail(got.trim_start()) != tail(want.trim_start()) {
                         failures += 1;
                         if failures <= 2 {

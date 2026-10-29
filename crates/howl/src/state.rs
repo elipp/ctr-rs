@@ -72,6 +72,10 @@ pub struct RaceAudio {
     /// The song of the mask that is out (`ACTION_MASK_WEAPON`, with `AKU_SONG` or `UKA_SONG`):
     /// [`crate::music::AKU_SONG`] or [`crate::music::UKA_SONG`].
     pub mask_song: Option<u16>,
+    /// It goes the wrong way, and has for long enough to be told (`vehicle::lap::wrong_way`).
+    pub wrong_way: bool,
+    /// Aku Aku looks after it, not Uka Uka (`VehPickupItem_MaskBoolGoodGuy`): who tells it.
+    pub good_guy: bool,
 }
 
 impl Howl {
@@ -96,13 +100,17 @@ impl Howl {
                 self.stop_music();
                 self.stop_songs();
             }
-            State::Racing => self.enable_voicelines(true),
+            State::Racing => {
+                self.reset_direction();
+                self.enable_voicelines(true);
+            }
             State::PreLastLap | State::LastLap => self.enable_voicelines(false),
             State::FinalLap => {
                 self.lower_music();
                 self.play_xa(Category::Music, FINAL_LAP_XA);
             }
             State::PostLastLap => {
+                self.reset_direction();
                 self.raise_music();
                 self.enable_voicelines(true);
             }
@@ -117,6 +125,7 @@ impl Howl {
     /// `Audio_Update1`: a frame of the game in the state the race is in. (The win's sound, which
     /// it plays as the leader finishes first, is the listener's.)
     pub fn update_state(&mut self, race: &RaceAudio) {
+        self.track_direction(race.wrong_way);
         let Some(state) = self.state else {
             return;
         };
@@ -136,7 +145,7 @@ impl Howl {
             }
             State::Racing => {
                 self.set_mask_song(race, 0);
-                self.update_voicelines();
+                self.update_voicelines(race.good_guy);
                 if laps > 2 && lap == laps - 2 && near {
                     self.set_state(State::PreLastLap);
                 }
@@ -161,7 +170,7 @@ impl Howl {
             }
             State::PostLastLap => {
                 self.set_mask_song(race, LAST_LAP_TEMPO);
-                self.update_voicelines();
+                self.update_voicelines(race.good_guy);
                 if lap == laps - 1 && near {
                     self.set_state(State::LastLap);
                 }

@@ -24,6 +24,8 @@ const FINISH_LINE_NEAR: i32 = 1200;
 const FINISH_LINE_FAR: i32 = 32000;
 const REVERSE_DISTANCE_MAX: i32 = 1000;
 const REVERSE_CROSSING_PENALTY: u32 = 600;
+/// How far a kart drives against the track before it is told so.
+const WRONG_WAY_TOLD: u32 = 0x1f5;
 
 /// What a lap update found out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -113,6 +115,13 @@ pub fn update_progress(d: &mut Driver, level: &Level) {
         d.actions_flag_set |= actions::CHECKPOINT_BRANCH_PENDING;
     }
     d.checkpoint_current_index = checkpoint_index;
+}
+
+/// Whether the kart drives against the track, and has for long enough to be told "WRONG WAY!"
+/// (`UI_RenderFrame_Racing`), and for its mask to say so (`WrongWayDirection_bool`).
+pub fn wrong_way(d: &Driver) -> bool {
+    d.actions_flag_set & actions::DRIVING_WRONG_WAY != 0
+        && d.distance_driven_backwards >= WRONG_WAY_TOLD
 }
 
 /// The per-driver part of `PlayLevel_UpdateLapStats`: the progress, the distance driven

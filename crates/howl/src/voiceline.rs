@@ -4,7 +4,10 @@
 //! `Voiceline_StartPlay`). A character says nothing for two seconds after its last, and a line
 //! waits for the one before it to end, and for the CD to be free.
 //!
-//! Not ported: the wrong-way lines of Aku Aku and Uka Uka, and the lines of a boss race.
+//! A driver that goes the wrong way for a second is told so by its mask, Aku Aku or Uka Uka,
+//! once until it has gone the right way for a second again.
+//!
+//! Not ported: the lines of a boss race.
 
 use std::collections::VecDeque;
 
@@ -38,6 +41,12 @@ const OFTEN_UNSAID: u8 = 8;
 /// A line holds the next back for this many of the game's frames, and a fifth of its sectors
 /// more if it plays.
 const COOLDOWN: i16 = 30;
+/// The XA of [`Category::Extra`] in which Aku Aku, and Uka Uka, say the driver goes the wrong
+/// way.
+const WRONG_WAY_AKU: u16 = 30;
+const WRONG_WAY_UKA: u16 = 61;
+/// How many of the game's frames the driver goes one way before it counts.
+const SAME_WAY_FRAMES: u32 = 30;
 
 /// A line waiting to be spoken (`struct VoicelineItem`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +72,12 @@ pub struct Voicelines {
     lines: VecDeque<Line>,
     /// The character of the line started last.
     speaking: u8,
+    /// `WrongWayDirection_bool`: the driver goes the wrong way, and `framesDrivingSameDirection`:
+    /// the game's frames it has since it went the other.
+    wrong_way: bool,
+    same_way: u32,
+    /// `boolCanPlayWrongWaySFX`: the mask may say it, the driver having gone the right way.
+    can_say_wrong_way: bool,
 }
 
 impl Howl {
@@ -133,9 +148,28 @@ impl Howl {
         });
     }
 
-    /// `Voiceline_Update`, once a frame of the game while racing: the newest line waiting starts
-    /// once the one before is over and the CD plays nothing.
-    pub fn update_voicelines(&mut self) {
+    /// `UI_RenderFrame_Racing`'s part, once a frame of the game: which way the driver goes
+    /// (`vehicle::lap::wrong_way`), and for how long.
+    pub(crate) fn track_direction(&mut self, wrong_way: bool) {
+        let lines = &mut self.voicelines;
+        if lines.wrong_way != wrong_way {
+            lines.same_way = 0;
+            lines.wrong_way = wrong_way;
+        }
+        lines.same_way += 1;
+    }
+
+    /// The racing begins, or goes on after "FINAL LAP!" (`Audio_SetState`): the driver has gone
+    /// no way yet.
+    pub(crate) fn reset_direction(&mut self) {
+        self.voicelines.wrong_way = false;
+        self.voicelines.same_way = 0;
+    }
+
+    /// `Voiceline_Update`, once a frame of the game while racing: the mask says the driver goes
+    /// the wrong way, or the newest line waiting starts, once the one before is over and the CD
+    /// plays nothing. `good_guy` is for the driver's mask (`VehPickupItem_MaskBoolGoodGuy`).
+    pub fn update_voicelines(&mut self, good_guy: bool) {
         let lines = &mut self.voicelines;
         if !lines.enabled {
             return;
@@ -148,6 +182,25 @@ impl Howl {
         }
         if self.xa.state != XaState::Idle {
             return;
+        }
+        let lines = &mut self.voicelines;
+        let settled = lines.same_way > SAME_WAY_FRAMES;
+        if lines.can_say_wrong_way {
+            if lines.wrong_way && settled {
+                lines.can_say_wrong_way = false;
+                let id = if good_guy {
+                    WRONG_WAY_AKU
+                } else {
+                    WRONG_WAY_UKA
+                };
+                self.voicelines.cooldown = COOLDOWN;
+                if self.play_xa(Category::Extra, id) {
+                    self.voicelines.cooldown += (self.xa_length(Category::Extra, id) / 5) as i16;
+                }
+                return;
+            }
+        } else if !lines.wrong_way && settled {
+            lines.can_say_wrong_way = true;
         }
         if let Some(line) = self.voicelines.lines.pop_front() {
             self.start_voiceline(line);
@@ -254,20 +307,51 @@ mod tests {
         assert_eq!(waiting, [4, 3]);
         // The newest starts, one of the two lines of set 4 of its character; the next waits for
         // its second and a fifth of its 50 sectors, and for the CD to be free.
-        howl.update_voicelines();
+        howl.update_voicelines(true);
         assert_eq!(howl.voicelines.speaking, 4);
         let (category, id) = howl.xa_playing().unwrap();
         assert_eq!(category, Category::Game);
         assert!([4 * 19 + 8, 4 * 19 + 9].contains(&id), "{id}");
         assert_eq!(howl.voicelines.cooldown, COOLDOWN + 10);
         for _ in 0..COOLDOWN + 10 {
-            howl.update_voicelines();
+            howl.update_voicelines(true);
         }
         assert_eq!(howl.voicelines.lines.len(), 1);
         howl.stop_xa();
-        howl.update_voicelines();
+        howl.update_voicelines(true);
         assert!(howl.voicelines.lines.is_empty());
         assert_eq!(howl.voicelines.speaking, 3);
+    }
+
+    /// `frames` of the game, the driver going one way.
+    fn drive(howl: &mut Howl, wrong_way: bool, frames: u32, good_guy: bool) {
+        for _ in 0..frames {
+            howl.track_direction(wrong_way);
+            howl.update_voicelines(good_guy);
+        }
+    }
+
+    #[test]
+    fn the_mask_says_the_driver_goes_the_wrong_way_once_until_it_turns_round() {
+        let mut howl = howl();
+        howl.enable_voicelines(true);
+        // Not before the driver has gone the right way for a second.
+        drive(&mut howl, true, 100, true);
+        assert_eq!(howl.xa_playing(), None);
+        drive(&mut howl, false, SAME_WAY_FRAMES + 1, true);
+        drive(&mut howl, true, SAME_WAY_FRAMES, true);
+        assert_eq!(howl.xa_playing(), None);
+        drive(&mut howl, true, 1, true);
+        assert_eq!(howl.xa_playing(), Some((Category::Extra, WRONG_WAY_AKU)));
+        assert_eq!(howl.voicelines.cooldown, COOLDOWN + 10);
+        // Once: the driver still going the wrong way, nothing more is said.
+        howl.stop_xa();
+        drive(&mut howl, true, 200, true);
+        assert_eq!(howl.xa_playing(), None);
+        // Uka Uka tells the others, after they have turned round and back.
+        drive(&mut howl, false, SAME_WAY_FRAMES + 1, false);
+        drive(&mut howl, true, SAME_WAY_FRAMES + 1, false);
+        assert_eq!(howl.xa_playing(), Some((Category::Extra, WRONG_WAY_UKA)));
     }
 
     #[test]
