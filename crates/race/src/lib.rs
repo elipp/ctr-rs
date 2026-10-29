@@ -538,6 +538,11 @@ impl Race {
                 self.weapons.detonate(slot);
             }
         }
+        // The rank icons' tint runs down to nothing (the HUD does it as it draws, once a tick).
+        for kart in &mut self.karts {
+            let timer = &mut kart.driver.damage_color_timer;
+            *timer -= timer.signum();
+        }
         let bodies: Vec<weapon::Body> = self
             .karts
             .iter()
@@ -550,6 +555,9 @@ impl Race {
             &mut self.objects.random_number,
             &doors,
         );
+        for &(slot, timer) in &self.last_weapons.damage_colors {
+            self.karts[slot].driver.damage_color_timer = timer;
+        }
         for &instance in &self.last_weapons.opened_doors {
             self.objects.open_door(instance);
         }

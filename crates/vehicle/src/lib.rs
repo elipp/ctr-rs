@@ -356,6 +356,10 @@ impl Driver {
     }
 }
 
+/// How many ticks the rank icon of a driver that a weapon hurt is tinted (`0x1e`, the start of
+/// `damageColorTimer`).
+pub const DAMAGE_COLOR_TIMER: i16 = 0x1e;
+
 /// The part of `struct Driver` the ported code uses. Positions are 24.8
 /// fixed point (`pos_curr`) unless noted; quad blocks are indices into
 /// `Level::quad_blocks`.
@@ -486,6 +490,9 @@ pub struct Driver {
     pub v_shift_start_guard_timer: i16,
     pub v_shift_window_timer: i16,
     pub driver_rank: i16,
+    /// `damageColorTimer`: the rank icon is tinted by it after a weapon hurt the driver. It is set
+    /// to [`DAMAGE_COLOR_TIMER`] (red) or its negative (green) and runs down to 0 by a tick.
+    pub damage_color_timer: i16,
 
     pub jump_ten_buffer: i16,
     pub jump_cooldown_ms: i16,
