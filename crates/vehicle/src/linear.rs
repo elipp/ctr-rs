@@ -3,13 +3,6 @@
 //! turns it into a target speed (`base_speed`) and a steering command
 //! (`simp_turn_state`).
 //!
-//! Not ported yet, because nothing else of them exists: weapons (the item
-//! roulette, firing, bombs and bubbles), the mask weapons (but for having
-//! one, which the mask grab gives the driver), the Super Engine,
-//! the TNT crate on the head, and the time-spent statistics and tire colour,
-//! which do not feed back into the simulation. The driver has no item, so
-//! none of that code is reached.
-//!
 //! In `ctr-native`, the paths that go through `gasClearSteerFlags` drop the
 //! reverse-steer bits they clear (the retail registers `actionsFlagSetCopy`
 //! and `actionsFlagSetNext` are one register, native has two variables). This
@@ -124,7 +117,12 @@ pub fn base_speed(d: &Driver) -> i32 {
     }
     stat = mips::add_lo(stat, bonus);
 
-    let mut subtract = 0;
+    // A TNT crate on the head (`instTntRecv`) takes half of it; the rest can take more.
+    let mut subtract = if d.tnt_scale_y.is_some() {
+        stats.damaged_speed as i32 >> 1
+    } else {
+        0
+    };
     if d.burn_timer != 0 || d.squish_timer != 0 || d.rain_cloud_effect == rain_cloud::SLOW {
         subtract = stats.damaged_speed as i32;
     }

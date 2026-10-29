@@ -1,12 +1,10 @@
 # Unimplemented
-- the icon of a damaged driver turning red or green (`damageColorTimer`), for every weapon
-- the other uses of a TNT crate on the head (`instTntRecv`): half the speed, the fire button ignored, the driving animation held at its middle frame
+- the other uses of a TNT crate on the head (`instTntRecv`): the fire button ignored, the driving animation held at its middle frame
 - driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
 - the bombs and missiles look for mines oldest first (`weapon::fly`), but a mine's thread goes to the front of the `MINE` bucket, so `RB_Hazard_CollideWithBucket` finds the newest first, as the hazards do (`race::set_off_mines`)
 - submerged in the mud in tiny arena looks off
-- While reading base_speed I noticed one more thing: C takes half of damaged_speed when instTntRecv is set (TNT on the head), and our subtract starts at 0. I haven't checked whether that's handled elsewhere.
 - blizzard bluff: reflection of weapon crates on ice
 
 ## Maps
@@ -30,7 +28,6 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 
 ## To check
 - the heat shimmer of the flame jets (`heat.rs`, `heat.wgsl`, `Torch_Main`): it is a post-processing pass over the main camera's picture, so it warps what is in front of a lens too (retail's lens only covers what was drawn before it, by depth) (it looks right in the game)
-- the screen flash of a burst: whether retail's `animFrame == 1` lands on the tick our effect's first advance does, and whether the quad sits under the HUD as ours does
 
 ## Tick oracle coverage
 `vehicle/tests/tick.rs` compares the drivers with ctr-native, and has the real `LInC` of the wumpa fruit only (`has_linc` in `tests/reference/tick.c`); the other models' hitboxes give 1 on both sides. What would still change kart positions:
