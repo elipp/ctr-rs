@@ -319,6 +319,8 @@ fn a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
     };
     // Dropped (no direction held), it lies where the kart was.
     race.tick(&level, &pads(0));
+    // (As in retail, the tap only asks to fire: `ShootOnCirclePress` answers on the next tick.)
+    assert!(race.weapons.mines().is_empty(), "the potion is thrown a tick after the tap");
     let mut tick = 1;
     while race
         .weapons
