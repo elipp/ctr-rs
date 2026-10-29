@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+default = ["dev"]
+# Links Bevy dynamically, which makes a rebuild fast. A shipped build leaves it out
+# (`cargo dist`), as a binary built with it needs `libbevy_dylib` beside it.
+dev = ["bevy/dynamic_linking"]
 # Records every system and render span for the Tracy profiler. It costs a lot of CPU and grows
 # memory while a profiler is attached, so it is off unless asked for: `--features tracy`.
 tracy = ["bevy/trace_tracy"]
@@ -13,7 +17,6 @@ debug = ["bevy/debug"]
 
 [dependencies]
 bevy = { version = "0.20.0", features = [
-    "dynamic_linking",
     "gamepad",
 ] }
 # The system clipboard, for pasting a lobby address.

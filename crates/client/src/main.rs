@@ -9,6 +9,8 @@
 //! `probe.rs` for its keys. Hold the right mouse button to look, WASD to move, Space/Shift
 //! up/down, Ctrl to go fast.
 
+// A release build on Windows has no console window; `crash.rs` tells of a panic instead.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 // Bevy systems take their parameters and `Query` filters as types, so both lints fire on them.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
@@ -16,6 +18,7 @@ mod animation;
 mod assets;
 mod banner;
 mod command;
+mod crash;
 mod config;
 mod disc;
 mod drive;
@@ -78,6 +81,7 @@ pub(crate) use resources::*;
 pub(crate) use scene::*;
 
 fn main() {
+    crash::install();
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);
