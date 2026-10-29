@@ -52,8 +52,9 @@ models used by the instances, and the size of the data.
 
 ## Using a map
 
-The viewer reads every `assets/maps/*.ctrmap` when it starts and lists the maps after the game's
-tracks: `[` and `]` step through the tracks (from the first track, `[` goes to the last map). The
+The viewer reads every `*.ctrmap` in its `maps` folder when it starts (`assets/maps` in a debug
+build; in a release build `%APPDATA%\ctr-rs\maps` on Windows, `~/.config/ctr-rs/maps` on Linux)
+and lists the maps after the game's tracks: `[` and `]` step through the tracks (from the first track, `[` goes to the last map). The
 window title shows the map's name. A file that cannot be read is reported on stderr and left out.
 
 A map has the id `Map::id()`, made from its contents, with the top bit set (`is_map_id`). The game's

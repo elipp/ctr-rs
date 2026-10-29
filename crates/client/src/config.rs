@@ -1,4 +1,4 @@
-//! The player's settings, kept in `assets/.cache/config.json`: read when the viewer starts, and
+//! The player's settings, kept in `config.json` (see `paths.rs`): read when the viewer starts, and
 //! written whenever one changes.
 //!
 //! * `/config set nickname [name]`: what the others call us instead of our key (up to
@@ -26,10 +26,12 @@ pub struct Config {
     pub nickname: String,
     /// The last character driven (`CHARACTERS` order).
     pub character: Option<u32>,
+    /// The disc image (see `disc.rs`), once a picked or written one has proved to be a disc.
+    pub iso: Option<PathBuf>,
 }
 
 fn path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/.cache/config.json")
+    crate::paths::config_file()
 }
 
 impl Config {
