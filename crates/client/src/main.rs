@@ -2,7 +2,8 @@
 //! viewer for a track's geometry (textured). There are no command line options: the level is 0
 //! and the racer the one driven last time (`config.rs`), and `]` / Page Up and `[` / Page Down
 //! switch to the next and the previous level, `.` and `,` to the next and the previous racer. The
-//! disc image is `CTR_BIN` or `assets/ctr-u.bin`.
+//! disc image is `CTR_BIN`, the `iso` of the config, or `assets/ctr-u.bin`
+//! in a debug build; on Windows a file dialog asks for it (see `disc.rs`).
 //!
 //! The viewer: a collision probe from the camera is drawn and described on screen; see
 //! `probe.rs` for its keys. Hold the right mouse button to look, WASD to move, Space/Shift
@@ -16,6 +17,7 @@ mod assets;
 mod banner;
 mod command;
 mod config;
+mod disc;
 mod drive;
 mod exhaust;
 mod explosion;
@@ -38,6 +40,7 @@ mod mask;
 mod minimap;
 mod names;
 mod pause;
+mod paths;
 mod place;
 mod probe;
 mod projectile;
@@ -76,7 +79,8 @@ pub(crate) use scene::*;
 
 fn main() {
     let track_id = 0;
-    let config = config::Config::load();
+    let mut config = config::Config::load();
+    disc::locate(&mut config);
     // The character driven last time.
     let racer = config
         .character
