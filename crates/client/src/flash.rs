@@ -69,7 +69,13 @@ pub fn step(sim: Res<Sim>, mut flash: ResMut<Flash>, mut last: Local<Option<u32>
         *flash = Flash::default();
     }
     flash.previous = flash.current;
-    if sim.race.last_weapons.flashes.contains(&sim.own) {
+    // A bubble that hurt a kart it bumped into pops with a flash on its owner's screen
+    // (`RB_ShieldDark_ThTick_Grow`): the tick that decides the pop leaves it at its first frame.
+    let bubble_popped = sim
+        .driver()
+        .shield
+        .is_some_and(|s| s.crash_attack && s.pop_frame == Some(1));
+    if bubble_popped || sim.race.last_weapons.flashes.contains(&sim.own) {
         // It starts at once, not over the tick.
         *flash = Flash {
             previous: FULL,
