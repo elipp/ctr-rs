@@ -45,3 +45,5 @@ ctr-rs is an independent fan project, not affiliated with or endorsed by Sony In
 Crash Team Racing was developed by Naughty Dog and published by Sony Computer Entertainment. Crash Bandicoot and Crash Team Racing are trademarks of Activision Publishing, Inc. PlayStation is a trademark of Sony Interactive Entertainment Inc.
 
 Our own code is licensed under the GNU General Public License, version 3, which is the license of ctr-native and CTR-ModSDK, the projects it is ported from. `crates/gte` is also derived from MIT-licensed code, and its notice is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Also, LLM-based tooling was heavily used in the construction of this project.
