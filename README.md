@@ -2,7 +2,7 @@
 
 ctr-rs is and online-focused port of Crash Team Racing (PS1, 1999), written in Rust.
 
-It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native) project; it is used to verify the physics simulation and other mechanics remains as faithful to the original as possible. As we see it, the original CTR's controls are truly S-tier, and basically unmatched to this day.
+It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native) project, which is used to verify the physics simulation and other mechanics remains as faithful to the original as possible. As we see it, the original CTR's magical feel and controls are truly S-tier, and as such, replicating them is the absolute top priority for this project.
 
 ## What's here
 
