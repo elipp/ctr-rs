@@ -19,6 +19,9 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 2. the level's ambience (`Level_AmbientSound`: `levAmbientSound` along `SpawnType2` 5 and 6, `Level_RandomFX`), and the rain of the red beaker's cloud 0x82 (`DropRain`)
 3. the volume options (`howl_VolumeSet`, `howl_ModeSet`)
 
+## Net
+- auto-kick suspicious peers: count what a well-behaved client never does per guest (a duplicate `Want`, which `transfers::Verdict::Duplicate` already tells apart; a `Want` for a map the host did not provide; a `Blob` nobody asked for) and kick with `KICKED` past a threshold. Log each as a rate-limited `tracing::warn!` with `fmt_short()` ids (the `net` crate has no logging yet), and say why in the kick. A guest that never reads its stream also holds a transfer slot until QUIC's idle timeout: put a deadline on `send_reliably` for maps
+
 ## Chores
 - remove any hex constants that aren't used as a bitmask; the particular values serve no purpose in the port
 
