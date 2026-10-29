@@ -7,7 +7,8 @@ It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native)
 ## What's here
 
 - **Exact physics** - Kart against ground and wall, and kart against kart, follow the original tick for tick. `vehicle/tests/tick.rs` checks them against the C reference, `ctr-native`. The weapons, crates and the level's objects follow the original closely.
-- **Truly native performance, framerates/aspect ratio** - The project runs and builds on any system that Rust builds on.
+- **Truly native performance, framerates/aspect ratio** - No need for [PGXP](https://github.com/libretro/beetle-psx-libretro/tree/master/pgxp) or other hacks, since we have an actual depth buffer.
+- **Cross-platform** - The project runs and builds on any system that Rust builds on.
 - **No emulator hacks, ROM patches or launchers** - The current "CTR online" solutions have quite a bit of jank to get running.
 - **The modding horizon is unlimited** - Modding ctr-native, while certainly possible, is difficult to get right, and limited in scope due to the recomp-style codebase and the C programming language.
 - **30 Hz simulation, hi-FPS rendering** - The game state advances at the original's 30 ticks a second, independent of the frame rate that is drawn.
