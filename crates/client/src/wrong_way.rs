@@ -1,7 +1,7 @@
 //! "WRONG WAY!" over the middle of the screen, in the large font, orange, while our kart (or the
 //! one we watch) drives against the track and has for long enough (`UI_RenderFrame_Racing`,
 //! `vehicle::lap::wrong_way`). It flashes with the race's clock: on while its bit 0x80 is, a
-//! little under four times a second. Not while the race is paused. What the masks say of it is
+//! little under four times a second. Not while the race is paused, nor in a free drive. What the masks say of it is
 //! `howl`'s.
 
 use bevy::prelude::*;
@@ -56,7 +56,8 @@ fn show(
         return;
     };
     let race = &*sim.race;
-    let shown = race
+    let shown = race.laps != race::FREE_DRIVE_LAPS
+        && race
         .karts
         .get(sim.own)
         .is_some_and(|kart| vehicle::lap::wrong_way(&kart.driver))
