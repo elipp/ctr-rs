@@ -13,3 +13,13 @@ codegen-units = 1
 opt-level = 1
 # No ThinLTO: above opt-level 0 rustc runs it over a crate's own codegen units by default
 lto = "off"
+
+# `cargo dist` (see `.cargo/config.toml`): what is shipped. Slow to build (fat LTO, one codegen
+# unit), so day-to-day `--release` stays the plain one. Panics still unwind: a panic in the
+# network thread must end that thread, not every player's game. Debuginfo goes but the symbols
+# stay, so that the backtrace in `crash.log` has function names.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
