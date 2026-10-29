@@ -465,6 +465,8 @@ impl Sfx<'_> {
             finished,
             first: ours.driver_rank == 0,
             mask_song: mask.map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
+            wrong_way: vehicle::lap::wrong_way(ours),
+            good_guy: vehicle::stuck::good_guy(ours.character),
         });
     }
 }
