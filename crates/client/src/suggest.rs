@@ -181,6 +181,50 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
+            node(
+                "fx",
+                "Try a visual effect (alone: the panel, F3)",
+                &[
+                    node(
+                        "confetti",
+                        "The confetti of a win",
+                        &[
+                            leaf("auto", "When we finish first"),
+                            leaf("on", "Always"),
+                            leaf("off", "Never"),
+                        ],
+                    ),
+                    leaf("flash", "The white flash of a blast on our kart"),
+                    leaf("finish", "Our kart finishes first now, offline"),
+                    Spec {
+                        name: "speed",
+                        about: "Slow motion, offline",
+                        options: &[
+                            leaf("1", "The game's speed"),
+                            leaf("0.5", "Half"),
+                            leaf("0.25", "A quarter"),
+                            leaf("0.1", "A tenth"),
+                        ],
+                        arg: Some("<factor, 0.05 to 4>"),
+                    },
+                    node(
+                        "freeze",
+                        "Stop the race, offline",
+                        &[leaf("on", "Stop it"), leaf("off", "Let it go on")],
+                    ),
+                    leaf("step", "One tick of a frozen race"),
+                    node(
+                        "weather",
+                        "The level's rain or snow",
+                        &[leaf("on", "Draw it"), leaf("off", "Hide it")],
+                    ),
+                    node(
+                        "rain",
+                        "The red beaker's rain",
+                        &[leaf("on", "Draw it"), leaf("off", "Hide it")],
+                    ),
+                ],
+            ),
         ],
     ),
 ];
@@ -255,6 +299,13 @@ mod tests {
         assert_eq!(names("/race "), ["start", "restart", "stop"]);
         assert_eq!(names("/race st"), ["start", "stop"]);
         assert_eq!(names("/debug set weapon 1"), ["1", "10", "11"]);
+        assert_eq!(
+            names("/debug fx "),
+            [
+                "confetti", "flash", "finish", "speed", "freeze", "step", "weather", "rain"
+            ]
+        );
+        assert_eq!(names("/debug fx f"), ["flash", "finish", "freeze"]);
         // Not a command, an unknown one, or past what is known.
         assert!(Menu::of("hello").is_none());
         assert!(Menu::of("/teapot ").is_none());
