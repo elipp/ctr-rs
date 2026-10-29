@@ -13,8 +13,8 @@
 //!
 //! A kart that bumps into a held bubble is hurt by it, like by the mask, and the bubble pops
 //! (`SHIELD_FLAG_CRASH_ATTACK`, set by [`crate::collide`]'s `attack`).
-//!
-//! Not ported: the white flash on the owner's screen when the bubble pops that way.
+//! The white flash on the owner's screen when it pops that way is the client's to draw: it
+//! sees `crash_attack` with the pop at its first frame.
 
 use crate::{Driver, Effect, actions, kart_state};
 
