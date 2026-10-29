@@ -15,6 +15,12 @@ It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native)
 - **Rollback netcode with no local delay** - Players connect directly to each other with [iroh](https://github.com/n0-computer/iroh), if possible.
 - **Custom tracks** - The `ctr-map` turns an xdelta patch of the disc into a `.ctrmap` file that the client can load through the lobby.
 
+## What's not here (not currently planned)
+- **Adventure mode**
+- **Time trial**
+- **Relic race**
+- **Battle mode**
+
 ## Running it
 
 You provide your own legally obtained disc image of Crash Team Racing. Point `CTR_BIN` at it, or put it at `assets/ctr-u.bin`.
