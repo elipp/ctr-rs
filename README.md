@@ -1,16 +1,15 @@
 # ctr-rs
 
-A Rust port of Crash Team Racing (PS1, 1999), built for online multiplayer cups. The kart physics is meant to match the original exactly, so that every client can run the same race and roll back when a remote player's input arrives late.
-
-Adventure Mode (the hub worlds, the garage, the bosses) is out of scope.
+ctr-rs is and online-focused port of Crash Team Racing (PS1, 1999), written in Rust. It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native) project; it is used to verify the physics simulation and other mechanics remains as faithful to the original as possible, as (in our opinion) the original CTR's controls are S-tier and unmatched to this day.
 
 ## What's here
 
-- **Exact physics.** Kart against ground and wall, and kart against kart, follow the original tick for tick. `vehicle/tests/tick.rs` checks them against the C reference, `ctr-native`. The weapons, crates and the level's objects follow the original closely, but are not held to the same standard.
+- **Exact physics.** Kart against ground and wall, and kart against kart, follow the original tick for tick. `vehicle/tests/tick.rs` checks them against the C reference, `ctr-native`. The weapons, crates and the level's objects follow the original closely.
 - **A 30 Hz simulation.** The game state advances at the original's 30 ticks a second, independent of the frame rate that is drawn.
-- **Rollback netcode with no local delay.** Players connect directly to each other with [iroh](https://github.com/n0-computer/iroh). Everyone plays their own input at once and the game predicts the others' until it arrives (`crates/net`, `race::rollback`).
+- **Truly native performance, framerates/aspect ratio.** The project builds on any system that Rust builds on.
+- **Rollback netcode with no local delay.** Players connect directly to each other with [iroh](https://github.com/n0-computer/iroh), if possible.
 - **The game's sound.** `crates/howl` emulates the PS1's SPU (ADPCM voices, ADSR envelopes, reverb) and plays the level's music and the voice lines from the disc.
-- **Custom tracks.** `ctr-map` turns an xdelta patch of the disc into a `.ctrmap` file that the client can load.
+- **Custom tracks.** The `ctr-map` turns an xdelta patch of the disc into a `.ctrmap` file that the client can load through the lobby.
 
 ## Running it
 
