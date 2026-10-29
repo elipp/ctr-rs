@@ -51,6 +51,8 @@ pub enum Action {
     DebugLevel(Option<MeshSetting>),
     /// (Debug) Set the depth bias of the crates, or toast it (`None`).
     DebugCrateBias(Option<f32>),
+    /// (Debug) Try a visual effect, or open the panel of them (`fx.rs`).
+    DebugFx(crate::fx::Fx),
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
     NetInfo,
     /// Set how the drawing eases the karts of the others after a rollback.
@@ -85,7 +87,7 @@ const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | spectate [add
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors|crate-fixup | crate bias <number>";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 
@@ -228,6 +230,44 @@ impl Action {
         }))
     }
 
+    /// Nothing (the panel), `confetti auto|on|off`, `flash`, `finish`, `speed <factor>`,
+    /// `freeze on|off`, `step`, `weather on|off` or `rain on|off`.
+    fn fx(line: &str) -> Result<crate::fx::Fx, String> {
+        use crate::fx::{Force, Fx, SPEED_RANGE};
+        const USAGE: &str = "Usage: /debug fx [confetti auto|on|off | flash | finish | speed <factor> | freeze on|off | step | weather on|off | rain on|off]";
+        let (what, value) = word(line);
+        let on_off = || match value {
+            "on" => Ok(true),
+            "off" => Ok(false),
+            _ => Err(USAGE.to_string()),
+        };
+        Ok(match what {
+            "" => Fx::Panel,
+            "confetti" => Fx::Confetti(match value {
+                "auto" => Force::Auto,
+                "on" => Force::On,
+                "off" => Force::Off,
+                _ => return Err(USAGE.into()),
+            }),
+            "flash" => Fx::Flash,
+            "finish" => Fx::Finish,
+            "speed" => match value.parse::<f32>() {
+                Ok(speed) if (SPEED_RANGE.0..=SPEED_RANGE.1).contains(&speed) => Fx::Speed(speed),
+                _ => {
+                    return Err(format!(
+                        "A speed is {} to {}, 1 being the game's\n{USAGE}",
+                        SPEED_RANGE.0, SPEED_RANGE.1
+                    ));
+                }
+            },
+            "freeze" => Fx::Freeze(on_off()?),
+            "step" => Fx::Step,
+            "weather" => Fx::Weather(on_off()?),
+            "rain" => Fx::BeakerRain(on_off()?),
+            _ => return Err(format!("Unknown command: /debug fx {what}\n{USAGE}")),
+        })
+    }
+
     fn debug(line: &str) -> Result<Action, String> {
         let (sub, rest) = word(line);
         match sub {
@@ -267,6 +307,7 @@ impl Action {
             },
             "viewer" => Ok(Action::DebugViewer),
             "level" => Action::level(rest),
+            "fx" => Action::fx(rest).map(Action::DebugFx),
             "crate" => {
                 const USAGE: &str = "Usage: /debug crate bias [number]";
                 let (what, value) = word(rest);
@@ -709,6 +750,28 @@ mod tests {
         assert!(Action::parse("debug stall 5m").is_err());
         assert!(Action::parse("debug stall 61s").is_err());
         assert!(Action::parse("debug netinfo").is_err());
+        let fx = |line| match Action::parse(line) {
+            Ok(Action::DebugFx(fx)) => Some(fx),
+            _ => None,
+        };
+        use crate::fx::{Force, Fx};
+        assert_eq!(fx("debug fx"), Some(Fx::Panel));
+        assert_eq!(fx("debug fx confetti on"), Some(Fx::Confetti(Force::On)));
+        assert_eq!(
+            fx("debug fx confetti auto"),
+            Some(Fx::Confetti(Force::Auto))
+        );
+        assert_eq!(fx("debug fx flash"), Some(Fx::Flash));
+        assert_eq!(fx("debug fx finish"), Some(Fx::Finish));
+        assert_eq!(fx("debug fx speed 0.25"), Some(Fx::Speed(0.25)));
+        assert_eq!(fx("debug fx freeze on"), Some(Fx::Freeze(true)));
+        assert_eq!(fx("debug fx step"), Some(Fx::Step));
+        assert_eq!(fx("debug fx weather off"), Some(Fx::Weather(false)));
+        assert_eq!(fx("debug fx rain off"), Some(Fx::BeakerRain(false)));
+        assert!(Action::parse("debug fx speed 0").is_err());
+        assert!(Action::parse("debug fx speed fast").is_err());
+        assert!(Action::parse("debug fx confetti").is_err());
+        assert!(Action::parse("debug fx sparkles").is_err());
         assert!(matches!(
             Action::parse("config set nickname  Big Bob "),
             Ok(Action::SetConfig(crate::config::Setting::Nickname(n))) if n == "Big Bob"

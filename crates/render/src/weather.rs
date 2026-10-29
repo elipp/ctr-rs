@@ -53,8 +53,8 @@ pub struct Weather {
     fill_mode: u32,
 }
 
-/// `RenderWeather_NextRngByte`
-fn next_byte(state0: &mut u32, state1: &mut u32) -> u32 {
+/// `RenderWeather_NextRngByte` (`DrawConfetti_NextRngByte` is the same)
+pub(crate) fn next_byte(state0: &mut u32, state1: &mut u32) -> u32 {
     let shifted = *state1 >> 8;
     let mut mixed = state0.wrapping_add(shifted);
     *state0 = (*state0 >> 8) | (*state1 << 24);

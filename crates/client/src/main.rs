@@ -18,6 +18,7 @@ mod animation;
 mod assets;
 mod banner;
 mod command;
+mod confetti;
 mod crash;
 mod config;
 mod disc;
@@ -30,6 +31,7 @@ mod flash;
 mod fly;
 mod font;
 mod frame;
+mod fx;
 mod heat;
 mod hud;
 mod kart;
@@ -50,6 +52,7 @@ mod projectile;
 
 mod props;
 mod rain;
+mod rect_menu;
 mod remote;
 mod resources;
 mod scene;
@@ -234,6 +237,7 @@ fn main() {
         lobby::LobbyPlugin,
         command::CommandPlugin,
         pause::PausePlugin,
+        fx::FxPlugin,
         // The race's HUD. (A tuple of plugins holds 15 at most.)
         (
             leaderboard::LeaderboardPlugin,
