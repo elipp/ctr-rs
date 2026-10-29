@@ -154,6 +154,53 @@ fn a_host_and_two_peers_race_over_a_mesh() {
 }
 
 #[test]
+fn a_character_changed_between_races_is_the_one_that_races() {
+    let host = net::host(3, "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
+    std::thread::sleep(Duration::from_secs(2));
+    let sessions = [&host, &guest];
+
+    host.start(5, 0);
+    for session in sessions {
+        wait_for(session, "the first start", |e| match e {
+            Event::Started { characters, .. } => {
+                assert_eq!(characters, [3, 7]);
+                true
+            }
+            _ => false,
+        });
+    }
+
+    // The race is over, and both pick another racer for the next.
+    for session in sessions {
+        session.over();
+    }
+    host.set_character(4);
+    guest.set_character(9);
+    std::thread::sleep(Duration::from_millis(500));
+    host.start(5, 0);
+    for session in sessions {
+        wait_for(session, "the second start", |e| match e {
+            Event::Started { characters, .. } => {
+                assert_eq!(characters, [4, 9]);
+                true
+            }
+            _ => false,
+        });
+    }
+}
+
+#[test]
 fn a_guest_fetches_a_custom_track_from_the_host() {
     let host = net::host(3, "", BUILD);
     let mut ticket = None;
