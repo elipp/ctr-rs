@@ -28,6 +28,10 @@ pub const VERSION: u32 = 3;
 /// zstd's level for a map file: it is made once and sent many times.
 const COMPRESSION: i32 = 19;
 
+/// The most a map may unpack to: what a map file says it holds is not to be believed, so a
+/// file that would unpack to more is refused before it is allocated.
+const MAX_UNPACKED: usize = 256 << 20;
+
 /// The top bit of the `u32` that names a track: the game's tracks are small numbers, a map's id
 /// has this set (and the rest of the id from its contents).
 const MAP_ID_BIT: u32 = 0x8000_0000;
@@ -104,7 +108,7 @@ impl Map {
                 "the map is version {version}, this build reads version {VERSION}"
             )));
         }
-        let unpacked = zstd::stream::decode_all(rest)
+        let unpacked = zstd::bulk::decompress(rest, MAX_UNPACKED)
             .map_err(|e| invalid(format!("unpacking the map: {e}")))?;
         bitcode::deserialize(&unpacked).map_err(|e| invalid(format!("reading the map: {e}")))
     }
@@ -192,6 +196,24 @@ mod tests {
         let mut map = tiny();
         map.vram[0].pixels = vec![7; 100_000];
         assert!(map.to_bytes().unwrap().len() < 1_000);
+    }
+
+    #[test]
+    fn a_file_that_unpacks_to_too_much_is_refused() {
+        use std::io::Write;
+        // 1 GiB of zeros is a few dozen KiB packed. It is written in pieces, so the frame does
+        // not record its size, which a bomb would not tell the truth about either.
+        let mut encoder = zstd::stream::Encoder::new(Vec::new(), 1).unwrap();
+        let zeros = vec![0u8; 1 << 20];
+        for _ in 0..1024 {
+            encoder.write_all(&zeros).unwrap();
+        }
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend(VERSION.to_le_bytes());
+        bytes.extend(encoder.finish().unwrap());
+        assert!(bytes.len() < 1 << 20);
+        let err = Map::from_bytes(&bytes).unwrap_err();
+        assert!(err.to_string().contains("unpacking the map"), "{err}");
     }
 
     #[test]
