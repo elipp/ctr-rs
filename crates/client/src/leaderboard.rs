@@ -77,7 +77,7 @@ impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (build, order, names).chain().run_if(crate::drive::driving),
+            (build, order, tint, names).chain().run_if(crate::drive::driving),
         );
     }
 }
@@ -280,6 +280,40 @@ fn order(
     }
 }
 
+/// `UI_Rank_GetDamageColor`: the multiplier of a portrait's colours `[r, g, b]` for a driver whose
+/// `damageColorTimer` is `timer`, in 0x80ths (0x80 is the picture as it is, 0xff nearly twice as
+/// bright): red the moment a weapon hurt the driver (positive), green for a green beaker
+/// (negative), and back to neutral over 30 ticks.
+fn damage_color(timer: i16) -> [i32; 3] {
+    const FRAMES: i32 = 30;
+    const STEP: i32 = 4;
+    const MAX: i32 = 0xff;
+    let timer = timer as i32;
+    if timer < 0 {
+        let strength = (timer + FRAMES) * STEP;
+        [strength, MAX - strength, strength]
+    } else if timer > 0 {
+        let strength = (FRAMES - timer) * STEP;
+        [MAX - strength, strength, strength]
+    } else {
+        [0x80; 3]
+    }
+}
+
+/// Tints the portraits by how recently a weapon hurt their karts.
+fn tint(sim: Res<crate::props::Sim>, mut rows: Query<(&Row, &mut ImageNode)>) {
+    for (row, mut image) in &mut rows {
+        let Some(kart) = sim.race.karts.get(row.slot) else {
+            continue;
+        };
+        let [r, g, b] = damage_color(kart.driver.damage_color_timer).map(|c| c as f32 / 128.0);
+        let color = Color::LinearRgba(LinearRgba::new(r, g, b, 1.0));
+        if image.color != color {
+            image.color = color;
+        }
+    }
+}
+
 /// Keeps the names on the portraits those of the nicknames now.
 fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
     let Some(online) = &lobby.online else {
@@ -291,5 +325,19 @@ fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
         {
             text.0.clone_from(label);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hurt_icon_goes_red_or_green_and_back_to_neutral() {
+        assert_eq!(damage_color(0), [0x80; 3]);
+        assert_eq!(damage_color(30), [0xff, 0, 0]);
+        assert_eq!(damage_color(-30), [0, 0xff, 0]);
+        assert_eq!(damage_color(1), [0xff - 116, 116, 116]);
+        assert_eq!(damage_color(-1), [116, 0xff - 116, 116]);
     }
 }

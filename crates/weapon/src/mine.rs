@@ -527,6 +527,13 @@ impl Weapons {
                     ..hit(pick::damage::SPIN)
                 });
                 c.tick.flashes.push(slot);
+                // Green for a green beaker.
+                let color = if m.kind == MineKind::GreenBeaker {
+                    -vehicle::DAMAGE_COLOR_TIMER
+                } else {
+                    vehicle::DAMAGE_COLOR_TIMER
+                };
+                c.tick.damage_colors.push((slot, color));
                 self.destroy(me, m, c);
             } else if carried {
                 // The kart has a TNT crate on its head already: both go off, on it.
@@ -534,15 +541,18 @@ impl Weapons {
                     attacker: None,
                     ..hit(pick::damage::BLAST)
                 });
+                c.tick.damage_colors.push((slot, vehicle::DAMAGE_COLOR_TIMER));
                 self.destroy(me, m, c);
             } else if body.squished {
                 c.tick.hits.push(Hit {
                     attacker: None,
                     ..hit(pick::damage::BLAST)
                 });
+                c.tick.damage_colors.push((slot, vehicle::DAMAGE_COLOR_TIMER));
                 self.destroy(me, m, c);
             } else if m.kind == MineKind::Nitro {
                 c.tick.hits.push(hit(pick::damage::BLAST));
+                c.tick.damage_colors.push((slot, -vehicle::DAMAGE_COLOR_TIMER));
                 self.destroy(me, m, c);
             } else {
                 // TNT: onto the head, unless the kart is shielded from it.
@@ -550,6 +560,7 @@ impl Weapons {
                 if body.immune {
                     self.destroy(me, m, c);
                 } else {
+                    c.tick.damage_colors.push((slot, vehicle::DAMAGE_COLOR_TIMER));
                     c.tick.sounds.push(Sound3D {
                         id: TNT_HIT_SFX,
                         pos: m.pos,
@@ -615,6 +626,7 @@ impl Weapons {
         for (victim, body) in c.bodies.iter().enumerate() {
             if in_reach(m.pos, body.at, reach) {
                 c.tick.flashes.push(victim);
+                c.tick.damage_colors.push((victim, vehicle::DAMAGE_COLOR_TIMER));
                 c.tick.hits.push(Hit {
                     victim,
                     attacker: Some(m.parent),
@@ -751,6 +763,7 @@ impl Weapons {
                 damage: pick::damage::BLAST,
                 rain: false,
             });
+            c.tick.damage_colors.push((target, vehicle::DAMAGE_COLOR_TIMER));
             self.blowup(me, m, c);
             self.vanish(m);
             return;

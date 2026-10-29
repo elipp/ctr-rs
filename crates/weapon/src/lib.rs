@@ -306,6 +306,9 @@ pub struct Tick {
     pub opened_doors: Vec<usize>,
     /// The karts a blast went off on, whose screens flash white (`RB_Burst_CollThread`).
     pub flashes: Vec<usize>,
+    /// The karts whose icon is tinted, and by what (`damageColorTimer`: red is
+    /// `vehicle::DAMAGE_COLOR_TIMER`, green its negative), in the order the weapons set it.
+    pub damage_colors: Vec<(usize, i16)>,
     /// The sounds of a TNT crate on a head. (The explosions' and the detonations' are their
     /// listener's to play.)
     pub sounds: Vec<vehicle::Sound3D>,
@@ -506,6 +509,10 @@ impl Weapons {
                 doors,
                 &mut tick,
             );
+            if let Some(victim) = step.driver_hit {
+                tick.damage_colors
+                    .push((victim, vehicle::DAMAGE_COLOR_TIMER));
+            }
             for j in step.missiles_hit {
                 self.projectiles[j].dead = true;
             }
@@ -545,6 +552,8 @@ impl Weapons {
         for (victim, body) in bodies.iter().enumerate() {
             if victim != p.parent && in_reach(p.pos, body.at, radius_squared) {
                 tick.flashes.push(victim);
+                tick.damage_colors
+                    .push((victim, vehicle::DAMAGE_COLOR_TIMER));
                 tick.hits.push(Hit {
                     victim,
                     attacker: Some(p.parent),
@@ -632,6 +641,8 @@ struct Step {
     missiles_hit: Vec<usize>,
     /// The mines (indices into the mines) it ran into, which go off.
     mines_hit: Vec<usize>,
+    /// The kart it ran into (`RB_MovingExplosive_ThTick` tints its icon).
+    driver_hit: Option<usize>,
 }
 
 impl Step {
@@ -640,6 +651,7 @@ impl Step {
             explodes: true,
             missiles_hit: Vec::new(),
             mines_hit: Vec::new(),
+            driver_hit: None,
         }
     }
 }
@@ -809,7 +821,10 @@ fn fly(
         if p.target == Some(victim) {
             p.flags |= flags::HIT_TARGET;
         }
-        return Step::explode();
+        return Step {
+            driver_hit: Some(victim),
+            ..Step::explode()
+        };
     }
 
     // A mine in the way goes off, and so does the weapon.
@@ -825,6 +840,7 @@ fn fly(
             explodes: true,
             missiles_hit: Vec::new(),
             mines_hit: vec![hit],
+            driver_hit: None,
         };
     }
 
@@ -845,6 +861,7 @@ fn fly(
                 explodes: true,
                 missiles_hit: vec![missile],
                 mines_hit: Vec::new(),
+                driver_hit: None,
             };
         }
         if p.flags & flags::DETONATE != 0 {
@@ -856,6 +873,7 @@ fn fly(
         explodes: false,
         missiles_hit: Vec::new(),
         mines_hit: Vec::new(),
+        driver_hit: None,
     }
 }
 
