@@ -85,6 +85,10 @@ const FILL_TIP: [u8; 3] = [0xff, 0xbb, 0x00];
 const LAYER: usize = 5;
 const DEPTH: f32 = 100.0;
 
+/// How far above the kart's place the figure is drawn, in pixels of the PlayStation's screen
+/// (retail's sits nearer the middle of the screen).
+const LIFT: f32 = 30.0;
+
 /// What the HUD remembers of a driver between ticks (`trackerTimer`, `trackerDist` and the
 /// `ACTION_TRACKER_TARGETED` bit, and the thread that was chasing).
 #[derive(Resource, Default, Debug, PartialEq, Eq)]
@@ -390,7 +394,7 @@ fn show(
     // The picture is 512 by 216 on the PlayStation, stretched over the window.
     let scale = Vec2::new(window.width() / 512.0, window.height() / 216.0);
     let place = |offset: [i32; 2]| {
-        let screen = at + Vec2::new(offset[0] as f32, offset[1] as f32) * scale;
+        let screen = at + Vec2::new(offset[0] as f32, offset[1] as f32 - LIFT) * scale;
         [
             screen.x - window.width() / 2.0,
             window.height() / 2.0 - screen.y,
