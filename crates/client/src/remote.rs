@@ -50,10 +50,8 @@ pub fn build(
     online.specs.clear();
     let mut models: HashMap<usize, (Model, Vec<Icon>)> = HashMap::new();
     for (slot, &character) in online.characters.iter().enumerate() {
-        if slot == online.slot {
-            online.specs.push(drive.spec());
-            continue;
-        }
+        // Every kart, ours too, is what the host said it drives: a character of ours that
+        // differs would be a sim of its own.
         let character = character as usize;
         let (model, wheel_icons) = models
             .entry(character)
@@ -67,6 +65,10 @@ pub fn build(
             anim_num_frames,
         };
         online.specs.push(spec);
+        // (Ours is on the grid already.)
+        if slot == online.slot {
+            continue;
+        }
         let birth = race::Kart::birth(&track.0, slot, &spec);
         // The first `show` puts it where the sim has it.
         builder.spawn(
