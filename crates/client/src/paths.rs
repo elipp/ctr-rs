@@ -21,6 +21,11 @@ pub fn config_file() -> PathBuf {
     cache().join("config.json")
 }
 
+/// Where the panic that ended the last run is written, see `crash.rs`.
+pub fn crash_log() -> PathBuf {
+    root().join("crash.log")
+}
+
 /// The maps that are ours.
 pub fn maps() -> PathBuf {
     root().join("maps")
