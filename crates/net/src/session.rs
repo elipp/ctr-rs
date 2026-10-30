@@ -30,14 +30,17 @@ pub(crate) fn send_interval() -> tokio::time::Interval {
 
 /// A message on a stream of its own, which iroh delivers whole and in order.
 /// The host tells everyone, itself included, who is in the lobby: itself, then the guests that
-/// have said what they drive, in the order they joined.
+/// have said what they drive, in the order they joined. Whoever left (`gone`) during the race
+/// that is on, or just ended, is not in it, though the race still holds their place in `guests`.
 pub(crate) async fn tell_lobby(
     me: EndpointId,
     character: u8,
     nick: &str,
     guests: &[Guest],
+    gone: &HashSet<EndpointId>,
     io: &Io,
 ) {
+    let guests: Vec<&Guest> = guests.iter().filter(|g| !gone.contains(&g.id)).collect();
     let players: Vec<Player> = std::iter::once(Player {
         id: me,
         character,
@@ -70,7 +73,7 @@ pub(crate) async fn tell_lobby(
             .map(|p| (*p.id.as_bytes(), p.nick.clone()))
             .collect(),
     };
-    for guest in guests {
+    for guest in &guests {
         let _ = send_reliably(&guest.connection, &message).await;
     }
     io.event(Event::Lobby {
@@ -100,6 +103,9 @@ pub(crate) async fn run(
     let mut guests: Vec<Guest> = Vec::new();
     let mut host_connection: Option<Connection> = None;
     let mut hellos = 0;
+    // The host: the players of the race that left it. They are not told of in the lobby, and go from
+    // `guests` when the next race starts.
+    let mut gone: HashSet<EndpointId> = HashSet::new();
     // The track of a start that waits for the Hellos.
     let mut start_wanted: Option<(u32, u64)> = None;
     // The custom tracks we can send, and the ones we asked the host for.
@@ -117,7 +123,7 @@ pub(crate) async fn run(
             }
             io.event(Event::Open(Ticket::of(&endpoint.addr())));
             // The lobby has us in it from the start.
-            tell_lobby(me, character, &nick, &guests, &io).await;
+            tell_lobby(me, character, &nick, &guests, &gone, &io).await;
         }
         Role::Join(ticket) => {
             let connection: Connection = tokio::select! {
@@ -157,9 +163,6 @@ pub(crate) async fn run(
     let mut racing = false;
     // The host: the level the lobby drives on between races, as last set.
     let mut lobby_track: Option<(u32, u64)> = None;
-    // The host: the players of the race that left it. They go from the lobby when the next race
-    // starts.
-    let mut gone: HashSet<EndpointId> = HashSet::new();
     // The players that left the race on the way (everyone learns of it from the host), and for
     // the host, the ones whose pads are still being settled by slot.
     let mut departed: HashSet<EndpointId> = HashSet::new();
@@ -273,7 +276,7 @@ pub(crate) async fn run(
                 Command::Character(c) => if !racing {
                     character = c;
                     if matches!(role, Role::Host) {
-                        tell_lobby(me, character, &nick, &guests, &io).await;
+                        tell_lobby(me, character, &nick, &guests, &gone, &io).await;
                     }
                     if let Some(connection) = &host_connection {
                         // The host takes the latest Hello it has, so one that is sent again overrides.
@@ -292,7 +295,7 @@ pub(crate) async fn run(
                 Command::Nickname(new) => if new != nick {
                     nick = new;
                     if matches!(role, Role::Host) {
-                        tell_lobby(me, character, &nick, &guests, &io).await;
+                        tell_lobby(me, character, &nick, &guests, &gone, &io).await;
                     }
                     if let Some(connection) = &host_connection {
                         let message = Message::Nick { seq: hellos, nick: nick.clone() };
@@ -310,7 +313,13 @@ pub(crate) async fn run(
                     },
                 },
                 Command::Ready => game_ready = true,
-                Command::RaceOver => racing = false,
+                Command::RaceOver => {
+                    racing = false;
+                    // Whoever left during the race is out of the lobby now that it is over.
+                    if matches!(role, Role::Host) && !gone.is_empty() {
+                        tell_lobby(me, character, &nick, &guests, &gone, &io).await;
+                    }
+                }
                 Command::NetInfo => {
                     let peers = distinct(
                         guests
@@ -371,7 +380,7 @@ pub(crate) async fn run(
                             if seq >= guest.nick.0 {
                                 guest.nick = (seq, clean_nick(&theirs_nick));
                             }
-                            tell_lobby(me, character, &nick, &guests, &io).await;
+                            tell_lobby(me, character, &nick, &guests, &gone, &io).await;
                         }
                     }
                     // (It may beat the Hello: the guest is in the lobby once that comes.)
@@ -380,7 +389,7 @@ pub(crate) async fn run(
                         && seq > guest.nick.0
                     {
                         guest.nick = (seq, clean_nick(&theirs));
-                        tell_lobby(me, character, &nick, &guests, &io).await;
+                        tell_lobby(me, character, &nick, &guests, &gone, &io).await;
                     },
                     Message::Lobby { players, watching } if from == host_id && !matches!(role, Role::Host) => {
                         let players: Vec<Player> = players
@@ -641,7 +650,7 @@ pub(crate) async fn run(
                             let had = guests.len();
                             guests.retain(|g| g.id != from);
                             if guests.len() != had {
-                                tell_lobby(me, character, &nick, &guests, &io).await;
+                                tell_lobby(me, character, &nick, &guests, &gone, &io).await;
                             }
                         }
                     }
