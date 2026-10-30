@@ -55,7 +55,13 @@ pub struct WumpaIconPlugin;
 
 impl Plugin for WumpaIconPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, show, fly).chain().run_if(crate::drive::driving));
+        // Per system: the viewer can be switched on at the sync point between two of them.
+        app.add_systems(
+            Update,
+            (build, show, fly)
+                .chain()
+                .distributive_run_if(crate::drive::driving),
+        );
     }
 }
 
