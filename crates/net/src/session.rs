@@ -17,7 +17,7 @@ use crate::transfers::{Transfer, Transfers, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
     ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Tick, Ticket,
-    clean_chat, clean_nick,
+    RateLimit, clean_chat, clean_nick,
 };
 
 /// How often the packets go out, once per game tick. They are sent whether or not there is
@@ -103,6 +103,8 @@ pub(crate) async fn run(
     let mut guests: Vec<Guest> = Vec::new();
     let mut host_connection: Option<Connection> = None;
     let mut hellos = 0;
+    // The host: how fast each guest has been talking.
+    let mut talkers: HashMap<EndpointId, RateLimit> = HashMap::new();
     // The host: the players of the race that left it. They are not told of in the lobby, and go from
     // `guests` when the next race starts.
     let mut gone: HashSet<EndpointId> = HashSet::new();
@@ -471,8 +473,13 @@ pub(crate) async fn run(
                         }
                     }
                     // Only a guest of the lobby speaks, and the host says who it was.
+                    // (One who talks too fast is not heard.)
                     Message::Say { text } => if matches!(role, Role::Host)
                         && guests.iter().any(|g| g.id == from)
+                        && talkers
+                            .entry(from)
+                            .or_insert_with(|| RateLimit::chat_for_host(Instant::now()))
+                            .allow(Instant::now())
                     {
                         let text = clean_chat(&text);
                         if !text.is_empty() {

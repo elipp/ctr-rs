@@ -66,6 +66,8 @@ pub struct Lobby {
     /// The level the host picked to drive on between races (`Event::Track`) that we have not gone
     /// to yet: we lack the map, or the level switch has not come to it.
     pending_track: Option<(u32, u64)>,
+    /// How fast we have been talking.
+    chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
     pub online: Option<Online>,
@@ -186,11 +188,19 @@ impl Lobby {
         }
     }
 
-    /// Says that to everyone in the lobby, us too.
-    pub fn say(&self, text: &str) {
+    /// Says that to everyone in the lobby, us too: false if we are talking too fast for it (see
+    /// `net::RateLimit`; the host holds us to the same).
+    pub fn say(&mut self, text: &str) -> bool {
+        if net::clean_chat(text).is_empty() {
+            return true;
+        }
+        if !self.chat_limit.allow(std::time::Instant::now()) {
+            return false;
+        }
         if let Some(session) = &self.session {
             session.say(text);
         }
+        true
     }
 
     /// What a player said as a line of the console: the portrait of its character, its name in

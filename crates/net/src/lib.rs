@@ -11,6 +11,7 @@
 //! (the game predicts them until then, see `race::rollback`).
 
 mod conn;
+mod limit;
 mod names;
 mod peers;
 mod session;
@@ -19,6 +20,7 @@ mod transfers;
 pub mod wire;
 
 pub use iroh::EndpointId;
+pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
 pub use ticket::Ticket;
 pub use wire::{Pad, Tick};
