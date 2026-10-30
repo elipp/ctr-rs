@@ -8,11 +8,16 @@ use map::Map;
 const USAGE: &str = "ctr-map: maps from community patches.
 
 usage:
-  ctr-map import PATCH.xdelta [-o OUT.ctrmap] [--level N] [--disc BIN]
+  ctr-map import PATCH.xdelta [-o OUT.ctrmap] [--level N] [--song-pack N] [--disc BIN]
       reads the patch against the USA disc image (CTR_BIN, or assets/ctr-u.bin; --disc picks
       one), finds where the patch put its map (a track's slot, or the entries that CTR Editor
       uses; --level N when it changes several different tracks, --entries LEV,VRAM to name
-      the BIGFILE entries by hand), and saves it (default: assets/maps/NAME.ctrmap)
+      the BIGFILE entries by hand; --song-pack N takes the music from song pack N of KART.HWL when
+      the patch's is not the track's slot's, see `audio`; when the patch changes several
+      packs, it lists them and asks, unless the option is given), and saves it (default: assets/maps/NAME.ctrmap)
+  ctr-map audio PATCH.xdelta [--disc BIN]
+      whether the patch changes the game's audio: the song packs of SOUNDS/KART.HWL, and the
+      executable's tables of each level's song and reverb
   ctr-map export [-o DIR] [--disc BIN]
       makes a map of each racing track of the game that DIR (default: assets/disc/maps) lacks or
       has an old one of, named __builtin__TRACK.ctrmap; the client does this itself when it starts
@@ -25,13 +30,57 @@ fn disc() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"))
 }
 
+/// When the patch changes several song packs, which one is the track's: the patch does not say
+/// (only its author knows), so the packs are listed and a number is asked for. Nothing is asked
+/// when no one is there to answer, or when there is not a choice (one pack is taken); an empty answer takes the
+/// pack of the track's own slot.
+fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Result<Option<u8>> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let changes = map::audio::changed_packs(disc, &std::fs::read(patch)?)?;
+    match changes.as_slice() {
+        [] => return Ok(None),
+        [only] => {
+            println!("the patch changes the music of song pack {} only: using it", only.pack);
+            return Ok(Some(only.pack));
+        }
+        _ => {}
+    }
+    println!("the patch changes the music of {} song packs:", changes.len());
+    for c in &changes {
+        let levels = match c.levels.as_slice() {
+            [] => String::new(),
+            l => format!(" (the game's level {l:?})"),
+        };
+        println!(
+            "  {:>2}{levels}: {} of {} sequences differ, bpm {:?} -> {:?}, {} samples changed",
+            c.pack, c.sequences.0, c.sequences.1, c.was, c.now, c.samples
+        );
+    }
+    loop {
+        print!("which is the map's music? a number, or nothing for its track's own pack: ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line)? == 0 {
+            return Ok(None);
+        }
+        match line.trim().parse::<u8>() {
+            _ if line.trim().is_empty() => return Ok(None),
+            Ok(n) if changes.iter().any(|c| c.pack == n) => return Ok(Some(n)),
+            _ => println!("one of the packs listed"),
+        }
+    }
+}
+
 fn run(args: Vec<String>) -> Result<(), String> {
     let mut args = args.into_iter();
     match args.next().as_deref() {
         Some("import") => {
             let mut patch = None;
             let (mut out, mut level, mut disc_path) = (None, None, disc());
-            let mut entries = None;
+            let (mut entries, mut song_pack) = (None, None);
             while let Some(arg) = args.next() {
                 let mut value = |what: &str| args.next().ok_or(format!("{what} needs a value"));
                 match arg.as_str() {
@@ -52,13 +101,24 @@ fn run(args: Vec<String>) -> Result<(), String> {
                             |s: &str| s.parse::<usize>().map_err(|e| format!("--entries: {e}"));
                         entries = Some((num(lev)?, num(vram)?));
                     }
+                    "--song-pack" => {
+                        song_pack = Some(
+                            value("--song-pack")?
+                                .parse::<u8>()
+                                .map_err(|e| format!("--song-pack: {e}"))?,
+                        )
+                    }
                     "--disc" => disc_path = PathBuf::from(value("--disc")?),
                     _ if patch.is_none() => patch = Some(PathBuf::from(arg)),
                     _ => return Err(format!("what is {arg}?")),
                 }
             }
             let patch = patch.ok_or("import needs a patch")?;
-            let done = map::import::import(&disc_path, &patch, level, entries)
+            if song_pack.is_none() {
+                song_pack = ask_song_pack(&disc_path, &patch)
+                    .map_err(|e| format!("{}: {e}", patch.display()))?;
+            }
+            let done = map::import::import(&disc_path, &patch, level, entries, song_pack)
                 .map_err(|e| format!("{}: {e}", patch.display()))?;
             let out = out.unwrap_or_else(|| {
                 PathBuf::from("assets/maps").join(format!("{}.ctrmap", done.map.name))
@@ -77,6 +137,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 done.tracks
             );
             println!("saved {}", out.display());
+            Ok(())
+        }
+        Some("audio") => {
+            let (mut patch, mut disc_path) = (None, disc());
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--disc" => {
+                        disc_path = PathBuf::from(args.next().ok_or("--disc needs a value")?)
+                    }
+                    _ if patch.is_none() => patch = Some(PathBuf::from(arg)),
+                    _ => return Err(format!("what is {arg}?")),
+                }
+            }
+            let patch = patch.ok_or("audio needs a patch")?;
+            let report = map::audio::audit(&disc_path, &patch)
+                .map_err(|e| format!("{}: {e}", patch.display()))?;
+            print!("{report}");
             Ok(())
         }
         Some("export") => {
@@ -118,6 +195,19 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 map.dram.pointer_slots.len(),
                 map.vram.len()
             );
+            match &map.audio {
+                Some(a) => println!(
+                    "audio: over track {}; song pack {}, reverb {}, {} samples ({} bytes)",
+                    a.level,
+                    a.song_pack
+                        .as_ref()
+                        .map_or("the game's".into(), |p| format!("its own ({} bytes)", p.len())),
+                    a.reverb.map_or("the game's".into(), |r| r.to_string()),
+                    a.samples.len(),
+                    a.samples.iter().map(|(_, s)| s.len()).sum::<usize>()
+                ),
+                None => println!("audio: none"),
+            }
             Ok(())
         }
         _ => Err(USAGE.into()),

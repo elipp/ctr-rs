@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source};
 use bevy::prelude::*;
 use howl::music::{AKU_SONG, UKA_SONG};
+use loader::howl::Cseq;
 use howl::state::{RaceAudio, State};
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
 use loader::source::{Need, Source as DiscSource};
@@ -153,12 +154,34 @@ fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds
 }
 
 /// `Music_LoadBanks` and `Music_AsyncParseBanks`: a level that loads sets its reverb and loads
-/// its song pack. There are no boss races.
+/// its song pack. There are no boss races. A map brings what its patch changed (`map::Audio`),
+/// and has the game's for the track it was made over where it brings none.
 fn level_audio(track: Res<Track>, sounds: Res<Sounds>) {
     if track.is_changed() {
+        let audio = map::is_map_id(track.1.0)
+            .then(|| crate::maps::get(track.1.0))
+            .flatten()
+            .and_then(|m| m.audio.as_ref());
         let mut sounds = sounds.lock();
-        sounds.set_level_reverb(track.1.0, None);
-        sounds.set_level_music(track.1.0, None);
+        let Some(audio) = audio else {
+            sounds.set_level_audio(track.1.0, None, None, Vec::new());
+            return;
+        };
+        // The pack was checked when the map was read.
+        let pack = audio.song_pack.clone().and_then(|p| Cseq::parse(p).ok());
+        info!(
+            "map audio: over track {}, song pack {:?} ({} bytes, {} songs), reverb {:?}, {} samples",
+            audio.level,
+            pack.is_some(),
+            audio.song_pack.as_ref().map_or(0, Vec::len),
+            pack.as_ref().map_or(0, |p| p.songs.len()),
+            audio.reverb,
+            audio.samples.len()
+        );
+        let samples = (audio.samples.iter())
+            .map(|(n, adpcm)| (*n, adpcm.clone().into_boxed_slice()))
+            .collect();
+        sounds.set_level_audio(audio.level, pack, audio.reverb, samples);
     }
 }
 

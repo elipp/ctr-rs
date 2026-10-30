@@ -155,6 +155,8 @@ struct Song {
 pub struct Music {
     /// Every song pack of `KART.HWL`, and the one the level loaded (`ptrCseqHeader`).
     packs: Vec<Cseq>,
+    /// How many of them are the game's: a map's pack, if the level has one, is after them.
+    retail: usize,
     pack: Option<usize>,
     songs: [Song; SONGS],
     sequences: [Sequence; SEQUENCES],
@@ -167,6 +169,7 @@ pub struct Music {
 impl Music {
     pub fn new(packs: Vec<Cseq>) -> Music {
         Music {
+            retail: packs.len(),
             packs,
             ..Music::default()
         }
@@ -266,6 +269,38 @@ impl Howl {
         self.music.pack = pack
             .map(usize::from)
             .filter(|&p| p < self.music.packs.len());
+    }
+
+    /// A level that loads, as [`Howl::set_level_reverb`] and [`Howl::set_level_music`] have it,
+    /// except that a map can bring its own: it has the song pack `pack` where it gives one, the
+    /// reverb mode `reverb`, and the ADPCM `samples` in place of the game's samples of those
+    /// numbers; what it does not give is the game's for `level`. What an earlier map brought is
+    /// put back first.
+    pub fn set_level_audio(
+        &mut self,
+        level: u32,
+        pack: Option<Cseq>,
+        reverb: Option<u8>,
+        samples: Vec<(u16, Box<[u8]>)>,
+    ) {
+        for (sample, adpcm) in std::mem::take(&mut self.replaced).into_iter().rev() {
+            self.spu.replace_sample(sample, adpcm);
+        }
+        for (sample, adpcm) in samples {
+            if let Some(old) = self.spu.replace_sample(sample, Some(adpcm)) {
+                self.replaced.push((sample, old));
+            }
+        }
+        self.set_level_reverb(level, None);
+        if let Some(reverb) = reverb {
+            self.set_reverb(reverb as u16);
+        }
+        self.set_level_music(level, None);
+        self.music.packs.truncate(self.music.retail);
+        if let Some(pack) = pack {
+            self.music.packs.push(pack);
+            self.music.pack = Some(self.music.packs.len() - 1);
+        }
     }
 
     /// `Music_Adjust`: the song `id` of the pack plays, from its start if another played, and

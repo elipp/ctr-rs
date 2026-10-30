@@ -126,6 +126,22 @@ pub fn open_bigfile_with<R: Read + Seek>(
     Ok((disc, big))
 }
 
+/// The bytes of the file at `path` (directories split by `/`) of a disc image that `open` makes,
+/// as `open_bigfile_with`; `None` if the disc has no such file.
+pub fn read_file_with<R: Read + Seek>(
+    open: impl Fn() -> io::Result<R>,
+    path: &str,
+) -> io::Result<Option<Vec<u8>>> {
+    let Some((start, size)) = find_sized(&mount(&open)?, path) else {
+        return Ok(None);
+    };
+    let mut disc = RawSectorReader::new(open()?)?;
+    disc.seek(SeekFrom::Start(start as u64 * USER_DATA_SIZE))?;
+    let mut bytes = vec![0; size as usize];
+    disc.read_exact(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
 /// Opens the disc image at `path` and reads the header of `SOUNDS/KART.HWL`.
 pub fn open_howl(path: &std::path::Path) -> io::Result<(Disc, crate::howl::Howl)> {
     open_howl_with(|| open_file(path))
