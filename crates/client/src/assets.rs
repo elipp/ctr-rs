@@ -1,18 +1,14 @@
 //! Loading the disc: the levels, the racers and the pictures they share.
 
-use std::path::PathBuf;
-
 use crate::{
     FlameModels, Racer, ShadowIcons, SmokeIcon, TiremarkIcon, WheelIcons, flame, font, maps, skid,
 };
 use bevy::prelude::*;
-use loader::bigindex::{BigIndex, LevFile, Lod};
-use loader::disc::open_bigfile;
 use loader::dram::DramFile;
 use loader::icons::{Icon, parse_groups, parse_icons};
 use loader::lev::Level;
-use loader::level::LevelId;
 use loader::model::Model;
+use loader::source::{Need, Source};
 use loader::vram::{Vram, parse_vram_file};
 
 /// `NITROS_OXIDE` in `GAME_CHARACTER_IDS` order.
@@ -73,32 +69,24 @@ pub(crate) struct Shared {
     pub(crate) digits: Vec<render::place::Digit>,
 }
 
-pub(crate) fn bigfile_path() -> PathBuf {
-    crate::disc::path()
+/// The bytes of a file of the disc.
+fn get(source: &Source, need: Need) -> Vec<u8> {
+    source
+        .get(need)
+        .unwrap_or_else(|e| panic!("{}: {e}", need.key()))
 }
 
 /// The model and the wheel sprites of a racer (none for Oxide, who has no wheels), for the
 /// karts of the other players.
 pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
-    let path = bigfile_path();
-    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let file = big
-        .read(
-            &mut disc,
-            BigIndex::RACER_MODEL_HI.nth(character as u32).get(),
-        )
-        .expect("read racer model");
+    let source = crate::disc::source();
+    let file = get(&source, Need::Racer(character as u32));
     let model =
         Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model");
     let wheel_icons = if character as u32 == NITROS_OXIDE {
         Vec::new()
     } else {
-        let pack = big
-            .read(
-                &mut disc,
-                BigIndex::ARCADE_1P_PACK.nth(character as u32).get(),
-            )
-            .expect("read racer pack");
+        let pack = get(&source, Need::Pack(character as u32));
         parse_groups(&DramFile::parse(&pack).expect("parse racer pack"))
             .expect("parse racer pack icons")
             .into_iter()
@@ -109,55 +97,37 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
     (model, wheel_icons)
 }
 
-/// A level from the disc, with the texture page file shared by every track (`shared.vrm`): the
+/// A level, from its map, with the texture page file shared by every track (`shared.vrm`): the
 /// racers' textures are in it.
 pub(crate) fn load_level(id: u32) -> LevelData {
-    let path = bigfile_path();
-    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
-    assert!(
-        !map::is_map_id(id) || maps::get(id).is_some(),
-        "map {id:#x} is not in the maps folder"
-    );
-    if let Some(map) = maps::get(id) {
-        debug!("level {id:#x} ({}): loaded from map cache", maps::name(id));
-        // A map brings its own level and texture pages; the shared ones are the disc's.
-        let mut vram = Vram::default();
-        for img in &map.vram {
-            vram.upload(img).expect("upload VRAM image");
+    let map = maps::get(id).unwrap_or_else(|| {
+        if map::is_map_id(id) {
+            panic!("map {id:#x} is not in the maps folder")
+        } else {
+            panic!(
+                "the map of the game's track {id} is missing: it is made from the disc when the \
+                 client starts (delete the folder of the maps made from the disc to make them again)"
+            )
         }
-        upload_shared(&mut vram, &big, &mut disc);
-        return LevelData {
-            level: map.level.clone(),
-            dram: map.dram.clone(),
-            vram,
-        };
-    }
-    debug!("level {id:#x} ({}): loaded from disc", maps::name(id));
-    let mut read = |f| {
-        let index = BigIndex::level(LevelId(id), Lod::OnePlayer, f);
-        big.read(&mut disc, index.get())
-            .expect("read level file from BIGFILE")
-    };
-    let dram = DramFile::parse(&read(LevFile::Lev)).expect("parse DRAM file");
-    let level = Level::parse(&dram).expect("parse LEV");
+    });
+    debug!("level {id:#x} ({}): loaded from its map", maps::name(id));
+    // A map brings its own level and texture pages; the shared ones are the disc's.
     let mut vram = Vram::default();
-    for img in parse_vram_file(&read(LevFile::Vram)).expect("parse VRAM file") {
-        vram.upload(&img).expect("upload VRAM image");
+    for img in &map.vram {
+        vram.upload(img).expect("upload VRAM image");
     }
-    upload_shared(&mut vram, &big, &mut disc);
-    LevelData { level, dram, vram }
+    upload_shared(&mut vram, &crate::disc::source());
+    LevelData {
+        level: map.level.clone(),
+        dram: map.dram.clone(),
+        vram,
+    }
 }
 
 /// The texture pages that every track shares (`shared.vrm`).
-pub(crate) fn upload_shared(
-    vram: &mut Vram,
-    big: &loader::bigfile::BigFile,
-    disc: &mut loader::disc::Disc,
-) {
-    let shared = big
-        .read(disc, BigIndex::SHARED_MPK_VRM.get())
-        .expect("read shared VRAM file");
+pub(crate) fn upload_shared(vram: &mut Vram, source: &Source) {
+    let shared = get(source, Need::SharedVram);
     for img in parse_vram_file(&shared).expect("parse shared VRAM file") {
         vram.upload(&img).expect("upload shared VRAM image");
     }
@@ -165,17 +135,11 @@ pub(crate) fn upload_shared(
 
 /// A racer from the disc: its model, and what its pack has of the kart's.
 pub(crate) fn load_character(character: u32) -> Character {
-    let path = bigfile_path();
-    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let file = big
-        .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character).get())
-        .expect("read racer model");
+    let source = crate::disc::source();
+    let file = get(&source, Need::Racer(character));
     let racer =
         Model::parse(&DramFile::parse(&file).expect("parse DRAM file")).expect("parse racer model");
-    let pack = big
-        .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(character).get())
-        .expect("read racer pack");
-    let pack = DramFile::parse(&pack).expect("parse racer pack");
+    let pack = DramFile::parse(&get(&source, Need::Pack(character))).expect("parse racer pack");
     let icons = parse_icons(&pack).expect("parse racer pack icons");
     let groups = parse_groups(&pack).expect("parse racer pack icons");
     let global = |index| icons.iter().find(|i| i.global_index == index).cloned();
@@ -199,20 +163,11 @@ pub(crate) fn load_character(character: u32) -> Character {
 
 /// What the racers' packs share. (Character 0's pack will do.)
 pub(crate) fn load_shared() -> Shared {
-    let path = bigfile_path();
-    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let pack = big
-        .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(0).get())
-        .expect("read racer pack");
-    let pack = DramFile::parse(&pack).expect("parse racer pack");
+    let source = crate::disc::source();
+    let pack = DramFile::parse(&get(&source, Need::Pack(0))).expect("parse racer pack");
     // The fonts are in the texture pages every level shares.
     let mut vram = Vram::default();
-    let shared = big
-        .read(&mut disc, BigIndex::SHARED_MPK_VRM.get())
-        .expect("read shared.vrm");
-    for image in parse_vram_file(&shared).expect("parse shared.vrm") {
-        vram.upload(&image).expect("upload shared.vrm");
-    }
+    upload_shared(&mut vram, &source);
     let groups = parse_groups(&pack).expect("parse racer pack icons");
     let font =
         |f| render::font::FontAtlas::new(f, &groups, &vram).expect("racer pack has the fonts");

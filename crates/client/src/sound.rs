@@ -32,7 +32,7 @@ use bevy::prelude::*;
 use howl::music::{AKU_SONG, UKA_SONG};
 use howl::state::{RaceAudio, State};
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
-use loader::disc::XaDisc;
+use loader::source::{Need, Source as DiscSource};
 use loader::lev::Level;
 use race::{KartTick, Light, Race};
 use render::mesh::SCALE;
@@ -106,24 +106,19 @@ impl Plugin for SoundPlugin {
 #[derive(Resource)]
 pub struct Sounds {
     howl: Arc<Mutex<Howl>>,
-    xa: Option<Arc<Mutex<XaDisc>>>,
+    source: DiscSource,
 }
 
 impl Sounds {
-    /// The sounds of `KART.HWL` and the XA on the disc image at `path`. A disc without them
-    /// plays none.
-    pub fn load(path: &std::path::Path) -> Sounds {
-        let howl = Howl::read(path).unwrap_or_else(|e| {
-            warn!("no sounds: {}: {e}", path.display());
+    /// The sounds of `KART.HWL` and the XA of `source`. A disc without them plays none.
+    pub fn load(source: DiscSource) -> Sounds {
+        let howl = Howl::read_from(&source).unwrap_or_else(|e| {
+            warn!("no sounds: {e}");
             Howl::new(Vec::new(), Vec::new(), Vec::new(), Vec::new())
         });
-        let xa = loader::disc::open_xa(path)
-            .inspect_err(|e| warn!("no XA: {}: {e}", path.display()))
-            .ok()
-            .map(|(_, files)| Arc::new(Mutex::new(files)));
         Sounds {
             howl: Arc::new(Mutex::new(howl)),
-            xa,
+            source,
         }
     }
 
@@ -179,14 +174,12 @@ fn stream_xa(sounds: Res<Sounds>) {
     let Some(request) = request else {
         return;
     };
-    let (howl, disc) = (sounds.howl.clone(), sounds.xa.clone());
+    let (howl, source) = (sounds.howl.clone(), sounds.source.clone());
     std::thread::spawn(move || {
-        let sectors = disc.and_then(|disc| {
-            let read = disc.lock().unwrap().read(request.category, request.track);
-            read.inspect_err(|e| warn!("XA {:?}: {e}", request.track))
-                .ok()
-                .flatten()
-        });
+        let sectors = source
+            .get(Need::Xa(request.category, request.id))
+            .inspect_err(|e| warn!("XA {:?}: {e}", request.track))
+            .ok();
         let pcm = sectors.map(|sectors| loader::xa::decode(&sectors));
         howl.lock().unwrap().start_xa(request.serial, pcm);
     });

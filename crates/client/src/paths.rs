@@ -26,14 +26,25 @@ pub fn crash_log() -> PathBuf {
     root().join("crash.log")
 }
 
+/// What is made from the disc image (`prepare`'s output), which can all go to make it again.
+pub fn disc() -> PathBuf {
+    root().join("disc")
+}
+
+/// The maps of the game's own tracks, made from the disc.
+pub fn builtin_maps() -> PathBuf {
+    disc().join("maps")
+}
+
 /// The maps that are ours.
 pub fn maps() -> PathBuf {
     root().join("maps")
 }
 
-/// The maps that other players sent: everything in it may go.
+/// The maps that other players sent: everything in it may go. (Not the same folder as `maps`
+/// in any build: `/cache purge` deletes this one whole.)
 pub fn cached_maps() -> PathBuf {
-    cache().join("maps")
+    root().join(".cache").join("maps")
 }
 
 fn cache() -> PathBuf {

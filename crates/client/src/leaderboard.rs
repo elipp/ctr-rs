@@ -10,8 +10,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use loader::bigindex::BigIndex;
-use loader::disc::open_bigfile;
+use loader::source::Need;
 use loader::dram::DramFile;
 use loader::icons::{parse_groups, parse_icons};
 use render::font::{Font, Gradient};
@@ -94,10 +93,8 @@ pub(crate) fn pack_groups() -> Vec<loader::icons::IconGroup> {
 }
 
 fn pack() -> DramFile {
-    let path = crate::bigfile_path();
-    let (mut disc, big) = open_bigfile(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let pack = big
-        .read(&mut disc, BigIndex::ARCADE_1P_PACK.get())
+    let pack = crate::disc::source()
+        .get(Need::Pack(0))
         .expect("read racer pack");
     DramFile::parse(&pack).expect("parse racer pack")
 }

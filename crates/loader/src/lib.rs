@@ -8,6 +8,7 @@ pub mod lev;
 pub mod level;
 pub mod model;
 pub mod scenery;
+pub mod source;
 pub mod texture;
 pub mod vram;
 pub mod water;

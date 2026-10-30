@@ -89,6 +89,7 @@ fn main() {
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);
+    disc::prepare();
     maps::make_builtins();
     maps::load();
     // The character driven last time.
@@ -229,7 +230,7 @@ fn main() {
     // The systems of both modes are there all the time: the race's run with the `Drive` resource
     // (`drive::driving`), the viewer's without it, and `/debug viewer` takes it away or gives it
     // back (`switch_mode`).
-    app.insert_resource(sound::Sounds::load(&bigfile_path()));
+    app.insert_resource(sound::Sounds::load(disc::source()));
     app.insert_resource(drive).add_plugins((
         drive::DrivePlugin,
         sound::SoundPlugin,
