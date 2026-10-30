@@ -114,6 +114,19 @@ impl Map {
         bitcode::deserialize(&unpacked).map_err(|e| invalid(format!("reading the map: {e}")))
     }
 
+    /// Whether the file at `path` starts as a map file of this build's [`VERSION`] does: what
+    /// tells a map that was made by an older build, which `Map::read` refuses, without reading
+    /// it all.
+    pub fn is_current(path: &Path) -> bool {
+        use std::io::Read;
+        let mut head = [0u8; MAGIC.len() + 4];
+        std::fs::File::open(path)
+            .and_then(|mut f| f.read_exact(&mut head))
+            .is_ok_and(|()| {
+                head.starts_with(MAGIC) && head[MAGIC.len()..] == VERSION.to_le_bytes()
+            })
+    }
+
     pub fn write(&self, path: &Path) -> io::Result<()> {
         std::fs::write(path, self.to_bytes()?)
     }
