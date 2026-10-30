@@ -69,6 +69,7 @@ mod subtract;
 mod suggest;
 mod toast;
 mod tracker;
+mod version;
 mod weapon;
 mod weather;
 mod wheels;
@@ -259,6 +260,7 @@ fn main() {
             slide_meter::SlideMeterPlugin,
             toast::ToastPlugin,
             wrong_way::WrongWayPlugin,
+            version::VersionPlugin,
             free_drive::FreeDrivePlugin,
         ),
         config::ConfigPlugin,
