@@ -22,6 +22,7 @@
 use bevy::prelude::*;
 use net::{EndpointId, Pad, Session, Ticket};
 
+use crate::console::Log;
 use crate::maps;
 
 use commands::run;
@@ -183,6 +184,33 @@ impl Lobby {
         if let Some(session) = &self.session {
             session.set_nickname(nick);
         }
+    }
+
+    /// Says that to everyone in the lobby, us too.
+    pub fn say(&self, text: &str) {
+        if let Some(session) = &self.session {
+            session.say(text);
+        }
+    }
+
+    /// What a player said as a line of the console: the portrait of its character, its name in
+    /// the colour of the character, and the text. A player the lobby does not know (it has left,
+    /// or only watches: there is no character then) has no portrait.
+    fn chat_line(&self, from: EndpointId, text: &str) -> Log {
+        let key = from.fmt_short().to_string();
+        let said = |name: &str, color| {
+            Log::colored(name.to_string(), color).then(format!(": {text}"), Color::WHITE)
+        };
+        if let Some(member) = self.roster.iter().find(|m| m.key == key) {
+            let character = (member.character as usize).min(crate::CHARACTER_COLORS.len() - 1);
+            return said(&member.label, crate::CHARACTER_COLORS[character]).icon(character as u8);
+        }
+        let name = self
+            .watchers
+            .iter()
+            .find(|(_, k)| *k == key)
+            .map_or(key.as_str(), |(name, _)| name.as_str());
+        said(name, crate::console::DIM_COLOR)
     }
 
     /// Names the slots of the race after the nicknames known now.
