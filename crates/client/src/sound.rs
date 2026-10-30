@@ -99,7 +99,8 @@ impl Plugin for SoundPlugin {
             .add_systems(
                 Update,
                 (level_audio, stream_xa).run_if(crate::drive::driving),
-            );
+            )
+            .add_systems(Update, volumes);
     }
 }
 
@@ -182,6 +183,15 @@ fn level_audio(track: Res<Track>, sounds: Res<Sounds>) {
             .map(|(n, adpcm)| (*n, adpcm.clone().into_boxed_slice()))
             .collect();
         sounds.set_level_audio(audio.level, pack, audio.reverb, samples);
+    }
+}
+
+/// The volumes the config asks for, when it changes (and once the sounds are there).
+fn volumes(config: Res<crate::config::Config>, sounds: Option<Res<Sounds>>) {
+    if let Some(sounds) = sounds
+        && (config.is_changed() || sounds.is_added())
+    {
+        sounds.lock().set_volumes(config.volume_fx, config.volume_music);
     }
 }
 
@@ -341,6 +351,9 @@ impl Sfx<'_> {
         }
         kept.tick = tick;
         sounds.frame = tick;
+        // A free drive plays the main menu's song, not the level's.
+        let free_drive = race.laps == race::FREE_DRIVE_LAPS;
+        sounds.set_free_drive_music(free_drive);
         engines(&mut sounds, kept, drivers, own, places, ear);
 
         if let Some(light) = light {
@@ -480,7 +493,7 @@ impl Sfx<'_> {
             to_finish: ours.distance_to_finish_curr as i32,
             finished,
             first: ours.driver_rank == 0,
-            mask_song: mask.map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
+            mask_song: mask.filter(|_| !free_drive).map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
             wrong_way: race.laps != race::FREE_DRIVE_LAPS && vehicle::lap::wrong_way(ours),
             good_guy: vehicle::stuck::good_guy(ours.character),
         });

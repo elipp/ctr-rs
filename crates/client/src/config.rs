@@ -8,10 +8,14 @@
 //! * `/config set fps-max <number>`: the most frames a second to draw, 0 for no limit (the
 //!   default); the sim has its own clock, see `frame.rs`
 //!
+//! * `/config set volume music|fx <0-100>`: how loud the music and the effects (the voices too)
+//!   are, in percent of the game's own volumes (100 at first)
+//!
 //! The last character driven is kept too, and is the one the client starts with.
 //!
-//! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, and its arm
-//! in [`apply`].
+//! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, its arm in
+//! [`apply`], its line in [`USAGE`], and its entry in the command line's suggestions
+//! (`suggest.rs`, which does not read the parser: nothing but the reader notices a miss).
 
 use std::path::PathBuf;
 
@@ -35,6 +39,9 @@ pub struct Config {
     pub vsync: bool,
     /// The most frames a second to draw, 0 for no limit (`/config set fps-max`).
     pub fps_max: u32,
+    /// The effects' and the music's volumes, 0 to 100 (`/config set volume`).
+    pub volume_fx: u8,
+    pub volume_music: u8,
 }
 
 impl Default for Config {
@@ -45,6 +52,8 @@ impl Default for Config {
             iso: None,
             vsync: true,
             fps_max: 0,
+            volume_fx: 100,
+            volume_music: 100,
         }
     }
 }
@@ -117,11 +126,15 @@ pub enum Setting {
     Vsync(bool),
     /// 0 for no limit.
     FpsMax(u32),
+    /// 0 to 100.
+    VolumeFx(u8),
+    VolumeMusic(u8),
 }
 
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
-    /config set fps-max <frames a second, 0 for no limit>";
+    /config set fps-max <frames a second, 0 for no limit>\n\
+    /config set volume music|fx <0-100>";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
@@ -145,6 +158,20 @@ impl Setting {
             "fps-max" => value.parse().map(Setting::FpsMax).map_err(|_| {
                 "Usage: /config set fps-max <frames a second, 0 for no limit>".to_string()
             }),
+            "volume" => {
+                const USAGE: &str = "Usage: /config set volume music|fx <0-100>";
+                let (kind, percent) = word(value);
+                let percent: u8 = percent
+                    .parse()
+                    .ok()
+                    .filter(|p| *p <= 100)
+                    .ok_or_else(|| USAGE.to_string())?;
+                match kind {
+                    "music" => Ok(Setting::VolumeMusic(percent)),
+                    "fx" => Ok(Setting::VolumeFx(percent)),
+                    _ => Err(USAGE.into()),
+                }
+            }
             "" => Err(USAGE.into()),
             _ => Err(format!("Unknown setting: {key}\n{USAGE}")),
         }
@@ -235,6 +262,19 @@ fn apply(
                     max => format!("Frame rate: at most {max} a second"),
                 };
                 toasts.write(Toast::new(text, 2000));
+            }
+            Setting::VolumeFx(percent) | Setting::VolumeMusic(percent) => {
+                let name = if matches!(setting, Setting::VolumeFx(_)) {
+                    config.volume_fx = *percent;
+                    "Effects"
+                } else {
+                    config.volume_music = *percent;
+                    "Music"
+                };
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                toasts.write(Toast::new(format!("{name} volume: {percent}"), 2000));
             }
         }
     }
