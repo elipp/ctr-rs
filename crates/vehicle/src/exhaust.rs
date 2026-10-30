@@ -6,7 +6,7 @@
 //! is held, as it is in the boost window.
 //!
 //! Not ported: the stop while the boost flame burns, the multiplayer thinning (`numPlyrCurrGame`), bots,
-//! invisibility and the underwater bubbles.
+//! and invisibility.
 
 use crate::{Driver, Matrix, kart_state};
 
@@ -20,7 +20,13 @@ pub struct Puff {
     /// Drawn subtractive (dark) instead of additive: the turbo meter is in
     /// the window where a tap of the hop button gives a boost.
     pub dark: bool,
+    /// The pipe is under water (below one unit, in mud or water): the puff is a bubble.
+    pub underwater: bool,
 }
+
+/// `VEH_EMITTER_EXHAUST_WATER_Y_LIMIT` (1.0, in 24.8): the height under which a pipe in the water
+/// bubbles.
+const WATER_Y_LIMIT: i32 = 0x100;
 
 const VELOCITY: [i32; 3] = [0, 0x400, -0x400];
 const POSITION_Y: i32 = 7;
@@ -67,10 +73,14 @@ pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
         in_boost_window(d)
     };
     pipes
-        .map(|x| Puff {
-            position: rotate(m, [x, y, z]),
-            velocity,
-            dark,
+        .map(|x| {
+            let position = rotate(m, [x, y, z]);
+            Puff {
+                position,
+                velocity,
+                dark,
+                underwater: d.split_line && position[1] - velocity[1] + d.pos_curr.y < WATER_Y_LIMIT,
+            }
         })
         .to_vec()
 }

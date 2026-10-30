@@ -367,8 +367,13 @@ pub(super) fn drive_tick(
         particles.sparks(slot, kart.landing, kart.wall);
         particles.spray(slot, &kart.spray, tick);
         particles.puffs(slot, &kart.puffs);
+        if let Some(racer) = sim.race.karts.get(slot) {
+            particles.splashes(slot, racer.driver.wake_particles);
+            particles.clods(slot, racer.driver.mud_particles);
+        }
     }
-    particles.tick();
+    let heights: Vec<i32> = sim.race.karts.iter().map(|k| k.driver.inst_pos[1]).collect();
+    particles.tick(&heights);
 
     // The mask grab put the kart back on the track: the camera swings round behind it.
     if mine.result.respawned {

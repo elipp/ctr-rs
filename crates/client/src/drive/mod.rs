@@ -146,6 +146,7 @@ impl Plugin for DrivePlugin {
                     crate::kart::reap,
                     crate::kart::animate,
                     crate::kart::show,
+                    crate::submerge::cut,
                     chase,
                     debug_actions,
                     crate::projectile::place,

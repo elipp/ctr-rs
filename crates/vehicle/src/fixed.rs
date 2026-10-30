@@ -179,6 +179,14 @@ pub fn fixed_player_search(
         d.quad_block_height = mips::sll(sps.quad_block_coll.hit_pos.y as i32, 8);
         d.collision_flags |= collision_flags::TOUCHED_QUADBLOCK;
 
+        // Mud and water cut the kart at the water line (`vertSplit` 0).
+        if matches!(
+            q.terrain_type,
+            terrain_type::MUD | terrain_type::WATER | terrain_type::FASTWATER
+        ) {
+            d.split_line = true;
+        }
+
         // The normal of the surface, smoothed over a few ticks.
         let n = sps.hit.plane.normal;
         d.axis_angle3_normal_vec = normalize(
