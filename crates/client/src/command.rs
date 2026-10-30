@@ -807,6 +807,17 @@ mod tests {
         ));
         assert!(Action::parse("config set fps-max fast").is_err());
         assert!(Action::parse("config set fps-max -1").is_err());
+        assert!(matches!(
+            Action::parse("config set volume music 40"),
+            Ok(Action::SetConfig(crate::config::Setting::VolumeMusic(40)))
+        ));
+        assert!(matches!(
+            Action::parse("config set volume fx 0"),
+            Ok(Action::SetConfig(crate::config::Setting::VolumeFx(0)))
+        ));
+        assert!(Action::parse("config set volume fx 101").is_err());
+        assert!(Action::parse("config set volume fx").is_err());
+        assert!(Action::parse("config set volume loud 50").is_err());
         let smoothing = |line| match Action::parse(line) {
             Ok(Action::NetSmoothing(how)) => Some(how),
             _ => None,
