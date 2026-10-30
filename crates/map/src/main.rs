@@ -13,6 +13,9 @@ usage:
       one), finds where the patch put its map (a track's slot, or the entries that CTR Editor
       uses; --level N when it changes several different tracks, --entries LEV,VRAM to name
       the BIGFILE entries by hand), and saves it (default: assets/maps/NAME.ctrmap)
+  ctr-map export [-o DIR] [--disc BIN]
+      makes a map of each racing track of the game that DIR (default: assets/maps) lacks, named
+      __builtin__TRACK.ctrmap; the client does this itself when it starts
   ctr-map info MAP.ctrmap
       what a map file holds";
 
@@ -74,6 +77,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 done.tracks
             );
             println!("saved {}", out.display());
+            Ok(())
+        }
+        Some("export") => {
+            let (mut out, mut disc_path) = (PathBuf::from("assets/maps"), disc());
+            while let Some(arg) = args.next() {
+                let mut value = |what: &str| args.next().ok_or(format!("{what} needs a value"));
+                match arg.as_str() {
+                    "-o" => out = PathBuf::from(value("-o")?),
+                    "--disc" => disc_path = PathBuf::from(value("--disc")?),
+                    _ => return Err(format!("what is {arg}?")),
+                }
+            }
+            let made = map::builtin::export(&disc_path, &out)
+                .map_err(|e| format!("{}: {e}", disc_path.display()))?;
+            println!("made {made} maps in {}", out.display());
             Ok(())
         }
         Some("info") => {

@@ -37,7 +37,7 @@ use crate::peers::Role;
 use crate::session::run;
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/7";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/8";
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
@@ -112,6 +112,11 @@ pub enum Event {
     Lead { slot: usize, ahead: f32 },
     /// A message the host broadcast (see [`Session::announce`]) for the players to read.
     Announce(String),
+    /// The host picked the level `track` to drive on between races (see [`Session::set_track`]);
+    /// a guest that joins later hears of the one picked last. A custom track comes with the
+    /// `hash` of its contents (0 for the game's own), which a game that lacks it asks for with
+    /// [`Session::fetch`].
+    Track { track: u32, hash: u64 },
     /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
     Checksum { slot: usize, tick: Tick, hash: u64 },
     /// A hash from `from` that was not taken in, and why: it is of another race (`sent` is not
@@ -223,6 +228,10 @@ enum Command {
         hash: u64,
     },
     Announce(String),
+    Track {
+        track: u32,
+        hash: u64,
+    },
     Character(u8),
     Spectate(bool),
     Nickname(String),
@@ -287,6 +296,13 @@ impl Session {
     /// it.
     pub fn announce(&self, text: impl Into<String>) {
         let _ = self.commands.send(Command::Announce(text.into()));
+    }
+
+    /// Tells everyone in the lobby which level to drive on until the next race, if we host it
+    /// and no race is on ([`Event::Track`]); a guest that joins later is told too. A custom
+    /// track has to be [provided](Self::provide) for the players who lack it.
+    pub fn set_track(&self, track: u32, hash: u64) {
+        let _ = self.commands.send(Command::Track { track, hash });
     }
 
     /// Changes the character we drive, for the race that has not started yet. (Pass the one

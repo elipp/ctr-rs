@@ -25,32 +25,6 @@ const MAX_LEAD: u32 = 60;
 /// stays that long.
 const WAIT_TOAST_TICKS: u32 = 90;
 
-/// The ticks between the beeps of an online race: a second.
-const TICKS_PER_BEEP: u32 = 60;
-
-/// The pitch of the first player's beep; each next player is a major third higher.
-const BEEP_HZ: f32 = 440.0;
-
-/// What a tick can ask of the player's ears and eyes outside the sim. (The game's own sounds, the
-/// traffic lights' among them, are `sound.rs`'s.)
-#[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct Cues<'w, 's> {
-    commands: Commands<'w, 's>,
-    pitches: ResMut<'w, Assets<bevy::audio::Pitch>>,
-    toasts: MessageWriter<'w, Toast>,
-}
-
-impl Cues<'_, '_> {
-    fn beep(&mut self, hertz: f32, millis: u64) {
-        let pitch = self.pitches.add(bevy::audio::Pitch::new(
-            hertz,
-            std::time::Duration::from_millis(millis),
-        ));
-        self.commands
-            .spawn((AudioPlayer(pitch), PlaybackSettings::DESPAWN));
-    }
-}
-
 /// How long F7 and F8 freeze an online client for.
 const STALLS_MS: [u64; 2] = [500, 2000];
 
@@ -70,7 +44,7 @@ pub(super) fn drive_tick(
     mut lobby: ResMut<crate::lobby::Lobby>,
     mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
     smoothing: Res<crate::kart::Smoothing>,
-    mut cues: Cues,
+    mut toasts: MessageWriter<Toast>,
     // The ticks waited for a late player, and the buttons a spectator held last tick.
     mut waits: Local<(u32, u32)>,
     mut sfx: crate::sound::Sfx,
@@ -172,7 +146,7 @@ pub(super) fn drive_tick(
     let stall_down = [KeyCode::F7, KeyCode::F8].map(|key| online && keys.pressed(key));
     for (i, millis) in STALLS_MS.into_iter().enumerate() {
         if stall_down[i] && !keys_held[2 + i] {
-            info!("(debug) stalling for {millis} ms");
+            debug!("(debug) stalling for {millis} ms");
             std::thread::sleep(std::time::Duration::from_millis(millis));
         }
     }
@@ -248,7 +222,7 @@ pub(super) fn drive_tick(
             net.frozen[slot] = true;
             net.gone[slot] = true;
             let name = net.labels.get(slot).map_or("?", String::as_str);
-            cues.toasts.write(
+            toasts.write(
                 Toast::new(format!("Player {name} left the race"), 3000)
                     .color(Color::srgb(1.0, 0.6, 0.3)),
             );
@@ -277,7 +251,7 @@ pub(super) fn drive_tick(
                 .map(|&slot| net.labels.get(slot).map_or("?", String::as_str))
                 .collect();
             let text = format!("Waiting for {}...", names.join(", "));
-            cues.toasts.write(
+            toasts.write(
                 Toast::new(
                     text,
                     WAIT_TOAST_TICKS as u64 * 1000 / crate::GAME_TICK_HZ as u64,
@@ -387,12 +361,6 @@ pub(super) fn drive_tick(
     let Step::Played(ticks) = advance.step else {
         return;
     };
-    // A beep every second of ticks, higher for each player: the clients' beeps line up when
-    // their ticks do. (Off.)
-    if online && tick.is_multiple_of(TICKS_PER_BEEP) {
-        // let frequency = BEEP_HZ * 1.25_f32.powi(sim.own as i32);
-        // cues.beep(frequency, 100);
-    }
     let mine = &ticks[sim.own];
     // Everyone's exhaust and sparks, ours and the others' (the others' as the sim has them).
     for (slot, kart) in ticks.iter().enumerate() {
@@ -513,7 +481,7 @@ pub(super) fn debug_actions(
         // Like F7 and F8, for as long as asked: the frame is cut short, so the others run ahead.
         if let Action::DebugStall(time) = action {
             if lobby.online.is_some() {
-                info!("(debug) stalling for {time:?}");
+                debug!("(debug) stalling for {time:?}");
                 std::thread::sleep(*time);
             } else {
                 toasts.write(Toast::new("Only online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));

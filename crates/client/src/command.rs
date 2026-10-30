@@ -565,7 +565,7 @@ fn submit(
 
 /// A chat message, for the others in the lobby to read. (Stub: nothing is sent yet.)
 fn chat(message: &str, toasts: &mut MessageWriter<Toast>) {
-    info!("(chat, not sent) {message}");
+    debug!("(chat, not sent) {message}");
     toasts.write(Toast::new("Chat is not implemented yet", 2000));
 }
 
@@ -783,6 +783,21 @@ mod tests {
         assert!(Action::parse("config set nickname 0123456789abc").is_err());
         assert!(Action::parse("config set colour red").is_err());
         assert!(Action::parse("config get nickname").is_err());
+        assert!(matches!(
+            Action::parse("config set vsync off"),
+            Ok(Action::SetConfig(crate::config::Setting::Vsync(false)))
+        ));
+        assert!(Action::parse("config set vsync maybe").is_err());
+        assert!(matches!(
+            Action::parse("config set fps-max 144"),
+            Ok(Action::SetConfig(crate::config::Setting::FpsMax(144)))
+        ));
+        assert!(matches!(
+            Action::parse("config set fps-max 0"),
+            Ok(Action::SetConfig(crate::config::Setting::FpsMax(0)))
+        ));
+        assert!(Action::parse("config set fps-max fast").is_err());
+        assert!(Action::parse("config set fps-max -1").is_err());
         let smoothing = |line| match Action::parse(line) {
             Ok(Action::NetSmoothing(how)) => Some(how),
             _ => None,

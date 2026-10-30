@@ -10,7 +10,7 @@ use loader::model::Model;
 use race::KartSpec;
 
 use crate::Track;
-use crate::drive::{Drive, Kart};
+use crate::drive::Kart;
 use crate::kart::{KartBuilder, KartSlot};
 use crate::lobby::Lobby;
 
@@ -26,7 +26,6 @@ pub fn kart_collisions() -> bool {
 pub fn build(
     mut lobby: ResMut<Lobby>,
     track: Res<Track>,
-    drive: Res<Drive>,
     others: Query<Entity, (With<KartSlot>, Without<Kart>)>,
     mut builder: KartBuilder,
 ) {
