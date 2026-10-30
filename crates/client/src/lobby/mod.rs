@@ -62,6 +62,9 @@ pub struct Lobby {
     pub average_pings: std::collections::HashMap<String, std::time::Duration>,
     /// The map the race is on that we are waiting for the host to send.
     fetching: Option<u32>,
+    /// The level the host picked to drive on between races (`Event::Track`) that we have not gone
+    /// to yet: we lack the map, or the level switch has not come to it.
+    pending_track: Option<(u32, u64)>,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
     pub online: Option<Online>,
@@ -234,8 +237,41 @@ impl Lobby {
     fn start(&self, track: u32) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            session.start(track, maps::file(track).map_or(0, |(hash, _)| hash));
+            session.start(track, Self::hash_of(track));
         }
+    }
+
+    /// Whether we host the lobby we are in.
+    pub fn is_host(&self) -> bool {
+        self.session.is_some() && !self.joined
+    }
+
+    /// Tells the lobby which level to drive on until the next race (the host only): the players
+    /// go to it, and so do the ones who join later.
+    pub fn set_track(&self, track: u32) {
+        if self.is_host()
+            && self.online.is_none()
+            && let Some(session) = &self.session
+        {
+            self.provide(session, track);
+            session.set_track(track, Self::hash_of(track));
+        }
+    }
+
+    /// The level the host picked that we have yet to go to, and the hash of its map.
+    pub(crate) fn pending_track(&self) -> Option<(u32, u64)> {
+        self.pending_track
+    }
+
+    /// We went to the level the host picked, or will not.
+    pub(crate) fn clear_pending_track(&mut self) {
+        self.pending_track = None;
+    }
+
+    /// The hash of the contents of the map `track`: the others compare it with theirs, which for
+    /// one of the game's levels is made from their disc. (0 for a level we have no map of.)
+    fn hash_of(track: u32) -> u64 {
+        maps::hash(track).unwrap_or(0)
     }
 
     /// Makes the map `track` available to the players who lack it, if it is one.

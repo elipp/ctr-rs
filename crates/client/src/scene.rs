@@ -57,7 +57,7 @@ pub(crate) fn switch_level(world: &mut World) {
         .and_then(|l| l.online.as_ref())
         .map(|o| (o.track, o.hash));
     let missing =
-        race_track.is_some_and(|(track, hash)| map::is_map_id(track) && !maps::has(track, hash));
+        race_track.is_some_and(|(track, hash)| !maps::has(track, hash));
     let race_track = race_track.map(|(track, _)| track);
     // The level shown before the race took the viewer to its own: back to it when the race is
     // over (the lobby closed, or failed).
@@ -78,9 +78,22 @@ pub(crate) fn switch_level(world: &mut World) {
     }
     let mut options = *world.resource::<Options>();
     let current = world.resource::<LevelNumber>().0;
+    // The level the host picked to drive on between races, once we have its map.
+    let mut hosts_pick = None;
+    if let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>() {
+        match lobby.pending_track() {
+            _ if race_track.is_some() => lobby.clear_pending_track(),
+            Some((track, hash)) if maps::has(track, hash) => {
+                lobby.clear_pending_track();
+                hosts_pick = Some(track);
+            }
+            _ => {}
+        }
+    }
     let wanted = race_track
         .filter(|&track| track != current && !missing)
-        .or(back.filter(|&track| track != current));
+        .or(back.filter(|&track| track != current))
+        .or(hosts_pick.filter(|&track| track != current));
     if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }
@@ -113,6 +126,18 @@ pub(crate) fn switch_level(world: &mut World) {
         world.insert_resource(LevelNumber(id));
         restart_drive(world, options);
         run_scene_systems(world, options);
+        let text = if hosts_pick == Some(id) {
+            format!("The host picked {}", maps::name(id))
+        } else {
+            format!("Track: {}", maps::name(id))
+        };
+        world.write_message(toast::Toast::new(text, 2500));
+        // Whoever hosts the lobby takes the others along (a race has its own level).
+        if race_track.is_none()
+            && let Some(lobby) = world.get_resource::<lobby::Lobby>()
+        {
+            lobby.set_track(id);
+        }
     } else if let Some(character) = character {
         // Only the kart goes: the level stays, and the race starts again with the new racer.
         let kart = world
@@ -400,7 +425,7 @@ pub(crate) fn setup(
         !mesh_options.hidden,
         mesh_options.cull,
     );
-    info!(
+    debug!(
         "{} turbo pad collision blocks, {} blocks that show them (those get the extra depth bias)",
         level
             .quad_blocks
@@ -409,7 +434,7 @@ pub(crate) fn setup(
             .count(),
         mesh::turbo_pad_visuals(level).len()
     );
-    info!(
+    debug!(
         "{} quad blocks, vertices per part {:?}, {} animated faces",
         level.quad_blocks.len(),
         data.parts

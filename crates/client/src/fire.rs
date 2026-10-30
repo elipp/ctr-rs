@@ -163,7 +163,7 @@ pub fn spawn(
     if icon.is_none() && wheels.is_empty() && smoke.is_none() {
         return;
     }
-    info!(
+    debug!(
         "{} fireballs and flame jets, {} plants",
         sources.emitters, sources.plants
     );

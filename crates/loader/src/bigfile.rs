@@ -38,13 +38,26 @@ impl BigFile {
     /// Parses the header of `BIGFILE.BIG`, which begins at `start_sector` of
     /// the 2048-byte-sector `disc`.
     pub fn open<R: Read + Seek>(disc: &mut R, start_sector: u32) -> io::Result<Self> {
+        Self::parse(&Self::read_header(disc, start_sector)?, start_sector)
+    }
+
+    /// The header region of the file that begins at `start_sector`, which [`BigFile::parse`]
+    /// takes.
+    pub fn read_header<R: Read + Seek>(disc: &mut R, start_sector: u32) -> io::Result<Vec<u8>> {
         let mut buf = vec![0u8; HEADER_SIZE];
         disc.seek(SeekFrom::Start(start_sector as u64 * USER_DATA_SIZE))?;
         disc.read_exact(&mut buf)?;
-        Self::parse(&buf, start_sector)
+        Ok(buf)
     }
 
-    fn parse(header: &[u8], start_sector: u32) -> io::Result<Self> {
+    /// The entries of a `header` that [`BigFile::read_header`] read.
+    pub fn parse(header: &[u8], start_sector: u32) -> io::Result<Self> {
+        if header.len() < ENTRIES_OFFSET {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "BIGFILE header is too short",
+            ));
+        }
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
         let count = word(4) as usize;
         if ENTRIES_OFFSET + count * ENTRY_SIZE > header.len() {

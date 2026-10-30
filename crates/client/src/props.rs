@@ -500,7 +500,7 @@ pub fn spawn(
             .flatten();
         if inst.model_name == "startbanner" {
             match &banner {
-                Some(b) => info!("start banner waves: {} vertices", b.vertex_count()),
+                Some(b) => debug!("start banner waves: {} vertices", b.vertex_count()),
                 None => warn!(
                     "start banner does not wave: {} colours, {} animations",
                     header.colors.len(),
@@ -683,7 +683,7 @@ pub fn spawn(
             });
         }
     }
-    info!(
+    debug!(
         "{} placed models, {} animated, {} hazards, {} rollers, {} turtles",
         level.instances.len(),
         props.0.len(),
