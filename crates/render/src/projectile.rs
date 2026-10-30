@@ -25,6 +25,11 @@ pub const NITRO: i16 = 0x06;
 pub const CRATE_EXPLOSION: i16 = 0x26;
 pub const SHOCKWAVE_GREEN: i16 = 0x45;
 
+/// `STATIC_WAKE`: the glow on the water under a kart that drives in it, which loops its
+/// animation. The levels with water keep it (`level.models`), not the racers' packs. (Not a
+/// weapon, but it is drawn the same way.)
+pub const WAKE: i16 = 0x43;
+
 /// `STATIC_CLOUD`: the red beaker's rain cloud, which loops its `billow` animation.
 pub const CLOUD: i16 = 0x42;
 

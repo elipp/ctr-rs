@@ -712,6 +712,43 @@ fn icon_scan(range: std::ops::RangeInclusive<i32>) -> Result<(), String> {
     Ok(())
 }
 
+/// The icon groups (`iconGroup[n]`) of the racer pack and, with a level, of the level's own
+/// `LevTexLookup`: where the particles' icons are.
+fn icon_groups(level: Option<LevelId>) -> Result<(), String> {
+    let path = std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
+        });
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let pack = big
+        .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(0).get())
+        .map_err(|e| e.to_string())?;
+    let pack = DramFile::parse(&pack).map_err(|e| e.to_string())?;
+    let show = |what: &str, groups: Vec<loader::icons::IconGroup>| {
+        for g in groups {
+            println!(
+                "{what}: group {} {:?}: {} icons",
+                g.group_id,
+                g.name,
+                g.icons.len()
+            );
+        }
+    };
+    show(
+        "racer pack",
+        loader::icons::parse_groups(&pack).map_err(|e| e.to_string())?,
+    );
+    if let Some(id) = level {
+        let l = load(id)?;
+        show(
+            "level",
+            loader::icons::parse_level_groups(&l.dram).map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(())
+}
+
 /// Decodes the HUD pictures the way the viewer does, to see that every cell has something in it.
 fn hud_pictures(which: &str) -> Result<(), String> {
     use render::{portraits, weapons};
@@ -829,6 +866,9 @@ fn run() -> Result<(), String> {
             return Err("icons takes numbers".into());
         };
         return icon_scan(first..=last);
+    }
+    if command == "groups" {
+        return icon_groups(args.first().map(|a| level_id(a)).transpose()?);
     }
     if command == "models" {
         return pack_models(args.first().and_then(|a| a.parse().ok()));

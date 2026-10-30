@@ -1,10 +1,8 @@
 # Unimplemented
 - the other uses of a TNT crate on the head (`instTntRecv`): the fire button ignored, the driving animation held at its middle frame
-- driving under water doesn't render the cart "water-tinted" and cause bubbles to come out of the exhaust
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
 - the bombs and missiles look for mines oldest first (`weapon::fly`), but a mine's thread goes to the front of the `MINE` bucket, so `RB_Hazard_CollideWithBucket` finds the newest first, as the hazards do (`race::set_off_mines`)
-- submerged in the mud in tiny arena looks off
 - blizzard bluff: reflection of weapon crates on ice
 
 ## Maps

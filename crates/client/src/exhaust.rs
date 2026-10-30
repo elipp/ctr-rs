@@ -10,7 +10,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::icons::Icon;
 use loader::vram::Vram;
 use render::mesh::SCALE;
-use render::particles::{DrawMode, Particle, Rng, quarter_units_to_world};
+use render::particles::{DrawMode, Particle, Rng, Sprite, quarter_units_to_world};
 
 use crate::kart::{Attached, KartSlot};
 use crate::subtract::{self, SubtractMaterial};
@@ -82,19 +82,62 @@ impl Particles {
         }
     }
 
-    /// The puffs of this game tick of kart `slot` (before [`Particles::tick`]).
+    /// The puffs of this game tick of kart `slot` (before [`Particles::tick`]): smoke, or bubbles
+    /// where the pipe is under water.
     pub fn puffs(&mut self, slot: usize, puffs: &[vehicle::exhaust::Puff]) {
         for puff in puffs {
-            let smoke = Particle::exhaust(puff.position, puff.velocity, puff.dark, &mut self.rng);
+            let make = if puff.underwater {
+                Particle::bubble
+            } else {
+                Particle::exhaust
+            };
+            let smoke = make(puff.position, puff.velocity, puff.dark, &mut self.rng);
             self.list.push((slot, smoke));
         }
     }
 
-    /// One game tick: every particle moves, after the karts have puffed (retail updates the
-    /// particles after the threads, so a new puff starts at its pipe).
-    pub fn tick(&mut self) {
-        self.list.retain_mut(|(_, p)| p.update());
+    /// The drops that the wake of kart `slot` threw up this game tick (`wake_particles`).
+    pub fn splashes(&mut self, slot: usize, count: u8) {
+        for _ in 0..count {
+            let drop = Particle::splash(&mut self.rng);
+            self.list.push((slot, drop));
+        }
     }
+
+    /// The clods that kart `slot` threw up in mud this game tick (`mud_particles`).
+    pub fn clods(&mut self, slot: usize, count: u8) {
+        for _ in 0..count {
+            let clod = Particle::mud_splash(&mut self.rng);
+            self.list.push((slot, clod));
+        }
+    }
+
+    /// One game tick: every particle moves, after the karts have puffed (retail updates the
+    /// particles after the threads, so a new puff starts at its pipe). `heights` is each kart's
+    /// height (`instSelf->matrix.t[1]`), which the bubbles pop at the surface by.
+    pub fn tick(&mut self, heights: &[i32]) {
+        let rng = &mut self.rng;
+        self.list.retain_mut(|(slot, p)| {
+            let alive = p.update();
+            if let Some(&y) = heights.get(*slot) {
+                p.surface(y, rng);
+            }
+            alive
+        });
+    }
+}
+
+/// The first pictures of the level's icon groups 7, 8, 9 and 13 (`bubble`, `bubblepop`, `drop`,
+/// `mud`): the exhaust's bubble, its pop, the splash's drop and the clod of mud. The level keeps
+/// them, not the racers.
+pub fn water_icons(dram: &loader::dram::DramFile) -> [Option<Icon>; 4] {
+    let groups = loader::icons::parse_level_groups(dram).unwrap_or_default();
+    [7, 8, 9, 13].map(|id| {
+        groups
+            .iter()
+            .find(|g| g.group_id == id)
+            .and_then(|g| g.icons.first().cloned())
+    })
 }
 
 /// `VEH_EMITTER_GROUND_SPARK_COUNT`
@@ -103,9 +146,11 @@ const LANDING_SPARKS: usize = 10;
 /// Width of a spark's streak, in game units.
 const SPARK_WIDTH: f32 = 1.2;
 
-/// The smoke's sprite size in texels; the picture is the whole texture.
+/// The sprites of one icon and one blend mode (the smoke, a bubble, a pop or a drop). The
+/// picture is the whole texture, and its size is in texels.
 #[derive(Component)]
 pub struct Smoke {
+    sprite: Sprite,
     mode: DrawMode,
     width: i32,
     height: i32,
@@ -113,17 +158,27 @@ pub struct Smoke {
 
 /// The picture of an icon as a texture, and its size in texels.
 pub fn icon_image(icon: &Icon, vram: &Vram) -> (Image, i32, i32) {
+    icon_image_blended(icon, vram, 255)
+}
+
+/// The picture of an icon for a sprite that is blended with the picture behind it: only the
+/// texels with the semi-transparency bit are (the GPU's blend is per texel), at `alpha`, and the
+/// others are drawn solid.
+pub fn icon_image_blended(icon: &Icon, vram: &Vram, alpha: u8) -> (Image, i32, i32) {
     let (u0, v0) = icon.layout.uv[0];
     let width = icon.layout.uv[1].0 as i32 - u0 as i32 + 1;
     let height = icon.layout.uv[2].1 as i32 - v0 as i32 + 1;
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     for y in 0..height as usize {
         for x in 0..width as usize {
-            if let Ok(Some((c, _))) = vram.texel_stp(
+            if let Ok(Some((mut c, stp))) = vram.texel_stp(
                 &icon.layout,
                 u0.wrapping_add(x as u8),
                 v0.wrapping_add(y as u8),
             ) {
+                if stp {
+                    c[3] = (c[3] as u32 * alpha as u32 / 255) as u8;
+                }
                 rgba[(y * width as usize + x) * 4..][..4].copy_from_slice(&c);
             }
         }
@@ -167,12 +222,11 @@ pub fn spawn(
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
     icon: &Icon,
+    water: &[Option<Icon>; 4],
     vram: &Vram,
     kart: Entity,
     layer: usize,
 ) {
-    let (image, width, height) = icon_image(icon, vram);
-    let image = images.add(image);
     let quads = MAX_QUADS;
     let mut mesh = || {
         let mut mesh = Mesh::new(
@@ -194,48 +248,87 @@ pub fn spawn(
         ));
         meshes.add(mesh)
     };
-    let base = |alpha_mode| StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(image.clone()),
-        unlit: true,
-        cull_mode: None,
-        double_sided: true,
-        alpha_mode,
-        ..default()
-    };
-    let layer = RenderLayers::layer(layer);
+    // All of them in the kart's own layer, as in retail (`otIndexOffset` is the kart's
+    // `depthBiasNormal`: they are ordered with the kart's parts and wheels, not put behind the
+    // water).
+    let [bubble, pop, drop, mud] = water;
+    let sprites = [
+        (Sprite::Smoke, Some(icon)),
+        (Sprite::Bubble, bubble.as_ref()),
+        (Sprite::BubblePop, pop.as_ref()),
+        (Sprite::Splash, drop.as_ref()),
+        (Sprite::Mud, mud.as_ref()),
+    ];
+    for (sprite, icon) in sprites {
+        let Some(icon) = icon else { continue };
+        let layer = RenderLayers::layer(layer);
+        let (image, width, height) = icon_image(icon, vram);
+        let image = images.add(image);
+        let base = |alpha_mode| StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(image.clone()),
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            alpha_mode,
+            ..default()
+        };
+        commands.spawn((
+            Smoke {
+                sprite,
+                mode: DrawMode::Add,
+                width,
+                height,
+            },
+            Mesh3d(mesh()),
+            MeshMaterial3d(materials.add(base(AlphaMode::Add))),
+            Attached(kart),
+            Transform::default(),
+            layer.clone(),
+            NoFrustumCulling,
+        ));
+        // Half the sprite and half the picture behind it (the clods of mud), on the texels that
+        // are semi-transparent.
+        let average = images.add(icon_image_blended(icon, vram, 128).0);
+        let blended = StandardMaterial {
+            base_color_texture: Some(average),
+            ..base(AlphaMode::Blend)
+        };
+        commands.spawn((
+            Smoke {
+                sprite,
+                mode: DrawMode::Average,
+                width,
+                height,
+            },
+            Mesh3d(mesh()),
+            MeshMaterial3d(materials.add(blended)),
+            Attached(kart),
+            Transform::default(),
+            layer.clone(),
+            NoFrustumCulling,
+        ));
+        commands.spawn((
+            Smoke {
+                sprite,
+                mode: DrawMode::Subtract,
+                width,
+                height,
+            },
+            Mesh3d(mesh()),
+            MeshMaterial3d(subtract_materials.add(SubtractMaterial {
+                base: base(AlphaMode::Blend),
+                extension: subtract::Subtract {},
+            })),
+            Attached(kart),
+            Transform::default(),
+            layer,
+            NoFrustumCulling,
+        ));
+    }
     // Sparks start at the ground and the wall and fly into them; retail has no depth buffer to
     // hide them there, so theirs are over the track for the others' karts as well.
     let spark_layer = RenderLayers::layer(crate::KART_LAYER);
-    commands.spawn((
-        Smoke {
-            mode: DrawMode::Add,
-            width,
-            height,
-        },
-        Mesh3d(mesh()),
-        MeshMaterial3d(materials.add(base(AlphaMode::Add))),
-        Attached(kart),
-        Transform::default(),
-        layer.clone(),
-        NoFrustumCulling,
-    ));
-    commands.spawn((
-        Smoke {
-            mode: DrawMode::Subtract,
-            width,
-            height,
-        },
-        Mesh3d(mesh()),
-        MeshMaterial3d(subtract_materials.add(SubtractMaterial {
-            base: base(AlphaMode::Blend),
-            extension: subtract::Subtract {},
-        })),
-        Attached(kart),
-        Transform::default(),
-        layer.clone(),
-        NoFrustumCulling,
-    ));
 
     // The sparks: untextured streaks that fade out towards their tails. Those of the grass are
     // drawn over the picture, the others added to it.
@@ -306,7 +399,12 @@ pub fn update(
         let wanted = particles
             .list
             .iter()
-            .filter(|(of, p)| *of == slot.0 && !p.is_line() && p.draw_mode() == smoke.mode)
+            .filter(|(of, p)| {
+                *of == slot.0
+                    && !p.is_line()
+                    && p.sprite == smoke.sprite
+                    && p.draw_mode() == smoke.mode
+            })
             .take(quads);
         for (n, (_, p)) in wanted.enumerate() {
             let Some(corners) = p.corners(smoke.width, smoke.height) else {
@@ -318,13 +416,18 @@ pub fn update(
             let at = Vec3::from_array(std::array::from_fn(|a| {
                 position[a] as f32 + velocity[a] as f32 * t
             }));
-            let center = kart + at / 256.0 * SCALE;
-            let gain = p.tint() as f32 / 128.0;
+            let mut center = kart + at / 256.0 * SCALE;
+            // (The mud's and the wake's height is the world's, not the kart's.)
+            if p.ignores_kart_height() {
+                center.y = at.y / 256.0 * SCALE;
+            }
+            // (A particle with its own green and blue, like the mud's, is tinted in them.)
+            let gain = p.rgb().map(|c| c as f32 / 128.0);
             for (k, [x, y]) in corners.into_iter().enumerate() {
                 let corner = center + right * quarter_units_to_world(x as f32)
                     - up * (quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT);
                 positions[n * 4 + k] = corner.to_array();
-                colors[n * 4 + k] = [gain, gain, gain, 1.0];
+                colors[n * 4 + k] = [gain[0], gain[1], gain[2], 1.0];
             }
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
