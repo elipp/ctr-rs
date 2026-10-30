@@ -20,8 +20,9 @@
 //! karts each tick (`EngineAudio_Recalculate`): ours on our class's loop, and the two other
 //! karts nearest the camera on the two loops retail gives the AIs (`EngineSound_NearestAIs`).
 //! Our kart's other loops (the ground, the skid, the wall rub and the turbo's roar) are the ones
-//! its tick keeps going ([`Effect::Recycle`]); retail gives the AIs none, and the other karts
-//! have none here either.
+//! its tick keeps going ([`Effect::Recycle`]); retail gives the AIs none. The other karts' skid
+//! and turbo's roar are kept going too, heard from where they are, and not from far (see
+//! `docs/notes/DIVERGENCE.md`).
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -85,6 +86,14 @@ const FAR_ENGINES: [u16; 2] = [0x10, 0x11];
 /// or nearer is at full volume, in level units.
 const HEARD_WITHIN: i32 = 9000;
 const FULL_WITHIN: i32 = 300;
+
+/// The loops of the other karts that are heard: the skid and the turbo's roar.
+const PEER_LOOPS: [u8; 2] = [audio_slot::SKID, audio_slot::TURBO];
+/// What another kart makes (its loops, its bounces and crashes, its voice) is at full volume this
+/// near the camera, and not heard from this far, in level units. Retail plays them in the middle
+/// at full volume, and the objects and the weapons carry to [`HEARD_WITHIN`].
+const KART_FULL_WITHIN: i32 = 300;
+const KART_HEARD_WITHIN: i32 = 2500;
 
 /// The output samples the audio thread renders at a time, with the sound engine locked: 3 ms.
 const BLOCK: usize = 128;
@@ -285,6 +294,8 @@ struct Kept {
     far: [FarVoice; 2],
     /// Our kart's loops (`driverAudioPtrs`), by [`vehicle::audio_slot`].
     loops: [Option<Sound>; 4],
+    /// The skid and the turbo's roar of the other karts, by slot ([`PEER_LOOPS`] order).
+    peer_loops: Vec<[Option<Sound>; 2]>,
     /// By slot: `VehFire_AudioCooldown`, in milliseconds.
     boost_cooldowns: Vec<i16>,
     /// The loops of the level's objects (by instance) and of the weapons in flight (by id).
@@ -345,6 +356,7 @@ impl Sfx<'_> {
             });
             *kept = Kept {
                 engines: vec![EngineSound::default(); drivers.len()],
+                peer_loops: vec![[None; 2]; drivers.len()],
                 boost_cooldowns: vec![0; drivers.len()],
                 ..Kept::default()
             };
@@ -374,7 +386,7 @@ impl Sfx<'_> {
             let heard = if slot == own {
                 Some((u8::MAX, CENTRE))
             } else {
-                places.get(slot).and_then(|&at| heard(ear, at))
+                places.get(slot).and_then(|&at| heard_kart(ear, at))
             };
             for effect in &kart.effects {
                 // The voice lines are not heard from anywhere, the loops are ours alone, and what
@@ -394,7 +406,15 @@ impl Sfx<'_> {
                             .iter()
                             .find(|d| d.driver_id == driver_id)
                             .map_or(driver.character, |d| d.character);
-                        sounds.request_voiceline(id, character, priority, finished);
+                        // A kart's voice is heard from where it is; out of earshot it is not said.
+                        if let Some((volume, pan)) = heard {
+                            let sfx = howl::Sfx {
+                                volume,
+                                pan,
+                                ..howl::Sfx::FULL
+                            };
+                            sounds.request_voiceline(id, character, priority, finished, sfx);
+                        }
                         continue;
                     }
                     Effect::Recycle {
@@ -413,6 +433,38 @@ impl Sfx<'_> {
                         };
                         let playing = &mut kept.loops[loop_slot as usize];
                         sounds.recycle(playing, id.map(u16::from), sfx);
+                        continue;
+                    }
+                    // The other karts' skid and roar are heard from where they are, and not
+                    // from far: their ground and wall rub are not heard at all.
+                    Effect::Recycle {
+                        slot: loop_slot,
+                        id,
+                        volume,
+                        distort,
+                        pan,
+                        echo,
+                    } if PEER_LOOPS.contains(&loop_slot) => {
+                        let near = places.get(slot).and_then(|&at| heard_kart(ear, at));
+                        let (id, sfx) = match near {
+                            Some((near, side)) => {
+                                // (The skid's own pan, around the middle, moves the side.)
+                                let pan = (pan as i32 + side as i32 - CENTRE as i32).clamp(0, 255);
+                                let volume = (volume as u32 * near as u32 / 255) as u8;
+                                let sfx = howl::Sfx {
+                                    volume,
+                                    distort,
+                                    pan: pan as u8,
+                                    echo,
+                                };
+                                (id.map(u16::from), sfx)
+                            }
+                            None => (None, howl::Sfx::SILENT),
+                        };
+                        let index = PEER_LOOPS.iter().position(|&l| l == loop_slot).unwrap();
+                        if let Some(playing) = kept.peer_loops.get_mut(slot) {
+                            sounds.recycle(&mut playing[index], id, sfx);
+                        }
                         continue;
                     }
                     _ => {}
@@ -444,7 +496,7 @@ impl Sfx<'_> {
                         if cheer {
                             let (voice, priority) =
                                 (fire::BIG_BOOST_VOICELINE, fire::VOICELINE_PRIORITY);
-                            sounds.request_voiceline(voice, driver.character, priority, finished);
+                            sounds.request_voiceline(voice, driver.character, priority, finished, howl::Sfx::FULL);
                         }
                         *cooldown = fire::AUDIO_COOLDOWN_MS;
                     }
@@ -455,6 +507,14 @@ impl Sfx<'_> {
         // A fire that went out in a tick played again (a rollback) still stops its roar.
         if ours.turbo.is_none() {
             sounds.recycle_mute(&mut kept.loops[audio_slot::TURBO as usize]);
+        }
+        for (slot, driver) in drivers.iter().enumerate() {
+            if slot != own && driver.turbo.is_none() {
+                let turbo = PEER_LOOPS.iter().position(|&l| l == audio_slot::TURBO).unwrap();
+                if let Some(playing) = kept.peer_loops.get_mut(slot) {
+                    sounds.recycle_mute(&mut playing[turbo]);
+                }
+            }
         }
 
         // `PlayLevel_UpdateLapStats` and `Audio_Update1`: a lap of ours, and our win.
@@ -707,12 +767,21 @@ fn engine_sfx(voice: EngineVoice) -> howl::Sfx {
 /// level units to nothing at 9000; the pan follows the angle from the camera's forward, all on
 /// one side at a right angle, and a sound behind is heard as the one in front that it mirrors.
 fn heard(ear: &Transform, at: Vec3) -> Option<(u8, u8)> {
+    heard_within(ear, at, FULL_WITHIN, HEARD_WITHIN)
+}
+
+/// As [`heard`] for another kart, which carries less far.
+fn heard_kart(ear: &Transform, at: Vec3) -> Option<(u8, u8)> {
+    heard_within(ear, at, KART_FULL_WITHIN, KART_HEARD_WITHIN)
+}
+
+fn heard_within(ear: &Transform, at: Vec3, full: i32, far: i32) -> Option<(u8, u8)> {
     let to = at - ear.translation;
     let distance = (to.length() / SCALE) as i32;
-    if distance >= HEARD_WITHIN {
+    if distance >= far {
         return None;
     }
-    let volume = map_to_range(distance, FULL_WITHIN, HEARD_WITHIN, 255, 0);
+    let volume = map_to_range(distance, full, far, 255, 0);
     let pan = CENTRE as i32 + side_of(ear, at);
     Some((volume as u8, pan.clamp(0, 255) as u8))
 }
@@ -750,6 +819,15 @@ mod tests {
         assert_eq!(heard(&ear(), at(200.0, 0.0)), Some((255, CENTRE)));
         assert_eq!(heard(&ear(), at(6000.0, 0.0)).unwrap().0, 88);
         assert_eq!(heard(&ear(), at(9500.0, 0.0)), None);
+    }
+
+    #[test]
+    fn another_kart_is_heard_from_less_far() {
+        assert_eq!(heard_kart(&ear(), at(200.0, 0.0)), Some((255, CENTRE)));
+        assert_eq!(heard_kart(&ear(), at(1400.0, 0.0)).unwrap().0, 128);
+        assert_eq!(heard_kart(&ear(), at(2600.0, 0.0)), None);
+        // (Where an object, 1400 units off, is still nearly full.)
+        assert!(heard(&ear(), at(1400.0, 0.0)).unwrap().0 > 200);
     }
 
     #[test]
