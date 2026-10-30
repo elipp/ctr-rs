@@ -143,7 +143,10 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
 }
 
 /// The wumpa count.
-pub(super) fn wumpa_hud(sim: Res<crate::props::Sim>, mut counts: Query<&mut CtrText, With<WumpaHud>>) {
+pub(super) fn wumpa_hud(
+    sim: Res<crate::props::Sim>,
+    mut counts: Query<&mut CtrText, With<WumpaHud>>,
+) {
     let count = sim.driver().num_wumpas.to_string();
     for mut text in &mut counts {
         // A changed text puts its glyphs up again: only a new count changes it.
@@ -205,7 +208,7 @@ pub(super) fn reserves_hud(
 }
 
 /// The bottom-left lines: the frame rate and the time a frame takes (smoothed over the last few
-/// frames), then where the kart is and what it does.
+/// frames), then where the kart is and what it does, and the version of the build.
 pub(super) fn hud(
     sim: Res<crate::props::Sim>,
     diagnostics: Res<DiagnosticsStore>,
@@ -228,7 +231,7 @@ pub(super) fn hud(
             continue;
         }
         text.0 = format!(
-            "{fps}\nspeed {:5}  {:?}{}{}{}{}",
+            "{fps}\nspeed {:5}  {:?}{}{}{}{}\nbuild {}",
             d.speed_approx,
             d.phys_state,
             if grounded { "" } else { "  airborne" },
@@ -245,7 +248,7 @@ pub(super) fn hud(
                 Some(why) => format!("  last drift ended: {why:?}"),
                 None => String::new(),
             },
+            crate::version::VERSION,
         );
     }
 }
-

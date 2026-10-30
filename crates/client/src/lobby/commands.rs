@@ -149,7 +149,8 @@ pub(super) fn run(
             | Action::DebugLevel(_)
             | Action::DebugCrateBias(_)
             | Action::DebugFx(_)
-            | Action::SetConfig(_) => continue,
+            | Action::SetConfig(_)
+            | Action::Version => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.
                 if let Some(session) = &lobby.session {

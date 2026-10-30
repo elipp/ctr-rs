@@ -110,6 +110,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             ],
         )],
     ),
+    leaf("version", "Show the version of this build"),
     node(
         "net",
         "The connection to the others",
@@ -321,7 +322,7 @@ mod tests {
     fn a_slash_lists_the_commands() {
         assert_eq!(
             names("/"),
-            ["lobby", "race", "config", "net", "cache", "debug"]
+            ["lobby", "race", "config", "version", "net", "cache", "debug"]
         );
         assert_eq!(names("/r"), ["race"]);
         assert_eq!(names("/race "), ["start", "restart", "stop"]);

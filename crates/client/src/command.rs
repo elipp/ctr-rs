@@ -64,6 +64,8 @@ pub enum Action {
     NetRollbacks(bool),
     /// Change a setting (`config.rs` does it).
     SetConfig(crate::config::Setting),
+    /// Toast the version of this build (`version.rs`).
+    Version,
 }
 
 /// How the level's mesh is built (`/debug level`).
@@ -121,6 +123,8 @@ impl Action {
             "race" => Action::race(rest),
             "cache" => Action::cache(rest),
             "config" => Action::config(rest),
+            "version" if rest.is_empty() => Ok(Action::Version),
+            "version" => Err("Usage: /version".into()),
             "net" => Action::net(rest),
             "debug" => Action::debug(rest),
             _ => Err(format!("Unknown command: /{name}")),
@@ -807,6 +811,8 @@ mod tests {
         ));
         assert!(Action::parse("config set fps-max fast").is_err());
         assert!(Action::parse("config set fps-max -1").is_err());
+        assert!(matches!(Action::parse("version"), Ok(Action::Version)));
+        assert!(Action::parse("version 1").is_err());
         assert!(matches!(
             Action::parse("config set volume music 40"),
             Ok(Action::SetConfig(crate::config::Setting::VolumeMusic(40)))
