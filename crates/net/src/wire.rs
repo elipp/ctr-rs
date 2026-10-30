@@ -131,6 +131,9 @@ pub enum Message {
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
+    /// Reliable, host to each client, between races: the level to drive on (`hash` as in
+    /// [`Message::Start`]). A client that joins is sent the latest.
+    Track { track: u32, hash: u64 },
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
     Checksum { epoch: u32, tick: Tick, hash: u64 },
     /// Reliable. The sim as it is at the start of `tick`. The bytes are the game's to make and
@@ -373,6 +376,10 @@ mod tests {
             },
             Message::Announce {
                 text: "Restarting in 5".into(),
+            },
+            Message::Track {
+                track: 0x8000_0001,
+                hash: 77,
             },
             Message::Inputs(Inputs {
                 epoch: 1,

@@ -1,3 +1,12 @@
+//! Which entry of `BIGFILE.BIG` is which.
+//!
+//! What the client reads at runtime is only: the level's `Vram` and `Lev` files (1-player LOD;
+//! the `Ptr` file is not used), [`BigIndex::RACER_MODEL_HI`] and [`BigIndex::ARCADE_1P_PACK`]
+//! for each racer, and [`BigIndex::SHARED_MPK_VRM`]'s texture pages. Everything else in the
+//! archive (menus, overlays, other LODs and player counts, adventure hubs, cutscenes, credits,
+//! podium, dance, boss and thumbnail files, ...) is unused. The sound is outside the archive, in
+//! `SOUNDS/KART.HWL` and `XA/` (see [`crate::xa`]), and a disc without them just plays none.
+
 use crate::level::LevelId;
 
 /// Index of a subfile in `BIGFILE.BIG` (the game's `enum BigIndex`, `BI_*`).

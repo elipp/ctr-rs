@@ -10,6 +10,7 @@
 //!
 //! The file is the magic, the [`VERSION`] and the [`Map`] in `bitcode`, compressed with zstd.
 
+pub mod builtin;
 pub mod import;
 
 use std::io;

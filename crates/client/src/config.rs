@@ -4,6 +4,9 @@
 //! * `/config set nickname [name]`: what the others call us instead of our key (up to
 //!   [`net::NICK_MAX`] characters; none clears it). It can change at any time, in a race too, but
 //!   only every [`net::NICK_COOLDOWN`]
+//! * `/config set vsync on|off`: whether the window waits for the display (on at first)
+//! * `/config set fps-max <number>`: the most frames a second to draw, 0 for no limit (the
+//!   default); the sim has its own clock, see `frame.rs`
 //!
 //! The last character driven is kept too, and is the one the client starts with.
 //!
@@ -19,7 +22,7 @@ use crate::command::{Action, word};
 use crate::lobby::Lobby;
 use crate::toast::Toast;
 
-#[derive(Resource, Serialize, Deserialize, Default, Clone, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
     /// What we are called in a lobby, empty to be known by our key (see `net::clean_nick`).
@@ -28,6 +31,33 @@ pub struct Config {
     pub character: Option<u32>,
     /// The disc image (see `disc.rs`), once a picked or written one has proved to be a disc.
     pub iso: Option<PathBuf>,
+    /// Whether the window waits for the display to draw (`/config set vsync`).
+    pub vsync: bool,
+    /// The most frames a second to draw, 0 for no limit (`/config set fps-max`).
+    pub fps_max: u32,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            nickname: String::new(),
+            character: None,
+            iso: None,
+            vsync: true,
+            fps_max: 0,
+        }
+    }
+}
+
+impl Config {
+    /// How the window presents what it draws.
+    pub fn present_mode(&self) -> bevy::window::PresentMode {
+        if self.vsync {
+            bevy::window::PresentMode::AutoVsync
+        } else {
+            bevy::window::PresentMode::AutoNoVsync
+        }
+    }
 }
 
 fn path() -> PathBuf {
@@ -84,9 +114,14 @@ impl Config {
 pub enum Setting {
     /// Already cleaned (see `net::clean_nick`).
     Nickname(String),
+    Vsync(bool),
+    /// 0 for no limit.
+    FpsMax(u32),
 }
 
-const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]";
+const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
+    /config set vsync on|off\n\
+    /config set fps-max <frames a second, 0 for no limit>";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
@@ -102,6 +137,14 @@ impl Setting {
                 }
                 Ok(Setting::Nickname(value.to_string()))
             }
+            "vsync" => match value {
+                "on" => Ok(Setting::Vsync(true)),
+                "off" => Ok(Setting::Vsync(false)),
+                _ => Err("Usage: /config set vsync on|off".into()),
+            },
+            "fps-max" => value.parse().map(Setting::FpsMax).map_err(|_| {
+                "Usage: /config set fps-max <frames a second, 0 for no limit>".to_string()
+            }),
             "" => Err(USAGE.into()),
             _ => Err(format!("Unknown setting: {key}\n{USAGE}")),
         }
@@ -112,7 +155,19 @@ pub struct ConfigPlugin;
 
 impl Plugin for ConfigPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, apply);
+        app.add_systems(Update, (apply, present_mode));
+    }
+}
+
+/// The windows present as the config says, when it changes.
+fn present_mode(config: Res<Config>, mut windows: Query<&mut Window>) {
+    if !config.is_changed() {
+        return;
+    }
+    for mut window in &mut windows {
+        if window.present_mode != config.present_mode() {
+            window.present_mode = config.present_mode();
+        }
     }
 }
 
@@ -159,6 +214,27 @@ fn apply(
                     format!("Nickname: {nick}")
                 };
                 toasts.write(Toast::new(text, 2500));
+            }
+            Setting::Vsync(on) => {
+                config.vsync = *on;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                toasts.write(Toast::new(
+                    format!("Vsync {}", if *on { "on" } else { "off" }),
+                    2000,
+                ));
+            }
+            Setting::FpsMax(max) => {
+                config.fps_max = *max;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let text = match max {
+                    0 => "Frame rate: no limit".to_string(),
+                    max => format!("Frame rate: at most {max} a second"),
+                };
+                toasts.write(Toast::new(text, 2000));
             }
         }
     }

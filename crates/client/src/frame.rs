@@ -1,24 +1,19 @@
-//! Frame rate limiting and the draw count log.
+//! Frame rate limiting and the draw count log. The sim runs on its own clock (30 ticks a second),
+//! so neither the display's rate nor the limit changes how the game plays.
 
 use bevy::prelude::*;
 
-/// The frame rate the viewer is held to, in Hz; `CTR_FPS` overrides it, 0 for no limit.
-pub(crate) const FRAME_RATE: f64 = 120.0;
+use crate::config::Config;
 
-// Holds the loop to [`FRAME_RATE`] now that the display does not (no vsync): sleeps most of
-// what is left of the frame, then spins the last stretch, as a sleep wakes up late.
+/// Holds the loop to `Config::fps_max` (0 for no limit): sleeps most of what is left of the
+/// frame, then spins the last stretch, as a sleep wakes up late.
 pub(crate) fn limit_frame_rate(
+    config: Res<Config>,
     mut previous: Local<Option<std::time::Instant>>,
-    mut configured: Local<Option<f64>>,
 ) {
     use std::time::{Duration, Instant};
     const SPIN: Duration = Duration::from_micros(1500);
-    let rate = *configured.get_or_insert_with(|| {
-        std::env::var("CTR_FPS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(FRAME_RATE)
-    });
+    let rate = config.fps_max as f64;
     let start = previous.unwrap_or_else(Instant::now);
     if rate > 0.0 {
         let target = start + Duration::from_secs_f64(1.0 / rate);
@@ -58,5 +53,5 @@ pub(crate) fn log_draws(
             vertices += assets.get(&mesh.0).map_or(0, |m| m.count_vertices());
         }
     }
-    info!("{entities} mesh entities, {visible} visible, {vertices} vertices");
+    debug!("{entities} mesh entities, {visible} visible, {vertices} vertices");
 }

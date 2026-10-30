@@ -89,6 +89,8 @@ fn main() {
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);
+    maps::make_builtins();
+    maps::load();
     // The character driven last time.
     let racer = config
         .character
@@ -123,8 +125,7 @@ fn main() {
                 maps::name(track_id),
                 CHARACTERS[racer as usize]
             ),
-            // The frame rate is `limit_frame_rate`'s.
-            // present_mode: bevy::window::PresentMode::AutoNoVsync,
+            present_mode: config.present_mode(),
             ..default()
         }),
         ..default()
@@ -138,14 +139,12 @@ fn main() {
         plugins
     };
     app.add_plugins(plugins);
-    // After the plugins, which set up the log that tells of a map that cannot be read.
-    maps::load();
     // Bevy's own font has no ä or ö: this one takes its place as the default.
     app.world_mut()
         .resource_mut::<Assets<Font>>()
         .insert(
             AssetId::default(),
-            Font::from_bytes(include_bytes!("../../../assets/Inconsolata-Regular.ttf").to_vec()),
+            Font::from_bytes(include_bytes!("../fonts/Inconsolata-Regular.ttf").to_vec()),
         )
         .expect("the default font can be replaced");
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
@@ -166,7 +165,7 @@ fn main() {
         .insert_resource(LevelNumber(track_id))
         .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
-        // .add_systems(Last, limit_frame_rate)
+        .add_systems(Last, limit_frame_rate)
         // After the cameras and karts have moved this frame, before their transforms propagate.
         .add_systems(
             PostUpdate,

@@ -102,6 +102,20 @@ fn find_entries<R: Read + Seek>(
     Ok(None)
 }
 
+/// The map of a level file and a texture page file (`LevFile::Lev`, `LevFile::Vram`), as the
+/// viewer parses them.
+pub(crate) fn from_files(name: String, lev: &[u8], vram: &[u8]) -> io::Result<Map> {
+    let dram = DramFile::parse(lev)?;
+    let level = Level::parse(&dram)?;
+    let vram = parse_vram_file(vram)?;
+    Ok(Map {
+        name,
+        level,
+        dram,
+        vram,
+    })
+}
+
 /// The map that `patch` makes, found on `original` (the path of the USA `.bin`). A patch puts its
 /// track in the slot of one of the game's (or of several, with the same file); `level` names the
 /// one to read it from, and without it the patch has to change one level file or the same one
@@ -190,16 +204,9 @@ pub fn import(
         };
         new_big.read(&mut new_disc, index)
     };
-    let dram = DramFile::parse(&read(LevFile::Lev)?)?;
-    let level = Level::parse(&dram)?;
-    let vram = parse_vram_file(&read(LevFile::Vram)?)?;
+    let map = from_files(name, &read(LevFile::Lev)?, &read(LevFile::Vram)?)?;
     Ok(Import {
-        map: Map {
-            name,
-            level,
-            dram,
-            vram,
-        },
+        map,
         source: match entries {
             Some((lev, vram)) => format!("entries {lev} (level) and {vram} (VRAM)"),
             None => format!("the slot of track {replaces}"),

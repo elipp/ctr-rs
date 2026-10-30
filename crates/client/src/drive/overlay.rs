@@ -11,9 +11,6 @@ use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 #[derive(Component)]
 pub(super) struct Hud;
 
-/// How much larger than retail's the counter's "x" is drawn, by eye.
-const COUNTER_X_SCALE: f32 = 1.5;
-
 /// The wumpa count: the number after the "x".
 #[derive(Component)]
 pub(crate) struct WumpaHud;

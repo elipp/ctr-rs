@@ -184,20 +184,25 @@ impl<R: Read + Seek> XaFiles<R> {
         let Some(&start) = self.starts[category as usize].get(track.file as usize) else {
             return Ok(None);
         };
-        let span = track.sectors as usize;
-        let mut raw = vec![0; span * RAW_SECTOR_SIZE as usize];
-        self.raw
-            .seek(SeekFrom::Start(start as u64 * RAW_SECTOR_SIZE))?;
-        self.raw.read_exact(&mut raw)?;
-        let mut sectors = Vec::new();
-        for sector in raw.as_chunks::<{ RAW_SECTOR_SIZE as usize }>().0 {
-            let sector = &sector[SUBHEADER_OFFSET as usize..][..SECTOR_SIZE];
-            if is_audio(sector, track.channel) {
-                sectors.extend_from_slice(sector);
-            }
-        }
-        Ok(Some(sectors))
+        read_track(&mut self.raw, start, track).map(Some)
     }
+}
+
+/// The sectors of `track` in the file that begins at sector `start` of `raw`, the image of raw
+/// sectors (or of one file's, with a `start` of 0).
+pub fn read_track<R: Read + Seek>(raw: &mut R, start: u32, track: Track) -> io::Result<Vec<u8>> {
+    let span = track.sectors as usize;
+    let mut buf = vec![0; span * RAW_SECTOR_SIZE as usize];
+    raw.seek(SeekFrom::Start(start as u64 * RAW_SECTOR_SIZE))?;
+    raw.read_exact(&mut buf)?;
+    let mut sectors = Vec::new();
+    for sector in buf.as_chunks::<{ RAW_SECTOR_SIZE as usize }>().0 {
+        let sector = &sector[SUBHEADER_OFFSET as usize..][..SECTOR_SIZE];
+        if is_audio(sector, track.channel) {
+            sectors.extend_from_slice(sector);
+        }
+    }
+    Ok(sectors)
 }
 
 /// `NativeAudio_IsXAAudioSector`: a sector of audio of 4-bit samples on `channel`.
