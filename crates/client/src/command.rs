@@ -769,7 +769,7 @@ pub(crate) fn input_row() -> impl Bundle {
                     display: Display::Grid,
                     grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
                     column_gap: Val::Px(16.0),
-                    row_gap: Val::Px(4.0),
+                    row_gap: Val::Px(6.0),
                     padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                     ..default()
                 },
