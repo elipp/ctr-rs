@@ -3,6 +3,7 @@
 use super::commands::{copy_to_clipboard, net_info_text};
 use super::online::Online;
 use super::{ANNOUNCE_COLOR, Lobby, Member};
+use crate::console::console;
 use crate::maps;
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -184,8 +185,9 @@ pub(super) fn report(
             }
             Event::NetInfo(peers) => {
                 let text = net_info_text(&peers);
-                debug!("{text}");
-                toasts.write(Toast::new(text, 8000).size(16.0));
+                for line in text.lines() {
+                    console!("{line}");
+                }
             }
             Event::Failed(why) => {
                 warn!("lobby failed: {why}");
