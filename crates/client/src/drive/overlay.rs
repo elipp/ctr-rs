@@ -11,6 +11,34 @@ use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 #[derive(Component)]
 pub(super) struct Hud;
 
+/// Whether the development text of the race shows: the position and speed under the frame rate,
+/// and the boost reserves (`/debug hud`). The frame rate always shows, and the viewer's text does.
+#[derive(Resource)]
+pub(crate) struct DebugText(pub(crate) bool);
+
+impl Default for DebugText {
+    fn default() -> Self {
+        DebugText(true)
+    }
+}
+
+/// `/debug hud`.
+pub(crate) fn debug_text_command(
+    mut actions: MessageReader<crate::command::Action>,
+    mut shown: ResMut<DebugText>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+) {
+    for action in actions.read() {
+        if let crate::command::Action::DebugHud(setting) = action {
+            shown.0 = setting.unwrap_or(!shown.0);
+            toasts.write(crate::toast::Toast::new(
+                format!("Debug text {}", if shown.0 { "on" } else { "off" }),
+                2000,
+            ));
+        }
+    }
+}
+
 /// The wumpa count: the number after the "x".
 #[derive(Component)]
 pub(crate) struct WumpaHud;
@@ -160,9 +188,17 @@ pub(super) fn split_hud(
 }
 
 /// The boost reserves, always, up to 10000.
-pub(super) fn reserves_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Text, With<ReservesHud>>) {
+pub(super) fn reserves_hud(
+    sim: Res<crate::props::Sim>,
+    shown: Res<DebugText>,
+    mut text: Query<&mut Text, With<ReservesHud>>,
+) {
     for mut text in &mut text {
-        text.0 = format!("{}", sim.driver().reserves);
+        text.0 = if shown.0 {
+            format!("{}", sim.driver().reserves)
+        } else {
+            String::new()
+        };
     }
 }
 
@@ -171,6 +207,7 @@ pub(super) fn reserves_hud(sim: Res<crate::props::Sim>, mut text: Query<&mut Tex
 pub(super) fn hud(
     sim: Res<crate::props::Sim>,
     diagnostics: Res<DiagnosticsStore>,
+    shown: Res<DebugText>,
     mut text: Query<&mut Text, With<Hud>>,
 ) {
     let d = sim.driver();
@@ -184,6 +221,10 @@ pub(super) fn hud(
         _ => String::new(),
     };
     for mut text in &mut text {
+        if !shown.0 {
+            text.0 = fps.clone();
+            continue;
+        }
         text.0 = format!(
             "{fps}\npos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}",
             d.pos_curr.x >> 8,

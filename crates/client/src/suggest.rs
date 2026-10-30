@@ -191,6 +191,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "Switch between the race and the fly-through viewer",
             ),
             node(
+                "hud",
+                "The development text of the race (the frame rate stays); alone: toggle",
+                &[leaf("on", "Show it"), leaf("off", "Hide it")],
+            ),
+            node(
                 "crate",
                 "Crates",
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
