@@ -149,9 +149,24 @@ impl Howl {
     /// whoever plays them reads, [`xa`]). A disc without XA plays none.
     pub fn read(path: &Path) -> io::Result<Howl> {
         let (mut disc, header) = loader::disc::open_howl(path)?;
+        let xnf = loader::disc::open_xa(path).map(|(xnf, _)| xnf);
+        Howl::load(&mut disc, header, xnf.unwrap_or_default())
+    }
+
+    /// As [`Howl::read`], from a [`Source`](loader::source::Source).
+    pub fn read_from(source: &loader::source::Source) -> io::Result<Howl> {
+        let (mut disc, header) = source.howl()?;
+        Howl::load(&mut disc, header, source.xnf().unwrap_or_default())
+    }
+
+    fn load<R: io::Read + io::Seek>(
+        disc: &mut R,
+        header: loader::howl::Howl,
+        xnf: Xnf,
+    ) -> io::Result<Howl> {
         let mut packs = Vec::with_capacity(header.song_offsets.len());
         for song in 0..header.song_offsets.len() as u16 {
-            packs.extend(header.cseq(&mut disc, song)?);
+            packs.extend(header.cseq(disc, song)?);
         }
         let mut samples: Samples = vec![None; header.sample_sizes.len()];
         let used = header.other_fx.iter().map(|fx| fx.sample);
@@ -160,12 +175,10 @@ impl Howl {
             let Some(slot @ None) = samples.get_mut(sample as usize) else {
                 continue;
             };
-            *slot = header.adpcm(&mut disc, sample)?.map(Vec::into_boxed_slice);
+            *slot = header.adpcm(disc, sample)?.map(Vec::into_boxed_slice);
         }
         let mut howl = Howl::new(header.other_fx, header.engine_fx, packs, samples);
-        howl.xnf = loader::disc::open_xa(path)
-            .map(|(xnf, _)| xnf)
-            .unwrap_or_default();
+        howl.xnf = xnf;
         Ok(howl)
     }
 

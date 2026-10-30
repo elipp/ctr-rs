@@ -183,6 +183,8 @@ pub struct XaRequest {
     /// Which request it is: a track asked for after it takes its place.
     pub serial: u32,
     pub category: Category,
+    /// Its number in the category.
+    pub id: u16,
     pub track: Track,
 }
 
@@ -225,6 +227,7 @@ impl Howl {
         xa.request = Some(XaRequest {
             serial: xa.serial,
             category,
+            id,
             track,
         });
         xa.state = XaState::Playing;

@@ -54,28 +54,24 @@ pub fn level_of(name: &str) -> Option<LevelId> {
     TRACKS.iter().find(|t| t.0 == slug).map(|t| t.2)
 }
 
+/// The name of the map of the game's racing track `id` (`__builtin__dingo_canyon`).
+pub fn name_of(id: u32) -> Option<String> {
+    TRACKS
+        .iter()
+        .find(|t| t.2.0 == id)
+        .map(|t| format!("{PREFIX}{}", t.0))
+}
+
 /// What the game's track `id` is called, as a person says it (none for a battle arena).
 pub fn display_name(id: u32) -> Option<&'static str> {
     TRACKS.iter().find(|t| t.2.0 == id).map(|t| t.1)
 }
 
-/// The map of the game's racing track `id`, made from the disc image `original` without writing
-/// a file. None for a track that has no map.
-pub fn from_disc(original: &Path, id: u32) -> io::Result<Option<Map>> {
-    let Some(&(slug, _, level)) = TRACKS.iter().find(|t| t.2.0 == id) else {
-        return Ok(None);
-    };
-    let (mut disc, big) = open_bigfile(original)?;
-    let mut read = |file| big.read(&mut disc, BigIndex::level(level, Lod::OnePlayer, file).get());
-    let (lev, vram) = (read(LevFile::Lev)?, read(LevFile::Vram)?);
-    from_files(format!("{PREFIX}{slug}"), &lev, &vram).map(Some)
-}
-
-/// Saves a map made by [`from_disc`] in `dir`, if it has no file there yet. It is under another
-/// name until it is whole, so that a stop leaves no half map.
+/// Saves a map in `dir`, if it has no file there yet or one of an older
+/// version. It is under another name until it is whole, so that a stop leaves no half map.
 pub fn save(map: &Map, dir: &Path) -> io::Result<()> {
     let path = dir.join(format!("{}.ctrmap", map.name));
-    if path.exists() {
+    if Map::is_current(&path) {
         return Ok(());
     }
     std::fs::create_dir_all(dir)?;
@@ -91,7 +87,7 @@ fn file_name(slug: &str) -> String {
 fn missing(dir: &Path) -> Vec<&'static (&'static str, &'static str, LevelId)> {
     TRACKS
         .iter()
-        .filter(|t| !dir.join(file_name(t.0)).exists())
+        .filter(|t| !Map::is_current(&dir.join(file_name(t.0))))
         .collect()
 }
 
@@ -100,8 +96,8 @@ pub fn missing_count(dir: &Path) -> usize {
     missing(dir).len()
 }
 
-/// Makes the map of each racing track that `dir` has none of, from the disc image `original`,
-/// and returns how many. The image is not opened if there is nothing to make.
+/// Makes the map of each racing track that `dir` has none of (or only one of an older version),
+/// from the disc image `original`, and returns how many. The image is not opened if there is nothing to make.
 pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
     let missing = missing(dir);
     if missing.is_empty() {
