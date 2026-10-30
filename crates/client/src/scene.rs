@@ -35,11 +35,14 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
 #[derive(Resource, Default)]
 pub(crate) struct LevelBeforeRace(pub(crate) Option<u32>);
 
+/// How many frames the level and racer keys are ignored after a change.
+const SETTLE_FRAMES: u32 = 10;
+
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
 /// the previous racer. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
 /// on the same level.
-pub(crate) fn switch_level(world: &mut World) {
+pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
     let keys = world.resource::<ButtonInput<KeyCode>>();
     let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let step =
@@ -49,6 +52,13 @@ pub(crate) fn switch_level(world: &mut World) {
         &[KeyCode::BracketLeft, KeyCode::PageDown],
     );
     let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
+    // A scene that was just built is still taking its first commands (the HUD's pictures and
+    // cameras are set up over the next frames): another change would despawn what they are about
+    // to touch. The keys wait for it.
+    if *settling > 0 {
+        *settling -= 1;
+        (level_step, racer_step) = (0, 0);
+    }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)
@@ -102,6 +112,8 @@ pub(crate) fn switch_level(world: &mut World) {
         let at = cycle.iter().position(|&n| n == current).unwrap_or(0) as i32;
         cycle[(at + level_step).rem_euclid(cycle.len() as i32) as usize]
     });
+    // (A change by the lobby or by the race's end is not held up by this, but starts the wait.)
+    *settling = SETTLE_FRAMES;
     options.racer = (options.racer as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32;
     world.insert_resource(options);
     if racer_step != 0 {

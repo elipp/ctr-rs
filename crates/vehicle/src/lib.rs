@@ -518,6 +518,15 @@ pub struct Driver {
     /// `instSelf->matrix.t` as `DRIVER_FUNC_TRANSLATE_MATRIX` last left it ([`baked::inst_matrix`]
     /// then): where the other karts find this one, until its next translate.
     pub inst_pos: [i32; 3],
+    /// `instSelf->flags & SPLIT_LINE`: the kart is in mud or water, and is drawn cut at the water
+    /// line (y 0). Set by the ground under it, cleared once it is above the line ([`force::update_wake`]).
+    pub split_line: bool,
+    /// `wakeScale`: nonzero while the wake model (`wakeInst`) shows under the kart ([`force::update_wake`]).
+    pub wake_scale: i16,
+    /// The splash particles `DRIVER_FUNC_TRANSLATE_MATRIX` spawned this tick (the wake's).
+    pub wake_particles: u8,
+    /// The clods of mud this tick threw up (`VehEmitter_MudSplash`, [`sparks::mud`]).
+    pub mud_particles: u8,
     pub button_used_to_start_drift: i16,
 
     pub rot_curr_x: i16,

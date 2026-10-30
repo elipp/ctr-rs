@@ -293,7 +293,8 @@ fn shine(
         if let Some(main) = main
             && target.is_none_or(|t| t.0 != main)
         {
-            commands.entity(entity).insert(UiTargetCamera(main));
+            // (The scene may have been replaced since this frame's glows were seen.)
+            commands.entity(entity).try_insert(UiTargetCamera(main));
         }
         let up = match shine {
             Shine::Weapon => armed,
