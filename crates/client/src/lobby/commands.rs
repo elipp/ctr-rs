@@ -145,6 +145,7 @@ pub(super) fn run(
             | Action::DebugSetWumpa(_)
             | Action::DebugStall(_)
             | Action::DebugViewer
+            | Action::DebugHud(_)
             | Action::DebugLevel(_)
             | Action::DebugCrateBias(_)
             | Action::DebugFx(_)

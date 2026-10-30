@@ -73,7 +73,7 @@ const fn shine_at(scale: f32) -> Vec2 {
 }
 
 /// How much smaller the wumpa fruit's glow is than the HUD's glow at the plain scale.
-const WUMPA_SHINE_SCALE: f32 = 0.5;
+const WUMPA_SHINE_SCALE: f32 = 0.7;
 
 /// The glow's size on screen, for the weapon or the fruit.
 fn shine_size(shine: &Shine) -> Vec2 {

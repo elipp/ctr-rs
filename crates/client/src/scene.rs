@@ -224,6 +224,16 @@ pub(crate) fn switch_mode(
                 None => {
                     options.driving = !options.driving;
                     world.insert_resource(options);
+                    // The viewer starts where the race's camera was.
+                    if !options.driving
+                        && let Some(at) = world
+                            .query_filtered::<&GlobalTransform, With<drive::ChaseCamera>>()
+                            .iter(world)
+                            .next()
+                            .map(|g| g.compute_transform())
+                    {
+                        world.insert_resource(ViewerStart(at));
+                    }
                     if options.driving { "Race" } else { "Viewer" }
                 }
                 Some(setting) => {
@@ -415,6 +425,7 @@ pub(crate) fn setup(
     driving: Option<Res<drive::Drive>>,
     wheel_icons: Res<WheelIcons>,
     smoke_icon: Res<crate::SmokeIcon>,
+    start: Option<Res<ViewerStart>>,
 ) {
     let level = &track.0;
     let data = mesh::level_mesh(
@@ -630,21 +641,34 @@ pub(crate) fn setup(
                 default(),
             );
         }
+        let (transform, yaw, pitch) = match start {
+            Some(start) => {
+                let (yaw, pitch, _) = start.0.rotation.to_euler(EulerRot::YXZ);
+                commands.remove_resource::<ViewerStart>();
+                (start.0, yaw, pitch)
+            }
+            None => (Transform::from_xyz(x, y + 3.0, z + 6.0), 0.0, -0.3),
+        };
         commands.spawn((
             Camera3d::default(),
             Camera {
                 clear_color: sky_clear,
                 ..default()
             },
-            Transform::from_xyz(x, y + 3.0, z + 6.0),
+            transform,
             FlyCamera {
-                yaw: 0.0,
-                pitch: -0.3,
+                yaw,
+                pitch,
                 speed: 10.0,
             },
         ));
     }
 }
+
+/// Where the viewer's camera starts, when `/debug viewer` leaves a race: where the chase camera
+/// was. Taken by `setup`.
+#[derive(Resource)]
+pub(crate) struct ViewerStart(Transform);
 
 /// Marks what belongs to the kart on the grid, to despawn it for another racer (and not the level).
 #[derive(Component)]
