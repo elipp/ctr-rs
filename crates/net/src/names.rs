@@ -1,4 +1,5 @@
-//! Nicknames: how they are cleaned, and what the players are called when two are alike.
+//! Nicknames and chat lines: how they are cleaned, and what the players are called when two are
+//! alike.
 
 use std::time::Duration;
 
@@ -20,6 +21,21 @@ pub fn clean_nick(nick: &str) -> String {
         .trim()
         .chars()
         .take(NICK_MAX)
+        .collect()
+}
+
+/// The most characters of a chat line.
+pub const CHAT_MAX: usize = 200;
+
+/// A chat line as it is sent: trimmed, without control characters, and at most [`CHAT_MAX`]
+/// characters. Empty means there is nothing to say.
+pub fn clean_chat(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(CHAT_MAX)
         .collect()
 }
 
@@ -58,6 +74,14 @@ mod tests {
         assert_eq!(clean_nick("a\u{7}b"), "ab");
         assert_eq!(clean_nick("ääääääääääääää").chars().count(), NICK_MAX);
         assert_eq!(clean_nick("   "), "");
+    }
+
+    #[test]
+    fn chat_lines_are_trimmed_and_cut() {
+        assert_eq!(clean_chat("  gg wp\n"), "gg wp");
+        assert_eq!(clean_chat("a\u{1b}[31mb"), "a[31mb");
+        assert_eq!(clean_chat(" \t "), "");
+        assert_eq!(clean_chat(&"ä".repeat(500)).chars().count(), CHAT_MAX);
     }
 
     #[test]

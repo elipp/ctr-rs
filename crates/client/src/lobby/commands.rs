@@ -45,6 +45,7 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::PurgeCache if lobby.online.is_some() => "Not during a race",
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
+        Action::Say(_) if !lobby.is_open() => "Not in a lobby to talk to (/lobby create)",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -138,6 +139,10 @@ pub(super) fn run(
                     format!("Rollback toasts {}", if *on { "on" } else { "off" }),
                     2000,
                 ));
+                continue;
+            }
+            Action::Say(text) => {
+                lobby.say(text);
                 continue;
             }
             // (Not the lobby's.)

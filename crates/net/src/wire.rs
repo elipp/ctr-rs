@@ -131,6 +131,13 @@ pub enum Message {
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
+    /// Reliable, client to host: a line for the lobby to read, said by the client. (See
+    /// `clean_chat`; the host cleans it again.)
+    Say { text: String },
+    /// Reliable, host to each client, the one who said it too: `from` (an endpoint id) said
+    /// `text`. The host puts it together, so that everyone reads the lines in the same order and
+    /// no client can speak for another.
+    Chat { from: [u8; 32], text: String },
     /// Reliable, host to each client, between races: the level to drive on (`hash` as in
     /// [`Message::Start`]). A client that joins is sent the latest.
     Track { track: u32, hash: u64 },
@@ -376,6 +383,13 @@ mod tests {
             },
             Message::Announce {
                 text: "Restarting in 5".into(),
+            },
+            Message::Say {
+                text: "gg".into(),
+            },
+            Message::Chat {
+                from: [5; 32],
+                text: "ääh!".into(),
             },
             Message::Track {
                 track: 0x8000_0001,
