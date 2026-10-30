@@ -24,7 +24,6 @@ use net::Ticket;
 
 use crate::console::{Console, Log, PAGE};
 use crate::suggest::Menu;
-use crate::toast::Toast;
 
 /// Something a player can ask for with a `/command`. The command only sends it; what it does is
 /// up to whoever handles it (the lobby's are in `lobby.rs`).
@@ -72,6 +71,8 @@ pub enum Action {
     SetConfig(crate::config::Setting),
     /// Toast the version of this build (`version.rs`).
     Version,
+    /// Say that to everyone in the lobby: a line that is not a `/command`.
+    Say(String),
 }
 
 /// How the level's mesh is built (`/debug level`).
@@ -703,7 +704,6 @@ fn submit(
     mut line: ResMut<CommandLine>,
     mut actions: MessageWriter<Action>,
     mut logs: MessageWriter<Log>,
-    mut toasts: MessageWriter<Toast>,
     mut console: ResMut<Console>,
 ) {
     if !std::mem::take(&mut line.entered) {
@@ -718,7 +718,7 @@ fn submit(
     }
     line.remember(&text);
     let Some(command) = text.strip_prefix('/') else {
-        chat(&text, &mut toasts);
+        actions.write(Action::Say(text));
         return;
     };
     match Action::parse(command) {
@@ -729,12 +729,6 @@ fn submit(
             logs.write(Log::error(why));
         }
     }
-}
-
-/// A chat message, for the others in the lobby to read. (Stub: nothing is sent yet.)
-fn chat(message: &str, toasts: &mut MessageWriter<Toast>) {
-    debug!("(chat, not sent) {message}");
-    toasts.write(Toast::new("Chat is not implemented yet", 2000));
 }
 
 /// The colours of the suggestions: the one picked, the others, and what they do.
@@ -779,6 +773,8 @@ pub(crate) fn input_row() -> impl Bundle {
             (
                 CommandText,
                 Text::new("> "),
+                // (As in the console: what is typed wraps too.)
+                TextLayout::linebreak(LineBreak::WordOrCharacter),
                 font.clone(),
                 Node {
                     padding: UiRect::all(Val::Px(8.0)),

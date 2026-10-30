@@ -116,7 +116,7 @@ pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>
     images.add(image)
 }
 
-fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Handle<Image> {
+pub(crate) fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Handle<Image> {
     atlas_image(portrait_atlas(&pack_icons(), vram), images)
 }
 
