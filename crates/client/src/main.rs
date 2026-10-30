@@ -174,6 +174,10 @@ fn main() {
         )
         .add_systems(
             PostUpdate,
+            props::follow_reflections.before(TransformSystems::Propagate),
+        )
+        .add_systems(
+            PostUpdate,
             kart::hide_parts
                 .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         )

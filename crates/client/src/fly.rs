@@ -18,7 +18,7 @@ pub(crate) fn fly(
     mut cameras: Query<(&mut Transform, &mut FlyCamera)>,
 ) {
     for (mut transform, mut cam) in &mut cameras {
-        if buttons.pressed(MouseButton::Right) {
+        if buttons.any_pressed([MouseButton::Left, MouseButton::Right]) {
             cam.yaw -= motion.delta.x * 0.003;
             cam.pitch = (cam.pitch - motion.delta.y * 0.003).clamp(-1.55, 1.55);
         }

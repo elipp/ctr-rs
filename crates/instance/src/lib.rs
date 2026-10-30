@@ -10,6 +10,7 @@
 
 pub mod hazard;
 pub mod pickup;
+pub mod reflect;
 
 use loader::dram::DramFile;
 use loader::lev::{InstDef, Level, PosRot, SVec3};

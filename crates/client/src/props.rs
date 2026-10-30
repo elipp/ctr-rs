@@ -272,6 +272,45 @@ fn crate_fixup(level: LevelId, n: usize) -> i16 {
     }
 }
 
+/// The reflection of a crate or a fruit that stands on ice (`instance::reflect`): the model
+/// again, mirrored in the split line, which follows the body of the object.
+#[derive(Component)]
+pub struct Reflection {
+    body: Entity,
+    /// The split line, in world units.
+    plane: f32,
+}
+
+/// How much of the light a reflection keeps: the game shifts the colour right by `specLightX`
+/// (1) and masks it with `reflectionRGBA` (0x7f7f7f), half of it, in the console's gamma.
+const REFLECTION_LIGHT: f32 = 0.5;
+
+/// Puts each reflection where its object's body is seen in the split line: the position and
+/// the turn mirrored, and the height of the model flipped (a negative scale also turns the faces
+/// round, which Bevy draws right). The body's own scale (a crate that grows back) is kept.
+pub fn follow_reflections(
+    bodies: Query<(&Transform, &Visibility), Without<Reflection>>,
+    mut reflections: Query<(&Reflection, &mut Transform, &mut Visibility)>,
+) {
+    for (reflection, mut transform, mut visibility) in &mut reflections {
+        let Ok((body, body_visibility)) = bodies.get(reflection.body) else {
+            continue;
+        };
+        let q = body.rotation;
+        *transform = Transform {
+            translation: Vec3::new(
+                body.translation.x,
+                2.0 * reflection.plane - body.translation.y,
+                body.translation.z,
+            ),
+            // A mirror in the XZ plane turns the axis of a rotation to (-x, y, -z).
+            rotation: Quat::from_xyzw(-q.x, q.y, -q.z, q.w),
+            scale: body.scale * Vec3::new(1.0, -1.0, 1.0),
+        };
+        visibility.set_if_neq(*body_visibility);
+    }
+}
+
 /// A placed crate (its index among `Objects::crates`).
 #[derive(Component)]
 pub struct CrateBody(pub usize);
@@ -524,6 +563,11 @@ pub fn spawn(
         if convex {
             mesh::wind_outward(&mut data.parts);
         }
+        // (A crate or a fruit on ice; as if there were one player.)
+        let mirror = matches!(by_instance.get(&n), Some(Slot::Crate(_) | Slot::Fruit(_)))
+            .then(|| instance::reflect::split_line(level, inst))
+            .flatten()
+            .map(|line| (line as f32 * SCALE, data.parts.clone()));
         let mut atlas = Image::new(
             bevy::render::render_resource::Extent3d {
                 width: data.atlas.width as u32,
@@ -654,6 +698,34 @@ pub fn spawn(
         } else {
             &base
         };
+        if let (Some((plane, parts)), Some(body)) = (mirror, parent) {
+            let dim = REFLECTION_LIGHT;
+            let dimmed = StandardMaterial {
+                base_color: Color::srgb(dim, dim, dim),
+                // The mirror turns every face round, and the draw does not turn the culling
+                // with it: the faces that look away from the camera are the ones to drop.
+                cull_mode: Some(bevy::render::render_resource::Face::Front),
+                ..base.clone()
+            };
+            let root = commands
+                .spawn((
+                    Reflection { body, plane },
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            spawn_parts(
+                parts,
+                &dimmed,
+                Transform::default(),
+                Some(root),
+                commands,
+                meshes,
+                materials,
+                subtract_materials,
+                0,
+            );
+        }
         let parts = spawn_parts(
             data.parts,
             base,
