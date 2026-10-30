@@ -1,3 +1,11 @@
+//! `BIGFILE.BIG`: a flat archive of every level, model and texture file of the game.
+//!
+//! Layout: an `i32` (the file's start sector, filled in at runtime by the game), the entry
+//! count, then `(sector offset, size)` pairs. The archive is not compressed, and neither are its
+//! entries: [`BigFile::read`] returns the bytes as stored, seeking straight to
+//! `start + sector_offset` and reading `size` bytes. (The files inside have their own formats,
+//! like the delta-compressed animation frames of a model, but nothing here inflates anything.)
+
 use std::io::{self, Read, Seek, SeekFrom};
 
 use crate::disc::USER_DATA_SIZE;
