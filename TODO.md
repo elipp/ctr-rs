@@ -3,11 +3,6 @@
 - the shield bubble should look egg-shaped, not a squashed half-sphere: check the model's proportions and the pulse/grow scales (`vehicle::shield`, `client/srcshield.rs`)
 - the shield bomb's `numTimesMissileLaunched` stat
 - the bombs and missiles look for mines oldest first (`weapon::fly`), but a mine's thread goes to the front of the `MINE` bucket, so `RB_Hazard_CollideWithBucket` finds the newest first, as the hazards do (`race::set_off_mines`)
-- blizzard bluff: reflection of weapon crates on ice
-
-## Maps
-- a title for a map (the game's names are in the language file, which a patch does not change): `Map.name` is the patch's file name
-- a map's music and reverb: it has none of its own, and gets no song and the reverb of the levels past the table. `ctr-map import` knows the track it was made over, whose song pack and reverb it could keep
 
 ## Sound
 The sound effects and the engines play through the `howl` crate: an SPU as `ctr-native` emulates it (24 voices, ADPCM decoded as they play, the Gaussian interpolation, the ADSR envelopes) under the HOWL channels, so sounds can be changed and stopped as they play and the ones that loop do (`OtherFX_Modify`, `OtherFX_Stop1/2`, `OtherFX_RecycleNew/Mute`, `EngineAudio_*`, `howl_PauseAudio`). Our kart's ground, skid, wall-rub and turbo loops play (`vehicle::emitter_sound`, `turbo`), and the boost, the mask grab's whistle, the voice lines (`howl::voiceline`: a grunt, or a line of XA), the pause menu's, the lap's, the win's and the item roulette's. So do the level's objects (crates, wumpa fruit, armadillos, fireballs, minecarts, barrels: `instance::Tick::sounds` and `loops`) and the weapons (launches, flight loops, explosions, detonations, a TNT on a head), heard from where they are. The sounds that echo (a kart in a tunnel) go through the SPU's reverb (`howl::reverb`), in the level's mode (`Howl::set_level_reverb`). The music is the level's song pack (`howl::music`): its song from the green light on, a mask's while ours is out, quieter for "FINAL LAP!" and 20 faster after it, as the states of the race say (`howl::state`). The XA (`loader::xa`: `XA/ENG.XNF`, the tracks' sectors and their ADPCM; `howl::xa`: the CD's input of the SPU and the native path of `CDSYS`) plays the voice lines and the "FINAL LAP!" and race-end jingles, which the states wait for; the viewer reads the tracks on a thread. `cargo run -p howl --example render` renders sounds to a WAV (`r2` before them for a level's reverb, `m0` for a level's song, `xm6` for an XA). What is left, in order:
@@ -23,9 +18,6 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 
 ## Tech debt
 - a kart is many entities: the body (the root, with `KartMotion`), the wheels, shadow, smoke, sparks, tire marks, mask and shield, which sit at the top level (they draw in world or camera space) and are tied to it by `Attached(kart)` (despawn, and `kart::hide_parts` for a kart that is not drawn). The wheels are tied by their own `kart` field, as `reap` despawns whatever is `Attached` to a kart without a slot, which the grid display's is. One parent with an identity transform that holds the body and every part would let Bevy's visibility and despawning do all of it, and give a single thing to spawn and to hide (`kart::KartBuilder::spawn` and the `spawn` of each part)
-
-## To check
-- the heat shimmer of the flame jets (`heat.rs`, `heat.wgsl`, `Torch_Main`): it is a post-processing pass over the main camera's picture, so it warps what is in front of a lens too (retail's lens only covers what was drawn before it, by depth) (it looks right in the game)
 
 ## Tick oracle coverage
 `vehicle/tests/tick.rs` compares the drivers with ctr-native, and has the real `LInC` of the wumpa fruit only (`has_linc` in `tests/reference/tick.c`); the other models' hitboxes give 1 on both sides. What would still change kart positions:
@@ -45,7 +37,6 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 
 ## Confirmed
 
-- With three players, changing track causes DESYNC (sometimes!!)
 - **Bevy reports a command on a despawned entity (heisenbug).** Seen on a peer after the host quit
   mid-race (2026-10-26), not reproduced since:
   `bevy_ecs::error::handler: Encountered an error in command <name>: Entity despawned: The entity
@@ -54,7 +45,7 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
   invalid relationship has been removed.` The names are hidden: run with `--features debug`
   (forwards to `bevy/debug`) to get the command and the component. Not fixed: turning the
   `despawn()` calls into `try_despawn()` would only silence it.
-- other karts' bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
+- other karts' shield bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 
 ## Maybe
 
@@ -74,3 +65,4 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 ## Not a bug?
 - /race restart doesn't include any pending clients. Instead, one must /race stop and /race start
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
+- Custom maps don't have music
