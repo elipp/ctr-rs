@@ -21,6 +21,7 @@ mod command;
 mod confetti;
 mod crash;
 mod config;
+mod console;
 mod disc;
 mod drive;
 mod exhaust;
@@ -122,7 +123,12 @@ fn main() {
     // See the executor below: without a render thread, `CTR_EXECUTOR=multi` keeps the defaults.
     let single_threaded = std::env::var("CTR_EXECUTOR").as_deref() != Ok("multi");
     let mut app = App::new();
-    let plugins = DefaultPlugins.set(WindowPlugin {
+    let plugins = DefaultPlugins
+        .set(bevy::log::LogPlugin {
+            custom_layer: console::layer,
+            ..default()
+        })
+        .set(WindowPlugin {
         primary_window: Some(Window {
             title: format!(
                 "ctr-rs: {}, {}",
@@ -242,6 +248,7 @@ fn main() {
         drive::DrivePlugin,
         sound::SoundPlugin,
         lobby::LobbyPlugin,
+        console::ConsolePlugin,
         command::CommandPlugin,
         pause::PausePlugin,
         fx::FxPlugin,

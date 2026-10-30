@@ -6,6 +6,10 @@
 //! Down pick one, Tab puts it in the line, and Return does too, sending the line if nothing can
 //! follow it. Otherwise Up and Down go through the lines sent before.
 //!
+//! The line is edited as in a shell: the arrows, Home and End move the cursor, and Ctrl A, E, B, F
+//! (Alt B, F by a word), Ctrl W, U, K, D, H and Alt D delete. Page
+//! Up and Down scroll the console (`console.rs`), which the line is the bottom row of.
+//!
 //! While it is open it takes the keyboard: the keys are cleared from the game's input every frame,
 //! so that typing does not drive the kart.
 
@@ -15,8 +19,10 @@ use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy::text::TextBackgroundColor;
 use net::Ticket;
 
+use crate::console::{Console, Log, PAGE};
 use crate::suggest::Menu;
 use crate::toast::Toast;
 
@@ -364,9 +370,15 @@ pub(crate) struct CommandLine {
     draft: String,
     /// The suggestion picked, of those listed for the text.
     selected: usize,
+    /// Where the cursor is in the text: a byte offset, always at a character.
+    cursor: usize,
 }
 
 impl CommandLine {
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+
     /// Up: the line sent before the one shown.
     fn older(&mut self) {
         let index = match self.browsing {
@@ -378,27 +390,109 @@ impl CommandLine {
                 self.history.len() - 1
             }
         };
+        self.set_text(self.history[index].clone());
         self.browsing = Some(index);
-        self.text = self.history[index].clone();
     }
 
     /// Down: the line sent after the one shown, and past the last, what was being typed.
     fn newer(&mut self) {
         let Some(i) = self.browsing else { return };
         if i + 1 < self.history.len() {
+            self.set_text(self.history[i + 1].clone());
             self.browsing = Some(i + 1);
-            self.text = self.history[i + 1].clone();
         } else {
-            self.browsing = None;
-            self.text = std::mem::take(&mut self.draft);
+            let draft = std::mem::take(&mut self.draft);
+            self.set_text(draft);
         }
     }
 
     /// Typing edits what is shown, which is the text from then on.
-    fn edit(&mut self, f: impl FnOnce(&mut String)) {
+    fn touch(&mut self) {
         self.browsing = None;
         self.selected = 0;
-        f(&mut self.text);
+    }
+
+    /// Replaces the text, with the cursor after it.
+    fn set_text(&mut self, text: String) {
+        self.touch();
+        self.cursor = text.len();
+        self.text = text;
+    }
+
+    /// Types at the cursor.
+    fn insert(&mut self, typed: &str) {
+        self.touch();
+        self.text.insert_str(self.cursor, typed);
+        self.cursor += typed.len();
+    }
+
+    /// Takes out that part of the text, leaving the cursor where it began.
+    fn remove(&mut self, range: std::ops::Range<usize>) {
+        self.touch();
+        self.cursor = range.start;
+        self.text.drain(range);
+    }
+
+    /// The offset of the character before the cursor.
+    fn before(&self) -> usize {
+        self.text[..self.cursor]
+            .chars()
+            .next_back()
+            .map_or(0, |c| self.cursor - c.len_utf8())
+    }
+
+    /// The offset of the character after the cursor.
+    fn after(&self) -> usize {
+        self.text[self.cursor..]
+            .chars()
+            .next()
+            .map_or(self.cursor, |c| self.cursor + c.len_utf8())
+    }
+
+    /// The start of the word before the cursor (words are what spaces separate).
+    fn word_start(&self) -> usize {
+        let head = self.text[..self.cursor].trim_end();
+        head.rfind(char::is_whitespace)
+            .map_or(0, |i| i + head[i..].chars().next().map_or(1, char::len_utf8))
+    }
+
+    /// The end of the word after the cursor.
+    fn word_end(&self) -> usize {
+        let tail = &self.text[self.cursor..];
+        let skipped = tail.len() - tail.trim_start().len();
+        let word = &tail[skipped..];
+        self.cursor + skipped + word.find(char::is_whitespace).unwrap_or(word.len())
+    }
+
+    /// Backspace.
+    fn backspace(&mut self) {
+        self.remove(self.before()..self.cursor);
+    }
+
+    /// Delete.
+    fn delete(&mut self) {
+        self.remove(self.cursor..self.after());
+    }
+
+    /// Shell keys with Ctrl or Alt held: true if `code` was one of them.
+    fn shortcut(&mut self, code: KeyCode, ctrl: bool, alt: bool) -> bool {
+        let end = self.text.len();
+        match code {
+            KeyCode::KeyA if ctrl => self.cursor = 0,
+            KeyCode::KeyE if ctrl => self.cursor = end,
+            KeyCode::KeyB if ctrl => self.cursor = self.before(),
+            KeyCode::KeyF if ctrl => self.cursor = self.after(),
+            KeyCode::KeyB if alt => self.cursor = self.word_start(),
+            KeyCode::KeyF if alt => self.cursor = self.word_end(),
+            KeyCode::KeyH if ctrl => self.backspace(),
+            KeyCode::KeyD if ctrl => self.delete(),
+            KeyCode::KeyD if alt => self.remove(self.cursor..self.word_end()),
+            KeyCode::KeyW if ctrl => self.remove(self.word_start()..self.cursor),
+            KeyCode::KeyU if ctrl => self.remove(0..self.cursor),
+            KeyCode::KeyK if ctrl => self.remove(self.cursor..end),
+            _ => return false,
+        }
+        true
     }
 
     /// The suggestions for the text, unless it is a line of the history being browsed.
@@ -436,7 +530,7 @@ impl CommandLine {
         else {
             return false;
         };
-        self.edit(|t| *t = line);
+        self.set_text(line);
         done
     }
 
@@ -453,8 +547,25 @@ impl CommandLine {
     }
 }
 
+/// The line on screen: `> `, the text before the cursor, ...
 #[derive(Component)]
-struct CommandText;
+pub(crate) struct CommandText;
+
+/// ... the character under the cursor (a blank at the end), blinking ...
+#[derive(Component)]
+struct CursorSpan;
+
+/// ... and the rest.
+#[derive(Component)]
+struct AfterSpan;
+
+/// The line and the suggestions over it, which are shown only while the line is open.
+#[derive(Component)]
+struct InputRow;
+
+/// The suggestions over the line.
+#[derive(Component)]
+struct Suggestions;
 
 pub struct CommandPlugin;
 
@@ -467,29 +578,45 @@ impl Plugin for CommandPlugin {
     }
 }
 
+/// Which of the modifier keys are held.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Modifiers {
+    ctrl: bool,
+    alt: bool,
+    /// Cmd on a Mac, the Windows key elsewhere.
+    sup: bool,
+}
+
 /// Reads the typing while the line is open, and keeps it from the game.
 pub(crate) fn capture(
     mut line: ResMut<CommandLine>,
+    mut console: ResMut<Console>,
+    time: Res<Time<Real>>,
     mut events: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    mut command: Local<bool>,
+    mut held: Local<Modifiers>,
 ) {
-    // The modifier is followed here: `keys` is wiped below, so it cannot say whether Cmd is held.
+    // The modifiers are followed here: `keys` is wiped below, so it cannot say what is held.
     let mut typed = Vec::new();
     for event in events.read() {
-        if matches!(event.logical_key, Key::Super | Key::Control) {
-            *command = event.state == ButtonState::Pressed;
+        let down = event.state == ButtonState::Pressed;
+        match event.logical_key {
+            Key::Control => held.ctrl = down,
+            Key::Alt => held.alt = down,
+            Key::Super => held.sup = down,
+            _ => {}
         }
-        typed.push(event.clone());
+        typed.push((event.clone(), *held));
     }
     if !line.open {
         // (What was typed before it opened is not for it.)
         return;
     }
-    for event in &typed {
+    for (event, Modifiers { ctrl, alt, sup }) in &typed {
         if event.state != ButtonState::Pressed {
             continue;
         }
+        let (ctrl, alt, sup) = (*ctrl, *alt, *sup);
         match &event.logical_key {
             Key::Enter => {
                 // A suggestion picked goes in first; the line is sent if that ends it.
@@ -503,6 +630,7 @@ pub(crate) fn capture(
             Key::Escape => {
                 line.open = false;
                 line.text.clear();
+                line.cursor = 0;
                 line.browsing = None;
                 line.draft.clear();
                 line.selected = 0;
@@ -517,22 +645,45 @@ pub(crate) fn capture(
                     line.newer();
                 }
             }
-            Key::Backspace => line.edit(|t| {
-                t.pop();
-            }),
-            _ if *command => {
-                if event.key_code == KeyCode::KeyV {
-                    match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
-                        Ok(text) => {
-                            line.edit(|t| t.extend(text.chars().filter(|c| !c.is_control())))
-                        }
-                        Err(e) => error!("could not read the clipboard: {e}"),
-                    }
+            Key::ArrowLeft => {
+                line.cursor = if sup {
+                    0
+                } else if ctrl || alt {
+                    line.word_start()
+                } else {
+                    line.before()
                 }
             }
+            Key::ArrowRight => {
+                line.cursor = if sup {
+                    line.text.len()
+                } else if ctrl || alt {
+                    line.word_end()
+                } else {
+                    line.after()
+                }
+            }
+            Key::Home => line.cursor = 0,
+            Key::End => line.cursor = line.text.len(),
+            Key::PageUp => console.scroll_by(PAGE, time.elapsed_secs()),
+            Key::PageDown => console.scroll_by(-PAGE, time.elapsed_secs()),
+            Key::Backspace if alt => {
+                let range = line.word_start()..line.cursor;
+                line.remove(range);
+            }
+            Key::Backspace => line.backspace(),
+            Key::Delete => line.delete(),
             _ => {
-                if let Some(text) = &event.text {
-                    line.edit(|t| t.extend(text.chars().filter(|c| !c.is_control())));
+                if (ctrl || sup) && event.key_code == KeyCode::KeyV {
+                    match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                        Ok(text) => line.insert(&text.replace(|c: char| c.is_control(), "")),
+                        Err(e) => error!("could not read the clipboard: {e}"),
+                    }
+                } else if (ctrl || alt) && line.shortcut(event.key_code, ctrl, alt) {
+                    // (Done.)
+                } else if let Some(text) = event.text.as_ref().filter(|_| !sup) {
+                    // (Ctrl A and the like are control characters, which are dropped.)
+                    line.insert(&text.replace(|c: char| c.is_control(), ""));
                 }
             }
         }
@@ -551,12 +702,16 @@ fn open(keys: Res<ButtonInput<KeyCode>>, mut line: ResMut<CommandLine>) {
 fn submit(
     mut line: ResMut<CommandLine>,
     mut actions: MessageWriter<Action>,
+    mut logs: MessageWriter<Log>,
     mut toasts: MessageWriter<Toast>,
+    mut console: ResMut<Console>,
 ) {
     if !std::mem::take(&mut line.entered) {
         return;
     }
     line.open = false;
+    line.cursor = 0;
+    console.scroll_to_end();
     let text = std::mem::take(&mut line.text);
     if text.is_empty() {
         return;
@@ -571,7 +726,7 @@ fn submit(
             actions.write(action);
         }
         Err(why) => {
-            toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+            logs.write(Log::error(why));
         }
     }
 }
@@ -587,82 +742,127 @@ const PICKED: Color = Color::srgb(1.0, 0.75, 0.3);
 const OPTION: Color = Color::srgb(0.9, 0.9, 0.9);
 const ABOUT: Color = Color::srgb(0.6, 0.6, 0.6);
 
-/// The line and its suggestions, at the bottom of the screen.
-#[derive(Component)]
-struct CommandBox;
+/// The line and its suggestions, for the console to put at the bottom of its window.
+pub(crate) fn input_row() -> impl Bundle {
+    let font = TextFont {
+        font_size: FONT_SIZE.into(),
+        ..default()
+    };
+    (
+        InputRow,
+        Node {
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+        Visibility::Hidden,
+        children![
+            (
+                Suggestions,
+                // Over the log, right above the line.
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Percent(100.0),
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    // Two columns, the names and what they do: a row's two texts line up with the
+                    // others', and what they do wraps in its own column.
+                    display: Display::Grid,
+                    grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
+                    column_gap: Val::Px(16.0),
+                    row_gap: Val::Px(6.0),
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::BLACK),
+                Visibility::Hidden,
+            ),
+            (
+                CommandText,
+                Text::new("> "),
+                font.clone(),
+                Node {
+                    padding: UiRect::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::BLACK),
+                children![
+                    (
+                        CursorSpan,
+                        TextSpan::new(" "),
+                        font.clone(),
+                        TextBackgroundColor(Color::NONE),
+                    ),
+                    (AfterSpan, TextSpan::new(""), font),
+                ],
+            ),
+        ],
+    )
+}
 
-/// The suggestions over the line.
-#[derive(Component)]
-struct Suggestions;
+/// Sets a string, leaving it (and so what watches it for changes) alone if it is the same.
+fn assign(to: &mut String, from: &str) {
+    if to != from {
+        to.clear();
+        to.push_str(from);
+    }
+}
 
 /// The line on screen while it is open, and over it what can be typed next.
 fn show(
     line: Res<CommandLine>,
     time: Res<Time<Real>>,
     mut commands: Commands,
-    boxes: Query<Entity, With<CommandBox>>,
+    mut rows: Query<&mut Visibility, With<InputRow>>,
     suggestions: Query<Entity, With<Suggestions>>,
-    mut texts: Query<&mut Text, With<CommandText>>,
+    mut prompt: Query<&mut Text, With<CommandText>>,
+    mut cursor: Query<
+        (&mut TextSpan, &mut TextColor, &mut TextBackgroundColor),
+        With<CursorSpan>,
+    >,
+    mut after: Query<&mut TextSpan, (With<AfterSpan>, Without<CursorSpan>)>,
     // What the suggestions were made for: the text and the one picked.
     mut shown: Local<Option<(String, usize)>>,
 ) {
-    if !line.open {
-        for entity in &boxes {
-            commands.entity(entity).despawn();
+    for mut row in &mut rows {
+        let want = if line.open {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *row != want {
+            *row = want;
         }
+    }
+    if !line.open {
         *shown = None;
         return;
     }
-    let cursor = if ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2) {
-        "_"
-    } else {
-        " "
-    };
-    let text = format!("> {}{cursor}", line.text);
+    let (before, rest) = line.text.split_at(line.cursor);
+    let under = rest.chars().next().map_or(" ".to_string(), String::from);
+    let blink_on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
+    for mut text in &mut prompt {
+        assign(&mut text.0, &format!("> {before}"));
+    }
+    for (mut span, mut color, mut background) in &mut cursor {
+        assign(&mut span.0, &under);
+        let (ink, back) = if blink_on {
+            (Color::BLACK, Color::WHITE)
+        } else {
+            (Color::WHITE, Color::NONE)
+        };
+        if color.0 != ink {
+            color.0 = ink;
+        }
+        if background.0 != back {
+            background.0 = back;
+        }
+    }
+    for mut span in &mut after {
+        assign(&mut span.0, rest.chars().next().map_or("", |c| &rest[c.len_utf8()..]));
+    }
     let Ok(list) = suggestions.single() else {
-        commands.spawn((
-            CommandBox,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(40.0),
-                left: Val::Px(20.0),
-                right: Val::Px(20.0),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            // Over every other piece of the HUD.
-            GlobalZIndex(i32::MAX),
-            children![
-                (
-                    Suggestions,
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::BLACK.with_alpha(0.75)),
-                    Visibility::Hidden,
-                ),
-                (
-                    CommandText,
-                    Text::new(text),
-                    TextFont {
-                        font_size: FONT_SIZE.into(),
-                        ..default()
-                    },
-                    Node {
-                        padding: UiRect::all(Val::Px(8.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::BLACK),
-                ),
-            ],
-        ));
         return;
     };
-    for mut shown_text in &mut texts {
-        shown_text.0 = text.clone();
-    }
     let key = (line.text.clone(), line.selected);
     if shown.as_ref() == Some(&key) {
         return;
@@ -675,42 +875,34 @@ fn show(
     } else {
         Visibility::Inherited
     });
+    let font = TextFont {
+        font_size: FONT_SIZE.into(),
+        ..default()
+    };
     for (name, about, color) in rows {
         commands.spawn((
             Text::new(name),
-            TextFont {
-                font_size: FONT_SIZE.into(),
-                ..default()
-            },
+            font.clone(),
             TextColor(color),
             ChildOf(list),
-            children![(
-                TextSpan::new(about),
-                TextFont {
-                    font_size: FONT_SIZE.into(),
-                    ..default()
-                },
-                TextColor(ABOUT),
-            )],
+        ));
+        commands.spawn((
+            Text::new(about),
+            font.clone(),
+            TextColor(ABOUT),
+            ChildOf(list),
         ));
     }
 }
 
 /// The rows of suggestions for the line: each option, the picked one in its own colour, and
-/// what else can be typed there; the names padded to line up what they do.
+/// what else can be typed there; and what they do.
 fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
     let Some(menu) = line.menu() else {
         return Vec::new();
     };
     let picked = line.selection().map(|(_, index)| index);
-    let width = menu
-        .options
-        .iter()
-        .map(|o| o.name.chars().count())
-        .chain(menu.arg.map(|(arg, _)| arg.chars().count()))
-        .max()
-        .unwrap_or(0);
-    let row = |name: &str, about: &str, color| (format!("{name:width$}   "), about.into(), color);
+    let row = |name: &str, about: &str, color| (name.to_string(), about.to_string(), color);
     let mut rows: Vec<_> = menu
         .options
         .iter()
@@ -866,6 +1058,72 @@ mod tests {
             Action::parse("debug set weapon 4"),
             Ok(Action::DebugAddWeapon(4))
         ));
+    }
+
+    fn typed(text: &str) -> CommandLine {
+        let mut line = CommandLine::default();
+        line.insert(text);
+        line
+    }
+
+    #[test]
+    fn typing_goes_in_at_the_cursor() {
+        let mut line = typed("/lobby create");
+        line.shortcut(KeyCode::KeyA, true, false);
+        line.insert("x");
+        assert_eq!(line.text, "x/lobby create");
+        assert_eq!(line.cursor, 1);
+        line.shortcut(KeyCode::KeyE, true, false);
+        line.backspace();
+        assert_eq!(line.text, "x/lobby creat");
+        line.shortcut(KeyCode::KeyB, true, false);
+        line.delete();
+        assert_eq!(line.text, "x/lobby crea");
+        // Characters of more than a byte are moved over whole.
+        let mut line = typed("aäö");
+        line.cursor = line.before();
+        assert_eq!(line.cursor, 3);
+        line.backspace();
+        assert_eq!(line.text, "aö");
+        line.delete();
+        assert_eq!(line.text, "a");
+    }
+
+    #[test]
+    fn words_are_deleted() {
+        let mut line = typed("net smoothing  replay");
+        line.shortcut(KeyCode::KeyW, true, false);
+        assert_eq!(line.text, "net smoothing  ");
+        line.shortcut(KeyCode::KeyW, true, false);
+        assert_eq!(line.text, "net ");
+        line.insert("smoothing  ");
+        line.shortcut(KeyCode::KeyB, false, true);
+        assert_eq!(line.cursor, 4);
+        line.shortcut(KeyCode::KeyF, false, true);
+        assert_eq!(line.cursor, 13);
+        line.cursor = 4;
+        line.shortcut(KeyCode::KeyD, false, true);
+        assert_eq!(line.text, "net   ");
+        line.shortcut(KeyCode::KeyA, true, false);
+        line.shortcut(KeyCode::KeyK, true, false);
+        assert_eq!(line.text, "");
+        line.insert("abc");
+        line.cursor = 1;
+        line.shortcut(KeyCode::KeyU, true, false);
+        assert_eq!(line.text, "bc");
+        // Keys that are not for it are not taken.
+        assert!(!line.shortcut(KeyCode::KeyQ, true, false));
+        assert!(!line.shortcut(KeyCode::KeyA, false, true));
+    }
+
+    #[test]
+    fn the_history_puts_the_cursor_at_the_end() {
+        let mut line = typed("draft");
+        line.remember("/version");
+        line.older();
+        assert_eq!((line.text.as_str(), line.cursor), ("/version", 8));
+        line.newer();
+        assert_eq!((line.text.as_str(), line.cursor), ("draft", 5));
     }
 
     #[test]
