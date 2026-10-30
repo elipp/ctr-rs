@@ -47,6 +47,9 @@ pub enum Action {
     /// (Debug) Switch between the race and the fly-through viewer with the collision probe
     /// (`main.rs`).
     DebugViewer,
+    /// (Debug) Show or hide the development text of the race (position, speed, reserves), or
+    /// toggle it (`None`). The frame rate stays.
+    DebugHud(Option<bool>),
     /// (Debug) Change how the level is built, or toast how it is (`None`).
     DebugLevel(Option<MeshSetting>),
     /// (Debug) Set the depth bias of the crates, or toast it (`None`).
@@ -87,7 +90,7 @@ const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | spectate [add
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | hud [on|off] | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 
@@ -306,6 +309,12 @@ impl Action {
                 )),
             },
             "viewer" => Ok(Action::DebugViewer),
+            "hud" => match rest {
+                "" => Ok(Action::DebugHud(None)),
+                "on" => Ok(Action::DebugHud(Some(true))),
+                "off" => Ok(Action::DebugHud(Some(false))),
+                _ => Err(DEBUG_USAGE.into()),
+            },
             "level" => Action::level(rest),
             "fx" => Action::fx(rest).map(Action::DebugFx),
             "crate" => {

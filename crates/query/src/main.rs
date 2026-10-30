@@ -642,6 +642,9 @@ fn instances(l: &Loaded, name: Option<&str>, at: Option<[i32; 3]>, within: i32) 
         for line in hitbox_lines(&l.level, i) {
             println!("      {line}");
         }
+        if let Some(split) = instance::reflect::split_line(&l.level, &l.level.instances[i]) {
+            println!("      reflected in the split line at {split}");
+        }
     }
 }
 

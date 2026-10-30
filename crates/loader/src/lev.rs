@@ -327,6 +327,9 @@ pub struct Level {
     pub scenery: Scenery,
     pub config_flags: u32,
     pub jump_vertical_speed_cap: u8,
+    /// `splitLines`: the heights, in level units, of the surfaces that reflect (ice) or hide
+    /// what is under them (mud, water); a quad block picks one with `REFLECT_SPLIT_LINE_0` or `_1`.
+    pub split_lines: [i16; 2],
 }
 
 /// Bounds-checked little-endian reads from the payload.
@@ -418,6 +421,7 @@ const LEVEL_CLEAR_COLORS: usize = 0x160;
 const LEVEL_RESTART_COUNT: usize = 0x148;
 const LEVEL_RESTART_PTR: usize = 0x14c;
 const LEVEL_JUMP_SPEED_CAP: usize = 0x18c;
+const LEVEL_SPLIT_LINES: usize = 0x184;
 
 const QUAD_BLOCK_SIZE: usize = 0x5c;
 const VERTEX_SIZE: usize = 0x10;
@@ -794,6 +798,7 @@ impl Level {
             scenery: Scenery::parse(&file.data, verts_at, num_verts)?,
             config_flags: p.u32(LEVEL_CONFIG_FLAGS)?,
             jump_vertical_speed_cap: p.u8(LEVEL_JUMP_SPEED_CAP)?,
+            split_lines: [p.i16(LEVEL_SPLIT_LINES)?, p.i16(LEVEL_SPLIT_LINES + 2)?],
         })
     }
 }
