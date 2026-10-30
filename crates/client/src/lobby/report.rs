@@ -3,7 +3,7 @@
 use super::commands::{copy_to_clipboard, net_info_text};
 use super::online::Online;
 use super::{ANNOUNCE_COLOR, Lobby, Member};
-use crate::console::console;
+use crate::console::{Log, console};
 use crate::maps;
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -17,6 +17,7 @@ pub(super) fn report(
     mut lobby: ResMut<Lobby>,
     level: Res<crate::LevelNumber>,
     mut toasts: MessageWriter<Toast>,
+    mut logs: MessageWriter<Log>,
 ) {
     let Some(session) = &lobby.session else {
         return;
@@ -37,18 +38,19 @@ pub(super) fn report(
     let mut left = Vec::new();
     let mut gones = Vec::new();
     let mut lefts = Vec::new();
+    let mut chats = Vec::new();
     for event in session.poll() {
         match event {
             Event::Open(ticket) => {
-                info!(
-                    "lobby open. To join it, type this in another viewer:\n/lobby join {ticket}\nType /race start to start the race once the others have joined."
-                );
                 copy_to_clipboard(format!("/lobby join {ticket}"));
                 // The players who join drive on the level we are on.
                 lobby.set_track(level.0);
                 toasts.write(
-                    Toast::new("Lobby created! Join command copied".to_string(), 3000)
-                        .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+                    Toast::new(
+                        "Lobby created! Join command copied to clipboard".to_string(),
+                        3000,
+                    )
+                    .color(Color::linear_rgb(0.4, 1.0, 0.4)),
                 );
             }
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
@@ -60,6 +62,7 @@ pub(super) fn report(
             Event::Announce(text) => {
                 toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
             }
+            Event::Chat { from, text } => chats.push((from, text)),
             // (A race decides its own level.)
             Event::Track { track, hash } if lobby.online.is_none() => {
                 if !map::is_map_id(track) && !maps::cycle().contains(&track) {
@@ -318,6 +321,10 @@ pub(super) fn report(
     // The race is named after the nicknames when it starts, and again when one changes.
     if new_race || nicks_told {
         lobby.refresh_labels();
+    }
+    // (After the lobby: a player who joined and spoke at once is known by now.)
+    for (from, text) in chats {
+        logs.write(lobby.chat_line(from, &text));
     }
     let mut answers = Vec::new();
     if let Some(online) = &mut lobby.online {

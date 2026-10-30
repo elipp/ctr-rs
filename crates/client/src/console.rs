@@ -9,9 +9,9 @@
 //!   else, including code outside the ECS and other threads. Every `warn!` and `error!` is shown
 //!   as well, with the name of where it came from; the rest of what is logged is not.
 //!
-//! The window fades away when nothing has been said for a while, and opening the command line (or
-//! a new line) brings it back. While the line is open the mouse wheel and Page Up and Down scroll
-//! back through up to [`CAPACITY`] lines.
+//! Each line fades away on its own a while after it was said, and the background sooner. The
+//! ones that are gone are only seen by scrolling back: while the command line is open, the mouse
+//! wheel and Page Up and Down scroll through up to [`CAPACITY`] lines.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -27,6 +27,8 @@ use bevy::log::{BoxedLayer, Level};
 use bevy::prelude::*;
 
 use crate::command::{self, CommandLine};
+use crate::leaderboard::{Portraits, load_portraits};
+use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
 
 /// The target of what `console!` logs.
 pub const TARGET: &str = "console";
@@ -47,6 +49,10 @@ const VISIBLE: usize = 24;
 pub const PAGE: i32 = 8;
 
 const FONT_SIZE: f32 = 18.0;
+
+/// A portrait before a line, as large as the text is tall. (Retail draws them on pixels of 2 by
+/// 3.)
+const ICON_SIZE: Vec2 = Vec2::new(25.0, 22.0);
 const LOG_HEIGHT: f32 = 300.0;
 const BACKGROUND_ALPHA: f32 = 0.25;
 
@@ -75,6 +81,10 @@ pub struct Piece {
 #[derive(Message, Clone, Debug, Default)]
 pub struct Log {
     pub pieces: Vec<Piece>,
+    /// A portrait before the line: the character (`CHARACTERS` order) it is of.
+    pub icon: Option<u8>,
+    /// When (`Time<Real>`) it was added to the console.
+    at: f32,
 }
 
 impl Log {
@@ -91,6 +101,12 @@ impl Log {
     /// An error: a line in red.
     pub fn error(text: impl Into<String>) -> Log {
         Log::colored(text, ERROR_COLOR)
+    }
+
+    /// Puts the portrait of that character before the line.
+    pub fn icon(mut self, character: u8) -> Log {
+        self.icon = Some(character);
+        self
     }
 
     /// Adds a piece after the others.
@@ -114,8 +130,8 @@ pub struct Console {
     version: u32,
     /// When (`Time<Real>`) something last happened that the window should be up for.
     active_at: f32,
-    /// How opaque the window is, 0 to 1.
-    alpha: f32,
+    /// When the lines were last brought back whole: by opening the command line or scrolling.
+    revealed_at: f32,
 }
 
 impl Default for Console {
@@ -125,13 +141,14 @@ impl Default for Console {
             scroll: 0,
             version: 0,
             active_at: f32::NEG_INFINITY,
-            alpha: 0.0,
+            revealed_at: f32::NEG_INFINITY,
         }
     }
 }
 
 impl Console {
-    fn push(&mut self, line: Log, now: f32) {
+    fn push(&mut self, mut line: Log, now: f32) {
+        line.at = now;
         if self.lines.len() == CAPACITY {
             self.lines.pop_front();
         }
@@ -142,6 +159,13 @@ impl Console {
         }
         self.version += 1;
         self.active_at = now;
+    }
+
+    /// How opaque a line that was added at `born` is at `now`: each fades on its own once its
+    /// time is up. The ones that have are back while the view is scrolled back, and go together
+    /// as soon as that ends.
+    fn text_alpha(&self, born: f32, now: f32) -> f32 {
+        opacity(now - born, HOLD_SECONDS).max(opacity(now - self.revealed_at, 0.0))
     }
 
     /// Scrolls to older lines (positive) or newer (negative).
@@ -231,6 +255,14 @@ struct LogArea;
 #[derive(Component)]
 struct Ink(Color);
 
+/// When the line a piece of text (or a portrait) is of was added to the console.
+#[derive(Component)]
+struct Born(f32);
+
+/// A portrait before a line.
+#[derive(Component)]
+struct ChatIcon;
+
 fn spawn(mut commands: Commands) {
     commands.spawn((
         ConsoleWindow,
@@ -319,16 +351,24 @@ fn fade(
     time: Res<Time<Real>>,
     mut windows: Query<&mut Visibility, With<ConsoleWindow>>,
     mut areas: Query<&mut BackgroundColor, With<LogArea>>,
-    mut texts: Query<(&Ink, &mut TextColor)>,
+    mut texts: Query<(&Ink, &Born, &mut TextColor)>,
+    mut icons: Query<(&Born, &mut ImageNode), With<ChatIcon>>,
 ) {
     let now = time.elapsed_secs();
-    if line.is_open() {
+    // While it is open the window stays, and while looking back nothing fades.
+    if line.is_open() || console.scroll > 0 {
         console.active_at = now;
     }
+    if console.scroll > 0 {
+        console.revealed_at = now;
+    }
     let idle = now - console.active_at;
-    let alpha = opacity(idle, HOLD_SECONDS);
-    console.alpha = alpha;
-    let shown = if alpha > 0.0 {
+    let background = opacity(idle, BACKGROUND_HOLD_SECONDS);
+    let newest = console
+        .lines
+        .back()
+        .map_or(0.0, |newest| console.text_alpha(newest.at, now));
+    let shown = if background > 0.0 || newest > 0.0 {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -338,16 +378,22 @@ fn fade(
             *visibility = shown;
         }
     }
-    for mut background in &mut areas {
-        let faded = Color::BLACK.with_alpha(BACKGROUND_ALPHA * opacity(idle, BACKGROUND_HOLD_SECONDS));
-        if background.0 != faded {
-            background.0 = faded;
+    for mut area in &mut areas {
+        let faded = Color::BLACK.with_alpha(BACKGROUND_ALPHA * background);
+        if area.0 != faded {
+            area.0 = faded;
         }
     }
-    for (ink, mut color) in &mut texts {
-        let faded = faded(ink.0, alpha);
+    for (ink, born, mut color) in &mut texts {
+        let faded = faded(ink.0, console.text_alpha(born.0, now));
         if color.0 != faded {
             color.0 = faded;
+        }
+    }
+    for (born, mut icon) in &mut icons {
+        let faded = Color::WHITE.with_alpha(console.text_alpha(born.0, now));
+        if icon.color != faded {
+            icon.color = faded;
         }
     }
 }
@@ -361,8 +407,13 @@ fn rebuild(
     console: Res<Console>,
     areas: Query<Entity, With<LogArea>>,
     mut commands: Commands,
+    textures: Res<crate::Textures>,
+    mut images: ResMut<Assets<Image>>,
+    portraits: Option<Res<Portraits>>,
+    time: Res<Time<Real>>,
     mut shown: Local<Option<(u32, usize)>>,
 ) {
+    let now = time.elapsed_secs();
     let key = (console.version, console.scroll);
     if *shown == Some(key) {
         return;
@@ -374,17 +425,33 @@ fn rebuild(
     commands.entity(area).despawn_children();
     let end = console.lines.len() - console.scroll;
     let start = end.saturating_sub(VISIBLE);
+    // The portraits are made when the first line needs them (the lobby's lists may have by then).
+    let mut atlas = portraits.map(|p| p.0.clone());
     for line in console.lines.range(start..end) {
-        spawn_line(&mut commands, area, line, console.alpha);
+        if line.icon.is_some() && atlas.is_none() {
+            let handle = load_portraits(&textures.vram, &mut images);
+            commands.insert_resource(Portraits(handle.clone()));
+            atlas = Some(handle);
+        }
+        spawn_line(&mut commands, area, line, console.text_alpha(line.at, now), atlas.as_ref());
     }
     if console.scroll > 0 {
-        let footer = Log::colored(format!("-- {} newer --", console.scroll), DIM_COLOR);
-        spawn_line(&mut commands, area, &footer, console.alpha);
+        let mut footer = Log::colored(format!("-- {} newer --", console.scroll), DIM_COLOR);
+        // (Never fades.)
+        footer.at = f32::INFINITY;
+        spawn_line(&mut commands, area, &footer, 1.0, None);
     }
 }
 
-/// A line of text in the area: the first piece is the text, and the others spans of it.
-fn spawn_line(commands: &mut Commands, area: Entity, line: &Log, alpha: f32) {
+/// A line in the area: the first piece is the text, and the others spans of it. With a portrait
+/// the two are side by side, and the text wraps in what is left of the width.
+fn spawn_line(
+    commands: &mut Commands,
+    area: Entity,
+    line: &Log,
+    alpha: f32,
+    portraits: Option<&Handle<Image>>,
+) {
     let font = TextFont {
         font_size: FONT_SIZE.into(),
         ..default()
@@ -393,26 +460,71 @@ fn spawn_line(commands: &mut Commands, area: Entity, line: &Log, alpha: f32) {
     let Some(first) = pieces.next() else {
         return;
     };
-    commands
-        .spawn((
-            Text::new(first.text.clone()),
-            font.clone(),
-            TextColor(faded(first.color, alpha)),
-            Ink(first.color),
-            // The area is clipped, not squeezed.
+    // (The area is clipped, not squeezed: nothing shrinks.)
+    let mut node = Node {
+        flex_shrink: 0.0,
+        ..default()
+    };
+    let mut parent = area;
+    if let Some((character, portraits)) = line.icon.zip(portraits) {
+        let character = (character as usize).min(ICON_IDS.len() - 1);
+        parent = commands
+            .spawn((
+                Node {
+                    flex_shrink: 0.0,
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                },
+                ChildOf(area),
+            ))
+            .id();
+        commands.spawn((
+            ChatIcon,
+            Born(line.at),
+            ImageNode::new(portraits.clone())
+                .with_rect(Rect::new(
+                    0.0,
+                    (character * HEIGHT) as f32,
+                    WIDTH as f32,
+                    ((character + 1) * HEIGHT) as f32,
+                ))
+                .with_mode(NodeImageMode::Stretch)
+                .with_color(Color::WHITE.with_alpha(alpha)),
             Node {
+                width: Val::Px(ICON_SIZE.x),
+                height: Val::Px(ICON_SIZE.y),
                 flex_shrink: 0.0,
                 ..default()
             },
-            ChildOf(area),
+            ChildOf(parent),
+        ));
+        node = Node {
+            flex_grow: 1.0,
+            flex_basis: Val::Px(0.0),
+            min_width: Val::Px(0.0),
+            ..default()
+        };
+    }
+    commands
+        .spawn((
+            Text::new(first.text.clone()),
+            // A word too long for a line is broken, not run out of the window.
+            TextLayout::linebreak(LineBreak::WordOrCharacter),
+            font.clone(),
+            TextColor(faded(first.color, alpha)),
+            Ink(first.color),
+            Born(line.at),
+            node,
+            ChildOf(parent),
         ))
-        .with_children(|parent| {
+        .with_children(|text| {
             for piece in pieces {
-                parent.spawn((
+                text.spawn((
                     TextSpan::new(piece.text.clone()),
                     font.clone(),
                     TextColor(faded(piece.color, alpha)),
                     Ink(piece.color),
+                    Born(line.at),
                 ));
             }
         });
@@ -462,6 +574,24 @@ mod tests {
         assert_eq!(console.lines[0].pieces[0].text, "5");
         console.scroll_by(i32::MAX, 0.0);
         assert_eq!(console.scroll, CAPACITY - 1);
+    }
+
+    #[test]
+    fn each_line_fades_on_its_own_unless_revealed() {
+        let mut console = console_of(0);
+        console.push(Log::new("old"), 0.0);
+        console.push(Log::new("new"), 8.0);
+        let (old, new) = (console.lines[0].at, console.lines[1].at);
+        let now = HOLD_SECONDS + FADE_SECONDS + 0.5;
+        assert_eq!(console.text_alpha(old, now), 0.0);
+        assert_eq!(console.text_alpha(new, now), 1.0);
+        // Scrolling back brings the old one back, until that is over.
+        console.revealed_at = now;
+        assert_eq!(console.text_alpha(old, now), 1.0);
+        assert!((console.text_alpha(old, now + FADE_SECONDS / 2.0) - 0.5).abs() < 1e-6);
+        assert_eq!(console.text_alpha(old, now + FADE_SECONDS), 0.0);
+        // (The newer one is not held back by it.)
+        assert_eq!(console.text_alpha(new, now + FADE_SECONDS), 1.0);
     }
 
     #[test]

@@ -1,19 +1,14 @@
-//! "FREE DRIVE MODE" in the top left corner, in the small font and a friendly yellow, while no
-//! race is on. In a lobby the portraits of the players (`lobby_list.rs`) are in that corner, and
-//! the text moves to their right.
+//! "FREE DRIVE" in the top right corner, in the small font and a friendly yellow, while no race
+//! is on. (The top left is the lobby's, with the portraits of the players: `lobby_list.rs`.)
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
-use render::portraits::WIDTH;
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::leaderboard::ICON_X;
 
-/// Where the text is, in pixels of retail's screen: from the left edge, or in a lobby from the
-/// right of the portraits, and down from the top.
-const LEFT: f32 = 8.0;
-const LEFT_IN_LOBBY: f32 = ICON_X + WIDTH as f32 + 4.0;
+/// Where the text is, in pixels of retail's screen: from the right edge, and down from the top.
+const RIGHT: f32 = 8.0;
 const TOP: f32 = 6.0;
 
 /// A texel of the text, in logical pixels.
@@ -40,16 +35,15 @@ fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     menu: Res<crate::pause::PauseMenu>,
-    lobby: Res<crate::lobby::Lobby>,
-    mut text: Query<(&mut Node, &mut Visibility), With<FreeDrive>>,
+    mut text: Query<&mut Visibility, With<FreeDrive>>,
 ) {
-    let Ok((mut node, mut visibility)) = text.single_mut() else {
+    let Ok(mut visibility) = text.single_mut() else {
         // The first frame, or of a new level (which took the nodes away).
         commands.spawn((
             FreeDrive,
             Node {
                 position_type: PositionType::Absolute,
-                left: hud::x(LEFT),
+                right: hud::x(RIGHT),
                 top: hud::y(TOP),
                 ..default()
             },
@@ -59,14 +53,6 @@ fn show(
         ));
         return;
     };
-    let left = hud::x(if lobby.members().next().is_some() {
-        LEFT_IN_LOBBY
-    } else {
-        LEFT
-    });
-    if node.left != left {
-        node.left = left;
-    }
     let shown = sim.race.laps == race::FREE_DRIVE_LAPS && !menu.open;
     visibility.set_if_neq(if shown {
         Visibility::Inherited

@@ -17,7 +17,7 @@ use crate::transfers::{Transfer, Transfers, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
     ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Tick, Ticket,
-    clean_nick,
+    RateLimit, clean_chat, clean_nick,
 };
 
 /// How often the packets go out, once per game tick. They are sent whether or not there is
@@ -103,6 +103,8 @@ pub(crate) async fn run(
     let mut guests: Vec<Guest> = Vec::new();
     let mut host_connection: Option<Connection> = None;
     let mut hellos = 0;
+    // The host: how fast each guest has been talking.
+    let mut talkers: HashMap<EndpointId, RateLimit> = HashMap::new();
     // The host: the players of the race that left it. They are not told of in the lobby, and go from
     // `guests` when the next race starts.
     let mut gone: HashSet<EndpointId> = HashSet::new();
@@ -266,6 +268,17 @@ pub(crate) async fn run(
                         let _ = send_reliably(&guest.connection, &Message::Announce { text: text.clone() }).await;
                     }
                     io.event(Event::Announce(text));
+                },
+                Command::Say(text) => if !text.is_empty() {
+                    if matches!(role, Role::Host) {
+                        let chat = Message::Chat { from: *me.as_bytes(), text: text.clone() };
+                        for guest in &guests {
+                            let _ = send_reliably(&guest.connection, &chat).await;
+                        }
+                        io.event(Event::Chat { from: me, text });
+                    } else if let Some(connection) = &host_connection {
+                        let _ = send_reliably(connection, &Message::Say { text }).await;
+                    }
                 },
                 Command::Track { track, hash } => if matches!(role, Role::Host) && !racing {
                     lobby_track = Some((track, hash));
@@ -457,6 +470,35 @@ pub(crate) async fn run(
                     Message::Announce { text } => {
                         if from == host_id && !matches!(role, Role::Host) {
                             io.event(Event::Announce(text));
+                        }
+                    }
+                    // Only a guest of the lobby speaks, and the host says who it was.
+                    // (One who talks too fast is not heard.)
+                    Message::Say { text } => if matches!(role, Role::Host)
+                        && guests.iter().any(|g| g.id == from)
+                        && talkers
+                            .entry(from)
+                            .or_insert_with(|| RateLimit::chat_for_host(Instant::now()))
+                            .allow(Instant::now())
+                    {
+                        let text = clean_chat(&text);
+                        if !text.is_empty() {
+                            let chat = Message::Chat { from: *from.as_bytes(), text: text.clone() };
+                            for guest in &guests {
+                                let _ = send_reliably(&guest.connection, &chat).await;
+                            }
+                            io.event(Event::Chat { from, text });
+                        }
+                    },
+                    Message::Chat { from: speaker, text } => {
+                        if from == host_id
+                            && !matches!(role, Role::Host)
+                            && let Ok(speaker) = EndpointId::from_bytes(&speaker)
+                        {
+                            let text = clean_chat(&text);
+                            if !text.is_empty() {
+                                io.event(Event::Chat { from: speaker, text });
+                            }
                         }
                     }
                     Message::Track { track, hash } => {

@@ -22,6 +22,7 @@
 use bevy::prelude::*;
 use net::{EndpointId, Pad, Session, Ticket};
 
+use crate::console::Log;
 use crate::maps;
 
 use commands::run;
@@ -65,6 +66,8 @@ pub struct Lobby {
     /// The level the host picked to drive on between races (`Event::Track`) that we have not gone
     /// to yet: we lack the map, or the level switch has not come to it.
     pending_track: Option<(u32, u64)>,
+    /// How fast we have been talking.
+    chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
     pub online: Option<Online>,
@@ -183,6 +186,41 @@ impl Lobby {
         if let Some(session) = &self.session {
             session.set_nickname(nick);
         }
+    }
+
+    /// Says that to everyone in the lobby, us too: false if we are talking too fast for it (see
+    /// `net::RateLimit`; the host holds us to the same).
+    pub fn say(&mut self, text: &str) -> bool {
+        if net::clean_chat(text).is_empty() {
+            return true;
+        }
+        if !self.chat_limit.allow(std::time::Instant::now()) {
+            return false;
+        }
+        if let Some(session) = &self.session {
+            session.say(text);
+        }
+        true
+    }
+
+    /// What a player said as a line of the console: the portrait of its character, its name in
+    /// the colour of the character, and the text. A player the lobby does not know (it has left,
+    /// or only watches: there is no character then) has no portrait.
+    fn chat_line(&self, from: EndpointId, text: &str) -> Log {
+        let key = from.fmt_short().to_string();
+        let said = |name: &str, color| {
+            Log::colored(name.to_string(), color).then(format!(": {text}"), Color::WHITE)
+        };
+        if let Some(member) = self.roster.iter().find(|m| m.key == key) {
+            let character = (member.character as usize).min(crate::CHARACTER_COLORS.len() - 1);
+            return said(&member.label, crate::CHARACTER_COLORS[character]).icon(character as u8);
+        }
+        let name = self
+            .watchers
+            .iter()
+            .find(|(_, k)| *k == key)
+            .map_or(key.as_str(), |(name, _)| name.as_str());
+        said(name, crate::console::DIM_COLOR)
     }
 
     /// Names the slots of the race after the nicknames known now.
