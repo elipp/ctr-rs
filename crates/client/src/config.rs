@@ -8,7 +8,7 @@
 //! * `/config set fps-max <number>`: the most frames a second to draw, 0 for no limit (the
 //!   default); the sim has its own clock, see `frame.rs`
 //!
-//! * `/config set volume music|fx <0-100>`: how loud the music and the effects (the voices too)
+//! * `/config set volume music|sfx <0-100>`: how loud the music and the effects (the voices too)
 //!   are, in percent of the game's own volumes (100 at first)
 //!
 //! The last character driven is kept too, and is the one the client starts with.
@@ -127,14 +127,14 @@ pub enum Setting {
     /// 0 for no limit.
     FpsMax(u32),
     /// 0 to 100.
-    VolumeFx(u8),
+    VolumeSfx(u8),
     VolumeMusic(u8),
 }
 
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
-    /config set volume music|fx <0-100>";
+    /config set volume music|sfx <0-100>";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
@@ -159,7 +159,7 @@ impl Setting {
                 "Usage: /config set fps-max <frames a second, 0 for no limit>".to_string()
             }),
             "volume" => {
-                const USAGE: &str = "Usage: /config set volume music|fx <0-100>";
+                const USAGE: &str = "Usage: /config set volume music|sfx <0-100>";
                 let (kind, percent) = word(value);
                 let percent: u8 = percent
                     .parse()
@@ -168,7 +168,7 @@ impl Setting {
                     .ok_or_else(|| USAGE.to_string())?;
                 match kind {
                     "music" => Ok(Setting::VolumeMusic(percent)),
-                    "fx" => Ok(Setting::VolumeFx(percent)),
+                    "sfx" => Ok(Setting::VolumeSfx(percent)),
                     _ => Err(USAGE.into()),
                 }
             }
@@ -263,8 +263,8 @@ fn apply(
                 };
                 toasts.write(Toast::new(text, 2000));
             }
-            Setting::VolumeFx(percent) | Setting::VolumeMusic(percent) => {
-                let name = if matches!(setting, Setting::VolumeFx(_)) {
+            Setting::VolumeSfx(percent) | Setting::VolumeMusic(percent) => {
+                let name = if matches!(setting, Setting::VolumeSfx(_)) {
                     config.volume_fx = *percent;
                     "Effects"
                 } else {

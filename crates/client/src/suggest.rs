@@ -104,7 +104,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "How loud the music and the effects are",
                     &[
                         takes("music", "The music's volume, 100 being the game's", "<0-100>"),
-                        takes("fx", "The effects' and voices' volume, 100 being the game's", "<0-100>"),
+                        takes("sfx", "The effects' and voices' volume, 100 being the game's", "<0-100>"),
                     ],
                 ),
             ],
