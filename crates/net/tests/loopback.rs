@@ -361,3 +361,52 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
         });
     }
 }
+
+#[test]
+fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
+    let host = net::host(3, "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
+    wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the first peer", |e| {
+        matches!(e, Event::PeerJoined(_))
+    });
+    let second = net::join(ticket.unwrap(), 11, "", BUILD);
+    wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the second peer", |e| {
+        matches!(e, Event::PeerJoined(_))
+    });
+    std::thread::sleep(Duration::from_secs(8));
+    host.start(5, 0);
+    for session in [&host, &first, &second] {
+        wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
+        session.ready();
+    }
+    for session in [&host, &first, &second] {
+        wait_for(session, "tick 0", |e| matches!(e, Event::Go));
+    }
+
+    drop(second);
+    for session in [&host, &first] {
+        wait_for(session, "the departure", |e| {
+            matches!(e, Event::Gone { slot: 2 })
+        });
+    }
+
+    // The race ends: the lobby is the host and the guest who stayed.
+    host.over();
+    first.over();
+    for session in [&host, &first] {
+        wait_for(session, "the lobby after the race", |e| match e {
+            Event::Lobby { players, .. } => players.len() == 2,
+            _ => false,
+        });
+    }
+}
