@@ -63,6 +63,7 @@ mod sky;
 mod slide_meter;
 mod sound;
 mod spider;
+mod submerge;
 mod subtract;
 mod suggest;
 mod toast;

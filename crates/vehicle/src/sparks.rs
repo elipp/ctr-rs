@@ -81,6 +81,26 @@ pub struct Spray {
     pub matrix: crate::Matrix,
 }
 
+/// `VEH_EMITTER_MUD_MIN_SPEED`
+const MUD_MIN_SPEED: i32 = 5 * 0x100;
+/// `VEH_EMITTER_MUD_SPLASH_LANDING_COUNT` and `_NORMAL_COUNT`
+const MUD_LANDING_CLODS: u8 = 10;
+const MUD_CLODS: u8 = 1;
+
+/// `VehEmitter_MudSplash`: how many clods a kart in mud throws up this tick: one while it is
+/// fast enough, and a burst as it lands.
+pub fn mud(d: &Driver) -> u8 {
+    use crate::terrain::terrain_type;
+    if (d.speed as i32).abs() <= MUD_MIN_SPEED || d.current_terrain != terrain_type::MUD {
+        return 0;
+    }
+    if d.actions_flag_set & actions::STARTED_TOUCH_GROUND != 0 {
+        MUD_LANDING_CLODS
+    } else {
+        MUD_CLODS
+    }
+}
+
 /// The spray of the ground under a kart that is fast enough, on the ground, and not held back:
 /// from the rear tires, and from all four while drifting. `timer` is the frame counter.
 pub fn spray(d: &Driver, timer: u32) -> Option<Spray> {

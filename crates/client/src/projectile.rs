@@ -37,6 +37,8 @@ use crate::{DEPTH_BIAS_PER_ORDER, KART_LAYER, Textures, spawn_parts};
 pub struct ProjectileModels {
     models: Models,
     built: Option<[Built; 13]>,
+    /// The level's wake, if it has one (`None`: not looked for yet).
+    wake: Option<Option<Built>>,
 }
 
 impl ProjectileModels {
@@ -44,6 +46,7 @@ impl ProjectileModels {
         ProjectileModels {
             models,
             built: None,
+            wake: None,
         }
     }
 }
@@ -71,6 +74,7 @@ const BEAKER_RED: usize = 9;
 const SHIELD_BLUE: usize = 10;
 const SHIELD_GREEN: usize = 11;
 const CLOUD: usize = 12;
+const WAKE: usize = 13;
 
 /// A shield bomb's `scale` and `alphaScale` (0x400 each, `RB_ShieldDark_ThTick_Grow`): 0x1000 is
 /// the model's size, and an alpha at which it is gone.
@@ -317,7 +321,42 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
                 layer: 0,
             })
     });
-    projectiles.chain(mines).chain(clouds).collect()
+    // The wake of a kart in the water: on the water line under it, turned with its heading. It
+    // is drawn with the kart (ours over the track, like the kart), and told from the others by
+    // the next bit under the clouds'.
+    let wakes = sim
+        .race
+        .karts
+        .iter()
+        .enumerate()
+        .filter(|(_, kart)| kart.driver.wake_scale != 0)
+        .map(|(slot, kart)| {
+            let d = &kart.driver;
+            let (sin, cos) = (d.angle as f32 * std::f32::consts::TAU / 4096.0).sin_cos();
+            let fixed = |v: f32| (v * 4096.0).round() as i16;
+            let heading = vehicle::Matrix {
+                m: [
+                    [fixed(cos), 0, fixed(sin)],
+                    [0, 0x1000, 0],
+                    [fixed(-sin), 0, fixed(cos)],
+                ],
+            };
+            Wanted {
+                id: 0x4000_0000 | slot as u32,
+                model: WAKE,
+                placed: Placed {
+                    translation: world([d.inst_pos[0], vehicle::force::WATERLINE_Y, d.inst_pos[2]]),
+                    rotation: rotation_of(&heading),
+                    // `wakeScale` is the model's own size at 0x1000.
+                    scale: Vec3::new(d.wake_scale as f32, 4096.0, d.wake_scale as f32) / 4096.0,
+                },
+                animated: true,
+                billboard: false,
+                color: Color::WHITE,
+                layer: if slot == sim.own { KART_LAYER } else { 0 },
+            }
+        });
+    projectiles.chain(mines).chain(clouds).chain(wakes).collect()
 }
 
 /// One game tick: the weapons the sim has are followed (born, moved, ended), the bursts it made
@@ -326,6 +365,7 @@ pub fn tick(
     sim: Res<Sim>,
     mut models: ResMut<ProjectileModels>,
     textures: Res<Textures>,
+    track: Res<crate::Track>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -376,6 +416,19 @@ pub fn tick(
             return;
         };
         models.built = built.try_into().ok();
+    }
+    // The wake is the level's own, and not every level has one (retail births none then).
+    if track.is_changed() {
+        models.wake = None;
+    }
+    if models.wake.is_none() {
+        let wake = track
+            .0
+            .models
+            .iter()
+            .filter_map(|&at| loader::model::Model::parse_at(&textures.dram, at).ok())
+            .find(|m| m.id == render::projectile::WAKE);
+        models.wake = Some(wake.and_then(|m| build(&m, false, &textures, &mut images)));
     }
     let built = models.built.as_ref().unwrap();
 
@@ -500,7 +553,14 @@ pub fn tick(
         }
     }
     for w in wanted.iter().filter(|w| !known.contains(&w.id)) {
-        let model = &built[w.model];
+        let model = if w.model == WAKE {
+            let Some(wake) = models.wake.as_ref().and_then(Option::as_ref) else {
+                continue;
+            };
+            wake
+        } else {
+            &built[w.model]
+        };
         let (entity, parts) = spawn_model(
             model,
             Transform {

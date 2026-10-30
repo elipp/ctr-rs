@@ -4,7 +4,7 @@
 //!
 //! Not ported: `CollideDrivers` (kart against kart), the squash and stretch of
 //! the model and the baked wheelie matrices (`TranslateMatrix` only builds the
-//! facing matrix here; the rest is presentation), and the wake particles.
+//! facing matrix here; the rest is presentation).
 
 use coll::Collision;
 use gte::{Gte, ctrl, data};
@@ -807,6 +807,43 @@ pub fn translate_matrix(d: &mut Driver, gte: &mut Gte, effects: &mut Vec<Effect>
     d.matrix_facing_dir = facing;
     crate::baked::update_matrix_animation(d);
     d.inst_pos = crate::baked::inst_matrix(d).1;
+    update_wake(d);
+}
+
+/// The water line (`VEH_PHYS_FORCE_WAKE_WATERLINE_Y`), in level units: every level's mud and
+/// water is at this height as far as the game knows.
+pub const WATERLINE_Y: i32 = 0;
+/// Below this the kart is too deep for its wake to show.
+const WAKE_VISIBLE_MIN_Y: i32 = -0x4f;
+/// `VEH_PHYS_FORCE_WAKE_INITIAL_SCALE`: 1.0, and it stays there.
+const WAKE_SCALE: i16 = 0x1000;
+const WAKE_PARTICLE_SPEED_MIN: i32 = 0xc00;
+const WAKE_PARTICLE_PREV_Y_MIN: i32 = -0x200;
+const WAKE_BURST_PARTICLES: u8 = 10;
+
+/// `VehPhysForce_TranslateMatrix_UpdateWake`: a kart in mud or water (`split_line`) that is
+/// below the water line shows its wake, and splashes while it moves; above the line it is out
+/// of the water. (The splash is the port's even in a split screen, which retail cuts.)
+fn update_wake(d: &mut Driver) {
+    d.wake_particles = 0;
+    let y = d.inst_pos[1];
+    let shown = y < WATERLINE_Y && y >= WAKE_VISIBLE_MIN_Y && d.split_line;
+    if !shown {
+        if y > WATERLINE_Y {
+            d.split_line = false;
+        }
+        d.wake_scale = 0;
+        return;
+    }
+    let fast = (d.speed as i32).abs() > WAKE_PARTICLE_SPEED_MIN;
+    if d.wake_scale == 0 {
+        d.wake_scale = WAKE_SCALE;
+        if fast && d.pos_prev.y > WAKE_PARTICLE_PREV_Y_MIN {
+            d.wake_particles = WAKE_BURST_PARTICLES;
+        }
+    } else if fast {
+        d.wake_particles = 1;
+    }
 }
 
 #[cfg(test)]

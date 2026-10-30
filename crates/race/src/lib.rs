@@ -713,6 +713,7 @@ fn after_tick(
     // A kart that a plant ate has no particle procedure (`DRIVER_FUNC_PARTICLES`, which is
     // `VehEmitter_DriverMain` otherwise): no sparks, smoke, skid marks or ground sounds.
     let (mut landing, mut wall, mut spray, mut puffs) = (None, None, None, Vec::new());
+    driver.mud_particles = 0;
     if driver.phys_state != vehicle::PhysState::PlantEaten {
         landing = vehicle::sparks::landing(driver);
         wall = vehicle::sparks::wall(driver);
@@ -720,6 +721,7 @@ fn after_tick(
         // The exhaust and the skid marks keep their state in the driver, so they run for every
         // kart even when nobody sees the particles.
         puffs = vehicle::exhaust::exhaust(driver);
+        driver.mud_particles = vehicle::sparks::mud(driver);
         vehicle::skid::skidmarks(driver);
         if driver.actions_flag_set & actions::BOT == 0 {
             vehicle::emitter_sound::tick(driver, effects);

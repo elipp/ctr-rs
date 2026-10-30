@@ -59,6 +59,8 @@ pub mod color_flags {
     pub const LARGE_QUAD: u16 = 0x400;
     /// The position is relative to the driver the particle belongs to.
     pub const DRIVER_LOCAL: u16 = 0x800;
+    /// ... but its height is not.
+    pub const DRIVER_LOCAL_IGNORE_Y: u16 = 0x8000;
     /// Drawn as a line from where the particle was a tick ago, not as a sprite.
     pub const SPECIAL_LINE: u16 = 0x1000;
     /// A line's tail fades to black. Without it, the tail has the colour the head had.
@@ -189,6 +191,146 @@ pub const EXHAUST_HIGH: [Entry; 7] = [
         axis: 4,
         base: [0, 256, 0],
         random: [-512, -512, 0],
+    },
+];
+
+/// `VEH_EMITTER_MUD_SPLASH_VELOCITY_SHIFT`
+const MUD_VELOCITY_SHIFT: u32 = 4;
+const MUD_VELOCITY_SCALE: i32 = 1 << MUD_VELOCITY_SHIFT;
+
+/// `PARTICLE_EXHAUST_WATER_HEIGHT_THRESHOLD`
+const SURFACE_HEIGHT: i32 = 3;
+/// `PARTICLE_EXHAUST_POP_LIFE_THRESHOLD`
+const POP_LIFE_THRESHOLD: i16 = 27;
+/// `MixRNG_Scramble() & PARTICLE_EXHAUST_ROTATION_RANDOM_MASK`
+const POP_ROTATION_RANGE: i32 = 0x1000;
+
+/// `data.emSet_Exhaust_Water`: the bubbles of a kart's exhaust under water.
+pub const EXHAUST_WATER: [Entry; 6] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x08a0,
+        lifespan: 30,
+    },
+    Entry::Axis {
+        flags: 27,
+        axis: 0,
+        base: [-512, -512, 0],
+        random: [1024, 1024, 0],
+    },
+    Entry::Axis {
+        flags: 36,
+        axis: 1,
+        base: [0, 0, 100],
+        random: [0, 0, 200],
+    },
+    Entry::Axis {
+        flags: 27,
+        axis: 2,
+        base: [-512, -512, 0],
+        random: [1024, 1024, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 5,
+        base: [512, 0, 0],
+        random: [0, 0, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 4,
+        base: [1, 0, 0],
+        random: [0, 0, 0],
+    },
+];
+
+/// `data.emSet_Falling`: the drops a kart throws up where it plows through water or mud.
+pub const FALLING: [Entry; 5] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x88a0,
+        lifespan: 15,
+    },
+    Entry::Axis {
+        flags: 27,
+        axis: 0,
+        base: [-8192, -2048, 0],
+        random: [16384, 4096, 0],
+    },
+    Entry::Axis {
+        flags: 27,
+        axis: 2,
+        base: [-8192, -2048, 0],
+        random: [16384, 4096, 0],
+    },
+    Entry::Axis {
+        flags: 62,
+        axis: 1,
+        base: [0, 4096, -600],
+        random: [2048, 2048, -200],
+    },
+    Entry::Axis {
+        flags: 9,
+        axis: 5,
+        base: [1024, 0, 0],
+        random: [300, 0, 0],
+    },
+];
+
+/// `data.emSet_MudSplash`: the clods a kart throws up in mud.
+pub const MUD_SPLASH: [Entry; 9] = [
+    Entry::Func {
+        flags: 1,
+        color_flags: 0x8880,
+        lifespan: 15,
+    },
+    Entry::Axis {
+        flags: 27,
+        axis: 0,
+        base: [-512, -512, 0],
+        random: [1024, 1024, 0],
+    },
+    Entry::Axis {
+        flags: 27,
+        axis: 2,
+        base: [-512, -512, 0],
+        random: [1024, 1024, 0],
+    },
+    Entry::Axis {
+        flags: 62,
+        axis: 1,
+        base: [0, 1536, -200],
+        random: [2048, 128, -60],
+    },
+    Entry::Axis {
+        flags: 11,
+        axis: 5,
+        base: [2048, -100, 0],
+        random: [300, 0, 0],
+    },
+    Entry::Axis {
+        flags: 19,
+        axis: 4,
+        base: [4096, -128, 0],
+        random: [0, 512, 0],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 7,
+        base: [16384, 0, 0],
+        random: [0; 3],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 8,
+        base: [9216, 0, 0],
+        random: [0; 3],
+    },
+    Entry::Axis {
+        flags: 1,
+        axis: 9,
+        base: [4352, 0, 0],
+        random: [0; 3],
     },
 ];
 
@@ -710,8 +852,28 @@ pub struct Axis {
     pub accel: i16,
 }
 
+/// Which icon of the game's icon groups a sprite shows (`iconGroup[n]`; the smoke is group 1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Sprite {
+    #[default]
+    Smoke,
+    /// `VEH_EMITTER_EXHAUST_ICON_WATER` (group 7)
+    Bubble,
+    /// `PARTICLE_EXHAUST_BUBBLEPOP_ICON_GROUP` (group 8)
+    BubblePop,
+    /// `VEH_PHYS_FORCE_WAKE_PARTICLE_ICON_GROUP` (group 9)
+    Splash,
+    /// `VEH_EMITTER_MUD_SPLASH_ICON` (group 13)
+    Mud,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Particle {
+    /// The icon it is drawn with.
+    pub sprite: Sprite,
+    /// `Particle_FuncPtr_ExhaustUnderwater`: it turns into a pop where it comes out of the water
+    /// ([`Particle::surface`]).
+    pub underwater: bool,
     pub axes: [Axis; axis::COUNT],
     pub axis_flags: u16,
     pub color_flags: u16,
@@ -759,6 +921,8 @@ impl Particle {
     /// `Particle_Init`.
     pub fn new(set: &[Entry], rng: &mut Rng) -> Particle {
         let mut p = Particle {
+            sprite: Sprite::Smoke,
+            underwater: false,
             axes: Default::default(),
             axis_flags: 0,
             color_flags: 0,
@@ -1015,7 +1179,19 @@ impl Particle {
     /// `VehEmitter_Exhaust`: a puff at `position` (1/256 game units, relative
     /// to the kart) that has been flying with `velocity` since the pipe.
     pub fn exhaust(position: [i32; 3], velocity: [i32; 3], dark: bool, rng: &mut Rng) -> Particle {
-        let mut p = Particle::new(&EXHAUST_HIGH, rng);
+        Particle::puff(&EXHAUST_HIGH, position, velocity, dark, rng)
+    }
+
+    /// A particle of `set` that has been flying with `velocity` since the pipe, which is dark
+    /// (subtracted) while the turbo meter is in the boost window.
+    fn puff(
+        set: &[Entry],
+        position: [i32; 3],
+        velocity: [i32; 3],
+        dark: bool,
+        rng: &mut Rng,
+    ) -> Particle {
+        let mut p = Particle::new(set, rng);
         for a in 0..3 {
             p.axes[a].start += position[a] - velocity[a];
             p.axes[a].velocity = velocity[a] as i16;
@@ -1027,8 +1203,48 @@ impl Particle {
         p
     }
 
-    /// `VehEmitter_Sparks_Ground`: one of the sparks of a landing. `back`, `side` and `push`
-    /// are the kart's axes in the world (see `vehicle::sparks::Landing`).
+    /// `VehEmitter_Exhaust` of a pipe under water: a bubble, which pops at the surface.
+    pub fn bubble(position: [i32; 3], velocity: [i32; 3], dark: bool, rng: &mut Rng) -> Particle {
+        let mut p = Particle::puff(&EXHAUST_WATER, position, velocity, dark, rng);
+        p.sprite = Sprite::Bubble;
+        p.underwater = true;
+        p
+    }
+
+    /// `VehEmitter_MudSplash`: a clod thrown up round the kart, flung out sideways (its start and
+    /// its drag both follow its velocity).
+    pub fn mud_splash(rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&MUD_SPLASH, rng);
+        for a in [axis::POS_X, axis::POS_Z] {
+            p.axes[a].start += p.axes[a].velocity as i32 * MUD_VELOCITY_SCALE;
+            p.axes[a].accel = p.axes[a].accel.wrapping_sub(p.axes[a].velocity >> MUD_VELOCITY_SHIFT);
+        }
+        p.sprite = Sprite::Mud;
+        p
+    }
+
+    /// `VehPhysForce_TranslateMatrix_SpawnWakeParticle`: a drop thrown up round the kart.
+    pub fn splash(rng: &mut Rng) -> Particle {
+        let mut p = Particle::new(&FALLING, rng);
+        p.sprite = Sprite::Splash;
+        p
+    }
+
+    /// `Particle_FuncPtr_ExhaustUnderwater`, after the tick's update: a bubble that is above the
+    /// water (`kart_y` is the kart's height in level units) and is past its first ticks turns
+    /// into a pop, which is gone on the next one.
+    pub fn surface(&mut self, kart_y: i32, rng: &mut Rng) {
+        if !self.underwater
+            || (self.axes[axis::POS_Y].start >> 8) + kart_y <= SURFACE_HEIGHT
+            || self.frames_left >= POP_LIFE_THRESHOLD
+        {
+            return;
+        }
+        self.sprite = Sprite::BubblePop;
+        self.axes[axis::ROT_Y].start = rng.mix(POP_ROTATION_RANGE);
+        self.frames_left = 0;
+    }
+
     pub fn landing_spark(
         back: [i32; 3],
         side: [i32; 3],
@@ -1182,6 +1398,11 @@ impl Particle {
 
     pub fn velocity(&self) -> [i32; 3] {
         std::array::from_fn(|a| self.axes[a].velocity as i32)
+    }
+
+    /// `DRIVER_LOCAL_IGNORE_Y`: its height is the world's, not the kart's added to it.
+    pub fn ignores_kart_height(&self) -> bool {
+        self.color_flags & color_flags::DRIVER_LOCAL_IGNORE_Y != 0
     }
 
     pub fn draw_mode(&self) -> DrawMode {

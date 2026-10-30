@@ -334,7 +334,7 @@ impl KartMotion {
 #[derive(Component)]
 pub struct KartRig {
     header: ModelHeader,
-    parts: [Option<Handle<Mesh>>; PARTS],
+    pub(crate) parts: [Option<Handle<Mesh>>; PARTS],
     /// The blend on the mesh: two frames and the bits of how far between them.
     shown: Option<((u8, i16), (u8, i16), u32)>,
     /// Whether the vertex colours are the burnt black ones.
@@ -497,6 +497,7 @@ impl KartBuilder<'_, '_> {
             );
         }
         if let Some(icon) = &self.smoke_icon.0 {
+            let water = crate::exhaust::water_icons(&self.textures.dram);
             crate::exhaust::spawn(
                 &mut self.commands,
                 &mut self.images,
@@ -504,6 +505,7 @@ impl KartBuilder<'_, '_> {
                 &mut self.materials,
                 &mut self.subtract_materials,
                 icon,
+                &water,
                 vram,
                 kart,
                 layer,
