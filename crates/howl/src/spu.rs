@@ -350,6 +350,17 @@ impl Spu {
         }
     }
 
+    /// Swaps the ADPCM of sample `sample` for `adpcm`, and gives the old (`None` if there is no
+    /// such sample).
+    pub fn replace_sample(
+        &mut self,
+        sample: u16,
+        adpcm: Option<Box<[u8]>>,
+    ) -> Option<Option<Box<[u8]>>> {
+        let slot = self.samples.get_mut(sample as usize)?;
+        Some(std::mem::replace(slot, adpcm))
+    }
+
     /// Whether sample `sample` is loaded (`spuAddr != 0`).
     pub fn has(&self, sample: u16) -> bool {
         matches!(self.samples.get(sample as usize), Some(Some(_)))

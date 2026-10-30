@@ -4842,6 +4842,7 @@ name = "map"
 version = "0.1.0"
 dependencies = [
  "bitcode",
+ "howl",
  "loader",
  "serde",
  "xdelta",
