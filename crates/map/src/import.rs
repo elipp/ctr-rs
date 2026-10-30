@@ -127,6 +127,7 @@ pub fn import(
     level: Option<u32>,
     entries: Option<(usize, usize)>,
     song_pack: Option<u8>,
+    reverb: Option<u8>,
 ) -> io::Result<Import> {
     let name = patch
         .file_stem()
@@ -207,7 +208,7 @@ pub fn import(
         new_big.read(&mut new_disc, index)
     };
     let mut map = from_files(name, &read(LevFile::Lev)?, &read(LevFile::Vram)?)?;
-    map.audio = crate::audio::carve(original, &bytes, replaces, song_pack)?;
+    map.audio = crate::audio::carve(original, &bytes, replaces, song_pack, reverb)?;
     Ok(Import {
         map,
         source: match entries {

@@ -8,13 +8,15 @@ use map::Map;
 const USAGE: &str = "ctr-map: maps from community patches.
 
 usage:
-  ctr-map import PATCH.xdelta [-o OUT.ctrmap] [--level N] [--song-pack N] [--disc BIN]
+  ctr-map import PATCH.xdelta [-o OUT.ctrmap] [--level N] [--song-pack N] [--reverb N] [--disc BIN]
       reads the patch against the USA disc image (CTR_BIN, or assets/ctr-u.bin; --disc picks
       one), finds where the patch put its map (a track's slot, or the entries that CTR Editor
       uses; --level N when it changes several different tracks, --entries LEV,VRAM to name
       the BIGFILE entries by hand; --song-pack N takes the music from song pack N of KART.HWL when
       the patch's is not the track's slot's, see `audio`; when the patch changes several
-      packs, it lists them and asks, unless the option is given), and saves it (default: assets/maps/NAME.ctrmap)
+      packs, it lists them and asks, unless the option is given; --reverb N, 0 to 4, sets the
+      map's reverb mode; the patch's reverbs are asked for in the same way when it changes
+      some, and the track's own is the default), and saves it (default: assets/maps/NAME.ctrmap)
   ctr-map audio PATCH.xdelta [--disc BIN]
       whether the patch changes the game's audio: the song packs of SOUNDS/KART.HWL, and the
       executable's tables of each level's song and reverb
@@ -36,9 +38,6 @@ fn disc() -> PathBuf {
 /// pack of the track's own slot.
 fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Result<Option<u8>> {
     use std::io::{BufRead, IsTerminal, Write};
-    if !std::io::stdin().is_terminal() {
-        return Ok(None);
-    }
     let changes = map::audio::changed_packs(disc, &std::fs::read(patch)?)?;
     match changes.as_slice() {
         [] => return Ok(None),
@@ -46,6 +45,7 @@ fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Re
             println!("the patch changes the music of song pack {} only: using it", only.pack);
             return Ok(Some(only.pack));
         }
+        _ if !std::io::stdin().is_terminal() => return Ok(None),
         _ => {}
     }
     println!("the patch changes the music of {} song packs:", changes.len());
@@ -74,13 +74,47 @@ fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Re
     }
 }
 
+/// When the patch gives levels other reverbs (`data.reverbMode`), which is the map's: one change
+/// is taken, several are listed and a number is asked for, which can be any of the game's modes
+/// (0 to 4); an empty answer leaves it to the track's own. Nothing is asked of no one.
+fn ask_reverb(patch: &std::path::Path, disc: &std::path::Path) -> std::io::Result<Option<u8>> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let changes = map::audio::changed_reverbs(disc, &std::fs::read(patch)?)?;
+    match changes.as_slice() {
+        [] => return Ok(None),
+        [(level, was, now)] => {
+            println!("the patch changes the reverb of level {level} from {was} to {now}: using it");
+            return Ok(Some(*now));
+        }
+        _ if !std::io::stdin().is_terminal() => return Ok(None),
+        _ => {}
+    }
+    println!("the patch changes the reverb of {} levels:", changes.len());
+    for (level, was, now) in &changes {
+        println!("  level {level:>2}: {was} -> {now}");
+    }
+    loop {
+        print!("which reverb is the map's? a mode 0 to 4, or nothing for its track's own: ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line)? == 0 {
+            return Ok(None);
+        }
+        match line.trim().parse::<u8>() {
+            _ if line.trim().is_empty() => return Ok(None),
+            Ok(n) if n < 5 => return Ok(Some(n)),
+            _ => println!("a mode from 0 to 4"),
+        }
+    }
+}
+
 fn run(args: Vec<String>) -> Result<(), String> {
     let mut args = args.into_iter();
     match args.next().as_deref() {
         Some("import") => {
             let mut patch = None;
             let (mut out, mut level, mut disc_path) = (None, None, disc());
-            let (mut entries, mut song_pack) = (None, None);
+            let (mut entries, mut song_pack, mut reverb) = (None, None, None);
             while let Some(arg) = args.next() {
                 let mut value = |what: &str| args.next().ok_or(format!("{what} needs a value"));
                 match arg.as_str() {
@@ -108,17 +142,28 @@ fn run(args: Vec<String>) -> Result<(), String> {
                                 .map_err(|e| format!("--song-pack: {e}"))?,
                         )
                     }
+                    "--reverb" => {
+                        reverb = Some(
+                            value("--reverb")?
+                                .parse::<u8>()
+                                .map_err(|e| format!("--reverb: {e}"))?,
+                        )
+                    }
                     "--disc" => disc_path = PathBuf::from(value("--disc")?),
                     _ if patch.is_none() => patch = Some(PathBuf::from(arg)),
                     _ => return Err(format!("what is {arg}?")),
                 }
             }
             let patch = patch.ok_or("import needs a patch")?;
+            if reverb.is_none() {
+                reverb = ask_reverb(&patch, &disc_path)
+                    .map_err(|e| format!("{}: {e}", patch.display()))?;
+            }
             if song_pack.is_none() {
                 song_pack = ask_song_pack(&disc_path, &patch)
                     .map_err(|e| format!("{}: {e}", patch.display()))?;
             }
-            let done = map::import::import(&disc_path, &patch, level, entries, song_pack)
+            let done = map::import::import(&disc_path, &patch, level, entries, song_pack, reverb)
                 .map_err(|e| format!("{}: {e}", patch.display()))?;
             let out = out.unwrap_or_else(|| {
                 PathBuf::from("assets/maps").join(format!("{}.ctrmap", done.map.name))

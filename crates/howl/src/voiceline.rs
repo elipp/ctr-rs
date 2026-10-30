@@ -55,6 +55,8 @@ struct Line {
     character: u8,
     /// The other character it is about (`secondaryCharacterID`), 16 for none.
     other: u8,
+    /// How loud it is said, 255 for the driver's own.
+    volume: u8,
 }
 
 /// What the voice lines keep.
@@ -90,8 +92,17 @@ impl Howl {
     }
 
     /// `Voiceline_RequestPlay`: `character` would say line `voice` (about `other`, 16 for no
-    /// one). Nothing is said once the race is over (`end_of_race`).
-    pub fn request_voiceline(&mut self, voice: u8, character: u8, other: u8, end_of_race: bool) {
+    /// one). Nothing is said once the race is over (`end_of_race`). A grunt plays at `sfx`, and
+    /// a line of XA at its volume (it has no pan: the CD's input is both sides alike); a driver
+    /// heard from far away is quiet (this is not retail's, which says every driver's the same).
+    pub fn request_voiceline(
+        &mut self,
+        voice: u8,
+        character: u8,
+        other: u8,
+        end_of_race: bool,
+        sfx: Sfx,
+    ) {
         if voice >= VOICE_SETS.len() as u8
             || character >= CHARACTERS
             || other > CHARACTERS
@@ -122,7 +133,7 @@ impl Howl {
             self.play(
                 GRUNTS[set as usize] + character as u16,
                 AntiSpam::Reject,
-                Sfx::FULL,
+                sfx,
             );
             self.voicelines.grunted[c] = self.frame;
             return;
@@ -145,6 +156,7 @@ impl Howl {
             voice,
             character,
             other,
+            volume: sfx.volume,
         });
     }
 
@@ -214,7 +226,7 @@ impl Howl {
         let pick = self.next_rng() % SET_SIZES[set];
         let id = line_xa(line.character, set, pick as u16);
         self.voicelines.cooldown = COOLDOWN;
-        if self.play_xa(Category::Game, id) {
+        if self.play_xa_at(Category::Game, id, line.volume) {
             self.voicelines.cooldown += (self.xa_length(Category::Game, id) / 5) as i16;
         }
     }
@@ -283,26 +295,26 @@ mod tests {
     #[test]
     fn a_driver_grunts_when_lines_are_off_and_then_keeps_quiet() {
         let mut howl = howl();
-        howl.request_voiceline(GRUNTS_TOO, 1, 16, false);
+        howl.request_voiceline(GRUNTS_TOO, 1, 16, false, Sfx::FULL);
         assert_eq!(howl.channels.taken().len(), 1);
         assert_eq!(howl.channels.stats(0).sound as u16, GRUNTS[1] + 1);
         howl.frame += QUIET_FRAMES;
-        howl.request_voiceline(GRUNTS_TOO, 1, 16, false);
+        howl.request_voiceline(GRUNTS_TOO, 1, 16, false, Sfx::FULL);
         assert_eq!(howl.channels.taken().len(), 1);
         // Another character is not held back by it.
-        howl.request_voiceline(GRUNTS_TOO, 0, 16, false);
+        howl.request_voiceline(GRUNTS_TOO, 0, 16, false, Sfx::FULL);
         assert_eq!(howl.channels.taken().len(), 2);
     }
 
     #[test]
     fn a_line_without_a_grunt_waits_in_the_queue_newest_first() {
         let mut howl = howl();
-        howl.request_voiceline(NO_GRUNT, 3, 16, false);
+        howl.request_voiceline(NO_GRUNT, 3, 16, false, Sfx::FULL);
         assert!(howl.voicelines.lines.is_empty());
         howl.enable_voicelines(true);
-        howl.request_voiceline(NO_GRUNT, 3, 16, false);
-        howl.request_voiceline(NO_GRUNT, 3, 16, false);
-        howl.request_voiceline(NO_GRUNT, 4, 16, false);
+        howl.request_voiceline(NO_GRUNT, 3, 16, false, Sfx::FULL);
+        howl.request_voiceline(NO_GRUNT, 3, 16, false, Sfx::FULL);
+        howl.request_voiceline(NO_GRUNT, 4, 16, false, Sfx::FULL);
         let waiting: Vec<u8> = howl.voicelines.lines.iter().map(|l| l.character).collect();
         assert_eq!(waiting, [4, 3]);
         // The newest starts, one of the two lines of set 4 of its character; the next waits for
@@ -370,8 +382,8 @@ mod tests {
     fn nothing_is_said_after_the_race() {
         let mut howl = howl();
         howl.enable_voicelines(true);
-        howl.request_voiceline(GRUNTS_TOO, 1, 16, true);
-        howl.request_voiceline(NO_GRUNT, 1, 16, true);
+        howl.request_voiceline(GRUNTS_TOO, 1, 16, true, Sfx::FULL);
+        howl.request_voiceline(NO_GRUNT, 1, 16, true, Sfx::FULL);
         assert!(howl.channels.taken().is_empty());
         assert!(howl.voicelines.lines.is_empty());
     }

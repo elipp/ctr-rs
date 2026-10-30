@@ -209,6 +209,11 @@ impl Howl {
     /// `CDSYS_XAPlay`: track `id` of `category` plays, at the music's volume or the voices'.
     /// False if there is no such track.
     pub fn play_xa(&mut self, category: Category, id: u16) -> bool {
+        self.play_xa_at(category, id, u8::MAX)
+    }
+
+    /// As [`Howl::play_xa`], at `loudness` of its volume, 255 being all of it.
+    pub fn play_xa_at(&mut self, category: Category, id: u16, loudness: u8) -> bool {
         let Some(track) = self.xnf.track(category, id) else {
             return false;
         };
@@ -216,7 +221,7 @@ impl Howl {
             Category::Music => self.volume_music,
             _ => self.volume_voice,
         };
-        let volume = (volume as i32) << VOLUME_SHIFT;
+        let volume = (volume as i32 * loudness as i32 / 255) << VOLUME_SHIFT;
         // `NativeAudio_PlayXATrack`.
         let cd = &mut self.spu.cd;
         cd.stop();
