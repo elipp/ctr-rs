@@ -86,9 +86,28 @@ mod tests {
 /// A `.bin` disc image opened for reading `BIGFILE.BIG`.
 pub type Disc = RawSectorReader<std::io::BufReader<std::fs::File>>;
 
+type FileDisc = std::io::BufReader<std::fs::File>;
+
+fn open_file(path: &std::path::Path) -> io::Result<FileDisc> {
+    std::fs::File::open(path).map(std::io::BufReader::new)
+}
+
+fn invalid(msg: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg)
+}
+
+/// The ISO 9660 filesystem of a disc image that `open` makes (as many times as it is asked), in
+/// the raw 2352-byte sectors of a `.bin`.
+fn mount<R: Read + Seek>(
+    open: &impl Fn() -> io::Result<R>,
+) -> io::Result<hadris_iso::read::IsoImage<RawSectorReader<R>>> {
+    hadris_iso::read::IsoImage::open(RawSectorReader::new(open()?)?)
+        .map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))
+}
+
 /// Opens the disc image at `path` and parses the header of `BIGFILE.BIG`.
 pub fn open_bigfile(path: &std::path::Path) -> io::Result<(Disc, crate::bigfile::BigFile)> {
-    open_bigfile_with(|| std::fs::File::open(path).map(std::io::BufReader::new))
+    open_bigfile_with(|| open_file(path))
 }
 
 /// Opens a disc image that `open` makes (as many times as it is asked: once to find
@@ -97,53 +116,50 @@ pub fn open_bigfile(path: &std::path::Path) -> io::Result<(Disc, crate::bigfile:
 pub fn open_bigfile_with<R: Read + Seek>(
     open: impl Fn() -> io::Result<R>,
 ) -> io::Result<(RawSectorReader<R>, crate::bigfile::BigFile)> {
-    use hadris_iso::read::IsoImage;
-
-    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let open = || RawSectorReader::new(open()?);
-
-    let image =
-        IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
-    let start = find(&image, "BIGFILE.BIG")
+    let start = find(&mount(&open)?, "BIGFILE.BIG")
         .ok_or_else(|| invalid("BIGFILE.BIG not in the root directory".into()))?;
 
-    let mut disc = open()?;
+    let mut disc = RawSectorReader::new(open()?)?;
     let big = crate::bigfile::BigFile::open(&mut disc, start)?;
     Ok((disc, big))
 }
 
 /// Opens the disc image at `path` and reads the header of `SOUNDS/KART.HWL`.
 pub fn open_howl(path: &std::path::Path) -> io::Result<(Disc, crate::howl::Howl)> {
-    use hadris_iso::read::IsoImage;
+    open_howl_with(|| open_file(path))
+}
 
-    let open = || RawSectorReader::new(std::fs::File::open(path).map(std::io::BufReader::new)?);
-    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let image =
-        IsoImage::open(open()?).map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
-    let start = find(&image, "SOUNDS/KART.HWL")
+/// `open_howl` for a disc image that `open` makes, as `open_bigfile_with`.
+pub fn open_howl_with<R: Read + Seek>(
+    open: impl Fn() -> io::Result<R>,
+) -> io::Result<(RawSectorReader<R>, crate::howl::Howl)> {
+    let start = find(&mount(&open)?, "SOUNDS/KART.HWL")
         .ok_or_else(|| invalid("SOUNDS/KART.HWL not on the disc".into()))?;
 
-    let mut disc = open()?;
+    let mut disc = RawSectorReader::new(open()?)?;
     let howl = crate::howl::Howl::open(&mut disc, start)?;
     Ok((disc, howl))
 }
 
 /// The XA audio of a disc image (`crate::xa`), its files read from their raw sectors.
-pub type XaDisc = crate::xa::XaFiles<std::io::BufReader<std::fs::File>>;
+pub type XaDisc = crate::xa::XaFiles<FileDisc>;
 
 /// Opens the disc image at `path` and reads the index of its XA audio, `XA/ENG.XNF`, and where
 /// each of the files it names is (`CdSearchFile`, as `CDSYS_SetXAToLang` looks them up).
 pub fn open_xa(path: &std::path::Path) -> io::Result<(crate::xa::Xnf, XaDisc)> {
-    use crate::xa::{Category, XaFiles, Xnf};
-    use hadris_iso::read::IsoImage;
+    open_xa_with(|| open_file(path))
+}
 
-    let file = || std::fs::File::open(path).map(std::io::BufReader::new);
-    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let image = IsoImage::open(RawSectorReader::new(file()?)?)
-        .map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
+/// `open_xa` for a disc image that `open` makes, as `open_bigfile_with`.
+pub fn open_xa_with<R: Read + Seek>(
+    open: impl Fn() -> io::Result<R>,
+) -> io::Result<(crate::xa::Xnf, crate::xa::XaFiles<R>)> {
+    use crate::xa::{Category, XaFiles, Xnf};
+
+    let image = mount(&open)?;
     let (start, size) = find_sized(&image, "XA/ENG.XNF")
         .ok_or_else(|| invalid("XA/ENG.XNF not on the disc".into()))?;
-    let mut disc = RawSectorReader::new(file()?)?;
+    let mut disc = RawSectorReader::new(open()?)?;
     disc.seek(SeekFrom::Start(start as u64 * USER_DATA_SIZE))?;
     let mut bytes = vec![0; size as usize];
     disc.read_exact(&mut bytes)?;
@@ -154,7 +170,7 @@ pub fn open_xa(path: &std::path::Path) -> io::Result<(crate::xa::Xnf, XaDisc)> {
             .map_while(|n| find(&image, &format!("{}/S{n:02}.XA", category.dir())))
             .collect()
     });
-    Ok((xnf, XaFiles::new(file()?, starts)))
+    Ok((xnf, XaFiles::new(open()?, starts)))
 }
 
 /// The first sector of the file at `path` (directories split by `/`, no version suffix).
