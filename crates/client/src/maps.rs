@@ -4,7 +4,8 @@
 //!
 //! The exception is the game's own tracks, made from the disc the first time the client runs
 //! (`map::builtin`): such a map has the number of the track it is named for, is not listed as a
-//! map, and is only taken from our own folder, never from what other players sent.
+//! map, and is only taken from the folder of what is made from the disc (`paths::builtin_maps`),
+//! never from our own maps or from what other players sent.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, Once};
@@ -25,13 +26,13 @@ struct Entry {
 /// live as long as the program, so that the rest of the viewer can hold on to them).
 static MAPS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static LOADED: Once = Once::new();
-/// The hashes of the game's tracks that are read from the disc, made when first asked (none for
-/// one that failed).
-static DISC_HASHES: Mutex<std::collections::BTreeMap<u32, Option<u64>>> =
-    Mutex::new(std::collections::BTreeMap::new());
-
 fn directory() -> PathBuf {
     crate::paths::maps()
+}
+
+/// Where the maps of the game's own tracks are.
+fn builtin_directory() -> PathBuf {
+    crate::paths::builtin_maps()
 }
 
 /// Where the maps that other players sent are kept: unlike `maps`, which is ours,
@@ -45,7 +46,12 @@ fn cache_directory() -> PathBuf {
 pub fn load() {
     LOADED.call_once(|| {
         let mut maps = Vec::new();
-        for (own, dir) in [(true, directory()), (false, cache_directory())] {
+        // Whether the folder is the one the game's own tracks are in.
+        for (builtins, dir) in [
+            (false, directory()),
+            (true, builtin_directory()),
+            (false, cache_directory()),
+        ] {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
@@ -61,8 +67,17 @@ pub fn load() {
                         continue;
                     }
                 };
-                if builtin::is_builtin_name(&map.name) {
-                    match builtin::level_of(&map.name).filter(|_| own) {
+                if builtin::is_builtin_name(&map.name) != builtins {
+                    let why = if builtins {
+                        "that folder is for the maps of the game's tracks"
+                    } else {
+                        "a map cannot be named for one of the game's tracks"
+                    };
+                    eprintln!("{}: {why}", path.display());
+                    continue;
+                }
+                if builtins {
+                    match builtin::level_of(&map.name) {
                         Some(level) => id = level.0,
                         None => {
                             eprintln!("{}: not a map of one of the game's tracks", path.display());
@@ -89,34 +104,10 @@ pub fn get(id: u32) -> Option<&'static Map> {
     maps.iter().find(|e| e.id == id).map(|e| e.map)
 }
 
-/// The hash of the contents of the map `id`. A game track that has no map file (it is read from
-/// the disc) gets the hash its map would have, made from the disc the first time it is asked.
+/// The hash of the contents of the map `id`: a game track's too, whose map is made from the disc.
 pub fn hash(id: u32) -> Option<u64> {
-    let known = {
-        let maps = MAPS.lock().unwrap();
-        maps.iter().find(|e| e.id == id).map(|e| e.hash)
-    };
-    if known.is_some() || map::is_map_id(id) {
-        return known;
-    }
-    if let Some(&hash) = DISC_HASHES.lock().unwrap().get(&id) {
-        return hash;
-    }
-    let made = map::builtin::from_disc(&crate::disc::path(), id)
-        .inspect_err(|e| eprintln!("could not read the level {id} from the disc: {e}"))
-        .ok()
-        .flatten();
-    let hash = made.as_ref().and_then(|map| map.hash().ok());
-    DISC_HASHES.lock().unwrap().insert(id, hash);
-    // The map is there to keep for the next run (the compression takes a while).
-    if let Some(map) = made {
-        std::thread::spawn(move || {
-            if let Err(e) = map::builtin::save(&map, &directory()) {
-                eprintln!("could not save the map {}: {e}", map.name);
-            }
-        });
-    }
-    hash
+    let maps = MAPS.lock().unwrap();
+    maps.iter().find(|e| e.id == id).map(|e| e.hash)
 }
 
 /// Whether we have the map `id` with these very contents. For one of the game's own tracks, whose
@@ -206,15 +197,20 @@ pub fn purge() -> Result<usize, String> {
     Ok(before - maps.len())
 }
 
-/// Makes the maps of the game's racing tracks that we lack, from the disc, which takes a while
-/// the first time. A track without one is read from the disc as it always was.
+/// Makes the maps of the game's racing tracks that we lack, or have of an older version, from the
+/// disc, which takes a while the first time. (`disc::locate` has seen to it that there is a disc
+/// when there are any to make.)
 pub fn make_builtins() {
-    let dir = directory();
+    let dir = builtin_directory();
     if map::builtin::missing_count(&dir) == 0 {
         return;
     }
+    let Some(image) = crate::disc::image() else {
+        eprintln!("The maps of the game's tracks are missing, and there is no disc image to make them from");
+        return;
+    };
     eprintln!("Making maps of the game's tracks from the disc (this is done once)...");
-    match map::builtin::export(&crate::disc::path(), &dir) {
+    match map::builtin::export(&image, &dir) {
         Ok(made) => eprintln!("Made {made} maps in {}", dir.display()),
         Err(e) => eprintln!("Could not make the maps of the game's tracks: {e}"),
     }

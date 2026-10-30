@@ -54,3 +54,19 @@ pub fn open_bigfile() -> Option<Big> {
         file_size,
     })
 }
+
+/// The folder that `Source::prepare` made from the disc: `CTR_DISC_DIR`, or `<repo>/assets/disc`.
+/// None (with a note) if there is no finished one.
+pub fn prepared_dir() -> Option<PathBuf> {
+    let dir = std::env::var_os("CTR_DISC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/disc"));
+    if !dir.join("MANIFEST").exists() {
+        eprintln!(
+            "skipping: {} has no MANIFEST (start the client once to make it, or set CTR_DISC_DIR)",
+            dir.display()
+        );
+        return None;
+    }
+    Some(dir)
+}

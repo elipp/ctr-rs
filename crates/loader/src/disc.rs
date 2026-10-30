@@ -88,19 +88,19 @@ mod tests {
 /// A `.bin` disc image opened for reading `BIGFILE.BIG`.
 pub type Disc = RawSectorReader<std::io::BufReader<std::fs::File>>;
 
-type FileDisc = std::io::BufReader<std::fs::File>;
+pub(crate) type FileDisc = std::io::BufReader<std::fs::File>;
 
-fn open_file(path: &std::path::Path) -> io::Result<FileDisc> {
+pub(crate) fn open_file(path: &std::path::Path) -> io::Result<FileDisc> {
     std::fs::File::open(path).map(std::io::BufReader::new)
 }
 
-fn invalid(msg: String) -> io::Error {
+pub(crate) fn invalid(msg: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
 /// The ISO 9660 filesystem of a disc image that `open` makes (as many times as it is asked), in
 /// the raw 2352-byte sectors of a `.bin`.
-fn mount<R: Read + Seek>(
+pub(crate) fn mount<R: Read + Seek>(
     open: &impl Fn() -> io::Result<R>,
 ) -> io::Result<hadris_iso::read::IsoImage<RawSectorReader<R>>> {
     hadris_iso::read::IsoImage::open(RawSectorReader::new(open()?)?)
@@ -175,170 +175,8 @@ pub fn open_xa_with<R: Read + Seek>(
     Ok((xnf, XaFiles::new(open()?, starts)))
 }
 
-/// Where the game's files come from: a directory of extracted copies, laid out as on the disc,
-/// and the disc image behind it. A file that the directory lacks is extracted from the image the
-/// first time it is read; one that it has is read without the image being opened.
-///
-/// ```text
-/// BIGFILE.HDR           the first sector of BIGFILE.BIG (u32), then its header
-/// BIGFILE/0123.bin      entry 123 of BIGFILE.BIG
-/// SOUNDS/KART.HWL       as on the disc
-/// XA/ENG.XNF            as on the disc
-/// XA/MUSIC/S00.XA       as on the disc, in the raw 2352-byte sectors of the image
-/// ```
-///
-/// A file is written whole under another name first, so a run that ends half-way leaves none.
-/// The extracted files are not checked against the image: delete the directory for another disc.
-#[derive(Clone, Debug)]
-pub struct Source {
-    image: PathBuf,
-    dir: PathBuf,
-}
-
-impl Source {
-    pub fn new(image: impl Into<PathBuf>, dir: impl Into<PathBuf>) -> Self {
-        Self {
-            image: image.into(),
-            dir: dir.into(),
-        }
-    }
-
-    /// The path of the extracted `name` on the disc; None if the disc has no such file. With
-    /// `raw`, the copy is of the image's raw sectors, not of the files's 2048-byte ones.
-    fn file(&self, name: &str, raw: bool) -> io::Result<Option<PathBuf>> {
-        let path = self.dir.join(name);
-        if path.exists() {
-            return Ok(Some(path));
-        }
-        let image = || open_file(&self.image);
-        let iso = hadris_iso::read::IsoImage::open(RawSectorReader::new(image()?)?)
-            .map_err(|e| invalid(format!("not an ISO 9660 image: {e:?}")))?;
-        let Some((start, size)) = find_sized(&iso, name) else {
-            return Ok(None);
-        };
-        let (mut from, len): (Box<dyn Read>, _) = if raw {
-            let sectors = (size as u64).div_ceil(USER_DATA_SIZE);
-            let mut file = image()?;
-            file.seek(SeekFrom::Start(start as u64 * RAW_SECTOR_SIZE))?;
-            (Box::new(file), sectors * RAW_SECTOR_SIZE)
-        } else {
-            let mut disc = RawSectorReader::new(image()?)?;
-            disc.seek(SeekFrom::Start(start as u64 * USER_DATA_SIZE))?;
-            (Box::new(disc), size as u64)
-        };
-        write_atomically(&path, |out| {
-            let copied = io::copy(&mut from.as_mut().take(len), out)?;
-            if copied == len {
-                Ok(())
-            } else {
-                Err(io::ErrorKind::UnexpectedEof.into())
-            }
-        })?;
-        Ok(Some(path))
-    }
-
-    /// `BIGFILE.BIG`: its entries, from the directory or the image.
-    pub fn bigfile(&self) -> io::Result<Archive> {
-        let header = self.dir.join("BIGFILE.HDR");
-        let big = match std::fs::read(&header) {
-            Ok(bytes) if bytes.len() > 4 => {
-                let start = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-                crate::bigfile::BigFile::parse(&bytes[4..], start)?
-            }
-            _ => {
-                let (mut disc, big) = open_bigfile(&self.image)?;
-                let mut bytes = big.start_sector.to_le_bytes().to_vec();
-                bytes.extend(crate::bigfile::BigFile::read_header(
-                    &mut disc,
-                    big.start_sector,
-                )?);
-                write_atomically(&header, |out| out.write_all(&bytes))?;
-                big
-            }
-        };
-        Ok(Archive {
-            source: self.clone(),
-            big,
-        })
-    }
-
-    /// `SOUNDS/KART.HWL`, opened as a file of its own (it begins at sector 0), and its header.
-    pub fn howl(&self) -> io::Result<(std::io::BufReader<std::fs::File>, crate::howl::Howl)> {
-        let path = self
-            .file("SOUNDS/KART.HWL", false)?
-            .ok_or_else(|| invalid("SOUNDS/KART.HWL not on the disc".into()))?;
-        let mut file = open_file(&path)?;
-        let howl = crate::howl::Howl::open(&mut file, 0)?;
-        Ok((file, howl))
-    }
-
-    /// The index of the XA audio, `XA/ENG.XNF`, and the XA files it names.
-    pub fn xa(&self) -> io::Result<(crate::xa::Xnf, XaFiles)> {
-        let path = self
-            .file("XA/ENG.XNF", false)?
-            .ok_or_else(|| invalid("XA/ENG.XNF not on the disc".into()))?;
-        let xnf = crate::xa::Xnf::parse(&std::fs::read(path)?)?;
-        let files = XaFiles {
-            source: self.clone(),
-            counts: xnf.files,
-        };
-        Ok((xnf, files))
-    }
-}
-
-/// `BIGFILE.BIG` of a [`Source`].
-#[derive(Debug, Clone)]
-pub struct Archive {
-    source: Source,
-    big: crate::bigfile::BigFile,
-}
-
-impl Archive {
-    pub fn entries(&self) -> &[crate::bigfile::BigEntry] {
-        &self.big.entries
-    }
-
-    /// Subfile `index` in full, extracted from the image if the directory lacks it.
-    pub fn read(&self, index: usize) -> io::Result<Vec<u8>> {
-        let path = self.source.dir.join(format!("BIGFILE/{index:04}.bin"));
-        if let Ok(bytes) = std::fs::read(&path) {
-            return Ok(bytes);
-        }
-        let mut disc = RawSectorReader::new(open_file(&self.source.image)?)?;
-        let bytes = self.big.read(&mut disc, index)?;
-        write_atomically(&path, |out| out.write_all(&bytes))?;
-        Ok(bytes)
-    }
-}
-
-/// The XA files of a [`Source`], whose tracks [`XaFiles::read`] reads.
-#[derive(Debug, Clone)]
-pub struct XaFiles {
-    source: Source,
-    /// How many files each category has (`Xnf::files`).
-    counts: [u32; 3],
-}
-
-impl XaFiles {
-    /// As `xa::XaFiles::read`: the sectors of `track`; None if its file is not on the disc.
-    pub fn read(
-        &self,
-        category: crate::xa::Category,
-        track: crate::xa::Track,
-    ) -> io::Result<Option<Vec<u8>>> {
-        if track.file >= self.counts[category as usize] as _ {
-            return Ok(None);
-        }
-        let name = format!("{}/S{:02}.XA", category.dir(), track.file);
-        let Some(path) = self.source.file(&name, true)? else {
-            return Ok(None);
-        };
-        crate::xa::read_track(&mut open_file(&path)?, 0, track).map(Some)
-    }
-}
-
 /// Writes `path` (and the directories above it) by `write`, under another name until it is done.
-fn write_atomically(
+pub(crate) fn write_atomically(
     path: &Path,
     write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -361,12 +199,12 @@ fn write_atomically(
 }
 
 /// The first sector of the file at `path` (directories split by `/`, no version suffix).
-fn find<R: Read + Seek>(image: &hadris_iso::read::IsoImage<R>, path: &str) -> Option<u32> {
+pub(crate) fn find<R: Read + Seek>(image: &hadris_iso::read::IsoImage<R>, path: &str) -> Option<u32> {
     find_sized(image, path).map(|(start, _)| start)
 }
 
 /// The first sector and the size in bytes of the file at `path`.
-fn find_sized<R: Read + Seek>(
+pub(crate) fn find_sized<R: Read + Seek>(
     image: &hadris_iso::read::IsoImage<R>,
     path: &str,
 ) -> Option<(u32, u32)> {
