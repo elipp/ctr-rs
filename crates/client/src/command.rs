@@ -565,7 +565,7 @@ fn submit(
 
 /// A chat message, for the others in the lobby to read. (Stub: nothing is sent yet.)
 fn chat(message: &str, toasts: &mut MessageWriter<Toast>) {
-    info!("(chat, not sent) {message}");
+    debug!("(chat, not sent) {message}");
     toasts.write(Toast::new("Chat is not implemented yet", 2000));
 }
 

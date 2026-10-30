@@ -155,6 +155,8 @@ pub(crate) async fn run(
     let mut running = false;
     // The host: a race has been started and the game has not said it is over.
     let mut racing = false;
+    // The host: the level the lobby drives on between races, as last set.
+    let mut lobby_track: Option<(u32, u64)> = None;
     // The host: the players of the race that left it. They go from the lobby when the next race
     // starts.
     let mut gone: HashSet<EndpointId> = HashSet::new();
@@ -201,6 +203,8 @@ pub(crate) async fn run(
                         if racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
                             let _ = send_reliably(&connection, &wait).await;
+                        } else if let Some((track, hash)) = lobby_track {
+                            let _ = send_reliably(&connection, &Message::Track { track, hash }).await;
                         }
                         listen(connection, id, heard_tx.clone());
                         guests.push(guest);
@@ -259,6 +263,12 @@ pub(crate) async fn run(
                         let _ = send_reliably(&guest.connection, &Message::Announce { text: text.clone() }).await;
                     }
                     io.event(Event::Announce(text));
+                },
+                Command::Track { track, hash } => if matches!(role, Role::Host) && !racing {
+                    lobby_track = Some((track, hash));
+                    for guest in &guests {
+                        let _ = send_reliably(&guest.connection, &Message::Track { track, hash }).await;
+                    }
                 },
                 Command::Character(c) => if !racing {
                     character = c;
@@ -438,6 +448,11 @@ pub(crate) async fn run(
                     Message::Announce { text } => {
                         if from == host_id && !matches!(role, Role::Host) {
                             io.event(Event::Announce(text));
+                        }
+                    }
+                    Message::Track { track, hash } => {
+                        if from == host_id && !matches!(role, Role::Host) {
+                            io.event(Event::Track { track, hash });
                         }
                     }
                     Message::Ready => {

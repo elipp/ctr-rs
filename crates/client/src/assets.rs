@@ -120,6 +120,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
         "map {id:#x} is not in the maps folder"
     );
     if let Some(map) = maps::get(id) {
+        debug!("level {id:#x} ({}): loaded from map cache", maps::name(id));
         // A map brings its own level and texture pages; the shared ones are the disc's.
         let mut vram = Vram::default();
         for img in &map.vram {
@@ -132,6 +133,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
             vram,
         };
     }
+    debug!("level {id:#x} ({}): loaded from disc", maps::name(id));
     let mut read = |f| {
         let index = BigIndex::level(LevelId(id), Lod::OnePlayer, f);
         big.read(&mut disc, index.get())
