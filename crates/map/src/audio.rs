@@ -182,12 +182,13 @@ fn read_table(exe: &[u8], at: usize, width: usize, count: usize) -> Option<Vec<u
 /// gives it, if that is not the game's, and the samples that pack plays that are not the game's;
 /// its reverb if that is not. Every map made over a track keeps which one, so that what it does
 /// not carry is the game's. `song_pack` names the pack to take when the patch does not say which
-/// is the track's (`ctr-map audio` shows which it changes).
+/// is the track's (`ctr-map audio` shows which it changes), and `reverb` the reverb mode.
 pub fn carve(
     original: &Path,
     patch: &[u8],
     level: u32,
     song_pack: Option<u8>,
+    reverb: Option<u8>,
 ) -> io::Result<Option<crate::Audio>> {
     let old = || Ok(BufReader::new(File::open(original)?));
     let new = || xdelta::Patched::new(BufReader::new(File::open(original)?), patch.to_vec());
@@ -211,8 +212,14 @@ pub fn carve(
     let pack = song_pack
         .or_else(|| table(&LEVEL_SONGS))
         .or(LEVEL_SONGS.get(level as usize).copied());
-    let reverb = table(&LEVEL_REVERBS);
-    audio.reverb = reverb.filter(|&r| LEVEL_REVERBS.get(level as usize).is_some_and(|&o| o != r));
+    let patched = table(&LEVEL_REVERBS);
+    audio.reverb = reverb.or(patched.filter(|&r| LEVEL_REVERBS.get(level as usize).is_some_and(|&o| o != r)));
+    if audio.reverb.is_some_and(|r| r as usize >= howl::tables::REVERBS.len()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("reverb {} is not one of the game's (0 to {})", audio.reverb.unwrap(), howl::tables::REVERBS.len() - 1),
+        ));
+    }
 
     if let Some(pack) = pack {
         let ((mut a, x), (mut b, y)) = (open_howl_with(old)?, open_howl_with(new)?);
@@ -374,4 +381,25 @@ pub fn changed_packs(original: &Path, patch: &[u8]) -> io::Result<Vec<PackChange
         });
     }
     Ok(changes)
+}
+
+/// The levels whose reverb mode the patched executable changes, with the mode the game has and
+/// the one the patch gives (`data.reverbMode`).
+pub fn changed_reverbs(original: &Path, patch: &[u8]) -> io::Result<Vec<(usize, u8, u8)>> {
+    let old = || Ok(BufReader::new(File::open(original)?));
+    let new = || xdelta::Patched::new(BufReader::new(File::open(original)?), patch.to_vec());
+    let (Some(a), Some(b)) = (read_file_with(old, EXE)?, read_file_with(new, EXE)?) else {
+        return Ok(Vec::new());
+    };
+    let Some((at, width)) = find_table(&a, &LEVEL_REVERBS) else {
+        return Ok(Vec::new());
+    };
+    let now = read_table(&b, at, width, LEVEL_REVERBS.len()).unwrap_or_default();
+    Ok(LEVEL_REVERBS
+        .iter()
+        .zip(now)
+        .enumerate()
+        .filter(|&(_, (&was, now))| was as u32 != now)
+        .map(|(level, (&was, now))| (level, was, now.min(255) as u8))
+        .collect())
 }
