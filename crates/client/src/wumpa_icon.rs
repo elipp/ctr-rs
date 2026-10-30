@@ -55,7 +55,7 @@ pub struct WumpaIconPlugin;
 
 impl Plugin for WumpaIconPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, show).chain().run_if(crate::drive::driving));
+        app.add_systems(Update, (build, show, fly).chain().run_if(crate::drive::driving));
     }
 }
 
@@ -201,4 +201,105 @@ fn show(
         transform.scale = Vec3::splat(HEIGHT_PIXELS / icon.diameter);
         transform.rotation = icon.rest * Quat::from_rotation_y(angle);
     }
+}
+
+/// `wumpaposter` (`gGT->iconGroup[0xB]`), the icon group of the fruit that flies to the counter.
+const POSTER_GROUP: i16 = 0xB;
+
+/// How far above the kart's projected spot the flight starts, in lines of retail's screen
+/// (`RB_Fruit_ThCollide`'s `- 0x14`).
+const START_LIFT: f32 = 20.0;
+
+/// The fruit picked up, flying from where it was grabbed to the counter (`UI_RenderFrame`): the
+/// sim's queue (`vehicle::wumpa::hud_tick`) says how far along it is.
+#[derive(Component)]
+struct FlyingWumpa {
+    /// The picture's size on screen.
+    size: Vec2,
+}
+
+/// Where the flight started (the spot the last fruit was picked up at, as the screen had it) and
+/// how many fruit were queued last frame, to see a new one come in.
+#[derive(Default)]
+struct Flight {
+    start: Vec2,
+    queued: i32,
+}
+
+/// Keeps the flying fruit where the queue has it. The picture is a node of the UI over the 3D
+/// fruit of the counter, which it lands on.
+fn fly(
+    mut commands: Commands,
+    sim: Res<crate::props::Sim>,
+    fixed: Res<Time<Fixed>>,
+    textures: Res<Textures>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<crate::drive::ChaseCamera>>,
+    karts: Query<
+        &Transform,
+        (
+            With<crate::drive::Kart>,
+            Without<crate::drive::ChaseCamera>,
+        ),
+    >,
+    mut images: ResMut<Assets<Image>>,
+    mut flying: Query<(&FlyingWumpa, &mut Node, &mut Visibility)>,
+    mut flight: Local<Flight>,
+    mut missing: Local<bool>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let driver = sim.driver();
+    let Ok((wumpa, mut node, mut visibility)) = flying.single_mut() else {
+        // The first frame of a level, which took the node away.
+        if *missing {
+            return;
+        }
+        let groups = crate::leaderboard::pack_groups();
+        let Some(atlas) = render::hud_icons::group_icon(&groups, &textures.vram, POSTER_GROUP)
+        else {
+            *missing = true;
+            return;
+        };
+        let size = Vec2::new(atlas.width as f32, atlas.height as f32) * crate::hud::PIXEL;
+        commands.spawn((
+            FlyingWumpa { size },
+            ImageNode::new(crate::leaderboard::atlas_image(atlas, &mut images))
+                .with_mode(NodeImageMode::Stretch),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(size.x),
+                height: Val::Px(size.y),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ));
+        return;
+    };
+    // A fruit came in: the flight starts from the kart.
+    let queued = driver.pickup_wumpa_collected;
+    if queued > flight.queued
+        && let Ok((camera, camera_transform)) = cameras.single()
+        && let Ok(kart) = karts.single()
+        && let Ok(at) = camera.world_to_viewport(camera_transform, kart.translation)
+    {
+        flight.start = at - Vec2::new(0.0, START_LIFT * crate::hud::PIXEL.y);
+    }
+    flight.queued = queued;
+    if queued == 0 {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    *visibility = Visibility::Inherited;
+    let end = Vec2::new(
+        window.width() / 2.0 + FRUIT_X * crate::hud::PIXEL.x,
+        ICON_MIDDLE_Y * crate::hud::PIXEL.y,
+    );
+    // The tick's countdown, run on between ticks.
+    let left = (driver.pickup_wumpa_cooldown as f32 - fixed.overstep_fraction()).max(0.0);
+    let at = end + (flight.start - end) * (left / vehicle::wumpa::FLIGHT_TICKS as f32);
+    node.left = Val::Px(at.x - wumpa.size.x / 2.0);
+    node.top = Val::Px(at.y - wumpa.size.y / 2.0);
 }

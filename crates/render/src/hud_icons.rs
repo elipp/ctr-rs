@@ -1,6 +1,6 @@
 //! HUD pictures cut from a racer pack's icons: a strip of equally sized cells, one icon each.
 
-use loader::icons::Icon;
+use loader::icons::{Icon, IconGroup};
 use loader::vram::Vram;
 
 use crate::mesh::Atlas;
@@ -67,6 +67,19 @@ pub fn strip_named(
         .map(|name| icons.iter().find(|i| i.name == *name))
         .collect();
     strip_of(&picked, vram, width, height, false)
+}
+
+/// The first icon of group `group_id` in a racer pack's `groups`, at its own size. `None` if the
+/// pack lacks the group.
+pub fn group_icon(groups: &[IconGroup], vram: &Vram, group_id: i16) -> Option<Atlas> {
+    let icon = groups
+        .iter()
+        .find(|g| g.group_id == group_id)?
+        .icons
+        .first()?;
+    let [(u0, v0), (u1, _), (_, v2), _] = icon.layout.uv;
+    let (width, height) = (u1.wrapping_sub(u0) as usize, v2.wrapping_sub(v0) as usize);
+    Some(strip_of(&[Some(icon)], vram, width, height, false))
 }
 
 /// The icons' texels, those with the STP bit [`half_transparent`] if `half` is set.
