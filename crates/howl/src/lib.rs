@@ -106,6 +106,8 @@ pub struct Howl {
     /// The tracks of XA (`XA/ENG.XNF`), and what of them plays.
     pub(crate) xnf: Xnf,
     pub(crate) xa: xa::Xa,
+    /// The samples a map put in place of the game's, with what they replaced.
+    pub(crate) replaced: Vec<(u16, Option<Box<[u8]>>)>,
     /// The output samples until the next vertical blank.
     until_vsync: u32,
 }
@@ -140,6 +142,7 @@ impl Howl {
             race_intro_xa: 0,
             xnf: Xnf::default(),
             xa: xa::Xa::default(),
+            replaced: Vec::new(),
             until_vsync: 0,
         }
     }
