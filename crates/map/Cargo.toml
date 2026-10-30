@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitcode = { version = "0.6.9", features = ["serde"] }
+howl = { path = "../howl" }
 loader = { path = "../loader" }
 serde = { version = "1.0.229", features = ["derive"] }
 xdelta = { path = "../xdelta" }
