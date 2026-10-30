@@ -80,11 +80,26 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[node(
             "set",
             "Change a setting",
-            &[takes(
-                "nickname",
-                "The name the others see, up to 12 characters",
-                "<name>",
-            )],
+            &[
+                takes(
+                    "nickname",
+                    "The name the others see, up to 12 characters",
+                    "<name>",
+                ),
+                node(
+                    "vsync",
+                    "Wait for the display before drawing",
+                    &[
+                        leaf("on", "Wait for the display"),
+                        leaf("off", "Draw as fast as allowed"),
+                    ],
+                ),
+                takes(
+                    "fps-max",
+                    "The most frames to draw a second, 0 for no limit",
+                    "<frames a second>",
+                ),
+            ],
         )],
     ),
     node(

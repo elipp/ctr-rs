@@ -125,6 +125,7 @@ fn main() {
                 maps::name(track_id),
                 CHARACTERS[racer as usize]
             ),
+            present_mode: config.present_mode(),
             ..default()
         }),
         ..default()
@@ -164,6 +165,7 @@ fn main() {
         .insert_resource(LevelNumber(track_id))
         .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
+        .add_systems(Last, limit_frame_rate)
         // After the cameras and karts have moved this frame, before their transforms propagate.
         .add_systems(
             PostUpdate,
