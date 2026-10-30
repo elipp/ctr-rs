@@ -4,6 +4,7 @@ use super::countdown::Then;
 use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, Lobby};
 use crate::command::Action;
+use crate::console::Log;
 use crate::maps;
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -73,6 +74,7 @@ pub(super) fn run(
     mut rollbacks: ResMut<RollbackToasts>,
     config: Res<crate::config::Config>,
     mut toasts: MessageWriter<Toast>,
+    mut logs: MessageWriter<Log>,
 ) {
     for action in actions.read() {
         if let Some(why) = refusal(action, &lobby) {
@@ -142,7 +144,9 @@ pub(super) fn run(
                 continue;
             }
             Action::Say(text) => {
-                lobby.say(text);
+                if !lobby.say(text) {
+                    logs.write(Log::error("You are talking too fast"));
+                }
                 continue;
             }
             // (Not the lobby's.)
