@@ -30,6 +30,7 @@ mod flame;
 mod flash;
 mod fly;
 mod font;
+mod free_drive;
 mod frame;
 mod fx;
 mod heat;
@@ -258,6 +259,7 @@ fn main() {
             slide_meter::SlideMeterPlugin,
             toast::ToastPlugin,
             wrong_way::WrongWayPlugin,
+            free_drive::FreeDrivePlugin,
         ),
         config::ConfigPlugin,
         probe::ProbePlugin,

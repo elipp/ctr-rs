@@ -99,6 +99,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "The most frames to draw a second, 0 for no limit",
                     "<frames a second>",
                 ),
+                node(
+                    "volume",
+                    "How loud the music and the effects are",
+                    &[
+                        takes("music", "The music's volume, 100 being the game's", "<0-100>"),
+                        takes("fx", "The effects' and voices' volume, 100 being the game's", "<0-100>"),
+                    ],
+                ),
             ],
         )],
     ),
