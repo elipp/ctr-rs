@@ -11,7 +11,7 @@ use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 #[derive(Component)]
 pub(super) struct Hud;
 
-/// Whether the development text of the race shows: the position and speed under the frame rate,
+/// Whether the development text of the race shows: the speed under the frame rate,
 /// and the boost reserves (`/debug hud`). The frame rate always shows, and the viewer's text does.
 #[derive(Resource)]
 pub(crate) struct DebugText(pub(crate) bool);
@@ -51,6 +51,9 @@ pub(super) struct SplitHud;
 /// How long a checkpoint time stays up, in milliseconds of the race. (The last one, at the finish
 /// line, stays.)
 const SPLIT_SHOW_MS: i32 = 3000;
+
+/// The width of the reserves' text, in pixels: "Reserves: " and 5 digits at the default font size.
+const RESERVES_WIDTH: f32 = 150.0;
 
 /// The boost reserves, as a number at the bottom right.
 #[derive(Component)]
@@ -101,14 +104,13 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         ReservesHud,
         Text::new(""),
-        TextFont {
-            font_size: 24.0.into(),
-            ..default()
-        },
+        // Wide enough for the label and 5 digits, so that the label stays put as the number grows.
+        TextLayout::justify(Justify::Left),
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(8.0),
             right: Val::Px(20.0),
+            width: Val::Px(RESERVES_WIDTH),
             ..default()
         },
     ));
@@ -122,7 +124,7 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
         TextLayout::justify(Justify::Right),
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(64.0),
+            bottom: Val::Px(8.0),
             right: hud::x(108.0),
             ..default()
         },
@@ -195,7 +197,7 @@ pub(super) fn reserves_hud(
 ) {
     for mut text in &mut text {
         text.0 = if shown.0 {
-            format!("{}", sim.driver().reserves)
+            format!("Reserves: {}", sim.driver().reserves)
         } else {
             String::new()
         };
@@ -226,10 +228,7 @@ pub(super) fn hud(
             continue;
         }
         text.0 = format!(
-            "{fps}\npos {} {} {}  (level units)\nspeed {:5}  {:?}{}{}{}{}",
-            d.pos_curr.x >> 8,
-            d.pos_curr.y >> 8,
-            d.pos_curr.z >> 8,
+            "{fps}\nspeed {:5}  {:?}{}{}{}{}",
             d.speed_approx,
             d.phys_state,
             if grounded { "" } else { "  airborne" },
