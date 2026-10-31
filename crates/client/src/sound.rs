@@ -32,6 +32,7 @@ use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, S
 use bevy::prelude::*;
 use howl::music::{AKU_SONG, UKA_SONG};
 use loader::howl::Cseq;
+use howl::settings::Slider;
 use howl::state::{RaceAudio, State};
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
 use loader::source::{Need, Source as DiscSource};
@@ -156,6 +157,12 @@ impl Sounds {
     pub fn menu(&self, id: u16) {
         self.lock().play(id, AntiSpam::CutRecent, howl::Sfx::FULL);
     }
+
+    /// `OptionsMenu_TestSound`: the sound to hear the volume `slider` by plays while it is
+    /// picked, `character`'s grunts for the voices, and stops once none is.
+    pub fn test_sound(&self, slider: Option<Slider>, character: u8, frame: u32) {
+        self.lock().test_sound(slider, character, frame);
+    }
 }
 
 fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds: Res<Sounds>) {
@@ -200,7 +207,9 @@ fn volumes(config: Res<crate::config::Config>, sounds: Option<Res<Sounds>>) {
     if let Some(sounds) = sounds
         && (config.is_changed() || sounds.is_added())
     {
-        sounds.lock().set_volumes(config.volume_fx, config.volume_music);
+        sounds
+            .lock()
+            .set_volumes(config.volume_fx, config.volume_music, config.volume_voice);
     }
 }
 

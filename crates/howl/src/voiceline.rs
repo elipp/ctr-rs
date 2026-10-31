@@ -28,7 +28,7 @@ const LINES: u16 = 19;
 /// The character whose lines are out of order: its first set is its sixth again.
 const OUT_OF_ORDER: u8 = 10;
 /// The grunts of sets 0 and 1: the sound effect of the first character, the others after it.
-const GRUNTS: [u16; 2] = [0x1c, 0x2c];
+pub(crate) const GRUNTS: [u16; 2] = [0x1c, 0x2c];
 
 const CHARACTERS: u8 = 16;
 /// The lines that wait at most (`voicelinePool`).
