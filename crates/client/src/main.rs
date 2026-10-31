@@ -91,6 +91,21 @@ use frame::*;
 pub(crate) use resources::*;
 pub(crate) use scene::*;
 
+/// What is logged. In a browser (WebGL2) Bevy says at the start which of its plugins the GPU
+/// cannot run, none of which the game uses: that is not for the console.
+fn log_filter() -> String {
+    let filter = bevy::log::DEFAULT_FILTER;
+    if cfg!(target_arch = "wasm32") {
+        format!(
+            "{filter},bevy_core_pipeline::oit=error,\
+             bevy_core_pipeline::prepass::background_motion_vectors=error,\
+             bevy_pbr::ssao=error,bevy_pbr::atmosphere=error"
+        )
+    } else {
+        filter.to_string()
+    }
+}
+
 fn main() {
     crash::install();
     #[cfg(target_arch = "wasm32")]
@@ -131,6 +146,7 @@ fn main() {
     let plugins = DefaultPlugins
         .set(bevy::log::LogPlugin {
             custom_layer: console::layer,
+            filter: log_filter(),
             ..default()
         })
         .set(WindowPlugin {
