@@ -41,7 +41,6 @@ fn stall(time: std::time::Duration) {
     }
 }
 
-
 /// One game tick of the sim.
 pub(super) fn drive_tick(
     mut particles: ResMut<crate::exhaust::Particles>,

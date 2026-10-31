@@ -94,6 +94,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "The name the others see, up to 12 characters",
                     "<name>",
                 ),
+                // (A browser has none of these three: see `config.rs`.)
+                #[cfg(not(target_arch = "wasm32"))]
                 node(
                     "vsync",
                     "Wait for the display before drawing",
@@ -102,11 +104,13 @@ pub(crate) const COMMANDS: &[Spec] = &[
                         leaf("off", "Draw as fast as allowed"),
                     ],
                 ),
+                #[cfg(not(target_arch = "wasm32"))]
                 takes(
                     "fps-max",
                     "The most frames to draw a second, 0 for no limit",
                     "<frames a second>",
                 ),
+                #[cfg(not(target_arch = "wasm32"))]
                 node(
                     "relay-only",
                     "Reach the others through the relay only, hiding your address",

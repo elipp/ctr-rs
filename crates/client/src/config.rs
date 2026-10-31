@@ -14,6 +14,9 @@
 //! * `/config set volume music|sfx <0-100>`: how loud the music and the effects (the voices too)
 //!   are, in percent of the game's own volumes (100 at first)
 //!
+//! A browser has no vsync, fps-max or relay-only: it paces the frames to the display itself, and
+//! reaches the others through the relay only.
+//!
 //! The last character driven is kept too, and is the one the client starts with.
 //!
 //! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, its arm in
@@ -180,16 +183,31 @@ pub enum Setting {
     VolumeMusic(u8),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set relay-only on|off\n\
+    /config set volume music|sfx <0-100>";
+#[cfg(target_arch = "wasm32")]
+const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set volume music|sfx <0-100>";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
     pub fn parse(line: &str) -> Result<Setting, String> {
         let (key, value) = word(line);
+        if cfg!(target_arch = "wasm32") {
+            match key {
+                "vsync" | "fps-max" => {
+                    return Err("In a browser, the browser sets the frame rate".into());
+                }
+                "relay-only" => {
+                    return Err("In a browser, every connection goes through the relay".into());
+                }
+                _ => {}
+            }
+        }
         match key {
             "nickname" => {
                 if value.chars().count() > net::NICK_MAX {

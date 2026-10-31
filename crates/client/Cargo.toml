@@ -45,8 +45,8 @@ rfd = { version = "0.17.2", default-features = false }
 # The system clipboard, for pasting a lobby address.
 arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
 
-# The browser build (`web.rs`): the page hands over the disc image, and is told of a panic
-# (`crash.rs`), which goes to the browser's console as well.
+# The browser build (`web.rs`): the page hands over the disc image, and keeps the settings and the
+# maps sent to us; it is told of a panic (`crash.rs`), which goes to the browser's console as well.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
 js-sys = "0.3.106"
