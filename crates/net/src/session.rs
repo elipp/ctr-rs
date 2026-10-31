@@ -6,20 +6,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::Connection;
-use iroh::{Endpoint, EndpointId};
+use iroh::{Endpoint, EndpointAddr, EndpointId};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::conn::{
     Heard, RACE_IN_PROGRESS, dial, distinct, listen, send_datagram, send_reliably, stamp,
 };
-use crate::peers::{Departure, Guest, HostState, Link, Plan, Role, stalled, start_over};
+use crate::peers::{Departure, Guest, HostState, Heirs, Link, Plan, Role, stalled, start_over};
 use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Tick, Ticket,
-    RateLimit, clean_chat, clean_nick,
+    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Public, Tick,
+    Ticket, RateLimit, clean_chat, clean_nick,
 };
+
+/// How long a guest tries to reach the player that would host the lobby in the place of a host
+/// that left, before it goes on to the next one.
+const HEIR_DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How often the packets go out, once per game tick. They are sent whether or not there is
 /// news: when a packet is lost and the game then waits for it, the resend is what gets it going.
@@ -72,6 +76,10 @@ pub(crate) async fn tell_lobby(
             .iter()
             .map(|p| (*p.id.as_bytes(), p.nick.clone()))
             .collect(),
+        public: host
+            .public
+            .as_ref()
+            .map(|p| (*p.realm.as_bytes(), p.name.clone(), p.track.clone())),
     };
     for guest in &guests {
         let _ = send_reliably(&guest.connection, &message).await;
@@ -154,10 +162,16 @@ pub(crate) async fn run(
             host_connection = Some(connection);
         }
     }
-    let host_id = match &role {
+    let mut host_id = match &role {
         Role::Host => me,
         Role::Join(ticket) => ticket.id,
     };
+
+    // A guest: what it would carry the lobby on with if the host left, and whether a race is on
+    // (which it cannot yet: see `Heard::Closed`).
+    let mut heirs = Heirs::default();
+    let mut race_on = false;
+    let (reached_tx, mut reached) = unbounded_channel::<(EndpointId, Option<Connection>)>();
 
     // The race.
     let mut plan: Option<Plan> = None;
@@ -231,6 +245,28 @@ pub(crate) async fn run(
             _ = list_timer.tick(), if host.as_ref().is_some_and(|h| h.publisher.is_some()) => {
                 if let Some(host) = &host {
                     refresh_listing(host, build);
+                }
+            }
+            Some((candidate, connection)) = reached.recv() => {
+                // The heir we dialed is the host now (as far as we know), or could not be reached.
+                if heirs.dialing == Some(candidate) {
+                    heirs.dialing = None;
+                    match connection {
+                        Some(connection) => {
+                            listen(connection.clone(), candidate, heard_tx.clone());
+                            host_id = candidate;
+                            host_connection = Some(connection.clone());
+                            io.event(Event::Joined(candidate));
+                            // As if we joined it: the host takes the latest Hello it has.
+                            let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
+                            let _ = send_reliably(&connection, &hello).await;
+                            hellos += 1;
+                        }
+                        None => {
+                            heirs.dead.insert(candidate);
+                            heirs.searching = true;
+                        }
+                    }
                 }
             }
             Some(connection) = dialed.recv() => {
@@ -339,14 +375,18 @@ pub(crate) async fn run(
                     },
                 },
                 Command::Ready => game_ready = true,
-                Command::RaceOver => if let Some(host) = &mut host {
-                    host.racing = false;
-                    // Whoever left during the race is out of the lobby now that it is over.
-                    if !host.gone.is_empty() {
-                        tell_lobby(me, character, &nick, host, &io).await;
+                Command::RaceOver => {
+                    race_on = false;
+                    if let Some(host) = &mut host {
+                        host.racing = false;
+                        // Whoever left during the race is out of the lobby now that it is over.
+                        if !host.gone.is_empty() {
+                            tell_lobby(me, character, &nick, host, &io).await;
+                        }
                     }
                 }
                 Command::Public(public) => if let Some(host) = &mut host {
+                    host.public = public.clone();
                     match public {
                         Some(public) => {
                             if host.publisher.as_ref().is_none_or(|p| p.realm != public.realm) {
@@ -361,6 +401,8 @@ pub(crate) async fn run(
                         },
                     }
                     refresh_listing(host, build);
+                    // The guests keep how it is listed, for one of them to carry on with.
+                    tell_lobby(me, character, &nick, host, &io).await;
                 },
                 Command::NetInfo => {
                     let peers = distinct(
@@ -396,6 +438,13 @@ pub(crate) async fn run(
             },
             Some((from, heard)) = heard.recv() => match heard {
                 Heard::Message(message) => match message {
+                    // A player that took us for the host: it was right, or will be (we may not
+                    // have found out that the host left yet). Kept for then.
+                    message @ (Message::Hello { .. } | Message::Nick { .. }) if host.is_none() => {
+                        if from != host_id && heirs.heard.len() < 64 {
+                            heirs.heard.push((from, message));
+                        }
+                    }
                     Message::Hello { build: theirs_build, .. } if theirs_build != build => {
                         if let Some(host) = &mut host
                             && let Some(guest) = host.guests.iter().find(|g| g.id == from)
@@ -436,7 +485,7 @@ pub(crate) async fn run(
                         guest.nick = (seq, clean_nick(&theirs));
                         tell_lobby(me, character, &nick, host, &io).await;
                     },
-                    Message::Lobby { players, watching } if from == host_id && host.is_none() => {
+                    Message::Lobby { players, watching, public } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
                             .iter()
                             .map(|(bytes, character, nick)| {
@@ -458,6 +507,14 @@ pub(crate) async fn run(
                             })
                             .collect::<Result<_, _>>()?;
                         let you = players.iter().position(|p| p.id == me);
+                        // The lobby is in the hands of a host that is there: what we kept of the
+                        // ones before it, and what players told us in its place, is over.
+                        heirs.order = players.iter().map(|p| p.id).collect();
+                        heirs.public = public.and_then(|(realm, name, track)| {
+                            Some(Public { realm: EndpointId::from_bytes(&realm).ok()?, name, track })
+                        });
+                        heirs.dead.clear();
+                        heirs.heard.clear();
                         io.event(Event::Lobby { players, spectators, you });
                     }
                     Message::Start { epoch: new, slot, characters, track, hash, roster }
@@ -469,6 +526,7 @@ pub(crate) async fn run(
                             .collect::<Result<_, _>>()?;
                         let slot = slot as usize;
                         epoch = new;
+                        race_on = true;
                         departed.clear();
                         // The host is connected already, and so are the players that were in
                         // the race before this one.
@@ -535,6 +593,7 @@ pub(crate) async fn run(
                     }
                     Message::Track { track, hash } => {
                         if from == host_id && host.is_none() {
+                            heirs.track = Some((track, hash));
                             io.event(Event::Track { track, hash });
                         }
                     }
@@ -683,7 +742,10 @@ pub(crate) async fn run(
                     links.remove(&from);
                     unclaimed.retain(|c| c.remote_id() != from);
                     // A guest whose host is gone has no lobby, nor a race: the host runs both.
-                    if from == host_id && host.is_none() {
+                    if from == host_id
+                        && host.is_none()
+                        && host_connection.as_ref().is_some_and(|c| c.stable_id() == closed)
+                    {
                         if kicked {
                             return Err(format!(
                                 "the host removed you: nothing came from you for {} seconds. \
@@ -691,7 +753,23 @@ pub(crate) async fn run(
                                 KICK_AFTER.as_secs()
                             ).into());
                         }
-                        return Err("the host closed the lobby".into());
+                        // A race has the host to settle the pads of whoever leaves it: it cannot
+                        // go on without one (yet), so it is stopped, as if the host had.
+                        // The lobby after it goes on with the next player in the order it was
+                        // told in.
+                        if race_on {
+                            race_on = false;
+                            running = false;
+                            departed.clear();
+                            io.event(Event::Stopped);
+                            io.event(Event::Announce("The host left the race".into()));
+                        } else {
+                            io.event(Event::Announce("The host left the lobby".into()));
+                        }
+                        host_connection = None;
+                        fetching.clear();
+                        heirs.dead.insert(from);
+                        heirs.searching = true;
                     }
                     if let Some(host) = &mut host {
                         // A player of the race that is on stays in the roster, which the race
@@ -781,6 +859,82 @@ pub(crate) async fn run(
                     }
                 }
             },
+        }
+
+        // A guest whose host is gone: the next player of the order hosts, and the others go to it.
+        // (TODO: two hosts, should a guest lose its way to an heir that is up and the rest not;
+        // the one later in the order should step down for the earlier when it hears of it.)
+        if heirs.searching && host.is_none() {
+            heirs.searching = false;
+            match heirs.next_host() {
+                None => return Err("the host closed the lobby".into()),
+                Some(id) if id == me => {
+                    let mut state = HostState {
+                        lobby_track: heirs.track,
+                        public: heirs.public.clone(),
+                        ..HostState::default()
+                    };
+                    // The players that dialed us before this are the guests, once they say who
+                    // they are (what they said is below).
+                    for connection in unclaimed.drain(..) {
+                        let id = connection.remote_id();
+                        if id == me || state.guests.iter().any(|g| g.id == id) {
+                            continue;
+                        }
+                        if let Some((track, hash)) = state.lobby_track {
+                            let _ = send_reliably(&connection, &Message::Track { track, hash }).await;
+                        }
+                        io.event(Event::PeerJoined(id));
+                        state.guests.push(Guest { id, connection, hello: None, nick: (0, String::new()), spectator: false });
+                    }
+                    if let Some(public) = &state.public {
+                        let mut publisher = Publisher::start(&endpoint, public.realm, io.events.clone());
+                        publisher.set(Some(public.clone()));
+                        state.publisher = Some(publisher);
+                    }
+                    // Nothing of the race before is carried over: the next start is a new one.
+                    host_connection = None;
+                    host_id = me;
+                    links.clear();
+                    (plan, race_info) = (None, None);
+                    departed.clear();
+                    epoch += 1;
+                    (running, game_ready, ready_sent) = (false, false, false);
+                    heirs.dialing = None;
+                    io.event(Event::Promoted {
+                        ticket: Ticket::of(&endpoint.addr()),
+                        public: state.public.clone(),
+                    });
+                    tell_lobby(me, character, &nick, &state, &io).await;
+                    refresh_listing(&state, build);
+                    host = Some(state);
+                    for (from, message) in std::mem::take(&mut heirs.heard) {
+                        let _ = heard_tx.send((from, Heard::Message(message)));
+                    }
+                }
+                Some(id) => {
+                    heirs.dialing = Some(id);
+                    let (endpoint, reached) = (endpoint.clone(), reached_tx.clone());
+                    tokio::spawn(async move {
+                        // A failed try is not the heir being gone: its address may not be found
+                        // yet (as in `dial`), so it is tried again until the time is up.
+                        let deadline = tokio::time::Instant::now() + HEIR_DIAL_TIMEOUT;
+                        let mut connection = None;
+                        while tokio::time::Instant::now() < deadline {
+                            let connect = endpoint.connect(EndpointAddr::new(id), ALPN);
+                            match tokio::time::timeout_at(deadline, connect).await {
+                                Ok(Ok(c)) => {
+                                    connection = Some(c);
+                                    break;
+                                }
+                                Ok(Err(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
+                                Err(_) => break,
+                            }
+                        }
+                        let _ = reached.send((id, connection));
+                    });
+                }
+            }
         }
 
         // The host: once everyone said what it holds of a player's pads that left, they all get

@@ -14,6 +14,8 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 
 ## Net
 - auto-kick suspicious peers: count what a well-behaved client never does per guest (a duplicate `Want`, which `transfers::Verdict::Duplicate` already tells apart; a `Want` for a map the host did not provide; a `Blob` nobody asked for) and kick with `KICKED` past a threshold. Log each as a rate-limited `tracing::warn!` with `fmt_short()` ids (the `net` crate has no logging yet), and say why in the kick. A guest that never reads its stream also holds a transfer slot until QUIC's idle timeout: put a deadline on `send_reliably` for maps
+- host migration, step-down: two hosts can come of it when a guest cannot reach an heir that is up and the others can (`session.rs`, the search for the next host). The one later in the order should step down for the earlier one when it hears of it (a dial or a Hello from a player ahead of it in `Heirs::order`), and rejoin.
+- host migration in a race: a guest stops the race when the host leaves during it, and the lobby carries on (`race_on` in `session.rs`), but the race itself is lost. The heir would have to take over the host's part in it (settling a leaver's pads with `Departure`, the `Ready`s and `Go`) without the sims diverging.
 
 ## Chores
 - remove any hex constants that aren't used as a bitmask; the particular values serve no purpose in the port
