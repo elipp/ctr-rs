@@ -125,9 +125,13 @@ pub enum Message {
     /// It comes whenever that changes, in full, so a client that joins late catches up. Each
     /// is the endpoint id, the character and the nickname (empty for none).
     /// The guests that only watch follow, as the endpoint id and the nickname.
+    /// Then how the lobby is listed, if it is public: the realm's endpoint id, the lobby's name
+    /// and its track, as the host was given them. A guest keeps them to list the lobby itself
+    /// should it become the host (see `Heirs`).
     Lobby {
         players: Vec<([u8; 32], u8, String)>,
         watching: Vec<([u8; 32], String)>,
+        public: Option<([u8; 32], String, String)>,
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
@@ -380,6 +384,7 @@ mod tests {
             Message::Lobby {
                 players: vec![([1; 32], 4, String::new()), ([2; 32], 15, "Ripper".into())],
                 watching: vec![([3; 32], "Eyes".into())],
+                public: Some(([6; 32], "Friday cup".into(), "Coco Park".into())),
             },
             Message::Announce {
                 text: "Restarting in 5".into(),

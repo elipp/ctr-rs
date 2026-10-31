@@ -23,6 +23,7 @@ pub(super) fn report(
         return;
     };
     let mut failed = None;
+    let mut promoted = None;
     let mut listed = None;
     let mut wanted_map = None;
     let mut free_track = None;
@@ -54,6 +55,7 @@ pub(super) fn report(
                     .color(Color::linear_rgb(0.4, 1.0, 0.4)),
                 );
             }
+            Event::Promoted { ticket, public } => promoted = Some((ticket, public)),
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
             Event::Lobby {
                 players,
@@ -199,6 +201,21 @@ pub(super) fn report(
                 failed = Some(why);
             }
         }
+    }
+    // The host left, and the lobby is ours now (the session listed it, if it was public).
+    if let Some((ticket, public)) = promoted {
+        lobby.joined = false;
+        lobby.public = public.map(|public| public.name);
+        copy_to_clipboard(format!("/lobby join {ticket}"));
+        // The players who join drive on the level we are on.
+        lobby.set_track(level.0);
+        toasts.write(
+            Toast::new(
+                "You are now the host\nJoin command copied to clipboard".to_string(),
+                4000,
+            )
+            .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+        );
     }
     for (key, rtt) in rtts {
         lobby
