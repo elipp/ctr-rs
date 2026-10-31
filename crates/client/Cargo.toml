@@ -37,11 +37,10 @@ map = { path = "../map" }
 # Where a release build keeps its files (`paths.rs`).
 directories = "6.0.0"
 
-# The disc image picker (`disc.rs`); elsewhere the path is `CTR_BIN` or in the config.
-[target."cfg(windows)".dependencies]
-rfd = { version = "0.17.2", default-features = false }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The disc image picker (`disc.rs`). On Linux through the desktop portal (or zenity), which needs
+# no GTK to build against.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 # The system clipboard, for pasting a lobby address.
 arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
 
