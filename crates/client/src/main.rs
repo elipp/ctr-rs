@@ -234,6 +234,7 @@ fn main() {
         common: vec![
             world.register_system(setup),
             world.register_system(spawn_kart),
+            world.register_system(console::spawn),
         ],
         race: vec![
             world.register_system(drive::spawn_hud),
