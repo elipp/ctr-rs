@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=ctr-rs
+Exec=ctr-rs
+Icon=ctr-rs
+Categories=Game;
+Terminal=false
