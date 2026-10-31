@@ -3,10 +3,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
+use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, timeout};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::conn::{
@@ -27,9 +28,9 @@ const HEIR_DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How often the packets go out, once per game tick. They are sent whether or not there is
 /// news: when a packet is lost and the game then waits for it, the resend is what gets it going.
-pub(crate) fn send_interval() -> tokio::time::Interval {
-    let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000 / 30));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+pub(crate) fn send_interval() -> Interval {
+    let mut interval = interval(Duration::from_millis(1000 / 30));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     interval
 }
 
@@ -189,12 +190,12 @@ pub(crate) async fn run(
     let mut timer = send_interval();
     // The last round trip to each player, from the pings.
     let mut pings: HashMap<EndpointId, Duration> = HashMap::new();
-    let mut ping_timer = tokio::time::interval(Duration::from_secs(PING_SECONDS));
-    ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut ping_timer = interval(Duration::from_secs(PING_SECONDS));
+    ping_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
     // The host: how often the listing of the lobby in the realm is checked for news (the guests
     // come and go in many places).
-    let mut list_timer = tokio::time::interval(Duration::from_secs(1));
-    list_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut list_timer = interval(Duration::from_secs(1));
+    list_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -430,7 +431,7 @@ pub(crate) async fn run(
                         // On a stream of its own, which the loop does not wait for.
                         let connection = link.connection.clone();
                         let message = message.clone();
-                        tokio::spawn(async move {
+                        n0_future::task::spawn(async move {
                             let _ = send_reliably(&connection, &message).await;
                         });
                     }
@@ -670,7 +671,7 @@ pub(crate) async fn run(
                             // guest takes its time to read it.
                             let connection = guest.connection.clone();
                             let sent_tx = sent_tx.clone();
-                            tokio::spawn(async move {
+                            n0_future::task::spawn(async move {
                                 let _ = send_reliably(&connection, &reply).await;
                                 let _ = sent_tx.send(transfer);
                             });
@@ -915,19 +916,19 @@ pub(crate) async fn run(
                 Some(id) => {
                     heirs.dialing = Some(id);
                     let (endpoint, reached) = (endpoint.clone(), reached_tx.clone());
-                    tokio::spawn(async move {
+                    n0_future::task::spawn(async move {
                         // A failed try is not the heir being gone: its address may not be found
                         // yet (as in `dial`), so it is tried again until the time is up.
-                        let deadline = tokio::time::Instant::now() + HEIR_DIAL_TIMEOUT;
+                        let deadline = Instant::now() + HEIR_DIAL_TIMEOUT;
                         let mut connection = None;
-                        while tokio::time::Instant::now() < deadline {
+                        while Instant::now() < deadline {
                             let connect = endpoint.connect(EndpointAddr::new(id), ALPN);
-                            match tokio::time::timeout_at(deadline, connect).await {
+                            match timeout(deadline.saturating_duration_since(Instant::now()), connect).await {
                                 Ok(Ok(c)) => {
                                     connection = Some(c);
                                     break;
                                 }
-                                Ok(Err(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
+                                Ok(Err(_)) => sleep(Duration::from_millis(500)).await,
                                 Err(_) => break,
                             }
                         }

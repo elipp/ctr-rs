@@ -5084,6 +5084,7 @@ dependencies = [
  "bitcode",
  "bytes",
  "iroh",
+ "n0-future",
  "realm-proto",
  "tokio",
 ]

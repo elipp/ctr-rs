@@ -2,7 +2,7 @@
 //! one is taken for each go. A burst up to the bucket's size is allowed, and then one go per
 //! refill.
 
-use std::time::Instant;
+use n0_future::time::Instant;
 
 /// How many chat lines a player can say at once, and how often it gets another after that.
 pub const CHAT_BURST: u32 = 5;

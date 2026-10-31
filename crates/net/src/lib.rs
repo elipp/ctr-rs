@@ -1,8 +1,8 @@
 //! Peer-to-peer connections between ctr-rust clients, negotiated with `iroh`.
 //!
 //! One client [`host`]s a lobby and prints its [`Ticket`]; the others [`join`] with it. A
-//! session runs on a thread of its own, so the game never waits on the network: it polls
-//! [`Session::events`] once per frame.
+//! session runs on a thread of its own (in a browser, a task of the page), so the game never
+//! waits on the network: it polls [`Session::events`] once per frame.
 //!
 //! The host only coordinates: it takes the joins, starts the race, and says when tick 0 is. The
 //! race itself is a mesh. When it starts, every player connects to every other, and each sends
@@ -22,6 +22,9 @@ pub mod wire;
 
 pub use iroh::EndpointId;
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
+/// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
+/// (where std's panics).
+pub use n0_future::time::Instant;
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
 pub use realm::{
     Browse, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public,
@@ -34,6 +37,7 @@ pub use wire::{Pad, Tick};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -306,6 +310,7 @@ pub struct Session {
     events: Mutex<Receiver<Event>>,
     commands: UnboundedSender<Command>,
     stop: Option<oneshot::Sender<()>>,
+    #[cfg(not(target_arch = "wasm32"))]
     thread: Option<JoinHandle<()>>,
 }
 
@@ -435,6 +440,7 @@ impl Drop for Session {
         // The thread says goodbye to the peers (which can take a while) on its own: the game
         // does not wait for it.
         self.stop.take();
+        #[cfg(not(target_arch = "wasm32"))]
         self.thread.take();
     }
 }
@@ -500,36 +506,44 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     let (events_tx, events) = mpsc::channel();
     let (commands, commands_rx) = unbounded_channel();
     let (stop, stop_rx) = oneshot::channel();
+    // Made where it runs: the session is not `Send`.
+    let session = move || async move {
+        let result: Result<(), Error> = async {
+            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec()]).bind().await?;
+            let io = Io {
+                events: events_tx.clone(),
+                commands: commands_rx,
+                stop: stop_rx,
+            };
+            let result = run(endpoint.clone(), io).await;
+            endpoint.close().await;
+            result
+        }
+        .await;
+        if let Err(e) = result {
+            let _ = events_tx.send(Event::Failed(e.to_string()));
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let thread = std::thread::Builder::new()
         .name("net".into())
         .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("the network runtime");
-            let result = runtime.block_on(async {
-                let endpoint = endpoint_builder()
-                    .alpns(vec![ALPN.to_vec()])
-                    .bind()
-                    .await?;
-                let io = Io {
-                    events: events_tx.clone(),
-                    commands: commands_rx,
-                    stop: stop_rx,
-                };
-                let result = run(endpoint.clone(), io).await;
-                endpoint.close().await;
-                result
-            });
-            if let Err(e) = result {
-                let _ = events_tx.send(Event::Failed(e.to_string()));
-            }
+                .expect("the network runtime")
+                .block_on(session())
         })
         .expect("the network thread");
+    // A browser has no threads: there the session is a task of the page's event loop, which
+    // runs between the frames.
+    #[cfg(target_arch = "wasm32")]
+    n0_future::task::spawn(session());
     Session {
         events: Mutex::new(events),
         commands,
         stop: Some(stop),
+        #[cfg(not(target_arch = "wasm32"))]
         thread: Some(thread),
     }
 }
