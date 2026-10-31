@@ -9,13 +9,75 @@ use iroh::endpoint::Connection;
 
 use crate::conn::send_datagram;
 use crate::wire::{InputReceiver, InputSender, Message};
-use crate::{KICK_AFTER, Ticket};
+use crate::realm::Publisher;
+use crate::transfers::Transfers;
+use crate::{KICK_AFTER, Public, RateLimit, Ticket};
 use crate::{Pad, Tick};
 
 #[derive(Clone)]
 pub(crate) enum Role {
     Host,
     Join(Ticket),
+}
+
+/// What only the lobby's host keeps: the guests, and what it takes to run the lobby and the
+/// races started from it. A peer is a host while it has one of these; the rest of a session
+/// (the connections, the race) is the same for every peer.
+#[derive(Default)]
+pub(crate) struct HostState {
+    /// The players that joined, in the order they did.
+    pub(crate) guests: Vec<Guest>,
+    /// How fast each guest has been talking.
+    pub(crate) talkers: HashMap<EndpointId, RateLimit>,
+    /// The players of the race that left it. They are not told of in the lobby, and go from
+    /// `guests` when the next race starts.
+    pub(crate) gone: HashSet<EndpointId>,
+    /// The track of a start that waits for the Hellos.
+    pub(crate) start_wanted: Option<(u32, u64)>,
+    /// The maps being sent.
+    pub(crate) transfers: Transfers,
+    /// Who is ready, before tick 0.
+    pub(crate) ready_from: HashSet<EndpointId>,
+    /// A race has been started and the game has not said it is over.
+    pub(crate) racing: bool,
+    /// The level the lobby drives on between races, as last set.
+    pub(crate) lobby_track: Option<(u32, u64)>,
+    /// The players that left the race, whose pads are still being settled, by slot.
+    pub(crate) departures: HashMap<usize, Departure>,
+    /// The listing of the lobby in the realm, if it is public.
+    pub(crate) publisher: Option<Publisher>,
+    /// How it is listed (what the guests are told, for one of them to carry on with).
+    pub(crate) public: Option<Public>,
+}
+
+/// What a guest keeps of the lobby to carry it on if the host goes: the players in the order
+/// they succeed in (the first one that is left hosts), and what the host would be keeping.
+#[derive(Default)]
+pub(crate) struct Heirs {
+    /// The players of the lobby that can host, the host first, as the latest
+    /// [`Message::Lobby`] said.
+    pub(crate) order: Vec<EndpointId>,
+    /// How the lobby is listed, if it is.
+    pub(crate) public: Option<Public>,
+    /// The level the host picked to drive on between races.
+    pub(crate) track: Option<(u32, u64)>,
+    /// The hosts that are gone, as far as we have found out (the one that closed, and every heir
+    /// that could not be reached or closed in turn).
+    pub(crate) dead: HashSet<EndpointId>,
+    /// Looking for the next host: pick one and dial it.
+    pub(crate) searching: bool,
+    /// The heir being dialed.
+    pub(crate) dialing: Option<EndpointId>,
+    /// What players that took us for the host said (they dialed us before we knew we were), for
+    /// when we are.
+    pub(crate) heard: Vec<(EndpointId, Message)>,
+}
+
+impl Heirs {
+    /// The one to carry the lobby on: the first of the order that is not known to be gone.
+    pub(crate) fn next_host(&self) -> Option<EndpointId> {
+        self.order.iter().copied().find(|id| !self.dead.contains(id))
+    }
 }
 
 /// A player in the lobby, as the host knows it.
@@ -155,5 +217,21 @@ mod tests {
         assert_eq!(stalled(100, &[(a, 100, long_ago)], now), [a]);
         // The host is the furthest back: it is not blamed, nor are the others.
         assert!(stalled(90, &[(a, 100, long_ago), (b, 160, long_ago)], now).is_empty());
+    }
+
+    #[test]
+    fn the_first_player_left_in_the_order_hosts_next() {
+        let [host, a, b] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
+        let mut heirs = Heirs {
+            order: vec![host, a, b],
+            ..Heirs::default()
+        };
+        heirs.dead.insert(host);
+        assert_eq!(heirs.next_host(), Some(a));
+        // The heir is gone too, before or after it took over.
+        heirs.dead.insert(a);
+        assert_eq!(heirs.next_host(), Some(b));
+        heirs.dead.insert(b);
+        assert_eq!(heirs.next_host(), None);
     }
 }
