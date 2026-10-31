@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use render::mesh::SCALE;
 
 use super::{Drive, Kart};
+use crate::command::CommandLine;
 
 /// Marks the camera that shows the sim's `camera::CameraDc`.
 #[derive(Component)]
@@ -103,6 +104,7 @@ pub(super) fn chase(
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
+    line: Res<CommandLine>,
     mut orbit: Local<Orbit>,
     karts: Query<&Transform, (With<Kart>, Without<ChaseCamera>)>,
     mut cameras: Query<&mut Transform, With<ChaseCamera>>,
@@ -127,7 +129,8 @@ pub(super) fn chase(
         MouseScrollUnit::Line => -scroll.delta.y,
         MouseScrollUnit::Pixel => -scroll.delta.y / 40.0,
     };
-    if lines != 0.0 {
+    // The wheel scrolls the console while the command line is open.
+    if lines != 0.0 && !line.is_open() {
         orbit.zoom = (orbit.zoom * ZOOM_PER_LINE.powf(lines)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
     }
     let t = fixed.overstep_fraction();
