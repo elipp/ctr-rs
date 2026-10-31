@@ -114,6 +114,24 @@ window.ctrTakePasted = () => {
   return text;
 };
 
+const CONFIG = "ctr-rs.config";
+window.ctrLoadConfig = () => {
+  try {
+    return localStorage.getItem(CONFIG);
+  } catch (e) {
+    console.warn(`could not read the settings: ${e}`);
+    return null;
+  }
+};
+window.ctrSaveConfig = (text) => {
+  try {
+    localStorage.setItem(CONFIG, text);
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+};
+
 window.ctrTakeDisc = () => {
   const taken = disc;
   disc = null;
