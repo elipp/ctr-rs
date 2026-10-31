@@ -55,9 +55,11 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
     // A scene that was just built is still taking its first commands (the HUD's pictures and
     // cameras are set up over the next frames): another change would despawn what they are about
     // to touch. The keys wait for it.
+    // The lobby's changes wait as well (the host can change the level faster than that), and
+    // are looked at again once it is over.
     if *settling > 0 {
         *settling -= 1;
-        (level_step, racer_step) = (0, 0);
+        return;
     }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
