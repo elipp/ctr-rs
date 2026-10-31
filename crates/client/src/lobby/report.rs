@@ -211,7 +211,7 @@ pub(super) fn report(
         lobby.set_track(level.0);
         toasts.write(
             Toast::new(
-                "You are now the host\nJoin command copied to clipboard".to_string(),
+                "You are now the host!\nJoin command copied to clipboard".to_string(),
                 4000,
             )
             .color(Color::linear_rgb(0.4, 1.0, 0.4)),
