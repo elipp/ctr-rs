@@ -124,8 +124,8 @@ pub(crate) struct Options {
 #[derive(Resource)]
 pub(crate) struct LevelNumber(pub(crate) u32);
 
-/// The systems that build the scene, to run again for another level or the other mode: `setup`
-/// and the kart, then the text overlay of the mode.
+/// The systems that build the scene, to run again for another level or the other mode: `setup`,
+/// the kart and the console (`console.rs`), then the text overlay of the mode.
 #[derive(Resource)]
 pub(crate) struct SceneSystems {
     pub(crate) common: Vec<bevy::ecs::system::SystemId>,
