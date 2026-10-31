@@ -7,7 +7,7 @@ use vehicle::demo::Demo;
 use vehicle::{Effect, buttons};
 
 use super::follow::view_of;
-use super::input::{pad_of, read_input};
+use super::input::{Controller, pad_of};
 use super::overlay::DemoHud;
 use super::pose::{Pose, pose_of};
 use super::{DEMO_FILE, DemoMode, Drive, Kart};
@@ -44,8 +44,7 @@ fn stall(time: std::time::Duration) {
 /// One game tick of the sim.
 pub(super) fn drive_tick(
     mut particles: ResMut<crate::exhaust::Particles>,
-    keys: Res<ButtonInput<KeyCode>>,
-    pads: Query<&Gamepad>,
+    controller: Controller,
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
@@ -62,6 +61,7 @@ pub(super) fn drive_tick(
     mut sfx: crate::sound::Sfx,
 ) {
     let drive = &mut *drive;
+    let keys = &controller.keys;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.
     let online = lobby.online.is_some();
     // The level of the race is not up yet, nor the karts of the others.
@@ -279,7 +279,7 @@ pub(super) fn drive_tick(
     let mut cycle = 0;
     // A spectator has no pad to play, but its R1 and L1 pick the kart to follow all the same.
     if spectating {
-        let held = read_input(&keys, &pads, waits.1).buttons_held;
+        let held = controller.read(waits.1).buttons_held;
         let taps = held & !waits.1;
         waits.1 = held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
@@ -292,7 +292,7 @@ pub(super) fn drive_tick(
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if online {
-            Pad::of_input(&read_input(&keys, &pads, held))
+            Pad::of_input(&controller.read(held))
         } else {
             let mut input = match &drive.demo {
                 DemoMode::Playing(demo) => demo.input(tick, held),
@@ -303,7 +303,7 @@ pub(super) fn drive_tick(
                     info!("demo over after {tick} ticks");
                     drive.demo = DemoMode::Off;
                 }
-                input = Some(read_input(&keys, &pads, held));
+                input = Some(controller.read(held));
             }
             let input = input.unwrap();
             if let DemoMode::Recording(demo) = &mut drive.demo {
