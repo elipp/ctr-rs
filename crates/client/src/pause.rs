@@ -94,7 +94,11 @@ fn items(lobby: &Lobby, view: View, public: &PublicLobbies) -> (String, Vec<Entr
     } else {
         items.push(entry(Item::PublicLobbies, "Public lobbies"));
     }
-    items.push(entry(Item::Quit, "Quit"));
+    // A page cannot close its tab: in a browser quitting would only stop the game, on its last
+    // frame.
+    if cfg!(not(target_arch = "wasm32")) {
+        items.push(entry(Item::Quit, "Quit"));
+    }
     // Online the race goes on.
     let title = if lobby.online.is_none() { "Paused" } else { "Menu" };
     (title.into(), items)

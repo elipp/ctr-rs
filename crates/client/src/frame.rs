@@ -13,6 +13,10 @@ pub(crate) fn limit_frame_rate(
 ) {
     use std::time::{Duration, Instant};
     const SPIN: Duration = Duration::from_micros(1500);
+    // A browser paces the frames itself, to the display, and has no sleep.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     let rate = config.fps_max as f64;
     let start = previous.unwrap_or_else(Instant::now);
     if rate > 0.0 {

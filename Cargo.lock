@@ -2371,6 +2371,7 @@ dependencies = [
  "gte",
  "howl",
  "instance",
+ "js-sys",
  "loader",
  "map",
  "math",
@@ -2381,6 +2382,7 @@ dependencies = [
  "serde",
  "serde_json",
  "vehicle",
+ "wasm-bindgen",
  "weapon",
 ]
 

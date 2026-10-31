@@ -1,5 +1,5 @@
-//! Finding the disc image. In order: `CTR_BIN`, the `iso` of the config, and, in a debug build,
-//! `assets/ctr-u.bin`. If there is none, and everything the client reads from the disc has been
+//! Finding the disc image. In order: the image in memory (in a browser, see `web.rs`), `CTR_BIN`,
+//! the `iso` of the config, and, in a debug build, `assets/ctr-u.bin`. If there is none, and everything the client reads from the disc has been
 //! made already (`prepare`, `maps::make_builtins`), it runs without one. Otherwise, on Windows, a
 //! file dialog asks for it and the answer is kept in the config; elsewhere the client says how to
 //! give the path and exits.
@@ -37,6 +37,10 @@ fn made() -> bool {
 /// wrong is printed; the files that are missing are then made as they are asked for.
 pub fn prepare() {
     use loader::source::Check;
+    // A browser has nowhere to keep them: there everything is read from the image.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     let source = source();
     let why = match source.check() {
         Check::Ready => return,
@@ -62,8 +66,8 @@ pub fn prepare() {
 /// Finds the disc and keeps the answer for `image`, or exits the program if it is needed and
 /// there is none.
 pub fn locate(config: &mut Config) {
-    let found = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
+    let found = loader::disc::in_memory()
+        .or_else(|| std::env::var_os("CTR_BIN").map(PathBuf::from))
         .or_else(|| config.iso.clone().filter(|p| is_disc(p)))
         .or_else(dev_default);
     if found.is_none() && made() {

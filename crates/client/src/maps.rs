@@ -200,6 +200,7 @@ pub fn purge() -> Result<usize, String> {
 /// Makes the maps of the game's racing tracks that we lack, or have of an older version, from the
 /// disc, which takes a while the first time. (`disc::locate` has seen to it that there is a disc
 /// when there are any to make.)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn make_builtins() {
     let dir = builtin_directory();
     if map::builtin::missing_count(&dir) == 0 {
@@ -213,6 +214,34 @@ pub fn make_builtins() {
     match map::builtin::export(&image, &dir) {
         Ok(made) => eprintln!("Made {made} maps in {}", dir.display()),
         Err(e) => eprintln!("Could not make the maps of the game's tracks: {e}"),
+    }
+}
+
+/// A browser has no folder to keep them in: there the maps of the game's tracks are made from the
+/// disc at every start, and only held in memory.
+#[cfg(target_arch = "wasm32")]
+pub fn make_builtins() {
+    let Some(image) = crate::disc::image() else {
+        return;
+    };
+    let made = match builtin::make_all(&image) {
+        Ok(made) => made,
+        Err(e) => {
+            eprintln!("Could not make the maps of the game's tracks: {e}");
+            return;
+        }
+    };
+    let mut maps = MAPS.lock().unwrap();
+    for map in made {
+        let (Some(level), Ok(hash)) = (builtin::level_of(&map.name), map.hash()) else {
+            continue;
+        };
+        maps.push(Entry {
+            id: level.0,
+            hash,
+            path: PathBuf::new(),
+            map: Box::leak(Box::new(map)),
+        });
     }
 }
 

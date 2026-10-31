@@ -59,12 +59,13 @@ pub fn set_relay_only(relay_only: bool) {
 /// The endpoint of a session or a fetch, as [`set_relay_only`] says.
 fn endpoint_builder() -> Builder {
     let builder = Endpoint::builder(presets::N0);
+    // (A browser has no sockets of its own: there the relay is the only way already.)
+    #[cfg(not(target_arch = "wasm32"))]
     if RELAY_ONLY.load(Ordering::Relaxed) {
         // No sockets of our own: the relay is the one way left.
-        builder.clear_ip_transports()
-    } else {
-        builder
+        return builder.clear_ip_transports();
     }
+    builder
 }
 
 /// What the clients speak, exchanged in the connection handshake.
