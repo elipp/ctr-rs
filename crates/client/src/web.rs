@@ -1,11 +1,12 @@
 //! The browser build. A page has no files, so the disc image is the one the player dropped on it
 //! (`web/play.html`): the page holds it until `main` runs, which takes it into memory as the
 //! image at [`DISC`] (`loader::disc::keep_in_memory`) for `disc.rs` to find. The clipboard is
-//! the page's as well, and so are the settings (`config.rs`), which it keeps in its storage, and a
-//! panic is told to it (`crash.rs`).
+//! the page's as well, and so are the settings (`config.rs`) and the maps other players sent
+//! (`maps.rs`), which it keeps in its storage, and a panic is told to it (`crash.rs`).
 
 use std::path::PathBuf;
 
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 /// The path that the dropped image goes by.
@@ -38,9 +39,29 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrSaveConfig)]
     pub fn save_config(text: &str) -> Option<String>;
 
+    /// The maps the page keeps, as the bytes of their files (`Uint8Array`s), once.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeMaps)]
+    fn take_saved_maps() -> js_sys::Array;
+
+    /// Keeps the file of a map that was sent to us, under `key`.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSaveMap)]
+    pub fn save_map(key: &str, bytes: &[u8]);
+
+    /// Deletes the maps the page keeps.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrPurgeMaps)]
+    pub fn purge_maps();
+
     /// Tells the page that the game has crashed, with what the panic said.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCrashed)]
     pub fn crashed(message: &str);
+}
+
+/// The files of the maps the page keeps.
+pub fn take_maps() -> Vec<Vec<u8>> {
+    take_saved_maps()
+        .iter()
+        .map(|bytes| bytes.unchecked_into::<js_sys::Uint8Array>().to_vec())
+        .collect()
 }
 
 /// Copies the dropped image into memory.
