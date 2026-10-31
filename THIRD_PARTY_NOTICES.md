@@ -29,3 +29,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Press Start 2P (web page font)
+
+`web/fonts/PressStart2P-Regular.ttf`, unmodified, is the Press Start 2P font by CodeMan38.
+
+Source: <https://github.com/google/fonts/tree/main/ofl/pressstart2p>
+
+License: SIL Open Font License 1.1, in `web/fonts/OFL.txt`.
