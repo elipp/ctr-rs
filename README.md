@@ -23,7 +23,7 @@ It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native)
 
 ## Running it
 
-You provide your own legally obtained disc image of Crash Team Racing. Point `CTR_BIN` at it, or put it at `assets/ctr-u.bin`.
+You provide your own legally obtained disc image of Crash Team Racing. The client asks for it with a file dialog the first time; or point `CTR_BIN` at it, or put it at `assets/ctr-u.bin`.
 
 ```
 cargo run -p client

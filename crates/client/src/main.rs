@@ -3,7 +3,7 @@
 //! and the racer the one driven last time (`config.rs`), and `]` / Page Up and `[` / Page Down
 //! switch to the next and the previous level, `.` and `,` to the next and the previous racer. The
 //! disc image is `CTR_BIN`, the `iso` of the config, or `assets/ctr-u.bin`
-//! in a debug build; on Windows a file dialog asks for it (see `disc.rs`).
+//! in a debug build; without one a file dialog asks for it (see `disc.rs`).
 //!
 //! The viewer: a collision probe from the camera is drawn and described on screen; see
 //! `probe.rs` for its keys. Hold the right mouse button to look, WASD to move, Space/Shift
