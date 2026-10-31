@@ -23,6 +23,7 @@ pub(super) fn report(
         return;
     };
     let mut failed = None;
+    let mut listed = None;
     let mut wanted_map = None;
     let mut free_track = None;
     let mut got_map = None;
@@ -47,7 +48,7 @@ pub(super) fn report(
                 lobby.set_track(level.0);
                 toasts.write(
                     Toast::new(
-                        "Lobby created! Join command copied to clipboard".to_string(),
+                        "Lobby created!\nJoin command copied to clipboard".to_string(),
                         3000,
                     )
                     .color(Color::linear_rgb(0.4, 1.0, 0.4)),
@@ -192,6 +193,7 @@ pub(super) fn report(
                     console!("{line}");
                 }
             }
+            Event::Listed(result) => listed = Some(result),
             Event::Failed(why) => {
                 warn!("lobby failed: {why}");
                 failed = Some(why);
@@ -211,6 +213,20 @@ pub(super) fn report(
     for key in left {
         lobby.pings.remove(&key);
         lobby.average_pings.remove(&key);
+    }
+    match listed {
+        Some(Ok(())) => {
+            let name = lobby.public_name().unwrap_or_default();
+            toasts.write(Toast::new(format!("Lobby \"{name}\" listed in the realm"), 2500));
+        }
+        Some(Err(why)) => {
+            warn!("could not list the lobby in the realm: {why}");
+            toasts.write(
+                Toast::new(format!("Could not list the lobby: {why}"), 4000)
+                    .color(Color::srgb(1.0, 0.4, 0.4)),
+            );
+        }
+        None => {}
     }
     if stopped {
         lobby.end_race();

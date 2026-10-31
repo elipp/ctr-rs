@@ -17,8 +17,8 @@ pub const ALPN: &[u8] = b"ctr-rust/realm/1";
 
 /// The most chars of a lobby's name.
 pub const MAX_NAME: usize = 32;
-/// The most chars of a cup's name.
-pub const MAX_CUP: usize = 32;
+/// The most chars of a track's name.
+pub const MAX_TRACK: usize = 32;
 /// The most chars of a version.
 pub const MAX_VERSION: usize = 32;
 
@@ -45,8 +45,8 @@ pub struct Listing {
     pub players: u8,
     pub max_players: u8,
     pub state: State,
-    /// The cup that is played, as the players see it.
-    pub cup: String,
+    /// The track that is played, as the players see it.
+    pub track: String,
     /// The lobby protocol the host speaks (`net::ALPN`), or anything else that is equal for the
     /// builds that can play together. A client greys out the lobbies of another.
     pub version: String,
@@ -61,7 +61,7 @@ impl Listing {
         };
         let ok = !self.name.trim().is_empty()
             && text(&self.name, MAX_NAME)
-            && text(&self.cup, MAX_CUP)
+            && text(&self.track, MAX_TRACK)
             && !self.version.is_empty()
             && text(&self.version, MAX_VERSION)
             && self.max_players > 0
@@ -82,7 +82,7 @@ pub struct Entry {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum Request {
     /// List the lobby of the connection, or replace what is listed for it. A host sends this
-    /// again whenever the players, the state or the cup change.
+    /// again whenever the players, the state or the track change.
     Announce(Listing),
     /// Take the lobby of the connection off the list, and keep the connection.
     Withdraw,
@@ -137,7 +137,7 @@ mod tests {
             players: 3,
             max_players: 8,
             state: State::Lobby,
-            cup: "Wumpa Cup".into(),
+            track: "Dingo Canyon".into(),
             version: "ctr-rust/lobby/9".into(),
         }
     }
@@ -161,7 +161,7 @@ mod tests {
             Listing { name: "  ".into(), ..listing() },
             Listing { name: "x".repeat(MAX_NAME + 1), ..listing() },
             Listing { name: "a\nb".into(), ..listing() },
-            Listing { cup: "x".repeat(MAX_CUP + 1), ..listing() },
+            Listing { track: "x".repeat(MAX_TRACK + 1), ..listing() },
             Listing { version: String::new(), ..listing() },
             Listing { max_players: 0, players: 0, ..listing() },
             Listing { players: 9, ..listing() },
@@ -177,7 +177,7 @@ mod tests {
             id: [0xff; 32],
             listing: Listing {
                 name: "ü".repeat(MAX_NAME),
-                cup: "ü".repeat(MAX_CUP),
+                track: "ü".repeat(MAX_TRACK),
                 version: "ü".repeat(MAX_VERSION),
                 ..listing()
             },

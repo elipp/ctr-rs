@@ -34,7 +34,7 @@ pub(super) fn copy_to_clipboard(text: String) {
 /// Why `action` cannot be done now, if it cannot.
 pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
     Some(match action {
-        Action::CreateLobby | Action::JoinLobby(_) | Action::SpectateLobby(_)
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
             if lobby.is_open() =>
         {
             "Close the lobby first (/lobby close)"
@@ -83,9 +83,13 @@ pub(super) fn run(
         }
         let now = time.elapsed_secs();
         let say = match action {
-            Action::CreateLobby => {
-                lobby.host(drive.character as u8, &config.nickname);
-                "Creating lobby..."
+            Action::CreateLobby { public } => {
+                lobby.host(drive.character as u8, &config.nickname, public.as_deref());
+                if public.is_some() {
+                    "Creating public lobby..."
+                } else {
+                    "Creating lobby..."
+                }
             }
             Action::JoinLobby(ticket) => {
                 lobby.join(ticket.clone(), drive.character as u8, &config.nickname);

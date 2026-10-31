@@ -55,7 +55,15 @@ pub(crate) const COMMANDS: &[Spec] = &[
         "lobby",
         "Play online",
         &[
-            leaf("create", "Open a lobby for others to join"),
+            node(
+                "create",
+                "Open a lobby for others to join",
+                &[takes(
+                    "public",
+                    "List it in the realm, for anyone to find",
+                    "[name]",
+                )],
+            ),
             takes("join", "Join a lobby", "<address>"),
             takes(
                 "spectate",

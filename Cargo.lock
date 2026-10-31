@@ -5082,6 +5082,7 @@ dependencies = [
  "bitcode",
  "bytes",
  "iroh",
+ "realm-proto",
  "tokio",
 ]
 
@@ -6458,6 +6459,8 @@ dependencies = [
  "iroh",
  "realm-proto",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
