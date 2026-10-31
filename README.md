@@ -29,6 +29,8 @@ You provide your own legally obtained disc image of Crash Team Racing. The clien
 cargo run -p client
 ```
 
+A build from the [releases](https://github.com/elipp/ctr-rs/releases) asks for the disc image the first time it starts. The macOS build is not signed, so macOS refuses to open it at first: allow it in System Settings → Privacy & Security ("Open Anyway"), or run `xattr -d com.apple.quarantine ctr-rs`.
+
 The client has no command line options. `]` and `[` switch the level, `.` and `,` switch the racer, and `/` commands go through the in-game console.
 
 `ctr-query` (`crates/query`) looks up a level's data from the disc, and `ctr-map` (`crates/map`) imports and describes maps.
