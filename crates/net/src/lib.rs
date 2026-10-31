@@ -24,8 +24,10 @@ pub use iroh::EndpointId;
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
 pub use realm::{
-    DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, Public, clean_lobby_name, default_realm,
+    Browse, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public,
+    PublicLobby, browse, default_realm, lobby_name,
 };
+pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
 pub use wire::{Pad, Tick};
 

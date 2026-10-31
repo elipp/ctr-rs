@@ -148,7 +148,7 @@ impl Action {
             "create" => match word(rest) {
                 ("", _) => Ok(Action::CreateLobby { public: None }),
                 ("public", name) => Ok(Action::CreateLobby {
-                    public: Some(name.to_string()),
+                    public: Some(net::lobby_name(name)?),
                 }),
                 _ => Err(LOBBY_USAGE.into()),
             },
@@ -943,6 +943,8 @@ mod tests {
             Ok(Action::CreateLobby { public: Some(name) }) if name == "Fast lane"
         ));
         assert!(Action::parse("lobby create private").is_err());
+        assert!(Action::parse("lobby create public Fäst").is_err());
+        assert!(Action::parse(&format!("lobby create public {}", "a".repeat(33))).is_err());
         assert!(matches!(
             Action::parse("lobby close"),
             Ok(Action::CloseLobby)

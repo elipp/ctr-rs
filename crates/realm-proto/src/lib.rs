@@ -30,6 +30,15 @@ pub const MAX_RESPONSE: usize = 256 << 10;
 /// The most lobbies the realm lists, and so the most a response holds.
 pub const MAX_LOBBIES: usize = 1000;
 
+/// Whether a lobby's name may have this char: the ones the game's fonts have (`render::font`),
+/// which show a name as the menus do, and a space. (Letters are capitals there, whatever their
+/// case.)
+pub fn is_name_char(c: char) -> bool {
+    c == ' '
+        || c.is_ascii_alphanumeric()
+        || matches!(c, '\'' | '!' | ':' | ',' | '=' | '-' | '%' | '.' | '+' | '?' | '_' | '/')
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum State {
     /// Gathering, and a player can join.
@@ -60,7 +69,8 @@ impl Listing {
             s.chars().count() <= max && !s.chars().any(char::is_control)
         };
         let ok = !self.name.trim().is_empty()
-            && text(&self.name, MAX_NAME)
+            && self.name.chars().count() <= MAX_NAME
+            && self.name.chars().all(is_name_char)
             && text(&self.track, MAX_TRACK)
             && !self.version.is_empty()
             && text(&self.version, MAX_VERSION)
@@ -161,6 +171,7 @@ mod tests {
             Listing { name: "  ".into(), ..listing() },
             Listing { name: "x".repeat(MAX_NAME + 1), ..listing() },
             Listing { name: "a\nb".into(), ..listing() },
+            Listing { name: "Fäst".into(), ..listing() },
             Listing { track: "x".repeat(MAX_TRACK + 1), ..listing() },
             Listing { version: String::new(), ..listing() },
             Listing { max_players: 0, players: 0, ..listing() },

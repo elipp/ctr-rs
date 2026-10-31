@@ -3,6 +3,9 @@
 //! (Triangle) goes back to the race. The mouse picks an item by pointing at it, and a click takes
 //! it.
 //!
+//! Outside a lobby it also offers "Public lobbies": the realm's list (`public_lobbies.rs`), where
+//! taking a lobby joins it. Backspace goes back from there to the menu, not to the race.
+//!
 //! Offline the race stops while the menu is open. Online it goes on, as the others are still
 //! racing: the menu only takes our controls, and our kart gets no input until it closes.
 //!
@@ -18,12 +21,15 @@ use render::font::{Font, Gradient};
 use crate::command::Action;
 use crate::font::{CtrText, TexelSize};
 use crate::lobby::Lobby;
+use crate::public_lobbies::{self, PublicLobbies, Status};
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 
 /// Whether the menu is open, and what it was asked to do.
 #[derive(Resource, Default)]
 pub struct PauseMenu {
     pub open: bool,
+    /// What the menu shows: its own items, or the realm's lobbies.
+    view: View,
     /// The item picked, of those the menu shows.
     selected: usize,
     /// The item that was clicked, to take in the next update.
@@ -32,38 +38,107 @@ pub struct PauseMenu {
     pub restart: bool,
 }
 
+/// What the menu is showing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum View {
+    #[default]
+    Main,
+    /// The public lobbies.
+    Browser,
+}
+
 /// Something the menu offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Item {
     Resume,
     Restart,
     LeaveLobby,
+    /// Shows the realm's list.
+    PublicLobbies,
     Quit,
+    /// The public lobby at that place of [`PublicLobbies::shown`].
+    Join(usize),
+    Refresh,
+    /// Back to the main view.
+    Back,
+    /// A line that says something and does nothing.
+    Info,
 }
 
-impl Item {
-    fn label(self) -> &'static str {
-        match self {
-            Item::Resume => "Resume",
-            Item::Restart => "Restart",
-            Item::LeaveLobby => "Leave lobby",
-            Item::Quit => "Quit",
-        }
+/// An item and the text it has.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Entry {
+    item: Item,
+    label: String,
+}
+
+fn entry(item: Item, label: impl Into<String>) -> Entry {
+    Entry {
+        item,
+        label: label.into(),
     }
 }
 
-/// What the menu offers now. An online race cannot be restarted by one player.
-fn items(lobby: &Lobby) -> Vec<Item> {
-    let mut items = vec![Item::Resume];
+/// The title of the menu and what it offers now. An online race cannot be restarted by one
+/// player.
+fn items(lobby: &Lobby, view: View, public: &PublicLobbies) -> (String, Vec<Entry>) {
+    if view == View::Browser {
+        return ("Public lobbies".into(), browser_items(public));
+    }
+    let mut items = vec![entry(Item::Resume, "Resume")];
     if lobby.online.is_none() {
-        items.push(Item::Restart);
+        items.push(entry(Item::Restart, "Restart"));
     }
     if lobby.is_open() {
-        items.push(Item::LeaveLobby);
+        items.push(entry(Item::LeaveLobby, "Leave lobby"));
+    } else {
+        items.push(entry(Item::PublicLobbies, "Public lobbies"));
     }
-    items.push(Item::Quit);
+    items.push(entry(Item::Quit, "Quit"));
+    // Online the race goes on.
+    let title = if lobby.online.is_none() { "Paused" } else { "Menu" };
+    (title.into(), items)
+}
+
+/// The realm's lobbies, one to a row: the name, the players, and if it is not simply a lobby we
+/// can join, why not.
+fn browser_items(public: &PublicLobbies) -> Vec<Entry> {
+    let mut items = Vec::new();
+    match &public.status {
+        Status::Idle | Status::Loading => items.push(entry(Item::Info, "Looking...")),
+        Status::Failed => {
+            items.push(entry(Item::Info, "Could not reach the realm"));
+            items.push(entry(Item::Refresh, "Try again"));
+        }
+        Status::Loaded(lobbies) => {
+            let (shown, more) = public.shown();
+            if lobbies.is_empty() {
+                items.push(entry(Item::Info, "No public lobbies"));
+            }
+            for (i, lobby) in shown.iter().enumerate() {
+                let name: String = lobby.name.chars().take(NAME_SHOWN).collect();
+                let note = if !lobby.compatible {
+                    "  other version"
+                } else if lobby.racing {
+                    "  racing"
+                } else {
+                    ""
+                };
+                let label = format!("{name}  {}/{}{note}", lobby.players, lobby.max_players);
+                items.push(entry(Item::Join(i), label));
+            }
+            if more > 0 {
+                items.push(entry(Item::Info, format!("and {more} more")));
+            }
+            items.push(entry(Item::Refresh, "Refresh"));
+        }
+    }
+    items.push(entry(Item::Back, "Back"));
     items
 }
+
+/// The most chars of a lobby's name a row shows: the font is wide, and the screen is not.
+const NAME_SHOWN: usize = 20;
 
 /// The panel behind the items, the line around it, and its shadow.
 const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
@@ -73,8 +148,8 @@ const SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 /// The menu on screen, and what it was built for.
 #[derive(Component)]
 struct Shown {
-    items: Vec<Item>,
-    title: &'static str,
+    items: Vec<Entry>,
+    title: String,
 }
 
 /// An item's text, and its place in the menu.
@@ -86,6 +161,8 @@ pub struct PausePlugin;
 impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
+            .init_resource::<PublicLobbies>()
+            .add_systems(Update, public_lobbies::poll.run_if(crate::drive::driving))
             .add_systems(
                 PreUpdate,
                 input
@@ -105,6 +182,7 @@ fn input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     lobby: Res<Lobby>,
+    mut public: ResMut<PublicLobbies>,
     sounds: Option<Res<Sounds>>,
     mut actions: MessageWriter<Action>,
     mut exit: MessageWriter<AppExit>,
@@ -120,6 +198,7 @@ fn input(
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         menu.open = !menu.open;
+        menu.view = View::Main;
         menu.selected = 0;
         menu.clicked = None;
         if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
@@ -132,7 +211,7 @@ fn input(
         sound(MENU_TAKE_SFX);
         return finish(was_open, &menu, &mut keys);
     } else if menu.open {
-        let items = items(&lobby);
+        let (_, items) = items(&lobby, menu.view, &public);
         let count = items.len();
         if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) {
             menu.selected = (menu.selected + count - 1) % count;
@@ -154,9 +233,14 @@ fn input(
         }
         if key(&[KeyCode::Backspace]) || pad(GamepadButton::North) {
             sound(MENU_BACK_SFX);
-            menu.open = false;
+            if menu.view == View::Browser {
+                menu.view = View::Main;
+                menu.selected = 0;
+            } else {
+                menu.open = false;
+            }
         }
-        match taken.and_then(|i| items.get(i)) {
+        match taken.and_then(|i| items.get(i)).map(|e| e.item) {
             Some(Item::Resume) => menu.open = false,
             Some(Item::Restart) => {
                 menu.open = false;
@@ -166,10 +250,29 @@ fn input(
                 menu.open = false;
                 actions.write(Action::CloseLobby);
             }
+            Some(Item::PublicLobbies) => {
+                menu.view = View::Browser;
+                menu.selected = 0;
+                public.refresh();
+            }
+            Some(Item::Refresh) => public.refresh(),
+            Some(Item::Back) => {
+                menu.view = View::Main;
+                menu.selected = 0;
+            }
+            Some(Item::Join(i)) => {
+                if let Some(found) = public.shown().0.get(i) {
+                    actions.write(Action::JoinLobby(net::Ticket {
+                        id: found.id,
+                        relay: None,
+                    }));
+                    menu.open = false;
+                }
+            }
+            Some(Item::Info) | None => {}
             Some(Item::Quit) => {
                 exit.write(AppExit::Success);
             }
-            None => {}
         }
         // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
         if !menu.open
@@ -194,19 +297,15 @@ fn show(
     mut commands: Commands,
     mut menu: ResMut<PauseMenu>,
     lobby: Res<Lobby>,
+    public: Res<PublicLobbies>,
     size: Res<TexelSize>,
     shown: Query<(Entity, &Shown)>,
     rows: Query<(&Row, &Children)>,
     mut texts: Query<&mut CtrText>,
 ) {
-    let wanted = menu.open.then(|| Shown {
-        items: items(&lobby),
-        // Online the race goes on.
-        title: if lobby.online.is_none() {
-            "Paused"
-        } else {
-            "Menu"
-        },
+    let wanted = menu.open.then(|| {
+        let (title, items) = items(&lobby, menu.view, &public);
+        Shown { items, title }
     });
     let current = shown.single().ok();
     let stale = match (&wanted, current) {
@@ -249,7 +348,7 @@ fn gradient(picked: bool) -> Gradient {
 
 fn spawn(commands: &mut Commands, shown: Shown, selected: usize, size: &TexelSize) {
     let items = shown.items.clone();
-    let title = shown.title;
+    let title = shown.title.clone();
     // The whole window, to put the panel in its middle. Under the command line.
     let root = commands
         .spawn((
@@ -301,7 +400,7 @@ fn spawn(commands: &mut Commands, shown: Shown, selected: usize, size: &TexelSiz
                 },
             ))
             .with_child(CtrText::new(
-                item.label(),
+                item.label,
                 Font::Middle,
                 gradient(i == selected),
             ))

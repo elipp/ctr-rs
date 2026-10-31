@@ -8,9 +8,14 @@
 use std::time::Duration;
 
 use iroh::endpoint::Connection;
+use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
-use realm_proto::{ALPN, Listing, MAX_RESPONSE, Reject, Request, Response, State};
-use std::sync::mpsc::Sender;
+use realm_proto::{
+    ALPN, Listing, MAX_RESPONSE, Reject, Request, Response, State, is_name_char,
+};
+use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::JoinHandle;
 use tokio::sync::watch;
 
 use crate::{Error, Event};
@@ -21,6 +26,11 @@ pub const DEFAULT_REALM: &str = "255860d3bf91bdb74ba38490edad92a818a760496dd1465
 /// How many players a lobby is listed as having room for. (The listing says it; the host does
 /// not hold the lobby to it.)
 pub const LOBBY_CAPACITY: u8 = 8;
+
+/// What a listing says of the builds that can play together: the lobby protocol, and the sim.
+fn version(build: u32) -> String {
+    format!("{} sim {build}", String::from_utf8_lossy(crate::ALPN))
+}
 
 /// The first wait before the realm is tried again, and the longest.
 const RETRY_MIN: Duration = Duration::from_secs(1);
@@ -41,16 +51,23 @@ pub fn default_realm() -> EndpointId {
 /// What a lobby is called in the list when the host does not say.
 pub const DEFAULT_LOBBY_NAME: &str = "Public lobby";
 
-/// A lobby name as the list takes it: no control characters, spaces trimmed and not doubled, at
-/// most [`realm_proto::MAX_NAME`] chars. Empty if nothing is left of it.
-pub fn clean_lobby_name(name: &str) -> String {
-    let words: Vec<&str> = name
-        .split_whitespace()
-        .map(|w| w.trim_matches(char::is_control))
-        .filter(|w| !w.is_empty())
-        .collect();
-    let name: String = words.join(" ").chars().filter(|c| !c.is_control()).collect();
-    name.chars().take(realm_proto::MAX_NAME).collect::<String>().trim_end().to_string()
+/// The most chars of a lobby's name.
+pub const MAX_LOBBY_NAME: usize = realm_proto::MAX_NAME;
+
+/// A lobby name as the list takes it: spaces trimmed and not doubled, or why it cannot be one.
+/// Only the chars the game's fonts have are allowed ([`is_name_char`]), and at most
+/// [`MAX_LOBBY_NAME`] of them. (The realm turns down any other.)
+pub fn lobby_name(name: &str) -> Result<String, String> {
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some(c) = name.chars().find(|&c| !is_name_char(c)) {
+        return Err(format!(
+            "A lobby name cannot have '{c}': it can have letters A to Z, digits, spaces and ' ! : , = - % . + ? _ /"
+        ));
+    }
+    if name.chars().count() > MAX_LOBBY_NAME {
+        return Err(format!("A lobby name has at most {MAX_LOBBY_NAME} characters"));
+    }
+    Ok(name)
 }
 
 /// How a public lobby is listed: the rest of the listing (the players, whether a race is on)
@@ -98,7 +115,7 @@ impl Publisher {
             max_players: LOBBY_CAPACITY.max(players),
             state: if racing { State::Racing } else { State::Lobby },
             track: track.clone(),
-            version: format!("{} sim {build}", String::from_utf8_lossy(crate::ALPN)),
+            version: version(build),
         });
         self.listing.send_if_modified(|current| {
             let changed = *current != listing;
@@ -197,16 +214,105 @@ async fn ask(connection: &Connection, request: &Request) -> Result<Response, Err
     Ok(Response::from_bytes(&bytes)?)
 }
 
+/// A lobby in the realm's list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicLobby {
+    /// What it is joined with (see [`Ticket`](crate::Ticket)).
+    pub id: EndpointId,
+    pub name: String,
+    pub players: u8,
+    pub max_players: u8,
+    /// A race is on: whoever joins waits for the next one.
+    pub racing: bool,
+    pub track: String,
+    /// It plays our build (see `build` of [`browse`]): a lobby that does not turns us away.
+    pub compatible: bool,
+}
+
+/// The list being fetched from a realm, which [`Browse::poll`] hands over when it is here.
+pub struct Browse {
+    result: Mutex<Receiver<Result<Vec<PublicLobby>, String>>>,
+    _thread: JoinHandle<()>,
+}
+
+impl Browse {
+    /// The list or what went wrong, once, when the realm has answered.
+    pub fn poll(&self) -> Option<Result<Vec<PublicLobby>, String>> {
+        match self.result.lock().unwrap().try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err("the network thread stopped".into())),
+        }
+    }
+}
+
+/// How long the whole fetch may take.
+const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Fetches the lobbies listed in `realm`, on a thread of its own: the game polls the [`Browse`].
+/// `build` is the version of the sim (`race::SIM_VERSION`), to tell which lobbies we can join.
+pub fn browse(realm: EndpointId, build: u32) -> Browse {
+    let (tx, result) = mpsc::channel();
+    let thread = std::thread::Builder::new()
+        .name("realm".into())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("the network runtime");
+            let list = runtime.block_on(async {
+                tokio::time::timeout(BROWSE_TIMEOUT, fetch(realm, build))
+                    .await
+                    .unwrap_or_else(|_| Err("the realm took too long".into()))
+            });
+            let _ = tx.send(list.map_err(|e| e.to_string()));
+        })
+        .expect("the network thread");
+    Browse { result: Mutex::new(result), _thread: thread }
+}
+
+async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, Error> {
+    let endpoint = Endpoint::bind(presets::N0).await?;
+    let list = async {
+        let connection = endpoint.connect(EndpointAddr::new(realm), ALPN).await?;
+        let response = ask(&connection, &Request::List).await;
+        connection.close(0u32.into(), b"bye");
+        response
+    }
+    .await;
+    endpoint.close().await;
+    let Response::Lobbies(entries) = list? else {
+        return Err("the realm answered nonsense".into());
+    };
+    let ours = version(build);
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| {
+            let Listing { name, players, max_players, state, track, version } = entry.listing;
+            Some(PublicLobby {
+                id: EndpointId::from_bytes(&entry.id).ok()?,
+                name,
+                players,
+                max_players,
+                racing: state == State::Racing,
+                track,
+                compatible: version == ours,
+            })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn lobby_names_are_cleaned() {
-        assert_eq!(clean_lobby_name("  Fast   lane \n"), "Fast lane");
-        assert_eq!(clean_lobby_name("\u{7}"), "");
-        let long = clean_lobby_name(&"ab ".repeat(40));
-        assert!(long.chars().count() <= realm_proto::MAX_NAME);
-        assert!(!long.ends_with(' '));
+    fn lobby_names_are_checked() {
+        assert_eq!(lobby_name("  Fast   lane \n").as_deref(), Ok("Fast lane"));
+        assert_eq!(lobby_name("").as_deref(), Ok(""));
+        assert!(lobby_name("Fäst").unwrap_err().contains("'ä'"));
+        assert!(lobby_name("a\u{7}").is_err());
+        assert!(lobby_name(&"a".repeat(MAX_LOBBY_NAME)).is_ok());
+        assert!(lobby_name(&"a".repeat(MAX_LOBBY_NAME + 1)).is_err());
     }
 }
