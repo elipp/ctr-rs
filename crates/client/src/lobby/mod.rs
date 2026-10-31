@@ -4,6 +4,7 @@
 //!
 //! * `/lobby create [public [name]]`: open a lobby (`/lobby close` closes it); a public one is listed in
 //!   the realm under that name, for anyone to find
+//! * the pause menu's "Public lobbies" (`pause.rs`): the realm's list, where a lobby is joined by taking it
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (the `cache/maps` folder, see `paths.rs`)
@@ -116,14 +117,15 @@ impl Lobby {
     }
 
     /// Opens a lobby of our own, for others to join. (They get its address when it is up.) A
-    /// `public` one is also listed in the realm, under that name (the default if it is empty).
+    /// `public` one is also listed in the realm, under that name (the default if it is empty;
+    /// `net::lobby_name` has checked it).
     /// The name is the lobby's, not ours: it stays as it is when we change nickname.
     pub fn host(&mut self, character: u8, nick: &str, public: Option<&str>) {
         self.session = Some(net::host(character, nick, race::SIM_VERSION));
         self.public = public.map(|name| {
-            Some(net::clean_lobby_name(name))
+            Some(name)
                 .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| net::DEFAULT_LOBBY_NAME.to_string())
+                .map_or_else(|| net::DEFAULT_LOBBY_NAME.to_string(), str::to_string)
         });
         self.joined = false;
         self.spectator = false;

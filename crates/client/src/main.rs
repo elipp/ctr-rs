@@ -53,6 +53,7 @@ mod probe;
 mod projectile;
 
 mod props;
+mod public_lobbies;
 mod rain;
 mod rect_menu;
 mod remote;
