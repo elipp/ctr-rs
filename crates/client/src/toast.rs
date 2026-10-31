@@ -2,8 +2,8 @@
 //! stacked under any other toasts that are still up, fading out over the last moments.
 //!
 //! A toast is in the game's font (`font.rs`), in capitals and a gradient of its colour, if the
-//! font has every character of it; one that has others (an address, a list of options) is in
-//! Bevy's.
+//! font has every character of it (a new line starts another line of glyphs); one that has others
+//! (an address, a list of options) is in Bevy's.
 //!
 //! ```ignore
 //! fn system(mut toasts: MessageWriter<Toast>) {
@@ -83,12 +83,13 @@ fn gradient(color: Color) -> Gradient {
     }
 }
 
-/// Whether the game's font can write `text`: it has no character the font lacks.
+/// Whether the game's font can write `text`: it has no character the font lacks (apart from the
+/// new lines, which divide the text into the lines it writes).
 fn in_game_font(text: &str) -> bool {
     !text.trim().is_empty()
         && text
             .chars()
-            .all(|c| c == ' ' || render::font::glyph(c).is_some())
+            .all(|c| c == ' ' || c == '\n' || render::font::glyph(c).is_some())
 }
 
 /// The size of a texel of a toast in the game's font: the HUD's, or half of it for a small toast,
@@ -161,6 +162,9 @@ fn show(
                 Node {
                     margin: UiRect::top(Val::Px(toast.lower)),
                     padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                    // (The lines of a toast in the game's font are its children.)
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
                     ..default()
                 },
                 BackgroundColor(BACKGROUND),
@@ -168,11 +172,13 @@ fn show(
             ))
             .id();
         if in_game_font(&toast.text) {
-            commands.spawn((
-                CtrText::new(toast.text.clone(), Font::Middle, gradient(toast.color))
-                    .fixed(texel_size(toast.size)),
-                ChildOf(shown),
-            ));
+            for line in toast.text.lines().filter(|line| !line.trim().is_empty()) {
+                commands.spawn((
+                    CtrText::new(line.to_string(), Font::Middle, gradient(toast.color))
+                        .fixed(texel_size(toast.size)),
+                    ChildOf(shown),
+                ));
+            }
         } else {
             commands.spawn((
                 Text::new(toast.text.clone()),
@@ -227,7 +233,9 @@ mod tests {
         assert!(in_game_font("Lobby created! Join command copied"));
         assert!(!in_game_font("Usage: /race start | restart | stop"));
         assert!(!in_game_font("Rollback: 3 ticks (x2)"));
-        assert!(!in_game_font("two\nlines"));
+        // A new line is a line of glyphs of its own.
+        assert!(in_game_font("two\nlines"));
+        assert!(!in_game_font("Usage:\n/race start | stop"));
         assert!(!in_game_font(" "));
     }
 
