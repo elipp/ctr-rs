@@ -1,5 +1,5 @@
 //! The browser build. A page has no files, so the disc image is the one the player dropped on it
-//! (`web/index.html`): the page holds it until `main` runs, which takes it into memory as the
+//! (`web/play.html`): the page holds it until `main` runs, which takes it into memory as the
 //! image at [`DISC`] (`loader::disc::keep_in_memory`) for `disc.rs` to find. The clipboard is
 //! the page's as well.
 

@@ -26,9 +26,11 @@ if [ "$profile" = dist ]; then
 else
     names=
 fi
-wasm-bindgen --target web --no-typescript $names --out-dir target/web --out-name client \
+wasm-bindgen --target web --no-typescript $names --out-dir target/web/play --out-name client \
     "target/wasm32-unknown-unknown/$dir/client.wasm"
 if [ "$profile" = dist ]; then
-    wasm-opt -O3 target/web/client_bg.wasm -o target/web/client_bg.wasm
+    wasm-opt -O3 target/web/play/client_bg.wasm -o target/web/play/client_bg.wasm
 fi
 cp web/index.html target/web/
+cp web/play.html target/web/play/index.html
+cp -R web/fonts target/web/
