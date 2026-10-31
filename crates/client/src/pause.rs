@@ -1,5 +1,5 @@
 //! The pause menu, in the game's fonts. Escape, P or a pad's Start opens and closes it. Up and
-//! Down (W and S, the D-pad) pick an item, Return or Space (Cross) takes it, and Backspace
+//! Down (W and S, the D-pad, the left stick pushed most of the way) pick an item, Return or Space (Cross) takes it, and Backspace
 //! (Triangle) goes back to the race. The mouse picks an item by pointing at it, and a click takes
 //! it.
 //!
@@ -8,7 +8,7 @@
 //!
 //! "Options" has the effects', the music's and the voices' volumes as retail's options menu draws
 //! them (`MainFreeze_MenuPtrOptions`): a wedge that grows to the right, with a white knob on it.
-//! Left and Right (A and D, the D-pad) held move the knob of the volume picked, as fast as
+//! Left and Right (A and D, the D-pad, the left stick) held move the knob of the volume picked, as fast as
 //! retail's 4 of 255 a frame, and the mouse puts it where it presses or drags. While a volume is
 //! picked its sound plays to hear it by (`OptionsMenu_TestSound`); online, where the race's song
 //! goes on, the music's is that song. The volumes are kept once the view is left.
@@ -53,6 +53,8 @@ pub struct PauseMenu {
     pub restart: bool,
     /// The way the keyboard slides a volume, -1, 0 or 1: Left or Right is held.
     slide_keys: i32,
+    /// The ways the left stick was pushed the last frame (right and up 1), to tap with it.
+    stick: IVec2,
     /// The part of a percent a held key has slid a volume, which is kept in whole ones.
     slid: f32,
     /// A volume changed since the config was last saved.
@@ -200,6 +202,10 @@ const WEDGE_TO: [u8; 3] = [0x80, 0x80, 0xff];
 /// frames a second.
 const SLIDE_PER_SECOND: f32 = 4.0 / 255.0 * 100.0 * 30.0;
 
+/// How far the left stick is pushed to count as the D-pad: past 0x20 or 0xe0 of retail's 0 to
+/// 0xff, 0x80 being the middle (`GAMEPAD_ProcessHold`'s analog buttons).
+const STICK_PUSHED: f32 = 0x60 as f32 / 127.0;
+
 /// The panel behind the items, the line around it, and its shadow.
 const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
 const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
@@ -286,6 +292,18 @@ fn input(
     };
     let key = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
+    // The left stick of the first pad that has it pushed, as the D-pad: tapped as it is pushed
+    // past the line, and held as long as it is.
+    let stick = pads
+        .iter()
+        .map(|p| p.left_stick())
+        .find(|s| *s != Vec2::ZERO)
+        .unwrap_or(Vec2::ZERO);
+    let way = |v: f32| (v > STICK_PUSHED) as i32 - (v < -STICK_PUSHED) as i32;
+    let pushed = IVec2::new(way(stick.x), way(stick.y));
+    let stick_tap = |y: i32| pushed.y == y && menu.stick.y != y;
+    let (stick_up, stick_down) = (stick_tap(1), stick_tap(-1));
+    menu.stick = pushed;
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         menu.open = !menu.open;
         menu.view = View::Main;
@@ -305,11 +323,12 @@ fn input(
     } else if menu.open {
         let (_, items) = items(&lobby, menu.view, &public);
         let count = items.len();
-        if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) {
+        if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up {
             menu.selected = (menu.selected + count - 1) % count;
             sound(MENU_MOVE_SFX);
         }
-        if key(&[KeyCode::ArrowDown, KeyCode::KeyS]) || pad(GamepadButton::DPadDown) {
+        if key(&[KeyCode::ArrowDown, KeyCode::KeyS]) || pad(GamepadButton::DPadDown) || stick_down
+        {
             menu.selected = (menu.selected + 1) % count;
             sound(MENU_MOVE_SFX);
         }
@@ -331,7 +350,8 @@ fn input(
         {
             let pad_way = |button| pads.iter().any(|p| p.pressed(button)) as i32;
             let way = menu.slide_keys + pad_way(GamepadButton::DPadRight)
-                - pad_way(GamepadButton::DPadLeft);
+                - pad_way(GamepadButton::DPadLeft)
+                + pushed.x;
             slide(
                 &mut menu,
                 &mut config,
