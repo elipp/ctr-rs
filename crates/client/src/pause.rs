@@ -13,6 +13,11 @@
 //! picked its sound plays to hear it by (`OptionsMenu_TestSound`); online, where the race's song
 //! goes on, the music's is that song. The volumes are kept once the view is left.
 //!
+//! Its "Controls" lists the keyboard's driving keys (`controls.rs`). Taking one waits for a key,
+//! which becomes that control's; Escape (Triangle, Start) leaves it as it was. A key the client
+//! uses for something else while driving is refused, with a word on what it does. "Reset" puts
+//! the defaults back.
+//!
 //! Offline the race stops while the menu is open. Online it goes on, as the others are still
 //! racing: the menu only takes our controls, and our kart gets no input until it closes.
 //!
@@ -33,6 +38,7 @@ use render::font::{Font, Gradient};
 
 use crate::command::Action;
 use crate::config::Config;
+use crate::controls::{self, Control};
 use crate::font::{CtrText, TexelSize};
 use crate::lobby::Lobby;
 use crate::public_lobbies::{self, PublicLobbies, Status};
@@ -57,8 +63,10 @@ pub struct PauseMenu {
     stick: IVec2,
     /// The part of a percent a held key has slid a volume, which is kept in whole ones.
     slid: f32,
-    /// A volume changed since the config was last saved.
+    /// A volume or a key changed since the config was last saved.
     unsaved: bool,
+    /// The control whose key is waited for.
+    capturing: Option<Control>,
 }
 
 /// What the menu is showing.
@@ -70,6 +78,18 @@ enum View {
     Browser,
     /// The volumes.
     Options,
+    /// The keyboard's driving keys.
+    Controls,
+}
+
+impl View {
+    /// The view Back goes to.
+    fn parent(self) -> View {
+        match self {
+            View::Controls => View::Options,
+            _ => View::Main,
+        }
+    }
 }
 
 /// Something the menu offers.
@@ -85,6 +105,12 @@ enum Item {
     Quit,
     /// A volume, which Left and Right change.
     Volume(Slider),
+    /// Shows the driving keys.
+    Controls,
+    /// A driving key, which taking waits for a key to bind.
+    Control(Control),
+    /// The driving keys back to the defaults.
+    ResetControls,
     /// The public lobby at that place of [`PublicLobbies::shown`].
     Join(usize),
     Refresh,
@@ -94,26 +120,34 @@ enum Item {
     Info,
 }
 
-/// An item and the text it has.
+/// An item and the text it has, and what it is set to, shown at its right.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
     item: Item,
     label: String,
+    value: Option<String>,
 }
 
 fn entry(item: Item, label: impl Into<String>) -> Entry {
     Entry {
         item,
         label: label.into(),
+        value: None,
     }
 }
 
 /// The title of the menu and what it offers now. An online race cannot be restarted by one
 /// player.
-fn items(lobby: &Lobby, view: View, public: &PublicLobbies) -> (String, Vec<Entry>) {
-    match view {
+fn items(
+    lobby: &Lobby,
+    menu: &PauseMenu,
+    public: &PublicLobbies,
+    config: &Config,
+) -> (String, Vec<Entry>) {
+    match menu.view {
         View::Browser => return ("Public lobbies".into(), browser_items(public)),
         View::Options => return ("Options".into(), options_items()),
+        View::Controls => return ("Controls".into(), controls_items(config, menu.capturing)),
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
@@ -142,8 +176,28 @@ fn options_items() -> Vec<Entry> {
         entry(Item::Volume(Slider::Fx), "FX"),
         entry(Item::Volume(Slider::Music), "Music"),
         entry(Item::Volume(Slider::Voice), "Voice"),
+        entry(Item::Controls, "Controls"),
         entry(Item::Back, "Back"),
     ]
+}
+
+/// The driving keys, and "Press a key" at the one `capturing`.
+fn controls_items(config: &Config, capturing: Option<Control>) -> Vec<Entry> {
+    let mut items: Vec<Entry> = Control::ALL
+        .iter()
+        .map(|&control| Entry {
+            item: Item::Control(control),
+            label: control.label().into(),
+            value: Some(if capturing == Some(control) {
+                "Press a key".into()
+            } else {
+                config.controls.describe(control)
+            }),
+        })
+        .collect();
+    items.push(entry(Item::ResetControls, "Reset"));
+    items.push(entry(Item::Back, "Back"));
+    items
 }
 
 /// The realm's lobbies, one to a row: the name, the players, and if it is not simply a lobby we
@@ -268,7 +322,11 @@ fn input(
     mut exit: MessageWriter<AppExit>,
 ) {
     // (The menu resets the keys every frame, so they no longer tell which are held.)
+    let mut first_press = None;
     for event in key_events.read() {
+        if event.state == ButtonState::Pressed && !event.repeat {
+            first_press = first_press.or(Some(event.key_code));
+        }
         let way = match event.key_code {
             KeyCode::ArrowLeft | KeyCode::KeyA => -1,
             KeyCode::ArrowRight | KeyCode::KeyD => 1,
@@ -304,11 +362,36 @@ fn input(
     let stick_tap = |y: i32| pushed.y == y && menu.stick.y != y;
     let (stick_up, stick_down) = (stick_tap(1), stick_tap(-1));
     menu.stick = pushed;
+    if let Some(control) = menu.capturing.filter(|_| menu.open) {
+        menu.clicked = None;
+        if first_press == Some(KeyCode::Escape)
+            || pad(GamepadButton::North)
+            || pad(GamepadButton::Start)
+        {
+            menu.capturing = None;
+            sound(MENU_BACK_SFX);
+        } else if let Some(key) = first_press {
+            let refuse = |why: String| Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4));
+            if let Some(what) = controls::taken(key) {
+                toasts.write(refuse(format!("{} {what}", controls::label(key))));
+            } else if !controls::bindable(key) {
+                toasts.write(refuse("That key cannot be bound".into()));
+            } else {
+                config.controls.bind(control, key);
+                menu.capturing = None;
+                menu.unsaved = true;
+                sound(MENU_TAKE_SFX);
+            }
+        }
+        save(&mut menu, &config, &mut toasts);
+        return finish(was_open, &menu, &mut keys);
+    }
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         menu.open = !menu.open;
         menu.view = View::Main;
         menu.selected = 0;
         menu.clicked = None;
+        menu.capturing = None;
         test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
         if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
             if menu.open {
@@ -321,7 +404,7 @@ fn input(
         save(&mut menu, &config, &mut toasts);
         return finish(was_open, &menu, &mut keys);
     } else if menu.open {
-        let (_, items) = items(&lobby, menu.view, &public);
+        let (_, items) = items(&lobby, &menu, &public, &config);
         let count = items.len();
         if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up {
             menu.selected = (menu.selected + count - 1) % count;
@@ -363,7 +446,7 @@ fn input(
         if key(&[KeyCode::Backspace]) || pad(GamepadButton::North) {
             sound(MENU_BACK_SFX);
             if menu.view != View::Main {
-                menu.view = View::Main;
+                menu.view = menu.view.parent();
                 menu.selected = 0;
             } else {
                 menu.open = false;
@@ -390,8 +473,17 @@ fn input(
             }
             Some(Item::Refresh) => public.refresh(),
             Some(Item::Back) => {
-                menu.view = View::Main;
+                menu.view = menu.view.parent();
                 menu.selected = 0;
+            }
+            Some(Item::Controls) => {
+                menu.view = View::Controls;
+                menu.selected = 0;
+            }
+            Some(Item::Control(control)) => menu.capturing = Some(control),
+            Some(Item::ResetControls) => {
+                config.controls = controls::Controls::default();
+                menu.unsaved = true;
             }
             Some(Item::Join(i)) => {
                 if let Some(found) = public.shown().0.get(i) {
@@ -484,7 +576,7 @@ fn test_sound(
     sounds.test_sound(picked, character, frame);
 }
 
-/// Keeps the volumes once the options are left.
+/// Keeps the volumes once the options are left, and the keys at once.
 fn save(menu: &mut PauseMenu, config: &Config, toasts: &mut MessageWriter<Toast>) {
     if menu.unsaved && !(menu.open && menu.view == View::Options) {
         menu.unsaved = false;
@@ -519,7 +611,7 @@ fn show(
     mut knobs: Query<(&Knob, &mut Node)>,
 ) {
     let wanted = menu.open.then(|| {
-        let (title, items) = items(&lobby, menu.view, &public);
+        let (title, items) = items(&lobby, &menu, &public, &config);
         Shown { items, title }
     });
     let current = shown.single().ok();
@@ -610,20 +702,33 @@ fn spawn(commands: &mut Commands, shown: Shown, selected: usize, size: &TexelSiz
     ));
     for (i, item) in items.into_iter().enumerate() {
         let text = CtrText::new(item.label, Font::Middle, gradient(i == selected));
+        // A setting has its label at the left and its value at the right.
+        let justify = if item.value.is_some() {
+            JustifyContent::SpaceBetween
+        } else {
+            JustifyContent::Center
+        };
         let row = commands
             .spawn((
                 ChildOf(panel),
                 Row(i),
                 Node {
                     width: Val::Percent(100.0),
-                    justify_content: JustifyContent::Center,
+                    justify_content: justify,
                     align_items: AlignItems::Center,
+                    column_gap: size.x(16),
                     padding: UiRect::vertical(size.y(2)),
                     ..default()
                 },
             ))
             .id();
-        if let Item::Volume(slider) = item.item {
+        if let Some(value) = item.value {
+            commands.spawn((ChildOf(row), text));
+            commands.spawn((
+                ChildOf(row),
+                CtrText::new(value, Font::Middle, gradient(i == selected)),
+            ));
+        } else if let Item::Volume(slider) = item.item {
             commands.spawn((
                 ChildOf(row),
                 text,
