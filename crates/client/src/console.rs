@@ -58,7 +58,7 @@ const BACKGROUND_ALPHA: f32 = 0.25;
 
 /// Seconds the text stays up after the last line or scroll, and how long it then fades for. The
 /// background goes first, after `BACKGROUND_HOLD_SECONDS`.
-const HOLD_SECONDS: f32 = 10.0;
+const HOLD_SECONDS: f32 = 60.0;
 const BACKGROUND_HOLD_SECONDS: f32 = 2.0;
 const FADE_SECONDS: f32 = 1.0;
 
