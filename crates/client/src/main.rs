@@ -74,6 +74,8 @@ mod tracker;
 mod version;
 mod weapon;
 mod weather;
+#[cfg(target_arch = "wasm32")]
+mod web;
 mod wheels;
 mod wrong_way;
 mod wumpa_icon;
@@ -91,6 +93,8 @@ pub(crate) use scene::*;
 
 fn main() {
     crash::install();
+    #[cfg(target_arch = "wasm32")]
+    web::take_disc_image();
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);
@@ -137,6 +141,9 @@ fn main() {
                 CHARACTERS[racer as usize]
             ),
             present_mode: config.present_mode(),
+            // In a browser, the page's canvas (`web/index.html`), as big as the page.
+            canvas: cfg!(target_arch = "wasm32").then(|| "#ctr".into()),
+            fit_canvas_to_parent: true,
             ..default()
         }),
         ..default()

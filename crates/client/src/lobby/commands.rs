@@ -12,6 +12,7 @@ use bevy::prelude::*;
 /// Puts `text` on the system clipboard. It is done on a thread of its own: on Linux the clipboard's
 /// owner has to stay up to serve the paste (until something else is copied), and a failure is only
 /// reported on the console.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn copy_to_clipboard(text: String) {
     std::thread::spawn(move || {
         let result = arboard::Clipboard::new().and_then(|mut clipboard| {
@@ -29,6 +30,12 @@ pub(super) fn copy_to_clipboard(text: String) {
             warn!("could not copy to the clipboard: {e}");
         }
     });
+}
+
+/// The page's clipboard, in a browser.
+#[cfg(target_arch = "wasm32")]
+pub(super) fn copy_to_clipboard(text: String) {
+    crate::web::copy(&text);
 }
 
 /// Why `action` cannot be done now, if it cannot.

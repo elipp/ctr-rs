@@ -144,7 +144,12 @@ impl Source {
     pub fn get(&self, need: Need) -> io::Result<Vec<u8>> {
         match std::fs::read(self.path(need)) {
             Ok(bytes) => return Ok(bytes),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            // (A browser has no files: there everything comes from the image.)
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::Unsupported
+                ) => {}
             Err(e) => return Err(e),
         }
         let xnf = if matches!(need, Need::Xa(..)) {

@@ -133,6 +133,25 @@ pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
     })
 }
 
+/// The map of every racing track, made from the disc image `original` and only held in memory:
+/// for a client with no folder to keep them in (a browser). One after another, and not
+/// compressed, which is what [`export`] spends its time on.
+pub fn make_all(original: &Path) -> io::Result<Vec<Map>> {
+    let (mut disc, big) = open_bigfile(original)?;
+    TRACKS
+        .iter()
+        .map(|&(slug, _, id)| {
+            let mut read =
+                |file| big.read(&mut disc, BigIndex::level(id, Lod::OnePlayer, file).get());
+            from_files(
+                format!("{PREFIX}{slug}"),
+                &read(LevFile::Lev)?,
+                &read(LevFile::Vram)?,
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
