@@ -410,3 +410,162 @@ fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
         });
     }
 }
+
+/// Opens a lobby and has `guests` join it, in order, each driving character 7 + its number. Waits
+/// until every session sees all of them in the lobby.
+fn lobby_of(guests: usize) -> (Session, Vec<Session>) {
+    let host = net::host(3, "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guests: Vec<Session> = (0..guests)
+        .map(|i| {
+            let guest = net::join(ticket.clone().unwrap(), 7 + i as u8, "", BUILD);
+            wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+            wait_for(&host, "a peer", |e| matches!(e, Event::PeerJoined(_)));
+            guest
+        })
+        .collect();
+    let everyone = guests.len() + 1;
+    for session in guests.iter().chain([&host]) {
+        wait_for(session, "everyone in the lobby", |e| match e {
+            Event::Lobby { players, .. } => players.len() == everyone,
+            _ => false,
+        });
+    }
+    // (The players' addresses take a while to be found by id, which migrating needs.)
+    std::thread::sleep(Duration::from_secs(8));
+    (host, guests)
+}
+
+/// The ticket that a session that became the host says the others join with.
+fn promoted(session: &Session) -> net::Ticket {
+    let mut ticket = None;
+    wait_for(session, "becoming the host", |e| match e {
+        Event::Promoted { ticket: t, .. } => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    ticket.unwrap()
+}
+
+#[test]
+fn the_first_guest_hosts_the_lobby_when_the_host_leaves() {
+    let (host, guests) = lobby_of(2);
+    let [first, second] = <[Session; 2]>::try_from(guests).ok().unwrap();
+    drop(host);
+
+    let ticket = promoted(&first);
+    wait_for(&second, "following the new host", |e| {
+        matches!(e, Event::Joined(id) if id == ticket.id)
+    });
+    // The lobby is the new host and the guest that followed, in that order.
+    for session in [&first, &second] {
+        wait_for(session, "the new lobby", |e| match e {
+            Event::Lobby { players, .. } => {
+                players.len() == 2 && players[0].id == ticket.id && players[0].character == 7
+                    && players[1].character == 8
+            }
+            _ => false,
+        });
+    }
+    // It works as a lobby: the new host starts a race with the guest.
+    std::thread::sleep(Duration::from_secs(1));
+    first.start(5, 0);
+    for session in [&first, &second] {
+        wait_for(session, "the start", |e| match e {
+            Event::Started { characters, .. } => {
+                assert_eq!(characters, [7, 8]);
+                true
+            }
+            _ => false,
+        });
+    }
+}
+
+#[test]
+fn the_next_guest_hosts_when_the_first_is_gone_as_well() {
+    let (host, guests) = lobby_of(3);
+    let [first, second, third] = <[Session; 3]>::try_from(guests).ok().unwrap();
+    // The heir is gone before it took over, and the guests behind it have to find that out.
+    drop(host);
+    drop(first);
+
+    let ticket = promoted(&second);
+    wait_for(&third, "following the second guest", |e| {
+        matches!(e, Event::Joined(id) if id == ticket.id)
+    });
+    for session in [&second, &third] {
+        wait_for(session, "the new lobby", |e| match e {
+            Event::Lobby { players, .. } => {
+                players.len() == 2 && players[0].id == ticket.id && players[1].character == 9
+            }
+            _ => false,
+        });
+    }
+}
+
+#[test]
+fn the_last_guest_hosts_a_lobby_of_one() {
+    let (host, guests) = lobby_of(1);
+    let [guest] = <[Session; 1]>::try_from(guests).ok().unwrap();
+    drop(host);
+    promoted(&guest);
+    // (The lobby event that comes with becoming the host is read with that one.)
+    guest.set_character(5);
+    wait_for(&guest, "the lobby of one", |e| match e {
+        Event::Lobby { players, .. } => players.len() == 1,
+        _ => false,
+    });
+}
+
+#[test]
+fn the_race_stops_and_the_lobby_goes_on_when_the_host_leaves_it() {
+    let (host, guests) = lobby_of(2);
+    let [first, second] = <[Session; 2]>::try_from(guests).ok().unwrap();
+    host.start(5, 0);
+    for session in [&host, &first, &second] {
+        wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
+        session.ready();
+    }
+    for session in [&host, &first, &second] {
+        wait_for(session, "tick 0", |e| matches!(e, Event::Go));
+    }
+
+    drop(host);
+    // The race is stopped (not failed) for both, and the first guest hosts the lobby.
+    let (mut stopped, mut ticket) = ([false; 2], None);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !stopped.iter().all(|&s| s) || ticket.is_none() {
+        assert!(Instant::now() < deadline, "stopped {stopped:?}, host {ticket:?}");
+        for (i, session) in [&first, &second].into_iter().enumerate() {
+            for event in session.poll() {
+                match event {
+                    Event::Stopped => stopped[i] = true,
+                    Event::Promoted { ticket: t, .. } => ticket = Some(t),
+                    Event::Failed(why) => panic!("failed: {why}"),
+                    _ => {}
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The game says the race is over, and the lobby is the new host and the other guest.
+    first.over();
+    second.over();
+    let ticket = ticket.unwrap();
+    wait_for(&second, "following the new host", |e| {
+        matches!(e, Event::Joined(id) if id == ticket.id)
+    });
+    wait_for(&first, "the new lobby", |e| match e {
+        Event::Lobby { players, .. } => players.len() == 2 && players[0].id == ticket.id,
+        _ => false,
+    });
+}

@@ -68,7 +68,7 @@ fn endpoint_builder() -> Builder {
 }
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/9";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/10";
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
@@ -100,8 +100,17 @@ pub enum Event {
         spectators: Vec<Player>,
         you: Option<usize>,
     },
-    /// We joined the lobby of this host.
+    /// We joined the lobby of this host. (Also when the host left and the lobby went on with
+    /// another one: we joined that one.)
     Joined(EndpointId),
+    /// The host left and we are the host now: the lobby goes on with us. Its address is ours,
+    /// so the old ticket does not work any more; `ticket` is what the others join with. The
+    /// guests that follow us are [`Event::PeerJoined`] and in the next [`Event::Lobby`]. If the
+    /// lobby was public, it is listed again under our id (`public`).
+    Promoted {
+        ticket: Ticket,
+        public: Option<Public>,
+    },
     /// A peer is gone.
     PeerLeft(EndpointId),
     /// A race is about to start. `slot` is ours among the players, and `characters` is the
