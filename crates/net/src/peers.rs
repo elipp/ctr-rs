@@ -9,13 +9,43 @@ use iroh::endpoint::Connection;
 
 use crate::conn::send_datagram;
 use crate::wire::{InputReceiver, InputSender, Message};
-use crate::{KICK_AFTER, Ticket};
+use crate::realm::Publisher;
+use crate::transfers::Transfers;
+use crate::{KICK_AFTER, RateLimit, Ticket};
 use crate::{Pad, Tick};
 
 #[derive(Clone)]
 pub(crate) enum Role {
     Host,
     Join(Ticket),
+}
+
+/// What only the lobby's host keeps: the guests, and what it takes to run the lobby and the
+/// races started from it. A peer is a host while it has one of these; the rest of a session
+/// (the connections, the race) is the same for every peer.
+#[derive(Default)]
+pub(crate) struct HostState {
+    /// The players that joined, in the order they did.
+    pub(crate) guests: Vec<Guest>,
+    /// How fast each guest has been talking.
+    pub(crate) talkers: HashMap<EndpointId, RateLimit>,
+    /// The players of the race that left it. They are not told of in the lobby, and go from
+    /// `guests` when the next race starts.
+    pub(crate) gone: HashSet<EndpointId>,
+    /// The track of a start that waits for the Hellos.
+    pub(crate) start_wanted: Option<(u32, u64)>,
+    /// The maps being sent.
+    pub(crate) transfers: Transfers,
+    /// Who is ready, before tick 0.
+    pub(crate) ready_from: HashSet<EndpointId>,
+    /// A race has been started and the game has not said it is over.
+    pub(crate) racing: bool,
+    /// The level the lobby drives on between races, as last set.
+    pub(crate) lobby_track: Option<(u32, u64)>,
+    /// The players that left the race, whose pads are still being settled, by slot.
+    pub(crate) departures: HashMap<usize, Departure>,
+    /// The listing of the lobby in the realm, if it is public.
+    pub(crate) publisher: Option<Publisher>,
 }
 
 /// A player in the lobby, as the host knows it.
