@@ -162,7 +162,7 @@ pub struct Music {
     sequences: [Sequence; SEQUENCES],
     /// What `HOWL_Music.c` plays (`cseqHighestIndex`, `cseqBoolPlay`), and the change of its
     /// tempo (`cseqTempo`).
-    playing: Option<u16>,
+    pub(crate) playing: Option<u16>,
     tempo: i32,
 }
 
@@ -369,7 +369,7 @@ impl Howl {
     /// `CseqMusic_Start`: song `id` of the pack starts on a free place of the pool, at
     /// `delta_bpm` beats a minute faster than its own, and when it ends from its start again if
     /// it `loops`. False if there is no such song or no free place.
-    fn start_song(&mut self, id: u16, delta_bpm: i32, loops: bool) -> bool {
+    pub(crate) fn start_song(&mut self, id: u16, delta_bpm: i32, loops: bool) -> bool {
         if !self.music.has(id) {
             return false;
         }
@@ -489,7 +489,7 @@ impl Howl {
     }
 
     /// `CseqMusic_Stop`.
-    fn stop_song(&mut self, id: u16) {
+    pub(crate) fn stop_song(&mut self, id: u16) {
         if !self.music.has(id) {
             return;
         }
@@ -1033,12 +1033,12 @@ mod tests {
     #[test]
     fn the_volumes_are_percents_of_the_games_and_silence_at_zero() {
         let mut howl = test_howl();
-        howl.set_volumes(100, 100);
+        howl.set_volumes(100, 100, 100);
         assert_eq!((howl.volume_fx, howl.volume_voice, howl.volume_music), (215, 255, 175));
-        howl.set_volumes(50, 0);
-        assert_eq!((howl.volume_fx, howl.volume_voice, howl.volume_music), (107, 127, 0));
+        howl.set_volumes(50, 0, 20);
+        assert_eq!((howl.volume_fx, howl.volume_voice, howl.volume_music), (107, 51, 0));
         // (More than the game's is the game's.)
-        howl.set_volumes(200, 200);
+        howl.set_volumes(200, 200, 200);
         assert_eq!(howl.volume_music, 175);
     }
 

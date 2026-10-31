@@ -16,13 +16,17 @@
 //! The sounds that echo (a kart in a tunnel, [`Sfx::echo`]) are heard through the SPU's
 //! [`reverb`] as well, which each level sets ([`Howl::set_level_reverb`]).
 //!
+//! The volume options ([`settings`]) are percents of the game's volumes, which the sounds that
+//! play follow at once.
+//!
 //! Not ported yet: the banks (every sample a sound effect, an engine or the music plays is
-//! loaded), and the volume options.
+//! loaded).
 
 pub mod channel;
 pub mod fx;
 pub mod music;
 pub mod reverb;
+pub mod settings;
 pub mod spu;
 pub mod state;
 pub mod tables;
@@ -110,6 +114,8 @@ pub struct Howl {
     pub(crate) replaced: Vec<(u16, Option<Box<[u8]>>)>,
     /// The output samples until the next vertical blank.
     until_vsync: u32,
+    /// What the options menu plays to hear a volume by.
+    pub(crate) test: settings::Test,
 }
 
 /// The game's volumes (`vol_FX`, `vol_Music`, `vol_Voice`), which are 100 % of [`Howl::set_volumes`].
@@ -118,13 +124,15 @@ const VOLUME_MUSIC: u32 = 175;
 const VOLUME_VOICE: u32 = 255;
 
 impl Howl {
-    /// The effects (the voices too) and the music at `fx` and `music` percent of the game's
-    /// volumes, 100 or more being those. The notes that play follow at once.
-    pub fn set_volumes(&mut self, fx: u8, music: u8) {
+    /// `howl_VolumeSet`: the effects, the music and the voices at `fx`, `music` and `voice`
+    /// percent of the game's volumes, 100 or more being those. The sounds and notes that play
+    /// follow at once.
+    pub fn set_volumes(&mut self, fx: u8, music: u8, voice: u8) {
         let of = |volume: u32, percent: u8| (volume * percent.min(100) as u32 / 100) as u8;
         self.volume_fx = of(VOLUME_FX, fx);
-        self.volume_voice = of(VOLUME_VOICE, fx);
+        self.volume_voice = of(VOLUME_VOICE, voice);
         self.volume_music = of(VOLUME_MUSIC, music);
+        self.set_fx_volumes();
         self.set_music_volumes();
     }
 
@@ -158,6 +166,7 @@ impl Howl {
             xnf: Xnf::default(),
             xa: xa::Xa::default(),
             replaced: Vec::new(),
+            test: settings::Test::default(),
             until_vsync: 0,
         }
     }
