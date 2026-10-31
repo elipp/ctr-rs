@@ -1,8 +1,8 @@
 //! Finding the disc image. In order: the image in memory (in a browser, see `web.rs`), `CTR_BIN`,
 //! the `iso` of the config, and, in a debug build, `assets/ctr-u.bin`. If there is none, and
 //! everything the client reads from the disc has been made already (`prepare`,
-//! `maps::make_builtins`), it runs without one. Otherwise, on Windows, a file dialog asks for it
-//! and the answer is kept in the config; elsewhere the client says how to give the path and
+//! `maps::make_builtins`), it runs without one. Otherwise a file dialog asks for it and the
+//! answer is kept in the config; if that is cancelled, the client says how to give the path and
 //! exits.
 
 use std::path::{Path, PathBuf};
@@ -111,7 +111,7 @@ fn dev_default() -> Option<PathBuf> {
 }
 
 /// Asks until the file is a disc; none if the dialog is cancelled.
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 fn ask() -> Option<PathBuf> {
     let mut why = None;
     loop {
@@ -135,7 +135,7 @@ fn ask() -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_arch = "wasm32")]
 fn ask() -> Option<PathBuf> {
     None
 }
