@@ -11,8 +11,9 @@
 //!   never straight, so that they do not learn our address (off at first; it costs latency, and
 //!   holds from the next lobby we create or join)
 //!
-//! * `/config set volume music|sfx <0-100>`: how loud the music and the effects (the voices too)
-//!   are, in percent of the game's own volumes (100 at first)
+//! * `/config set volume music|sfx|voice <0-100>`: how loud the music, the effects and the
+//!   voices are, in percent of the game's own volumes (100 at first). The pause menu's Options
+//!   set them too
 //!
 //! A browser has no vsync, fps-max or relay-only: it paces the frames to the display itself, and
 //! reaches the others through the relay only.
@@ -47,9 +48,10 @@ pub struct Config {
     pub fps_max: u32,
     /// Whether to play through the relay only (`/config set relay-only`).
     pub relay_only: bool,
-    /// The effects' and the music's volumes, 0 to 100 (`/config set volume`).
+    /// The effects', the music's and the voices' volumes, 0 to 100 (`/config set volume`).
     pub volume_fx: u8,
     pub volume_music: u8,
+    pub volume_voice: u8,
 }
 
 impl Default for Config {
@@ -63,6 +65,7 @@ impl Default for Config {
             relay_only: false,
             volume_fx: 100,
             volume_music: 100,
+            volume_voice: 100,
         }
     }
 }
@@ -181,6 +184,7 @@ pub enum Setting {
     /// 0 to 100.
     VolumeSfx(u8),
     VolumeMusic(u8),
+    VolumeVoice(u8),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -188,10 +192,10 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set relay-only on|off\n\
-    /config set volume music|sfx <0-100>";
+    /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
-    /config set volume music|sfx <0-100>";
+    /config set volume music|sfx|voice <0-100>";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
@@ -232,7 +236,7 @@ impl Setting {
                 _ => Err("Usage: /config set relay-only on|off".into()),
             },
             "volume" => {
-                const USAGE: &str = "Usage: /config set volume music|sfx <0-100>";
+                const USAGE: &str = "Usage: /config set volume music|sfx|voice <0-100>";
                 let (kind, percent) = word(value);
                 let percent: u8 = percent
                     .parse()
@@ -242,6 +246,7 @@ impl Setting {
                 match kind {
                     "music" => Ok(Setting::VolumeMusic(percent)),
                     "sfx" => Ok(Setting::VolumeSfx(percent)),
+                    "voice" => Ok(Setting::VolumeVoice(percent)),
                     _ => Err(USAGE.into()),
                 }
             }
@@ -355,14 +360,15 @@ fn apply(
                 };
                 toasts.write(Toast::new(text, 3500));
             }
-            Setting::VolumeSfx(percent) | Setting::VolumeMusic(percent) => {
-                let name = if matches!(setting, Setting::VolumeSfx(_)) {
-                    config.volume_fx = *percent;
-                    "Effects"
-                } else {
-                    config.volume_music = *percent;
-                    "Music"
+            Setting::VolumeSfx(percent)
+            | Setting::VolumeMusic(percent)
+            | Setting::VolumeVoice(percent) => {
+                let (volume, name) = match setting {
+                    Setting::VolumeSfx(_) => (&mut config.volume_fx, "Effects"),
+                    Setting::VolumeMusic(_) => (&mut config.volume_music, "Music"),
+                    _ => (&mut config.volume_voice, "Voice"),
                 };
+                *volume = *percent;
                 if let Err(why) = config.save() {
                     toasts.write(refuse(why));
                 }
