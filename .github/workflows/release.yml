@@ -54,6 +54,20 @@ jobs:
           else
               tar czf "dist/$name.tar.gz" "$name"
           fi
+      - name: AppImage
+        if: runner.os == 'Linux'
+        run: |
+          name=ctr-rs-${{ matrix.target }}
+          curl -sSfL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c
+          chmod +x appimagetool
+          mkdir -p AppDir/usr/bin AppDir/usr/share/doc/ctr-rs
+          cp "$name/ctr-rs" AppDir/usr/bin/
+          cp "$name"/*.txt "$name"/*.md "$name/LICENSE" AppDir/usr/share/doc/ctr-rs/
+          ln -s usr/bin/ctr-rs AppDir/AppRun
+          cp linux/ctr-rs.desktop linux/ctr-rs.png AppDir/
+          # No FUSE on the runner: the tool (an AppImage itself) unpacks and runs.
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool AppDir "dist/$name.AppImage"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
