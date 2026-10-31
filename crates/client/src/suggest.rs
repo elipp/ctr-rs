@@ -121,10 +121,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ),
                 node(
                     "volume",
-                    "How loud the music and the effects are",
+                    "How loud the music, the effects and the voices are",
                     &[
                         takes("music", "The music's volume, 100 being the game's", "<0-100>"),
-                        takes("sfx", "The effects' and voices' volume, 100 being the game's", "<0-100>"),
+                        takes("sfx", "The effects' volume, 100 being the game's", "<0-100>"),
+                        takes("voice", "The voices' volume, 100 being the game's", "<0-100>"),
                     ],
                 ),
             ],
