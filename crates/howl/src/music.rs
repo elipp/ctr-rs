@@ -158,10 +158,6 @@ pub struct Music {
     /// How many of them are the game's: a map's pack, if the level has one, is after them.
     retail: usize,
     pack: Option<usize>,
-    /// The main menu's pack plays in place of the level's (`pack` is the menu's then, and the
-    /// level's is kept here). See [`Howl::set_free_drive_music`].
-    free_drive: bool,
-    level_pack: Option<usize>,
     songs: [Song; SONGS],
     sequences: [Sequence; SEQUENCES],
     /// What `HOWL_Music.c` plays (`cseqHighestIndex`, `cseqBoolPlay`), and the change of its
@@ -270,36 +266,9 @@ impl Howl {
         };
         self.stop_songs();
         self.end_music();
-        self.music.free_drive = false;
-        self.music.level_pack = None;
         self.music.pack = pack
             .map(usize::from)
             .filter(|&p| p < self.music.packs.len());
-    }
-
-    /// In a free drive the main menu's song plays instead of the level's (`on`), and the level's
-    /// again after it. Does nothing if it is so already, or if the game has no menu pack. What
-    /// played stops when it changes, for the other to start; and a level that loads (see
-    /// [`Howl::set_level_music`]) is the level's again.
-    pub fn set_free_drive_music(&mut self, on: bool) {
-        let music = &mut self.music;
-        if on == music.free_drive {
-            return;
-        }
-        let menu = usize::from(MAIN_MENU_SONG);
-        if on && menu >= music.packs.len() {
-            return;
-        }
-        self.stop_songs();
-        self.end_music();
-        let music = &mut self.music;
-        if on {
-            music.level_pack = music.pack;
-            music.pack = Some(menu);
-        } else {
-            music.pack = music.level_pack.take();
-        }
-        music.free_drive = on;
     }
 
     /// A level that loads, as [`Howl::set_level_reverb`] and [`Howl::set_level_music`] have it,
@@ -1071,16 +1040,6 @@ mod tests {
         // (More than the game's is the game's.)
         howl.set_volumes(200, 200);
         assert_eq!(howl.volume_music, 175);
-    }
-
-    #[test]
-    fn a_game_without_a_menu_pack_keeps_the_levels_in_a_free_drive() {
-        let mut howl = test_howl();
-        howl.play_music(LEVEL_SONG, 0);
-        howl.vsync();
-        howl.set_free_drive_music(true);
-        howl.vsync();
-        assert_eq!(notes(&howl).len(), 1);
     }
 
     #[test]

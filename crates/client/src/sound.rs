@@ -363,9 +363,6 @@ impl Sfx<'_> {
         }
         kept.tick = tick;
         sounds.frame = tick;
-        // A free drive plays the main menu's song, not the level's.
-        let free_drive = race.laps == race::FREE_DRIVE_LAPS;
-        sounds.set_free_drive_music(free_drive);
         engines(&mut sounds, kept, drivers, own, places, ear);
 
         if let Some(light) = light {
@@ -553,7 +550,7 @@ impl Sfx<'_> {
             to_finish: ours.distance_to_finish_curr as i32,
             finished,
             first: ours.driver_rank == 0,
-            mask_song: mask.filter(|_| !free_drive).map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
+            mask_song: mask.map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
             wrong_way: race.laps != race::FREE_DRIVE_LAPS && vehicle::lap::wrong_way(ours),
             good_guy: vehicle::stuck::good_guy(ours.character),
         });
