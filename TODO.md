@@ -11,6 +11,7 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 2. the level's ambience (`Level_AmbientSound`: `levAmbientSound` along `SpawnType2` 5 and 6, `Level_RandomFX`), and the rain of the red beaker's cloud 0x82 (`DropRain`)
 3. the volume options (`howl_VolumeSet`, `howl_ModeSet`)
 4. the other players' karts, heard in space (an intentional divergence; the skid and the turbo's roar of the others, their one-shot sounds and their voice lines are heard by distance now, see `docs/notes/DIVERGENCE.md`). What is left: the falloff (300 to 2500 units, `KART_FULL_WITHIN` and `KART_HEARD_WITHIN`) is a guess to tune by ear, perhaps by the bounce's loudness (`Effect::DriverCrashing::volume`). The peer loops want a cap on how many play (the SPU has 24 voices, and the engines and our own use some: the nearest few, as the engines do), and the ground and wall rub if they should be heard. Karts in a tunnel keep the echo of their `ENGINE_ECHO` flag. Nothing here touches the sim: it is all in the listener (`client::sound`)
+- maybe don't reset the music when changing character
 
 ## Net
 - auto-kick suspicious peers: count what a well-behaved client never does per guest (a duplicate `Want`, which `transfers::Verdict::Duplicate` already tells apart; a `Want` for a map the host did not provide; a `Blob` nobody asked for) and kick with `KICKED` past a threshold. Log each as a rate-limited `tracing::warn!` with `fmt_short()` ids (the `net` crate has no logging yet), and say why in the kick. A guest that never reads its stream also holds a transfer slot until QUIC's idle timeout: put a deadline on `send_reliably` for maps
@@ -52,6 +53,8 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 - other karts' shield bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 
 ## Maybe
+
+- backing up and turning on N.Gin (some other drivers too?) looks weird
 
 - The few usf boost pads in the game
 
