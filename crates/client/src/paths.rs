@@ -16,7 +16,7 @@ fn root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// The settings, see `config.rs`.
+/// The settings, see `config.rs`. (Not in a browser, which keeps them in the page's storage.)
 pub fn config_file() -> PathBuf {
     cache().join("config.json")
 }

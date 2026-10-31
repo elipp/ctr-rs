@@ -1,5 +1,5 @@
-//! The player's settings, kept in `config.json` (see `paths.rs`): read when the viewer starts, and
-//! written whenever one changes.
+//! The player's settings, kept in `config.json` (see `paths.rs`), or in a browser in the page's
+//! storage (`web.rs`): read when the viewer starts, and written whenever one changes.
 //!
 //! * `/config set nickname [name]`: what the others call us instead of our key (up to
 //!   [`net::NICK_MAX`] characters; none clears it). It can change at any time, in a race too, but
@@ -75,18 +75,65 @@ impl Config {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn path() -> PathBuf {
     crate::paths::config_file()
 }
 
+/// Where the settings are kept, to tell of a failure.
+fn place() -> String {
+    if cfg!(target_arch = "wasm32") {
+        "the browser's storage".to_string()
+    } else {
+        crate::paths::config_file().display().to_string()
+    }
+}
+
+/// The text of the settings, none if there are none yet.
+#[cfg(not(target_arch = "wasm32"))]
+fn read() -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path()) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", place())),
+    }
+}
+
+/// The text of the settings, none if there are none yet (or the page cannot read them; it tells
+/// the console why).
+#[cfg(target_arch = "wasm32")]
+fn read() -> Result<Option<String>, String> {
+    Ok(crate::web::load_config())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write(text: &str) -> Result<(), String> {
+    let path = path();
+    let write = || -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, text)
+    };
+    write().map_err(|e| format!("Could not save {}: {e}", place()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write(text: &str) -> Result<(), String> {
+    match crate::web::save_config(text) {
+        None => Ok(()),
+        Some(e) => Err(format!("Could not save the settings: {e}")),
+    }
+}
+
 impl Config {
-    /// What the file holds; the defaults if there is none or it cannot be read (it is told of).
+    /// What is kept; the defaults if there is nothing or it cannot be read (it is told of).
     pub fn load() -> Config {
-        let text = match std::fs::read_to_string(path()) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
-            Err(e) => {
-                eprintln!("{}: {e}", path().display());
+        let text = match read() {
+            Ok(Some(text)) => text,
+            Ok(None) => return Config::default(),
+            Err(why) => {
+                eprintln!("{why}");
                 return Config::default();
             }
         };
@@ -96,21 +143,16 @@ impl Config {
                 config
             }
             Err(e) => {
-                eprintln!("{}: {e}", path().display());
+                eprintln!("{}: {e}", place());
                 Config::default()
             }
         }
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let path = path();
-        let write = || -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            std::fs::write(&path, serde_json::to_string_pretty(self)?)
-        };
-        write().map_err(|e| format!("Could not save {}: {e}", path.display()))
+        let text = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Could not save {}: {e}", place()))?;
+        write(&text)
     }
 
     /// Remembers the character we drive, if it is another.

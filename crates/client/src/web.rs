@@ -1,7 +1,8 @@
 //! The browser build. A page has no files, so the disc image is the one the player dropped on it
 //! (`web/play.html`): the page holds it until `main` runs, which takes it into memory as the
 //! image at [`DISC`] (`loader::disc::keep_in_memory`) for `disc.rs` to find. The clipboard is
-//! the page's as well, and a panic is told to it (`crash.rs`).
+//! the page's as well, and so are the settings (`config.rs`), which it keeps in its storage, and a
+//! panic is told to it (`crash.rs`).
 
 use std::path::PathBuf;
 
@@ -28,6 +29,14 @@ extern "C" {
     /// The text [`request_paste`] asked for, once.
     #[wasm_bindgen(js_namespace = window, js_name = ctrTakePasted)]
     pub fn take_pasted() -> Option<String>;
+
+    /// The settings the page keeps, none if it has none or cannot read them.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrLoadConfig)]
+    pub fn load_config() -> Option<String>;
+
+    /// Keeps the settings; what went wrong if the page could not.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSaveConfig)]
+    pub fn save_config(text: &str) -> Option<String>;
 
     /// Tells the page that the game has crashed, with what the panic said.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCrashed)]
