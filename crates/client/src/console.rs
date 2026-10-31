@@ -264,7 +264,7 @@ struct Born(f32);
 #[derive(Component)]
 struct ChatIcon;
 
-fn spawn(mut commands: Commands) {
+pub(crate) fn spawn(mut commands: Commands) {
     commands.spawn((
         ConsoleWindow,
         Node {
@@ -412,16 +412,17 @@ fn rebuild(
     mut images: ResMut<Assets<Image>>,
     portraits: Option<Res<Portraits>>,
     time: Res<Time<Real>>,
-    mut shown: Local<Option<(u32, usize)>>,
+    mut shown: Local<Option<(Entity, u32, usize)>>,
 ) {
     let now = time.elapsed_secs();
-    let key = (console.version, console.scroll);
-    if *shown == Some(key) {
-        return;
-    }
     let Ok(area) = areas.single() else {
         return;
     };
+    // (The area is new after another level: what it shows is put in it again.)
+    let key = (area, console.version, console.scroll);
+    if *shown == Some(key) {
+        return;
+    }
     *shown = Some(key);
     commands.entity(area).despawn_children();
     let end = console.lines.len() - console.scroll;
