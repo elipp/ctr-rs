@@ -58,7 +58,7 @@ const BACKGROUND_ALPHA: f32 = 0.25;
 
 /// Seconds the text stays up after the last line or scroll, and how long it then fades for. The
 /// background goes first, after `BACKGROUND_HOLD_SECONDS`.
-const HOLD_SECONDS: f32 = 20.0;
+const HOLD_SECONDS: f32 = 60.0;
 const BACKGROUND_HOLD_SECONDS: f32 = 2.0;
 const FADE_SECONDS: f32 = 1.0;
 
@@ -356,9 +356,11 @@ fn fade(
     mut icons: Query<(&Born, &mut ImageNode), With<ChatIcon>>,
 ) {
     let now = time.elapsed_secs();
-    // While it is open the window stays, and while it is open or looking back nothing fades.
+    // While it is open the window stays, and while looking back nothing fades.
     if line.is_open() || console.scroll > 0 {
         console.active_at = now;
+    }
+    if console.scroll > 0 {
         console.revealed_at = now;
     }
     let idle = now - console.active_at;

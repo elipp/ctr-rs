@@ -24,6 +24,10 @@ const PING_FONT_SIZE: f32 = 12.0;
 /// portrait.
 const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.9);
 
+/// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
+/// of retail's screen, to be clear of the toasts and the chat at the top.
+const TABLE_Y: f32 = 12.0;
+
 /// What the list is headed with. (The fonts have capitals, and this is how they show.)
 const TITLE: &str = "PLAYERS IN LOBBY:";
 
@@ -106,7 +110,7 @@ fn build(
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::ZERO,
-                top: Val::ZERO,
+                top: hud::y(TABLE_Y),
                 ..default()
             },
             Pickable::IGNORE,
