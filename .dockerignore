@@ -1,0 +1,7 @@
+# Only what a build of the server needs. (.cargo/ is left out on purpose: it may have flags
+# for this machine.)
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+**/target

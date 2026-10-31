@@ -55,7 +55,15 @@ pub(crate) const COMMANDS: &[Spec] = &[
         "lobby",
         "Play online",
         &[
-            leaf("create", "Open a lobby for others to join"),
+            node(
+                "create",
+                "Open a lobby for others to join",
+                &[takes(
+                    "public",
+                    "List it in the realm, for anyone to find",
+                    "[name]",
+                )],
+            ),
             takes("join", "Join a lobby", "<address>"),
             takes(
                 "spectate",
@@ -98,6 +106,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "fps-max",
                     "The most frames to draw a second, 0 for no limit",
                     "<frames a second>",
+                ),
+                node(
+                    "relay-only",
+                    "Reach the others through the relay only, hiding your address",
+                    &[
+                        leaf("on", "Never connect straight (slower, private)"),
+                        leaf("off", "Connect straight when possible"),
+                    ],
                 ),
                 node(
                     "volume",

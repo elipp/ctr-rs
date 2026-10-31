@@ -14,6 +14,7 @@ mod conn;
 mod limit;
 mod names;
 mod peers;
+mod realm;
 mod session;
 mod ticket;
 mod transfers;
@@ -22,21 +23,49 @@ pub mod wire;
 pub use iroh::EndpointId;
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
+pub use realm::{
+    Browse, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public,
+    PublicLobby, browse, default_realm, lobby_name,
+};
+pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
 pub use wire::{Pad, Tick};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use iroh::Endpoint;
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::{Builder, Connection, presets};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::peers::Role;
 use crate::session::run;
+
+static RELAY_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Whether the sessions and fetches that start from now on go through the relay only (`true`), or
+/// find the shortest way to the others, a direct one when there is one (the default). With the
+/// relay only, no packet leaves our address for another player's (nor for the realm's): they do
+/// not learn it, at the price of the relay's extra round trip. A session that is up keeps the
+/// way it started with.
+pub fn set_relay_only(relay_only: bool) {
+    RELAY_ONLY.store(relay_only, Ordering::Relaxed);
+}
+
+/// The endpoint of a session or a fetch, as [`set_relay_only`] says.
+fn endpoint_builder() -> Builder {
+    let builder = Endpoint::builder(presets::N0);
+    if RELAY_ONLY.load(Ordering::Relaxed) {
+        // No sockets of our own: the relay is the one way left.
+        builder.clear_ip_transports()
+    } else {
+        builder
+    }
+}
 
 /// What the clients speak, exchanged in the connection handshake.
 pub const ALPN: &[u8] = b"ctr-rust/lobby/9";
@@ -152,6 +181,10 @@ pub enum Event {
     Rtt { id: EndpointId, rtt: Duration },
     /// The answer to [`Session::net_info`]: how each peer is reached.
     NetInfo(Vec<PeerInfo>),
+    /// The lobby is in the realm's list (see [`Session::set_public`]), or it is not and why: the
+    /// realm cannot be reached, or turns the listing down. The session keeps trying, so `Ok`
+    /// can follow an `Err`.
+    Listed(Result<(), String>),
     /// The session could not go on.
     Failed(String),
 }
@@ -255,6 +288,7 @@ enum Command {
     },
     NetInfo,
     Stop,
+    Public(Option<Public>),
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -366,6 +400,14 @@ impl Session {
         let _ = self.commands.send(Command::Stop);
     }
 
+    /// Lists the lobby in a realm, for anyone to find and join, or takes it off the list
+    /// (`None`), if we host it. [`Event::Listed`] says whether it worked. The players and the
+    /// state of the lobby in the list follow the lobby; the name and the track are as given
+    /// here, so call it again when the track changes.
+    pub fn set_public(&self, public: Option<Public>) {
+        let _ = self.commands.send(Command::Public(public));
+    }
+
     /// Asks how each peer is reached; [`Event::NetInfo`] answers.
     pub fn net_info(&self) {
         let _ = self.commands.send(Command::NetInfo);
@@ -456,7 +498,7 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
                 .build()
                 .expect("the network runtime");
             let result = runtime.block_on(async {
-                let endpoint = Endpoint::builder(presets::N0)
+                let endpoint = endpoint_builder()
                     .alpns(vec![ALPN.to_vec()])
                     .bind()
                     .await?;

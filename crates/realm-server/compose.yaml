@@ -1,0 +1,16 @@
+services:
+  realm:
+    image: ${REGISTRY_HOST:-registry.lautasliina.fi}/ctr-realm
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: crates/realm-server/Dockerfile
+    # Host networking: QUIC gets the real addresses of the box (and the iptables rule for the
+    # port is the one that counts, not docker's own).
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - realm-data:/data
+
+volumes:
+  realm-data:

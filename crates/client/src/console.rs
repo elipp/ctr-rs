@@ -89,6 +89,7 @@ pub struct Log {
 
 impl Log {
     /// A line in white.
+    #[cfg(test)]
     pub fn new(text: impl Into<String>) -> Log {
         Log::colored(text, Color::WHITE)
     }

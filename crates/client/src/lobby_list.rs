@@ -1,10 +1,14 @@
-//! The players in the lobby, down the left of the screen while no race is on: each one's portrait
+//! The players in the lobby, down the left of the screen while no race is on, under a title in the
+//! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.)
 
 use bevy::prelude::*;
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
 
+use render::font::{Font, Gradient};
+
+use crate::font::CtrText;
 use crate::hud;
 use crate::leaderboard::{ICON_X, Portraits, atlas_image};
 use crate::lobby::Lobby;
@@ -20,13 +24,19 @@ const PING_FONT_SIZE: f32 = 12.0;
 /// portrait.
 const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.9);
 
-/// Where the first portrait is, in lines of retail's screen: higher than the leaderboard's, so
-/// that 8 players fit (8 rows of [`SLOT`] lines make 232 of the 240).
-const FIRST_Y: f32 = 4.0;
+/// What the list is headed with. (The fonts have capitals, and this is how they show.)
+const TITLE: &str = "PLAYERS IN LOBBY:";
+
+/// Where the title is, in lines of retail's screen. It is [`Font::Middle`], 8 lines tall.
+const TITLE_Y: f32 = 2.0;
+
+/// Where the first portrait is, in lines of retail's screen: under the title, and high enough
+/// that 8 players fit (8 rows of [`SLOT`] lines make 233 of the 240).
+const FIRST_Y: f32 = 12.0;
 
 /// The lines from one row to the next: a little more than the leaderboard's, to make room for
 /// the names, which hang under the portraits.
-const SLOT: f32 = 29.0;
+const SLOT: f32 = 28.0;
 
 /// The lines of retail's screen between the last portrait and the first who only watches (more
 /// than a row's own gap), and from one to the next.
@@ -102,6 +112,17 @@ fn build(
             Pickable::IGNORE,
         ))
         .id();
+    commands.spawn((
+        CtrText::new(TITLE, Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
+        Node {
+            position_type: PositionType::Absolute,
+            left: hud::x(ICON_X),
+            top: hud::y(TITLE_Y),
+            ..default()
+        },
+        Pickable::IGNORE,
+        ChildOf(column),
+    ));
     for (n, (character, name, key)) in players.iter().enumerate() {
         let character = (*character as usize).min(ICON_IDS.len() - 1);
         let y = n as f32 * SLOT;

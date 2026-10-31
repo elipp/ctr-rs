@@ -5082,6 +5082,7 @@ dependencies = [
  "bitcode",
  "bytes",
  "iroh",
+ "realm-proto",
  "tokio",
 ]
 
@@ -6442,6 +6443,24 @@ dependencies = [
  "bytemuck",
  "font-types",
  "once_cell",
+]
+
+[[package]]
+name = "realm-proto"
+version = "0.1.0"
+dependencies = [
+ "bitcode",
+]
+
+[[package]]
+name = "realm-server"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "realm-proto",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
