@@ -161,6 +161,10 @@ async function start(stream, size) {
   if (drop.classList.contains("busy")) return;
   drop.classList.add("busy");
   disc = await read(stream, size);
+  maps = await stored("maps", "readonly", (s) => s.getAll()).catch((e) => {
+    console.warn(`could not read the maps: ${e}`);
+    return [];
+  });
   status.textContent = "Starting";
   try {
     await init();
@@ -205,21 +209,44 @@ const trap = (error) => error instanceof WebAssembly.RuntimeError && crashed(Str
 addEventListener("error", (e) => trap(e.error));
 addEventListener("unhandledrejection", (e) => trap(e.reason));
 
-function handles(mode, use) {
+function stored(name, mode, use) {
   return new Promise((resolve, reject) => {
-    const open = indexedDB.open("ctr-rs", 1);
-    open.onupgradeneeded = () => open.result.createObjectStore("handles");
+    const open = indexedDB.open("ctr-rs", 2);
+    open.onupgradeneeded = () => {
+      for (const store of ["handles", "maps"]) {
+        if (!open.result.objectStoreNames.contains(store)) open.result.createObjectStore(store);
+      }
+    };
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
-      const request = use(open.result.transaction("handles", mode).objectStore("handles"));
+      const request = use(open.result.transaction(name, mode).objectStore(name));
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     };
   });
 }
-const remember = (handle) => handles("readwrite", (s) => s.put(handle, "disc")).catch(() => {});
-const forget = () => handles("readwrite", (s) => s.delete("disc")).catch(() => {});
-const recall = () => handles("readonly", (s) => s.get("disc")).catch(() => undefined);
+
+const remember = (handle) => stored("handles", "readwrite", (s) => s.put(handle, "disc")).catch(() => {});
+const forget = () => stored("handles", "readwrite", (s) => s.delete("disc")).catch(() => {});
+const recall = () => stored("handles", "readonly", (s) => s.get("disc")).catch(() => undefined);
+
+let maps = [];
+window.ctrTakeMaps = () => {
+  const taken = maps;
+  maps = [];
+  return taken;
+};
+window.ctrSaveMap = (key, bytes) => {
+  // `bytes` views wasm memory, which can move.
+  const copy = bytes.slice();
+  stored("maps", "readwrite", (s) => s.put(copy, key)).catch((e) =>
+    console.warn(`could not keep the map: ${e}`),
+  );
+};
+window.ctrPurgeMaps = () =>
+  stored("maps", "readwrite", (s) => s.clear()).catch((e) =>
+    console.warn(`could not delete the maps: ${e}`),
+  );
 
 let choices = [];
 let on = 0;

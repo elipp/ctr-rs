@@ -25,7 +25,8 @@ struct Entry {
 /// Where the bytes of a map's file are.
 enum File {
     Disk(PathBuf),
-    /// A map sent to us in a browser, which has no folder to keep it in: the bytes as they came.
+    /// A map sent to us in a browser, which has no folder to keep it in: the bytes as they came,
+    /// which the page keeps as well (`web.rs`).
     #[cfg(target_arch = "wasm32")]
     Held(Vec<u8>),
     /// One of the game's tracks in a browser: made from the disc at the start, and never sent.
@@ -104,6 +105,22 @@ pub fn load() {
                 });
             }
         }
+        // In a browser, the maps sent to us are kept by the page.
+        #[cfg(target_arch = "wasm32")]
+        for bytes in crate::web::take_maps() {
+            match Map::from_bytes(&bytes).and_then(|m| Ok((m.id()?, m.hash()?, m))) {
+                Ok((_, _, map)) if builtin::is_builtin_name(&map.name) => {
+                    eprintln!("{}: a map cannot be named for one of the game's tracks", map.name);
+                }
+                Ok((id, hash, map)) => maps.push(Entry {
+                    id,
+                    hash,
+                    file: File::Held(bytes),
+                    map: Box::leak(Box::new(map)),
+                }),
+                Err(e) => eprintln!("A kept map: {e}"),
+            }
+        }
         maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));
         MAPS.lock().unwrap().extend(maps);
     });
@@ -150,7 +167,7 @@ pub fn file(id: u32) -> Option<(u64, Vec<u8>)> {
 }
 
 /// Takes in a map that was sent to us as the bytes of its file: it has to be the map `id` with
-/// this `hash`. It is saved to the cache (`cache/maps/`), or held in memory in a browser, and
+/// this `hash`. It is saved to the cache (`cache/maps/`), or kept by the page in a browser, and
 /// listed from then on.
 pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
     let map = Map::from_bytes(bytes).map_err(|e| e.to_string())?;
@@ -206,9 +223,10 @@ fn keep(name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
     Ok(File::Disk(path))
 }
 
-/// A browser has no folder: there a map sent to us is held in memory, until the page is left.
+/// A browser has no folder: there the page keeps a map sent to us, and it is held in memory.
 #[cfg(target_arch = "wasm32")]
-fn keep(_name: &str, _id: u32, bytes: &[u8]) -> Result<File, String> {
+fn keep(_name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
+    crate::web::save_map(&format!("{id:08x}"), bytes);
     Ok(File::Held(bytes.to_vec()))
 }
 
@@ -225,6 +243,8 @@ pub fn purge() -> Result<usize, String> {
         #[cfg(target_arch = "wasm32")]
         File::Made => true,
     });
+    #[cfg(target_arch = "wasm32")]
+    crate::web::purge_maps();
     #[cfg(not(target_arch = "wasm32"))]
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
