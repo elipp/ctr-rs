@@ -17,9 +17,21 @@ struct Entry {
     id: u32,
     /// `Map::hash`, which tells two maps of the same id apart.
     hash: u64,
-    /// The file it came from, which is what a player who lacks the map is sent.
-    path: PathBuf,
+    /// What a player who lacks the map is sent.
+    file: File,
     map: &'static Map,
+}
+
+/// Where the bytes of a map's file are.
+enum File {
+    Disk(PathBuf),
+    /// A map sent to us in a browser, which has no folder to keep it in: the bytes as they came,
+    /// which the page keeps as well (`web.rs`).
+    #[cfg(target_arch = "wasm32")]
+    Held(Vec<u8>),
+    /// One of the game's tracks in a browser: made from the disc at the start, and never sent.
+    #[cfg(target_arch = "wasm32")]
+    Made,
 }
 
 /// The maps there are: read once, then added to by the ones that come in over the network (they
@@ -88,9 +100,25 @@ pub fn load() {
                 maps.push(Entry {
                     id,
                     hash,
-                    path,
+                    file: File::Disk(path),
                     map: Box::leak(Box::new(map)),
                 });
+            }
+        }
+        // In a browser, the maps sent to us are kept by the page.
+        #[cfg(target_arch = "wasm32")]
+        for bytes in crate::web::take_maps() {
+            match Map::from_bytes(&bytes).and_then(|m| Ok((m.id()?, m.hash()?, m))) {
+                Ok((_, _, map)) if builtin::is_builtin_name(&map.name) => {
+                    eprintln!("{}: a map cannot be named for one of the game's tracks", map.name);
+                }
+                Ok((id, hash, map)) => maps.push(Entry {
+                    id,
+                    hash,
+                    file: File::Held(bytes),
+                    map: Box::leak(Box::new(map)),
+                }),
+                Err(e) => eprintln!("A kept map: {e}"),
             }
         }
         maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));
@@ -127,13 +155,20 @@ pub fn file(id: u32) -> Option<(u64, Vec<u8>)> {
     let (hash, path) = {
         let maps = MAPS.lock().unwrap();
         let e = maps.iter().find(|e| e.id == id)?;
-        (e.hash, e.path.clone())
+        match &e.file {
+            File::Disk(path) => (e.hash, path.clone()),
+            #[cfg(target_arch = "wasm32")]
+            File::Held(bytes) => return Some((e.hash, bytes.clone())),
+            #[cfg(target_arch = "wasm32")]
+            File::Made => return None,
+        }
     };
     Some((hash, std::fs::read(path).ok()?))
 }
 
 /// Takes in a map that was sent to us as the bytes of its file: it has to be the map `id` with
-/// this `hash`. It is saved to the cache (`cache/maps/`) and listed from then on.
+/// this `hash`. It is saved to the cache (`cache/maps/`), or kept by the page in a browser, and
+/// listed from then on.
 pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
     let map = Map::from_bytes(bytes).map_err(|e| e.to_string())?;
     if builtin::is_builtin_name(&map.name) {
@@ -154,11 +189,23 @@ pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
         // Another map has this id (about one in two billion): not ours to replace.
         return Err(format!("a different map already has the id {id:#x}"));
     }
+    let file = keep(&map.name, id, bytes)?;
+    maps.push(Entry {
+        id,
+        hash,
+        file,
+        map: Box::leak(Box::new(map)),
+    });
+    Ok(())
+}
+
+/// Saves a map that was sent to us to the cache.
+#[cfg(not(target_arch = "wasm32"))]
+fn keep(name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
     let dir = cache_directory();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // The name of the patch may be one that we have a map of already.
-    let stem: String = map
-        .name
+    let stem: String = name
         .chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '-' {
@@ -173,13 +220,14 @@ pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
         path = dir.join(format!("{stem}-{id:08x}.ctrmap"));
     }
     std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-    maps.push(Entry {
-        id,
-        hash,
-        path,
-        map: Box::leak(Box::new(map)),
-    });
-    Ok(())
+    Ok(File::Disk(path))
+}
+
+/// A browser has no folder: there the page keeps a map sent to us, and it is held in memory.
+#[cfg(target_arch = "wasm32")]
+fn keep(_name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
+    crate::web::save_map(&format!("{id:08x}"), bytes);
+    Ok(File::Held(bytes.to_vec()))
 }
 
 /// Deletes the cache and forgets the maps that were in it; returns how many. (A map that is on
@@ -188,7 +236,16 @@ pub fn purge() -> Result<usize, String> {
     let dir = cache_directory();
     let mut maps = MAPS.lock().unwrap();
     let before = maps.len();
-    maps.retain(|e| !e.path.starts_with(&dir));
+    maps.retain(|e| match &e.file {
+        File::Disk(path) => !path.starts_with(&dir),
+        #[cfg(target_arch = "wasm32")]
+        File::Held(_) => false,
+        #[cfg(target_arch = "wasm32")]
+        File::Made => true,
+    });
+    #[cfg(target_arch = "wasm32")]
+    crate::web::purge_maps();
+    #[cfg(not(target_arch = "wasm32"))]
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -200,6 +257,7 @@ pub fn purge() -> Result<usize, String> {
 /// Makes the maps of the game's racing tracks that we lack, or have of an older version, from the
 /// disc, which takes a while the first time. (`disc::locate` has seen to it that there is a disc
 /// when there are any to make.)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn make_builtins() {
     let dir = builtin_directory();
     if map::builtin::missing_count(&dir) == 0 {
@@ -213,6 +271,34 @@ pub fn make_builtins() {
     match map::builtin::export(&image, &dir) {
         Ok(made) => eprintln!("Made {made} maps in {}", dir.display()),
         Err(e) => eprintln!("Could not make the maps of the game's tracks: {e}"),
+    }
+}
+
+/// A browser has no folder to keep them in: there the maps of the game's tracks are made from the
+/// disc at every start, and only held in memory.
+#[cfg(target_arch = "wasm32")]
+pub fn make_builtins() {
+    let Some(image) = crate::disc::image() else {
+        return;
+    };
+    let made = match builtin::make_all(&image) {
+        Ok(made) => made,
+        Err(e) => {
+            eprintln!("Could not make the maps of the game's tracks: {e}");
+            return;
+        }
+    };
+    let mut maps = MAPS.lock().unwrap();
+    for map in made {
+        let (Some(level), Ok(hash)) = (builtin::level_of(&map.name), map.hash()) else {
+            continue;
+        };
+        maps.push(Entry {
+            id: level.0,
+            hash,
+            file: File::Made,
+            map: Box::leak(Box::new(map)),
+        });
     }
 }
 

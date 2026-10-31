@@ -1,0 +1,62 @@
+name: pages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `crates/client/build.rs` names the version after the nearest tag.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+      - run: |
+          mkdir -p "$HOME/tools"
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+      - name: wasm-bindgen
+        run: |
+          id=$(cargo pkgid wasm-bindgen)
+          version=${id##*@}
+          curl -sSfL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$version/wasm-bindgen-$version-x86_64-unknown-linux-musl.tar.gz" \
+            | tar xz -C "$HOME/tools" --strip-components=1
+      - name: wasm-opt
+        run: |
+          curl -sSfL https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz \
+            | tar xz -C "$HOME/tools" --strip-components=2 binaryen-version_133/bin/wasm-opt
+      # `ring` (under iroh) compiles C for wasm32, which needs clang and llvm-ar.
+      - name: clang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang llvm
+      - run: ./web/build.sh dist
+        env:
+          LLVM: /usr
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

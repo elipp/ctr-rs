@@ -211,7 +211,7 @@ impl Lobby {
         if net::clean_chat(text).is_empty() {
             return true;
         }
-        if !self.chat_limit.allow(std::time::Instant::now()) {
+        if !self.chat_limit.allow(net::Instant::now()) {
             return false;
         }
         if let Some(session) = &self.session {

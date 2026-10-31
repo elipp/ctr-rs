@@ -19,8 +19,6 @@ debug = ["bevy/debug"]
 bevy = { version = "0.20.0", features = [
     "gamepad",
 ] }
-# The system clipboard, for pasting a lobby address.
-arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
 coll = { path = "../coll" }
 loader = { path = "../loader" }
 howl = { path = "../howl" }
@@ -42,3 +40,14 @@ directories = "6.0.0"
 # The disc image picker (`disc.rs`); elsewhere the path is `CTR_BIN` or in the config.
 [target."cfg(windows)".dependencies]
 rfd = { version = "0.17.2", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The system clipboard, for pasting a lobby address.
+arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
+
+# The browser build (`web.rs`): the page hands over the disc image, and keeps the settings and the
+# maps sent to us; it is told of a panic (`crash.rs`), which goes to the browser's console as well.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+js-sys = "0.3.106"
+wasm-bindgen = "0.2.129"

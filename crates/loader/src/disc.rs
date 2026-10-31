@@ -1,6 +1,8 @@
-use std::io::{self, Read, Seek, SeekFrom};
+use std::fs::File;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Size of a raw CD-ROM sector in a `.bin` image.
 pub const RAW_SECTOR_SIZE: u64 = 2352;
@@ -86,12 +88,54 @@ mod tests {
 }
 
 /// A `.bin` disc image opened for reading `BIGFILE.BIG`.
-pub type Disc = RawSectorReader<std::io::BufReader<std::fs::File>>;
+pub type Disc = RawSectorReader<FileDisc>;
 
-pub(crate) type FileDisc = std::io::BufReader<std::fs::File>;
+/// A disc image held in memory, which [`open_file`] opens in place of the file at its path. A
+/// browser has no files: the page hands over the image the player dropped on it.
+static IN_MEMORY: OnceLock<(PathBuf, &'static [u8])> = OnceLock::new();
 
-pub(crate) fn open_file(path: &std::path::Path) -> io::Result<FileDisc> {
-    std::fs::File::open(path).map(std::io::BufReader::new)
+/// Holds `bytes` as the disc image at `path` for as long as the program runs. Once only.
+pub fn keep_in_memory(path: PathBuf, bytes: Vec<u8>) {
+    let bytes: &'static [u8] = bytes.leak();
+    if IN_MEMORY.set((path, bytes)).is_err() {
+        panic!("a disc image is kept in memory once");
+    }
+}
+
+/// The path of the disc image that is [kept in memory](keep_in_memory), if one is.
+pub fn in_memory() -> Option<PathBuf> {
+    IN_MEMORY.get().map(|(path, _)| path.clone())
+}
+
+/// A disc image opened: the file, or the image [kept in memory](keep_in_memory) at its path.
+pub enum FileDisc {
+    File(BufReader<File>),
+    Memory(Cursor<&'static [u8]>),
+}
+
+impl Read for FileDisc {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            FileDisc::File(file) => file.read(buf),
+            FileDisc::Memory(memory) => memory.read(buf),
+        }
+    }
+}
+
+impl Seek for FileDisc {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        match self {
+            FileDisc::File(file) => file.seek(from),
+            FileDisc::Memory(memory) => memory.seek(from),
+        }
+    }
+}
+
+pub(crate) fn open_file(path: &Path) -> io::Result<FileDisc> {
+    match IN_MEMORY.get() {
+        Some((at, bytes)) if at == path => Ok(FileDisc::Memory(Cursor::new(bytes))),
+        _ => File::open(path).map(|file| FileDisc::File(BufReader::new(file))),
+    }
 }
 
 pub(crate) fn invalid(msg: String) -> io::Error {

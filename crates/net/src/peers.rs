@@ -2,10 +2,10 @@
 //! players that left it, and the link of pads to each player in it.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 use iroh::EndpointId;
 use iroh::endpoint::Connection;
+use n0_future::time::Instant;
 
 use crate::conn::send_datagram;
 use crate::wire::{InputReceiver, InputSender, Message};

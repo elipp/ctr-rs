@@ -217,14 +217,19 @@ fn stream_xa(sounds: Res<Sounds>) {
         return;
     };
     let (howl, source) = (sounds.howl.clone(), sounds.source.clone());
-    std::thread::spawn(move || {
+    let decode = move || {
         let sectors = source
             .get(Need::Xa(request.category, request.id))
             .inspect_err(|e| warn!("XA {:?}: {e}", request.track))
             .ok();
         let pcm = sectors.map(|sectors| loader::xa::decode(&sectors));
         howl.lock().unwrap().start_xa(request.serial, pcm);
-    });
+    };
+    // A browser has no threads: there it is done at once, and the frame waits for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(decode);
+    #[cfg(target_arch = "wasm32")]
+    decode();
 }
 
 /// What Bevy plays: everything the sound engine renders, without end.

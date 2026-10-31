@@ -28,6 +28,18 @@ const WAIT_TOAST_TICKS: u32 = 90;
 /// How long F7 and F8 freeze an online client for.
 const STALLS_MS: [u64; 2] = [500, 2000];
 
+/// Freezes this client for `time`. A browser cannot sleep: there it spins.
+fn stall(time: std::time::Duration) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(time);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let until = net::Instant::now() + time;
+        while net::Instant::now() < until {
+            std::hint::spin_loop();
+        }
+    }
+}
 
 /// One game tick of the sim.
 pub(super) fn drive_tick(
@@ -147,7 +159,7 @@ pub(super) fn drive_tick(
     for (i, millis) in STALLS_MS.into_iter().enumerate() {
         if stall_down[i] && !keys_held[2 + i] {
             debug!("(debug) stalling for {millis} ms");
-            std::thread::sleep(std::time::Duration::from_millis(millis));
+            stall(std::time::Duration::from_millis(millis));
         }
     }
     keys_held[2..].copy_from_slice(&stall_down);
@@ -487,7 +499,7 @@ pub(super) fn debug_actions(
         if let Action::DebugStall(time) = action {
             if lobby.online.is_some() {
                 debug!("(debug) stalling for {time:?}");
-                std::thread::sleep(*time);
+                stall(*time);
             } else {
                 toasts.write(Toast::new("Only online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             }
