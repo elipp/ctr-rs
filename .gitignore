@@ -3,3 +3,4 @@ target/
 /assets
 .venv/
 /Justfile
+.DS_Store
