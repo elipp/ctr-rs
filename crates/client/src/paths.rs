@@ -21,7 +21,8 @@ pub fn config_file() -> PathBuf {
     cache().join("config.json")
 }
 
-/// Where the panic that ended the last run is written, see `crash.rs`.
+/// Where the panic that ended the last run is written, see `crash.rs`. (Not in a browser.)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crash_log() -> PathBuf {
     root().join("crash.log")
 }

@@ -157,7 +157,7 @@ fn main() {
                 CHARACTERS[racer as usize]
             ),
             present_mode: config.present_mode(),
-            // In a browser, the page's canvas (`web/index.html`), as big as the page.
+            // In a browser, the page's canvas (`web/play.html`), as big as the page.
             canvas: cfg!(target_arch = "wasm32").then(|| "#ctr".into()),
             fit_canvas_to_parent: true,
             ..default()
@@ -172,6 +172,10 @@ fn main() {
     } else {
         plugins
     };
+    // In a browser, `crash.rs`'s panic hook stays: bevy's would put one that only tells the
+    // console in its place.
+    #[cfg(target_arch = "wasm32")]
+    let plugins = plugins.disable::<bevy::app::PanicHandlerPlugin>();
     app.add_plugins(plugins);
     // Bevy's own font has no ä or ö: this one takes its place as the default.
     app.world_mut()

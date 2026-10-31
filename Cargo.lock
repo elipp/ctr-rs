@@ -2367,6 +2367,7 @@ dependencies = [
  "bevy",
  "camera",
  "coll",
+ "console_error_panic_hook",
  "directories",
  "gte",
  "howl",
