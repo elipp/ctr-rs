@@ -13,6 +13,7 @@ use crate::conn::{
     Heard, RACE_IN_PROGRESS, dial, distinct, listen, send_datagram, send_reliably, stamp,
 };
 use crate::peers::{Departure, Guest, Link, Plan, Role, stalled, start_over};
+use crate::realm::Publisher;
 use crate::transfers::{Transfer, Transfers, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
@@ -81,6 +82,25 @@ pub(crate) async fn tell_lobby(
         spectators,
         you: Some(0),
     });
+}
+
+/// Tells the realm how the lobby stands now (it sends only what changed).
+fn refresh_listing(
+    publisher: &Option<Publisher>,
+    guests: &[Guest],
+    gone: &HashSet<EndpointId>,
+    racing: bool,
+    build: u32,
+) {
+    if let Some(publisher) = publisher {
+        // Us, and the guests that drive (a spectator takes no place, nor does a guest that has not
+        // said what it drives).
+        let driving = guests
+            .iter()
+            .filter(|g| !g.spectator && g.hello.is_some() && !gone.contains(&g.id))
+            .count();
+        publisher.refresh((1 + driving).min(u8::MAX as usize) as u8, racing, build);
+    }
 }
 
 /// The session of a lobby host or of a player who joined one. They differ in the lobby (the
@@ -177,6 +197,11 @@ pub(crate) async fn run(
     let mut pings: HashMap<EndpointId, Duration> = HashMap::new();
     let mut ping_timer = tokio::time::interval(Duration::from_secs(PING_SECONDS));
     ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The host: the listing of the lobby in the realm, if it is public, and how often it is
+    // checked for news (the guests come and go in many places).
+    let mut publisher: Option<Publisher> = None;
+    let mut list_timer = tokio::time::interval(Duration::from_secs(1));
+    list_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -222,6 +247,9 @@ pub(crate) async fn run(
                 }
             }
             Some(transfer) = sent.recv() => transfers.finish(&transfer),
+            _ = list_timer.tick(), if publisher.is_some() => {
+                refresh_listing(&publisher, &guests, &gone, racing, build);
+            }
             Some(connection) = dialed.recv() => {
                 listen(connection.clone(), connection.remote_id(), heard_tx.clone());
                 unclaimed.push(connection);
@@ -333,6 +361,22 @@ pub(crate) async fn run(
                         tell_lobby(me, character, &nick, &guests, &gone, &io).await;
                     }
                 }
+                Command::Public(public) => if matches!(role, Role::Host) {
+                    match public {
+                        Some(public) => {
+                            if publisher.as_ref().is_none_or(|p| p.realm != public.realm) {
+                                publisher = Some(Publisher::start(&endpoint, public.realm, io.events.clone()));
+                            }
+                            if let Some(publisher) = &mut publisher {
+                                publisher.set(Some(public));
+                            }
+                        }
+                        None => if let Some(publisher) = &mut publisher {
+                            publisher.set(None);
+                        },
+                    }
+                    refresh_listing(&publisher, &guests, &gone, racing, build);
+                },
                 Command::NetInfo => {
                     let peers = distinct(
                         guests

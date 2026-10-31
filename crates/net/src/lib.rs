@@ -14,6 +14,7 @@ mod conn;
 mod limit;
 mod names;
 mod peers;
+mod realm;
 mod session;
 mod ticket;
 mod transfers;
@@ -22,6 +23,9 @@ pub mod wire;
 pub use iroh::EndpointId;
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
+pub use realm::{
+    DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, Public, clean_lobby_name, default_realm,
+};
 pub use ticket::Ticket;
 pub use wire::{Pad, Tick};
 
@@ -152,6 +156,10 @@ pub enum Event {
     Rtt { id: EndpointId, rtt: Duration },
     /// The answer to [`Session::net_info`]: how each peer is reached.
     NetInfo(Vec<PeerInfo>),
+    /// The lobby is in the realm's list (see [`Session::set_public`]), or it is not and why: the
+    /// realm cannot be reached, or turns the listing down. The session keeps trying, so `Ok`
+    /// can follow an `Err`.
+    Listed(Result<(), String>),
     /// The session could not go on.
     Failed(String),
 }
@@ -255,6 +263,7 @@ enum Command {
     },
     NetInfo,
     Stop,
+    Public(Option<Public>),
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -364,6 +373,14 @@ impl Session {
     /// (we do not; we know). The lobby stays, and [`Session::restart`] starts the same players again.
     pub fn stop(&self) {
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// Lists the lobby in a realm, for anyone to find and join, or takes it off the list
+    /// (`None`), if we host it. [`Event::Listed`] says whether it worked. The players and the
+    /// state of the lobby in the list follow the lobby; the name and the track are as given
+    /// here, so call it again when the track changes.
+    pub fn set_public(&self, public: Option<Public>) {
+        let _ = self.commands.send(Command::Public(public));
     }
 
     /// Asks how each peer is reached; [`Event::NetInfo`] answers.

@@ -29,7 +29,11 @@ use crate::suggest::Menu;
 /// up to whoever handles it (the lobby's are in `lobby.rs`).
 #[derive(Message, Clone, Debug)]
 pub enum Action {
-    CreateLobby,
+    /// Open a lobby, and list it in the realm for anyone to find if `public` has the name to list
+    /// it under (empty for the default).
+    CreateLobby {
+        public: Option<String>,
+    },
     JoinLobby(Ticket),
     /// Join a lobby to watch its races, not to drive in them.
     SpectateLobby(Ticket),
@@ -95,7 +99,7 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
-const LOBBY_USAGE: &str = "Usage: /lobby create | join <address> | spectate [address] | close";
+const LOBBY_USAGE: &str = "Usage: /lobby create [public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
@@ -141,7 +145,13 @@ impl Action {
     fn lobby(line: &str) -> Result<Action, String> {
         let (sub, rest) = word(line);
         match sub {
-            "create" => Ok(Action::CreateLobby),
+            "create" => match word(rest) {
+                ("", _) => Ok(Action::CreateLobby { public: None }),
+                ("public", name) => Ok(Action::CreateLobby {
+                    public: Some(name.to_string()),
+                }),
+                _ => Err(LOBBY_USAGE.into()),
+            },
             "join" => rest
                 .parse()
                 .map(Action::JoinLobby)
@@ -922,8 +932,17 @@ mod tests {
     fn commands_have_subcommands() {
         assert!(matches!(
             Action::parse("lobby create"),
-            Ok(Action::CreateLobby)
+            Ok(Action::CreateLobby { public: None })
         ));
+        assert!(matches!(
+            Action::parse("lobby create public"),
+            Ok(Action::CreateLobby { public: Some(name) }) if name.is_empty()
+        ));
+        assert!(matches!(
+            Action::parse("lobby create public Fast lane"),
+            Ok(Action::CreateLobby { public: Some(name) }) if name == "Fast lane"
+        ));
+        assert!(Action::parse("lobby create private").is_err());
         assert!(matches!(
             Action::parse("lobby close"),
             Ok(Action::CloseLobby)

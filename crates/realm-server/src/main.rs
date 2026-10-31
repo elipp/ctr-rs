@@ -9,7 +9,7 @@
 mod realm;
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,8 +18,10 @@ use iroh::endpoint::{Connection, presets};
 use iroh::{Endpoint, SecretKey};
 use realm_proto::{ALPN, MAX_REQUEST, Reject, Request, Response};
 use tokio::sync::Semaphore;
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::EnvFilter;
 
-use crate::realm::{Bucket, Realm};
+use crate::realm::{Bucket, Realm, short};
 
 const DEFAULT_PORT: u16 = 4747;
 const DEFAULT_KEY: &str = "realm.key";
@@ -85,20 +87,34 @@ async fn bind(key: SecretKey, port: u16) -> Result<Endpoint, Error> {
     match both.bind().await {
         Ok(endpoint) => Ok(endpoint),
         Err(e) => {
-            eprintln!("no IPv6 ({e}), IPv4 only");
+            warn!("no IPv6 ({e}), IPv4 only");
             Ok(builder().bind_addr(format!("0.0.0.0:{port}"))?.bind().await?)
         }
     }
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Error> {
-    let args = args().inspect_err(|e| {
-        eprintln!("{e}\nusage: realm-server [--port <udp port>] [--key <key file>]");
+async fn main() {
+    // `RUST_LOG` sets what is shown, like `realm_server=debug` for every connection and list.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,realm_server=info".into()),
+        )
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
+    if let Err(e) = run().await {
+        error!("{e}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Error> {
+    let args = args().map_err(|e| {
+        format!("{e} (usage: realm-server [--port <udp port>] [--key <key file>])")
     })?;
     let endpoint = bind(secret_key(&args.key)?, args.port).await?;
-    println!("realm id: {}", endpoint.id());
-    println!("listening on {:?}", endpoint.bound_sockets());
+    info!("realm id: {}", endpoint.id());
+    info!("listening on {:?}", endpoint.bound_sockets());
 
     let realm = Arc::new(Realm::default());
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
@@ -109,6 +125,7 @@ async fn main() -> Result<(), Error> {
         };
         let Some(incoming) = incoming else { break };
         let Ok(slot) = slots.clone().try_acquire_owned() else {
+            warn!("refused a connection: {MAX_CONNECTIONS} are open");
             incoming.refuse();
             continue;
         };
@@ -121,6 +138,7 @@ async fn main() -> Result<(), Error> {
             drop(slot);
         });
     }
+    info!("shutting down");
     endpoint.close().await;
     Ok(())
 }
@@ -129,19 +147,25 @@ async fn main() -> Result<(), Error> {
 async fn serve(realm: &Realm, connection: Connection) {
     let id = *connection.remote_id().as_bytes();
     let me = connection.stable_id();
+    debug!(host = %short(&id), "connected");
     let mut bucket = Bucket::new(Instant::now());
     while let Ok((mut send, mut recv)) = connection.accept_bi().await {
         let request = tokio::time::timeout(READ_TIMEOUT, recv.read_to_end(MAX_REQUEST)).await;
         let response = match request {
             Ok(Ok(bytes)) => match Request::from_bytes(&bytes) {
-                Ok(_) if !bucket.take(Instant::now()) => Response::Rejected(Reject::TooFast),
+                Ok(_) if !bucket.take(Instant::now()) => {
+                    warn!(host = %short(&id), "asking too often");
+                    Response::Rejected(Reject::TooFast)
+                }
                 Ok(request) => realm.handle(id, me, request),
                 Err(_) => {
+                    warn!(host = %short(&id), "sent a request that does not parse");
                     connection.close(1u32.into(), b"bad request");
                     break;
                 }
             },
             _ => {
+                warn!(host = %short(&id), "opened a stream and sent no request");
                 connection.close(1u32.into(), b"no request");
                 break;
             }
@@ -150,5 +174,6 @@ async fn serve(realm: &Realm, connection: Connection) {
             break;
         }
     }
+    debug!(host = %short(&id), "disconnected");
     realm.closed(id, me);
 }

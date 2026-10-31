@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use realm_proto::{Entry, Listing, MAX_LOBBIES, Reject, Request, Response};
+use tracing::{debug, info, warn};
+
+use realm_proto::{Entry, Listing, MAX_LOBBIES, Reject, Request, Response, State};
 
 /// A connection tells a lobby from another by this.
 pub type Connection = usize;
@@ -25,33 +27,68 @@ impl Realm {
         let mut lobbies = self.lobbies.lock().unwrap();
         match request {
             Request::Announce(listing) => {
+                let host = short(&id);
                 if listing.validate().is_err() {
+                    warn!(%host, ?listing, "turned down an invalid listing");
                     return Response::Rejected(Reject::Invalid);
                 }
                 if lobbies.len() >= MAX_LOBBIES && !lobbies.contains_key(&id) {
+                    warn!(%host, name = %listing.name, "turned down a listing: the realm is full");
                     return Response::Rejected(Reject::Full);
                 }
                 // A host that comes back on a new connection takes over its listing from the
                 // one that is yet to be found dead.
-                lobbies.insert(id, Held { connection, listing });
+                let was = lobbies.insert(id, Held { connection, listing: listing.clone() });
+                let Listing { name, players, max_players, state, track, version } = &listing;
+                match was {
+                    None => info!(
+                        %host, %name, %track, %version, ?state, lobbies = lobbies.len(),
+                        "lobby listed ({players}/{max_players})"
+                    ),
+                    Some(was) if was.listing == listing => debug!(%host, %name, "announced again"),
+                    Some(was) => {
+                        let before = &was.listing;
+                        if players > &before.players {
+                            info!(%host, %name, "player joined ({players}/{max_players})");
+                        } else if players < &before.players {
+                            info!(%host, %name, "player left ({players}/{max_players})");
+                        }
+                        match (before.state, state) {
+                            (State::Lobby, State::Racing) => info!(%host, %name, %track, "race started"),
+                            (State::Racing, State::Lobby) => info!(%host, %name, "race over"),
+                            _ => {}
+                        }
+                        if before.name != *name || before.track != *track {
+                            info!(%host, %name, %track, "lobby changed");
+                        }
+                    }
+                }
                 Response::Ok
             }
             Request::Withdraw => {
-                remove(&mut lobbies, id, connection);
+                if let Some(held) = remove(&mut lobbies, id, connection) {
+                    info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby withdrawn");
+                }
                 Response::Ok
             }
-            Request::List => Response::Lobbies(
-                lobbies
-                    .iter()
-                    .map(|(id, held)| Entry { id: *id, listing: held.listing.clone() })
-                    .collect(),
-            ),
+            Request::List => {
+                debug!(lobbies = lobbies.len(), "list requested");
+                Response::Lobbies(
+                    lobbies
+                        .iter()
+                        .map(|(id, held)| Entry { id: *id, listing: held.listing.clone() })
+                        .collect(),
+                )
+            }
         }
     }
 
     /// The connection is gone, and takes its lobby with it.
     pub fn closed(&self, id: [u8; 32], connection: Connection) {
-        remove(&mut self.lobbies.lock().unwrap(), id, connection);
+        let mut lobbies = self.lobbies.lock().unwrap();
+        if let Some(held) = remove(&mut lobbies, id, connection) {
+            info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby gone: its host disconnected");
+        }
     }
 
     #[cfg(test)]
@@ -61,10 +98,16 @@ impl Realm {
 }
 
 /// Removes the lobby of `id`, if `connection` is still the one that holds it.
-fn remove(lobbies: &mut HashMap<[u8; 32], Held>, id: [u8; 32], connection: Connection) {
+fn remove(lobbies: &mut HashMap<[u8; 32], Held>, id: [u8; 32], connection: Connection) -> Option<Held> {
     if lobbies.get(&id).is_some_and(|held| held.connection == connection) {
-        lobbies.remove(&id);
+        return lobbies.remove(&id);
     }
+    None
+}
+
+/// The first bytes of an endpoint id in hex, which is how iroh shortens it.
+pub fn short(id: &[u8; 32]) -> String {
+    id[..5].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// How fast a connection may ask: a bucket of tokens that fills at a steady rate, and one is
@@ -108,7 +151,7 @@ mod tests {
             players: 1,
             max_players: 8,
             state: State::Lobby,
-            cup: "Wumpa Cup".into(),
+            track: "Dingo Canyon".into(),
             version: "v".into(),
         }
     }

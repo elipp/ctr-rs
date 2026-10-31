@@ -208,9 +208,11 @@ pub(super) fn reserves_hud(
 }
 
 /// The bottom-left lines: the frame rate and the time a frame takes (smoothed over the last few
-/// frames), then where the kart is and what it does, and the version of the build.
+/// frames), then where the kart is and what it does, the name of our lobby if it is public, and
+/// the version of the build.
 pub(super) fn hud(
     sim: Res<crate::props::Sim>,
+    lobby: Res<crate::lobby::Lobby>,
     diagnostics: Res<DiagnosticsStore>,
     shown: Res<DebugText>,
     mut text: Query<&mut Text, With<Hud>>,
@@ -231,7 +233,7 @@ pub(super) fn hud(
             continue;
         }
         text.0 = format!(
-            "{fps}\nspeed {:5}  {:?}{}{}{}{}\nbuild {}",
+            "{fps}\nspeed {:5}  {:?}{}{}{}{}{}\nbuild {}",
             d.speed_approx,
             d.phys_state,
             if grounded { "" } else { "  airborne" },
@@ -246,6 +248,10 @@ pub(super) fn hud(
             },
             match d.last_drift_end {
                 Some(why) => format!("  last drift ended: {why:?}"),
+                None => String::new(),
+            },
+            match lobby.public_name() {
+                Some(name) => format!("\nlobby \"{name}\" (public)"),
                 None => String::new(),
             },
             crate::version::VERSION,
