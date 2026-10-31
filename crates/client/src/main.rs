@@ -21,6 +21,7 @@ mod command;
 mod confetti;
 mod crash;
 mod config;
+mod controls;
 mod console;
 mod disc;
 mod drive;
