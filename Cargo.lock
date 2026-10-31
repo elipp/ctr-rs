@@ -6445,6 +6445,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "realm-proto"
+version = "0.1.0"
+dependencies = [
+ "bitcode",
+]
+
+[[package]]
+name = "realm-server"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "realm-proto",
+ "tokio",
+]
+
+[[package]]
 name = "rectangle-pack"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

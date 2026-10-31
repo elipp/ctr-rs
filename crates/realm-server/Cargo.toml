@@ -1,0 +1,14 @@
+[package]
+name = "realm-server"
+version = "0.1.0"
+edition = "2024"
+
+# The directory of the public lobbies (see `realm-proto`).
+[[bin]]
+name = "realm-server"
+path = "src/main.rs"
+
+[dependencies]
+iroh = "1.4.1"
+realm-proto = { path = "../realm-proto" }
+tokio = { version = "1.54", features = ["rt", "sync", "macros", "time", "signal"] }

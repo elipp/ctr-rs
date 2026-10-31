@@ -1,0 +1,9 @@
+[package]
+name = "realm-proto"
+version = "0.1.0"
+edition = "2024"
+
+# What the realm server and the clients say to each other. Like the rest of the wire formats it
+# is bitcode.
+[dependencies]
+bitcode = "0.6.9"
