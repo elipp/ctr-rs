@@ -18,7 +18,8 @@
 //! A browser has no vsync, fps-max or relay-only: it paces the frames to the display itself, and
 //! reaches the others through the relay only.
 //!
-//! The last character driven is kept too, and is the one the client starts with.
+//! The last character driven is kept too, and is the one the client starts with, and the
+//! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`).
 //!
 //! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, its arm in
 //! [`apply`], its line in [`USAGE`], and its entry in the command line's suggestions
@@ -30,6 +31,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Action, word};
+use crate::controls::Controls;
 use crate::lobby::Lobby;
 use crate::toast::Toast;
 
@@ -52,6 +54,8 @@ pub struct Config {
     pub volume_fx: u8,
     pub volume_music: u8,
     pub volume_voice: u8,
+    /// The keyboard's driving keys.
+    pub controls: Controls,
 }
 
 impl Default for Config {
@@ -66,6 +70,7 @@ impl Default for Config {
             volume_fx: 100,
             volume_music: 100,
             volume_voice: 100,
+            controls: Controls::default(),
         }
     }
 }
