@@ -2,11 +2,12 @@
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use iroh::endpoint::{Connection, ConnectionError};
 use iroh::{Endpoint, EndpointAddr, EndpointId};
+use n0_future::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::wire::Message;
@@ -60,7 +61,7 @@ pub(crate) fn listen(
     from: EndpointId,
     heard: UnboundedSender<(EndpointId, Heard)>,
 ) {
-    tokio::spawn(async move {
+    n0_future::task::spawn(async move {
         loop {
             let message = tokio::select! {
                 datagram = connection.read_datagram() => datagram.ok().map(|d| Message::from_bytes(&d)),
@@ -107,13 +108,13 @@ pub(crate) fn listen(
 
 /// Connects to a player of the roster, trying for a while: it may not be listening yet.
 pub(crate) fn dial(endpoint: Endpoint, id: EndpointId, dialed: UnboundedSender<Connection>) {
-    tokio::spawn(async move {
+    n0_future::task::spawn(async move {
         for _ in 0..20 {
             if let Ok(connection) = endpoint.connect(EndpointAddr::new(id), ALPN).await {
                 let _ = dialed.send(connection);
                 return;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            n0_future::time::sleep(Duration::from_millis(500)).await;
         }
     });
 }

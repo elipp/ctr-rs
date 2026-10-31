@@ -74,6 +74,8 @@ mod tracker;
 mod version;
 mod weapon;
 mod weather;
+#[cfg(target_arch = "wasm32")]
+mod web;
 mod wheels;
 mod wrong_way;
 mod wumpa_icon;
@@ -89,8 +91,25 @@ use frame::*;
 pub(crate) use resources::*;
 pub(crate) use scene::*;
 
+/// What is logged. In a browser (WebGL2) Bevy says at the start which of its plugins the GPU
+/// cannot run, none of which the game uses: that is not for the console.
+fn log_filter() -> String {
+    let filter = bevy::log::DEFAULT_FILTER;
+    if cfg!(target_arch = "wasm32") {
+        format!(
+            "{filter},bevy_core_pipeline::oit=error,\
+             bevy_core_pipeline::prepass::background_motion_vectors=error,\
+             bevy_pbr::ssao=error,bevy_pbr::atmosphere=error"
+        )
+    } else {
+        filter.to_string()
+    }
+}
+
 fn main() {
     crash::install();
+    #[cfg(target_arch = "wasm32")]
+    web::take_disc_image();
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);
@@ -127,6 +146,7 @@ fn main() {
     let plugins = DefaultPlugins
         .set(bevy::log::LogPlugin {
             custom_layer: console::layer,
+            filter: log_filter(),
             ..default()
         })
         .set(WindowPlugin {
@@ -137,6 +157,9 @@ fn main() {
                 CHARACTERS[racer as usize]
             ),
             present_mode: config.present_mode(),
+            // In a browser, the page's canvas (`web/play.html`), as big as the page.
+            canvas: cfg!(target_arch = "wasm32").then(|| "#ctr".into()),
+            fit_canvas_to_parent: true,
             ..default()
         }),
         ..default()
@@ -149,6 +172,10 @@ fn main() {
     } else {
         plugins
     };
+    // In a browser, `crash.rs`'s panic hook stays: bevy's would put one that only tells the
+    // console in its place.
+    #[cfg(target_arch = "wasm32")]
+    let plugins = plugins.disable::<bevy::app::PanicHandlerPlugin>();
     app.add_plugins(plugins);
     // Bevy's own font has no ä or ö: this one takes its place as the default.
     app.world_mut()

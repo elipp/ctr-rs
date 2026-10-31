@@ -1,5 +1,5 @@
-//! The player's settings, kept in `config.json` (see `paths.rs`): read when the viewer starts, and
-//! written whenever one changes.
+//! The player's settings, kept in `config.json` (see `paths.rs`), or in a browser in the page's
+//! storage (`web.rs`): read when the viewer starts, and written whenever one changes.
 //!
 //! * `/config set nickname [name]`: what the others call us instead of our key (up to
 //!   [`net::NICK_MAX`] characters; none clears it). It can change at any time, in a race too, but
@@ -13,6 +13,9 @@
 //!
 //! * `/config set volume music|sfx <0-100>`: how loud the music and the effects (the voices too)
 //!   are, in percent of the game's own volumes (100 at first)
+//!
+//! A browser has no vsync, fps-max or relay-only: it paces the frames to the display itself, and
+//! reaches the others through the relay only.
 //!
 //! The last character driven is kept too, and is the one the client starts with.
 //!
@@ -75,18 +78,65 @@ impl Config {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn path() -> PathBuf {
     crate::paths::config_file()
 }
 
+/// Where the settings are kept, to tell of a failure.
+fn place() -> String {
+    if cfg!(target_arch = "wasm32") {
+        "the browser's storage".to_string()
+    } else {
+        crate::paths::config_file().display().to_string()
+    }
+}
+
+/// The text of the settings, none if there are none yet.
+#[cfg(not(target_arch = "wasm32"))]
+fn read() -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path()) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", place())),
+    }
+}
+
+/// The text of the settings, none if there are none yet (or the page cannot read them; it tells
+/// the console why).
+#[cfg(target_arch = "wasm32")]
+fn read() -> Result<Option<String>, String> {
+    Ok(crate::web::load_config())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write(text: &str) -> Result<(), String> {
+    let path = path();
+    let write = || -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, text)
+    };
+    write().map_err(|e| format!("Could not save {}: {e}", place()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write(text: &str) -> Result<(), String> {
+    match crate::web::save_config(text) {
+        None => Ok(()),
+        Some(e) => Err(format!("Could not save the settings: {e}")),
+    }
+}
+
 impl Config {
-    /// What the file holds; the defaults if there is none or it cannot be read (it is told of).
+    /// What is kept; the defaults if there is nothing or it cannot be read (it is told of).
     pub fn load() -> Config {
-        let text = match std::fs::read_to_string(path()) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
-            Err(e) => {
-                eprintln!("{}: {e}", path().display());
+        let text = match read() {
+            Ok(Some(text)) => text,
+            Ok(None) => return Config::default(),
+            Err(why) => {
+                eprintln!("{why}");
                 return Config::default();
             }
         };
@@ -96,21 +146,16 @@ impl Config {
                 config
             }
             Err(e) => {
-                eprintln!("{}: {e}", path().display());
+                eprintln!("{}: {e}", place());
                 Config::default()
             }
         }
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let path = path();
-        let write = || -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            std::fs::write(&path, serde_json::to_string_pretty(self)?)
-        };
-        write().map_err(|e| format!("Could not save {}: {e}", path.display()))
+        let text = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Could not save {}: {e}", place()))?;
+        write(&text)
     }
 
     /// Remembers the character we drive, if it is another.
@@ -138,16 +183,31 @@ pub enum Setting {
     VolumeMusic(u8),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set relay-only on|off\n\
+    /config set volume music|sfx <0-100>";
+#[cfg(target_arch = "wasm32")]
+const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set volume music|sfx <0-100>";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
     pub fn parse(line: &str) -> Result<Setting, String> {
         let (key, value) = word(line);
+        if cfg!(target_arch = "wasm32") {
+            match key {
+                "vsync" | "fps-max" => {
+                    return Err("In a browser, the browser sets the frame rate".into());
+                }
+                "relay-only" => {
+                    return Err("In a browser, every connection goes through the relay".into());
+                }
+                _ => {}
+            }
+        }
         match key {
             "nickname" => {
                 if value.chars().count() > net::NICK_MAX {

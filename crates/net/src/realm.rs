@@ -14,6 +14,7 @@ use realm_proto::{
 };
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
 use tokio::sync::watch;
 
@@ -96,7 +97,7 @@ impl Publisher {
         events: Sender<Event>,
     ) -> Publisher {
         let (listing, rx) = watch::channel(None);
-        tokio::spawn(keep(endpoint.clone(), realm, rx, events));
+        n0_future::task::spawn(keep(endpoint.clone(), realm, rx, events));
         Publisher { realm, listing, about: None }
     }
 
@@ -153,7 +154,7 @@ async fn keep(
                 }
             }
         }
-        tokio::time::sleep(wait).await;
+        n0_future::time::sleep(wait).await;
         wait = (wait * 2).min(RETRY_MAX);
     }
 }
@@ -207,7 +208,7 @@ async fn ask(connection: &Connection, request: &Request) -> Result<Response, Err
     let (mut send, mut recv) = connection.open_bi().await?;
     send.write_all(&request.to_bytes()).await?;
     send.finish()?;
-    let bytes = tokio::time::timeout(ANSWER_TIMEOUT, recv.read_to_end(MAX_RESPONSE))
+    let bytes = n0_future::time::timeout(ANSWER_TIMEOUT, recv.read_to_end(MAX_RESPONSE))
         .await
         .map_err(|_| "the realm did not answer")??;
     Ok(Response::from_bytes(&bytes)?)
@@ -231,6 +232,7 @@ pub struct PublicLobby {
 /// The list being fetched from a realm, which [`Browse::poll`] hands over when it is here.
 pub struct Browse {
     result: Mutex<Receiver<Result<Vec<PublicLobby>, String>>>,
+    #[cfg(not(target_arch = "wasm32"))]
     _thread: JoinHandle<()>,
 }
 
@@ -248,26 +250,35 @@ impl Browse {
 /// How long the whole fetch may take.
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Fetches the lobbies listed in `realm`, on a thread of its own: the game polls the [`Browse`].
+/// Fetches the lobbies listed in `realm`, on a thread of its own (in a browser, a task of the
+/// page): the game polls the [`Browse`].
 /// `build` is the version of the sim (`race::SIM_VERSION`), to tell which lobbies we can join.
 pub fn browse(realm: EndpointId, build: u32) -> Browse {
     let (tx, result) = mpsc::channel();
+    let list = move || async move {
+        let list = n0_future::time::timeout(BROWSE_TIMEOUT, fetch(realm, build))
+            .await
+            .unwrap_or_else(|_| Err("the realm took too long".into()));
+        let _ = tx.send(list.map_err(|e| e.to_string()));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let thread = std::thread::Builder::new()
         .name("realm".into())
         .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("the network runtime");
-            let list = runtime.block_on(async {
-                tokio::time::timeout(BROWSE_TIMEOUT, fetch(realm, build))
-                    .await
-                    .unwrap_or_else(|_| Err("the realm took too long".into()))
-            });
-            let _ = tx.send(list.map_err(|e| e.to_string()));
+                .expect("the network runtime")
+                .block_on(list())
         })
         .expect("the network thread");
-    Browse { result: Mutex::new(result), _thread: thread }
+    #[cfg(target_arch = "wasm32")]
+    n0_future::task::spawn(list());
+    Browse {
+        result: Mutex::new(result),
+        #[cfg(not(target_arch = "wasm32"))]
+        _thread: thread,
+    }
 }
 
 async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, Error> {

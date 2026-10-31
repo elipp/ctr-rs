@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ctr-rs</title>
+<style>
+  @font-face {
+    font-family: "Press Start 2P";
+    src: url("../fonts/PressStart2P-Regular.ttf") format("truetype");
+    font-display: swap;
+  }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #ctr { display: block; width: 100%; height: 100%; outline: none; }
+  #drop {
+    position: fixed; inset: 0; display: grid; place-content: center; padding: 16px;
+    background: #070a1e; color: #d9ddf2;
+    font: 13px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  #drop::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, transparent 0 2px, rgb(0 0 0 / 0.16) 2px 3px);
+  }
+  #drop h1 {
+    position: absolute; left: 24px; top: 20px; margin: 0;
+    font: clamp(20px, 5vw, 40px)/1 "Press Start 2P", monospace; letter-spacing: 0.04em;
+    text-shadow: 3px 3px 0 #ff5a5a, 6px 6px 0 #03050f;
+  }
+  #drop h1 a { color: #ffd23f; text-decoration: none; }
+  .panel {
+    display: grid; justify-items: center; gap: 18px; padding: 24px 28px; text-align: center;
+    background: linear-gradient(#1f2a66, #10173f); box-shadow: 0 0 0 2px #03050f, 0 18px 40px rgb(0 0 0 / 0.6);
+    border: 2px solid; border-color: #7b8ad6 #03050f #03050f #7b8ad6;
+  }
+  #drop.over .panel { border-color: #ffd23f; }
+  #drop p { margin: 0; }
+  #status {
+    font: 11px/1.8 "Press Start 2P", monospace; color: #fff; text-shadow: 2px 2px 0 #03050f;
+  }
+  #drop.over #status { color: #ffd23f; }
+  #menu { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; justify-items: start; }
+  #menu li {
+    font: 10px/1.6 "Press Start 2P", monospace; color: #8a93c4; cursor: pointer; white-space: pre;
+  }
+  #menu li::before { content: "  "; }
+  #menu li.on { color: #ffd23f; }
+  #menu li.on::before { content: "\25B6\00a0"; }
+  #menu li.on::after { content: "_"; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { visibility: hidden; } }
+  @media (prefers-reduced-motion: reduce) { #menu li.on::after { animation: none; } }
+  #drop small { font-size: inherit; color: #8a93c4; }
+  #drop.busy #menu, #drop.busy small { visibility: hidden; }
+  #detail {
+    max-width: min(64ch, calc(100vw - 88px)); max-height: 30vh; overflow: auto; margin: 0;
+    padding: 8px 12px; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere;
+    color: #ff8a8a; background: rgb(0 0 0 / 0.35); font: inherit;
+  }
+  #drop input { display: none; }
+  #drop.hidden { display: none; }
+</style>
+</head>
+<body>
+<canvas id="ctr" tabindex="0"></canvas>
+<div id="drop">
+  <h1><a href="../">CTR-RS</a></h1>
+  <div class="panel">
+    <p id="status">Drop Crash Team Racing (USA) .bin</p>
+    <pre id="detail" hidden></pre>
+    <ul id="menu" role="menu"></ul>
+    <small id="note">It stays on this computer.</small>
+    <input type="file" accept=".bin">
+  </div>
+</div>
+<script>
+// Sound only starts after a key or click, so the game's audio contexts are resumed on one.
+// Must run before client.js is imported.
+const audio = [];
+window.AudioContext = new Proxy(window.AudioContext, {
+  construct(target, args) {
+    const context = new target(...args);
+    audio.push(context);
+    return context;
+  },
+});
+const gestures = ["keydown", "pointerdown", "touchend"];
+function resume() {
+  audio.forEach((context) => context.state === "suspended" && context.resume());
+  if (audio.length > 0 && audio.every((context) => context.state === "running")) {
+    gestures.forEach((name) => removeEventListener(name, resume, true));
+  }
+}
+gestures.forEach((name) => addEventListener(name, resume, true));
+</script>
+<script type="module">
+import init from "./client.js";
+
+const drop = document.getElementById("drop");
+const status = document.getElementById("status");
+const menu = document.getElementById("menu");
+const input = drop.querySelector("input");
+let disc = null;
+
+window.ctrCopy = (text) =>
+  navigator.clipboard.writeText(text).catch((e) => console.warn(`could not copy: ${e}`));
+let pasted = null;
+window.ctrPaste = () =>
+  navigator.clipboard.readText().then(
+    (text) => (pasted = text),
+    (e) => console.warn(`could not paste: ${e}`),
+  );
+window.ctrTakePasted = () => {
+  const text = pasted;
+  pasted = null;
+  return text;
+};
+
+const CONFIG = "ctr-rs.config";
+window.ctrLoadConfig = () => {
+  try {
+    return localStorage.getItem(CONFIG);
+  } catch (e) {
+    console.warn(`could not read the settings: ${e}`);
+    return null;
+  }
+};
+window.ctrSaveConfig = (text) => {
+  try {
+    localStorage.setItem(CONFIG, text);
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+};
+
+window.ctrTakeDisc = () => {
+  const taken = disc;
+  disc = null;
+  return taken;
+};
+
+async function read(stream, size) {
+  const bytes = new Uint8Array(size);
+  const reader = stream.getReader();
+  let at = 0;
+  let shown = -1;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes.set(value, at);
+    at += value.length;
+    const percent = Math.floor((at * 100) / size);
+    if (percent !== shown) {
+      status.textContent = `Reading ${percent}%`;
+      shown = percent;
+    }
+  }
+  return bytes;
+}
+
+async function start(stream, size) {
+  if (drop.classList.contains("busy")) return;
+  drop.classList.add("busy");
+  disc = await read(stream, size);
+  maps = await stored("maps", "readonly", (s) => s.getAll()).catch((e) => {
+    console.warn(`could not read the maps: ${e}`);
+    return [];
+  });
+  status.textContent = "Starting";
+  try {
+    await init();
+  } catch (e) {
+    // winit hands the event loop to the browser by throwing.
+    if (!String(e).includes("Using exceptions for control flow")) {
+      console.error(e);
+      crashed(String(e));
+      return;
+    }
+  }
+  if (crash !== null) return;
+  drop.classList.add("hidden");
+  document.getElementById("ctr").focus();
+}
+
+let crash = null;
+function crashed(message) {
+  if (crash !== null) return;
+  crash = message;
+  const starting = !drop.classList.contains("hidden");
+  audio.forEach((context) => context.close().catch(() => {}));
+  document.activeElement?.blur();
+  drop.classList.remove("hidden", "busy", "over");
+  document.getElementById("detail").textContent = message;
+  document.getElementById("detail").hidden = false;
+  document.getElementById("note").hidden = true;
+  offer(starting ? "The game could not start" : "The game crashed", [
+    ["Restart", () => location.reload()],
+    ...(starting ? [["Pick another .bin", () => forget().then(() => location.reload())]] : []),
+    ["Copy the error", copyCrash],
+  ]);
+}
+function copyCrash() {
+  navigator.clipboard.writeText(`ctr-rs crashed\n\n${crash}\n\n${navigator.userAgent}`).then(
+    () => (status.textContent = "The error is copied"),
+    (e) => console.warn(`could not copy: ${e}`),
+  );
+}
+window.ctrCrashed = crashed;
+const trap = (error) => error instanceof WebAssembly.RuntimeError && crashed(String(error));
+addEventListener("error", (e) => trap(e.error));
+addEventListener("unhandledrejection", (e) => trap(e.reason));
+
+function stored(name, mode, use) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("ctr-rs", 2);
+    open.onupgradeneeded = () => {
+      for (const store of ["handles", "maps"]) {
+        if (!open.result.objectStoreNames.contains(store)) open.result.createObjectStore(store);
+      }
+    };
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const request = use(open.result.transaction(name, mode).objectStore(name));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    };
+  });
+}
+
+const remember = (handle) => stored("handles", "readwrite", (s) => s.put(handle, "disc")).catch(() => {});
+const forget = () => stored("handles", "readwrite", (s) => s.delete("disc")).catch(() => {});
+const recall = () => stored("handles", "readonly", (s) => s.get("disc")).catch(() => undefined);
+
+let maps = [];
+window.ctrTakeMaps = () => {
+  const taken = maps;
+  maps = [];
+  return taken;
+};
+window.ctrSaveMap = (key, bytes) => {
+  // `bytes` views wasm memory, which can move.
+  const copy = bytes.slice();
+  stored("maps", "readwrite", (s) => s.put(copy, key)).catch((e) =>
+    console.warn(`could not keep the map: ${e}`),
+  );
+};
+window.ctrPurgeMaps = () =>
+  stored("maps", "readwrite", (s) => s.clear()).catch((e) =>
+    console.warn(`could not delete the maps: ${e}`),
+  );
+
+let choices = [];
+let on = 0;
+
+function offer(text, list) {
+  status.textContent = text;
+  choices = list;
+  menu.replaceChildren(
+    ...list.map(([label], i) => {
+      const item = document.createElement("li");
+      item.textContent = label;
+      item.setAttribute("role", "menuitem");
+      item.addEventListener("pointerenter", () => select(i));
+      item.addEventListener("click", () => take(i));
+      return item;
+    }),
+  );
+  select(0);
+}
+
+function select(i) {
+  on = i;
+  [...menu.children].forEach((item, j) => item.classList.toggle("on", j === i));
+}
+
+function take(i) {
+  if (!drop.classList.contains("busy")) choices[i]?.[1]();
+}
+
+addEventListener("keydown", (e) => {
+  if (drop.classList.contains("busy") || drop.classList.contains("hidden")) return;
+  const n = choices.length;
+  if (e.code === "ArrowUp" || e.code === "KeyW") select((on + n - 1) % n);
+  else if (e.code === "ArrowDown" || e.code === "KeyS") select((on + 1) % n);
+  else if (e.code === "Enter" || e.code === "NumpadEnter" || e.code === "Space") take(on);
+  else return;
+  e.preventDefault();
+});
+
+function fresh() {
+  offer("Drop Crash Team Racing (USA) .bin", [["Or pick it", pick]]);
+}
+
+async function pick() {
+  if (!window.showOpenFilePicker) return input.click();
+  let handle;
+  try {
+    [handle] = await showOpenFilePicker({
+      types: [{ description: "Disc image", accept: { "application/octet-stream": [".bin"] } }],
+    });
+  } catch {
+    return;
+  }
+  await remember(handle);
+  openHandle(handle);
+}
+
+async function allow(handle) {
+  if ((await handle.requestPermission({ mode: "read" })) === "granted") return openHandle(handle);
+  await forget();
+  fresh();
+}
+
+async function openHandle(handle) {
+  let file;
+  try {
+    file = await handle.getFile();
+  } catch {
+    await forget();
+    offer(`${handle.name} is not where it was`, [["Pick it again", pick]]);
+    return;
+  }
+  start(file.stream(), file.size);
+}
+
+drop.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  drop.classList.add("over");
+});
+drop.addEventListener("dragleave", (e) => {
+  if (!drop.contains(e.relatedTarget)) drop.classList.remove("over");
+});
+drop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  const item = [...e.dataTransfer.items].find((item) => item.kind === "file");
+  if (!item) return;
+  const file = item.getAsFile();
+  item.getAsFileSystemHandle?.().then((handle) => handle?.kind === "file" && remember(handle));
+  start(file.stream(), file.size);
+});
+input.addEventListener("change", () => {
+  const file = input.files[0];
+  if (file) start(file.stream(), file.size);
+});
+
+fresh();
+const handle = await recall();
+if (handle) {
+  if ((await handle.queryPermission({ mode: "read" })) === "granted") {
+    openHandle(handle);
+  } else {
+    offer(`${handle.name} was used last time`, [
+      ["Continue with it", () => allow(handle)],
+      ["Pick another .bin", pick],
+    ]);
+  }
+}
+</script>
+</body>
+</html>

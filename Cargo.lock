@@ -2367,10 +2367,12 @@ dependencies = [
  "bevy",
  "camera",
  "coll",
+ "console_error_panic_hook",
  "directories",
  "gte",
  "howl",
  "instance",
+ "js-sys",
  "loader",
  "map",
  "math",
@@ -2381,6 +2383,7 @@ dependencies = [
  "serde",
  "serde_json",
  "vehicle",
+ "wasm-bindgen",
  "weapon",
 ]
 
@@ -5082,6 +5085,7 @@ dependencies = [
  "bitcode",
  "bytes",
  "iroh",
+ "n0-future",
  "realm-proto",
  "tokio",
 ]

@@ -623,6 +623,10 @@ pub(crate) fn capture(
         // (What was typed before it opened is not for it.)
         return;
     }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(text) = crate::web::take_pasted() {
+        line.insert(&text.replace(|c: char| c.is_control(), ""));
+    }
     for (event, Modifiers { ctrl, alt, sup }) in &typed {
         if event.state != ButtonState::Pressed {
             continue;
@@ -686,10 +690,7 @@ pub(crate) fn capture(
             Key::Delete => line.delete(),
             _ => {
                 if (ctrl || sup) && event.key_code == KeyCode::KeyV {
-                    match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
-                        Ok(text) => line.insert(&text.replace(|c: char| c.is_control(), "")),
-                        Err(e) => error!("could not read the clipboard: {e}"),
-                    }
+                    paste(&mut line);
                 } else if (ctrl || alt) && line.shortcut(event.key_code, ctrl, alt) {
                     // (Done.)
                 } else if let Some(text) = event.text.as_ref().filter(|_| !sup) {
@@ -700,6 +701,22 @@ pub(crate) fn capture(
         }
     }
     keys.reset_all();
+}
+
+/// Cmd/Ctrl+V: the text on the system clipboard goes into the line.
+#[cfg(not(target_arch = "wasm32"))]
+fn paste(line: &mut CommandLine) {
+    match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+        Ok(text) => line.insert(&text.replace(|c: char| c.is_control(), "")),
+        Err(e) => error!("could not read the clipboard: {e}"),
+    }
+}
+
+/// In a browser the clipboard is read in the background: the text comes in a later frame, which
+/// `capture` takes it in.
+#[cfg(target_arch = "wasm32")]
+fn paste(_: &mut CommandLine) {
+    crate::web::request_paste();
 }
 
 /// Return opens the line, unless we are typing in it already.
