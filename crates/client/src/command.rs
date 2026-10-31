@@ -1011,6 +1011,11 @@ mod tests {
         ));
         assert!(Action::parse("config set vsync maybe").is_err());
         assert!(matches!(
+            Action::parse("config set relay-only on"),
+            Ok(Action::SetConfig(crate::config::Setting::RelayOnly(true)))
+        ));
+        assert!(Action::parse("config set relay-only maybe").is_err());
+        assert!(matches!(
             Action::parse("config set fps-max 144"),
             Ok(Action::SetConfig(crate::config::Setting::FpsMax(144)))
         ));

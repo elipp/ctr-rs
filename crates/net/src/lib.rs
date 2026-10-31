@@ -31,18 +31,41 @@ pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
 pub use wire::{Pad, Tick};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use iroh::Endpoint;
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::{Builder, Connection, presets};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::peers::Role;
 use crate::session::run;
+
+static RELAY_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Whether the sessions and fetches that start from now on go through the relay only (`true`), or
+/// find the shortest way to the others, a direct one when there is one (the default). With the
+/// relay only, no packet leaves our address for another player's (nor for the realm's): they do
+/// not learn it, at the price of the relay's extra round trip. A session that is up keeps the
+/// way it started with.
+pub fn set_relay_only(relay_only: bool) {
+    RELAY_ONLY.store(relay_only, Ordering::Relaxed);
+}
+
+/// The endpoint of a session or a fetch, as [`set_relay_only`] says.
+fn endpoint_builder() -> Builder {
+    let builder = Endpoint::builder(presets::N0);
+    if RELAY_ONLY.load(Ordering::Relaxed) {
+        // No sockets of our own: the relay is the one way left.
+        builder.clear_ip_transports()
+    } else {
+        builder
+    }
+}
 
 /// What the clients speak, exchanged in the connection handshake.
 pub const ALPN: &[u8] = b"ctr-rust/lobby/9";
@@ -475,7 +498,7 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
                 .build()
                 .expect("the network runtime");
             let result = runtime.block_on(async {
-                let endpoint = Endpoint::builder(presets::N0)
+                let endpoint = endpoint_builder()
                     .alpns(vec![ALPN.to_vec()])
                     .bind()
                     .await?;

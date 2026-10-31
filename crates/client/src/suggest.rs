@@ -108,6 +108,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "<frames a second>",
                 ),
                 node(
+                    "relay-only",
+                    "Reach the others through the relay only, hiding your address",
+                    &[
+                        leaf("on", "Never connect straight (slower, private)"),
+                        leaf("off", "Connect straight when possible"),
+                    ],
+                ),
+                node(
                     "volume",
                     "How loud the music and the effects are",
                     &[

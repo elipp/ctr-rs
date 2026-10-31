@@ -7,6 +7,9 @@
 //! * `/config set vsync on|off`: whether the window waits for the display (on at first)
 //! * `/config set fps-max <number>`: the most frames a second to draw, 0 for no limit (the
 //!   default); the sim has its own clock, see `frame.rs`
+//! * `/config set relay-only on|off`: whether to reach the other players through the relay only,
+//!   never straight, so that they do not learn our address (off at first; it costs latency, and
+//!   holds from the next lobby we create or join)
 //!
 //! * `/config set volume music|sfx <0-100>`: how loud the music and the effects (the voices too)
 //!   are, in percent of the game's own volumes (100 at first)
@@ -39,6 +42,8 @@ pub struct Config {
     pub vsync: bool,
     /// The most frames a second to draw, 0 for no limit (`/config set fps-max`).
     pub fps_max: u32,
+    /// Whether to play through the relay only (`/config set relay-only`).
+    pub relay_only: bool,
     /// The effects' and the music's volumes, 0 to 100 (`/config set volume`).
     pub volume_fx: u8,
     pub volume_music: u8,
@@ -52,6 +57,7 @@ impl Default for Config {
             iso: None,
             vsync: true,
             fps_max: 0,
+            relay_only: false,
             volume_fx: 100,
             volume_music: 100,
         }
@@ -126,6 +132,7 @@ pub enum Setting {
     Vsync(bool),
     /// 0 for no limit.
     FpsMax(u32),
+    RelayOnly(bool),
     /// 0 to 100.
     VolumeSfx(u8),
     VolumeMusic(u8),
@@ -134,6 +141,7 @@ pub enum Setting {
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
+    /config set relay-only on|off\n\
     /config set volume music|sfx <0-100>";
 
 impl Setting {
@@ -158,6 +166,11 @@ impl Setting {
             "fps-max" => value.parse().map(Setting::FpsMax).map_err(|_| {
                 "Usage: /config set fps-max <frames a second, 0 for no limit>".to_string()
             }),
+            "relay-only" => match value {
+                "on" => Ok(Setting::RelayOnly(true)),
+                "off" => Ok(Setting::RelayOnly(false)),
+                _ => Err("Usage: /config set relay-only on|off".into()),
+            },
             "volume" => {
                 const USAGE: &str = "Usage: /config set volume music|sfx <0-100>";
                 let (kind, percent) = word(value);
@@ -182,7 +195,14 @@ pub struct ConfigPlugin;
 
 impl Plugin for ConfigPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (apply, present_mode));
+        app.add_systems(Update, (apply, present_mode, net_transport));
+    }
+}
+
+/// The network uses the relay only, or not, as the config says, from the next session on.
+fn net_transport(config: Res<Config>) {
+    if config.is_changed() {
+        net::set_relay_only(config.relay_only);
     }
 }
 
@@ -262,6 +282,18 @@ fn apply(
                     max => format!("Frame rate: at most {max} a second"),
                 };
                 toasts.write(Toast::new(text, 2000));
+            }
+            Setting::RelayOnly(on) => {
+                config.relay_only = *on;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let text = match (on, lobby.is_open()) {
+                    (true, false) => "Relay only: the others will not see your address",
+                    (false, false) => "Relay only off: connections go straight when they can",
+                    (_, true) => "Relay only changes: it takes hold in the next lobby",
+                };
+                toasts.write(Toast::new(text, 3500));
             }
             Setting::VolumeSfx(percent) | Setting::VolumeMusic(percent) => {
                 let name = if matches!(setting, Setting::VolumeSfx(_)) {

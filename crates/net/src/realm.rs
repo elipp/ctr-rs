@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use iroh::endpoint::Connection;
-use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use realm_proto::{
     ALPN, Listing, MAX_RESPONSE, Reject, Request, Response, State, is_name_char,
@@ -272,7 +271,7 @@ pub fn browse(realm: EndpointId, build: u32) -> Browse {
 }
 
 async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, Error> {
-    let endpoint = Endpoint::bind(presets::N0).await?;
+    let endpoint = crate::endpoint_builder().bind().await?;
     let list = async {
         let connection = endpoint.connect(EndpointAddr::new(realm), ALPN).await?;
         let response = ask(&connection, &Request::List).await;
