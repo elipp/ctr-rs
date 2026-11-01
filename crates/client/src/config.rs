@@ -7,6 +7,8 @@
 //! * `/config set vsync on|off`: whether the window waits for the display (on at first)
 //! * `/config set fps-max <number>`: the most frames a second to draw, 0 for no limit (the
 //!   default); the sim has its own clock, see `frame.rs`
+//! * `/config set msaa off|2|4`: how many samples of anti-aliasing the cameras draw with (off at
+//!   first: the picture is pixel art, and each camera's pass pays for it). It holds at once
 //! * `/config set relay-only on|off`: whether to reach the other players through the relay only,
 //!   never straight, so that they do not learn our address (off at first; it costs latency, and
 //!   holds from the next lobby we create or join)
@@ -28,6 +30,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
+use bevy::render::view::{DebandDither, Tonemapping};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Action, word};
@@ -48,6 +51,8 @@ pub struct Config {
     pub vsync: bool,
     /// The most frames a second to draw, 0 for no limit (`/config set fps-max`).
     pub fps_max: u32,
+    /// The samples of multisampling per pixel, 1 (off), 2 or 4 (`/config set msaa`).
+    pub msaa: u8,
     /// Whether to play through the relay only (`/config set relay-only`).
     pub relay_only: bool,
     /// The effects', the music's and the voices' volumes, 0 to 100 (`/config set volume`).
@@ -66,6 +71,7 @@ impl Default for Config {
             iso: None,
             vsync: true,
             fps_max: 0,
+            msaa: 1,
             relay_only: false,
             volume_fx: 100,
             volume_music: 100,
@@ -76,6 +82,15 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The multisampling of the cameras.
+    pub fn msaa(&self) -> Msaa {
+        match self.msaa {
+            2 => Msaa::Sample2,
+            4 => Msaa::Sample4,
+            _ => Msaa::Off,
+        }
+    }
+
     /// How the window presents what it draws.
     pub fn present_mode(&self) -> bevy::window::PresentMode {
         if self.vsync {
@@ -185,6 +200,8 @@ pub enum Setting {
     Vsync(bool),
     /// 0 for no limit.
     FpsMax(u32),
+    /// 1 (off), 2 or 4 samples.
+    Msaa(u8),
     RelayOnly(bool),
     /// 0 to 100.
     VolumeSfx(u8),
@@ -196,10 +213,12 @@ pub enum Setting {
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
+    /config set msaa off|2|4\n\
     /config set relay-only on|off\n\
     /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
+    /config set msaa off|2|4\n\
     /config set volume music|sfx|voice <0-100>";
 
 impl Setting {
@@ -235,6 +254,12 @@ impl Setting {
             "fps-max" => value.parse().map(Setting::FpsMax).map_err(|_| {
                 "Usage: /config set fps-max <frames a second, 0 for no limit>".to_string()
             }),
+            "msaa" => match value {
+                "off" => Ok(Setting::Msaa(1)),
+                "2" => Ok(Setting::Msaa(2)),
+                "4" => Ok(Setting::Msaa(4)),
+                _ => Err("Usage: /config set msaa off|2|4".into()),
+            },
             "relay-only" => match value {
                 "on" => Ok(Setting::RelayOnly(true)),
                 "off" => Ok(Setting::RelayOnly(false)),
@@ -265,7 +290,31 @@ pub struct ConfigPlugin;
 
 impl Plugin for ConfigPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (apply, present_mode, net_transport));
+        app.add_systems(Update, (apply, present_mode, net_transport, msaa))
+            .add_observer(new_camera_defaults);
+    }
+}
+
+/// A camera starts with the multisampling the config says, not Bevy's 4x, and without the
+/// tonemapping and the dither that Bevy gives a 3D camera: the game's colors are the disc's, and
+/// each of those is a pass over the whole picture.
+fn new_camera_defaults(add: On<Add<Camera3d>>, config: Res<Config>, mut commands: Commands) {
+    commands.entity(add.entity).insert((
+        config.msaa(),
+        Tonemapping::None,
+        DebandDither::Disabled,
+    ));
+}
+
+/// The cameras multisample as the config says, when it changes.
+fn msaa(config: Res<Config>, mut cameras: Query<&mut Msaa>) {
+    if !config.is_changed() {
+        return;
+    }
+    for mut msaa in &mut cameras {
+        if *msaa != config.msaa() {
+            *msaa = config.msaa();
+        }
     }
 }
 
@@ -350,6 +399,17 @@ fn apply(
                 let text = match max {
                     0 => "Frame rate: no limit".to_string(),
                     max => format!("Frame rate: at most {max} a second"),
+                };
+                toasts.write(Toast::new(text, 2000));
+            }
+            Setting::Msaa(samples) => {
+                config.msaa = *samples;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let text = match samples {
+                    1 => "Multisampling off".to_string(),
+                    samples => format!("Multisampling: {samples}x"),
                 };
                 toasts.write(Toast::new(text, 2000));
             }

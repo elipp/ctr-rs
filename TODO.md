@@ -47,9 +47,7 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 
 ## Maybe
 - backing up and turning on N.Gin (some other drivers too?) looks weird (?)
-- The few usf boost pads in the game (thin)
-
-- **A color band near the top of the sky on Crash Cove.** The sky dome has open holes, filled by the level's clear colors (`Level::clear_colors`, `CAM_ClearScreen`); we fill them with the top color only. Looking up, a hard edge shows between the clear color `(144, 159, 255)` and the dome below it. Not understood: every vertex of the dome's top rim (y 1301) is exactly the top clear color, so the data has no such edge (`ctr-query sky 3` prints the rim). Retail's sky top cannot be seen, so there is nothing to compare with. Converting the dome's vertex colors from sRGB (they were read as linear) changed the shade but not the edge. Splitting the clear color by camera pitch (top/bottom halves, as `CAM_ClearScreen` does) would not fix it either; it would only show the bottom color (black on Crash Cove) under the horizon. Next step if it matters: draw the dome in a flat debug color to see which triangles make the edge.
+- The few usf boost pads in the game (probably work)
 
 ## Not a bug?
 - /race restart doesn't include any pending clients. Instead, one must /race stop and /race start
