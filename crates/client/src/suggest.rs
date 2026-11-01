@@ -5,6 +5,64 @@
 //!
 //! [`Action::parse`]: crate::command::Action
 
+/// A public lobby's offered name is one of these and one of [`LOBBY_NOUNS`]. Neither list has a
+/// place: a name like a track's would read as the track the lobby races on.
+const LOBBY_ADJECTIVES: &[&str] = &[
+    "Angry", "Blazing", "Cursed", "Crazy", "Drifting", "Evil", "Furious", "Golden", "Hyper",
+    "Lucky", "Mad", "Mighty", "Reckless", "Sacred", "Sneaky", "Speedy", "Spinning", "Turbo",
+    "Nitro", "Wacky", "Wild",
+];
+
+const LOBBY_NOUNS: &[&str] = &[
+    "Wumpas",
+    "Crates",
+    "Bandicoots",
+    "Beakers",
+    "Bombs",
+    "Missiles",
+    "Masks",
+    "Karts",
+    "Crash",
+    "Coco",
+    "Cortex",
+    "Aku Aku",
+    "Uka Uka",
+    "Papu",
+    "Komodo Joe",
+    "Tiny",
+    "Dingodile",
+    "N. Gin",
+    "N. Tropy",
+];
+
+pub(crate) const LOBBY_NAME_COUNT: u64 = (LOBBY_ADJECTIVES.len() * LOBBY_NOUNS.len()) as u64;
+
+/// Keeps the order of the names from reading like the lists'. It is prime so that it shares no
+/// factor with their lengths, which would leave words out.
+const LOBBY_NAME_STRIDE: usize = 101;
+
+/// The name at `index`, below [`LOBBY_NAME_COUNT`]. Every pair comes up once only if the lengths
+/// of the two lists share no factor either (a test checks).
+pub(crate) fn lobby_name_at(index: u64) -> String {
+    let position = index as usize * LOBBY_NAME_STRIDE;
+    let adjective = LOBBY_ADJECTIVES[position % LOBBY_ADJECTIVES.len()];
+    let noun = LOBBY_NOUNS[position % LOBBY_NOUNS.len()];
+    format!("{adjective} {noun}")
+}
+
+/// What `line` takes to give a public lobby that name: none unless it asks for one and has no
+/// name yet.
+pub(crate) fn name_to_add(line: &str, name: &str) -> Option<String> {
+    if !line.split_whitespace().eq(["/lobby", "create", "public"]) {
+        return None;
+    }
+    Some(if line.ends_with(char::is_whitespace) {
+        name.to_string()
+    } else {
+        format!(" {name}")
+    })
+}
+
 /// A command, subcommand or value, and what can follow it.
 pub(crate) struct Spec {
     pub name: &'static str,
@@ -65,8 +123,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                     takes(
                         "public",
-                        "List it in the realm, for anyone to find",
-                        "[name]",
+                        "Listed for anyone to find: type a name, or keep the grey one (Up, Down: another)",
+                        "[type a name]",
                     ),
                 ],
             ),
@@ -378,6 +436,18 @@ mod tests {
 
     fn names(line: &str) -> Vec<&'static str> {
         Menu::of(line).map_or(Vec::new(), |m| m.options.iter().map(|s| s.name).collect())
+    }
+
+    /// Every name comes up once, can be listed, and fits a row of the pause menu's list uncut.
+    #[test]
+    fn the_offered_lobby_names_are_valid() {
+        let names: std::collections::HashSet<_> =
+            (0..LOBBY_NAME_COUNT).map(lobby_name_at).collect();
+        assert_eq!(names.len() as u64, LOBBY_NAME_COUNT);
+        for name in names {
+            assert_eq!(net::lobby_name(&name).as_deref(), Ok(name.as_str()));
+            assert!(name.chars().count() <= crate::pause::NAME_SHOWN, "{name}");
+        }
     }
 
     #[test]

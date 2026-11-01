@@ -6,6 +6,9 @@
 //! Down pick one, Tab puts it in the line, and Return does too, sending the line if nothing can
 //! follow it. Otherwise Up and Down go through the lines sent before.
 //!
+//! `/lobby create public` shows a name for the lobby in grey: Up and Down change it, Tab or Return
+//! takes it, and typing replaces it.
+//!
 //! The line is edited as in a shell: the arrows, Home and End move the cursor, and Ctrl A, E, B, F
 //! (Alt B, F by a word), Ctrl W, U, K, D, H and Alt D delete. Page
 //! Up and Down scroll the console (`console.rs`), which the line is the bottom row of.
@@ -14,6 +17,8 @@
 //! so that typing does not drive the kart.
 
 use std::collections::VecDeque;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
@@ -23,7 +28,7 @@ use bevy::text::TextBackgroundColor;
 use net::Ticket;
 
 use crate::console::{Console, Log, PAGE};
-use crate::suggest::Menu;
+use crate::suggest::{self, Menu};
 
 /// Something a player can ask for with a `/command`. The command only sends it; what it does is
 /// up to whoever handles it (the lobby's are in `lobby.rs`).
@@ -444,6 +449,11 @@ pub(crate) struct CommandLine {
     draft: String,
     /// The suggestion picked, of those listed for the text.
     selected: usize,
+    /// Up or Down went through the suggestions since the text changed.
+    moved_selection: bool,
+    /// Which name a public lobby is offered (`suggest::lobby_name_at`), new each time the line
+    /// opens.
+    lobby_name_index: u64,
     /// Where the cursor is in the text: a byte offset, always at a character.
     cursor: usize,
 }
@@ -484,6 +494,7 @@ impl CommandLine {
     fn touch(&mut self) {
         self.browsing = None;
         self.selected = 0;
+        self.moved_selection = false;
     }
 
     /// Replaces the text, with the cursor after it.
@@ -594,6 +605,7 @@ impl CommandLine {
         let count = menu.options.len();
         let next = if down { index + 1 } else { index + count - 1 };
         self.selected = next % count;
+        self.moved_selection = true;
         true
     }
 
@@ -614,6 +626,48 @@ impl CommandLine {
         };
         self.set_text(line);
         done
+    }
+
+    /// The name to show in grey after the line, with a space if the line needs one.
+    fn ghost(&self) -> Option<String> {
+        suggest::name_to_add(&self.text, &suggest::lobby_name_at(self.lobby_name_index))
+    }
+
+    /// Up or Down through the names offered, so that Up goes back to the last: false if none is
+    /// shown.
+    fn cycle_lobby_name(&mut self, down: bool) -> bool {
+        if self.ghost().is_none() {
+            return false;
+        }
+        let step = if down {
+            1
+        } else {
+            suggest::LOBBY_NAME_COUNT - 1
+        };
+        self.lobby_name_index = (self.lobby_name_index + step) % suggest::LOBBY_NAME_COUNT;
+        true
+    }
+
+    /// Takes the name shown in grey: false if there is none.
+    fn accept_ghost(&mut self) -> bool {
+        let Some(ghost) = self.ghost() else {
+            return false;
+        };
+        self.set_text(format!("{}{ghost}", self.text));
+        true
+    }
+
+    /// Return. A line that is a whole command is sent as it is (`/lobby create`, which an option
+    /// could follow but does not have to), unless Up or Down picked an option; otherwise a
+    /// suggestion picked goes in first, and the line is sent if that ends it.
+    fn enter(&mut self) {
+        if self.selection().is_none()
+            || (!self.moved_selection && self.is_command())
+            || self.complete()
+        {
+            self.accept_ghost();
+            self.entered = true;
+        }
     }
 
     /// Keeps the line that was sent, unless it is the same as the last.
@@ -640,6 +694,10 @@ struct CursorSpan;
 /// ... and the rest.
 #[derive(Component)]
 struct AfterSpan;
+
+/// ... and the name offered for a public lobby.
+#[derive(Component)]
+struct GhostSpan;
 
 /// The line and the suggestions over it, which are shown only while the line is open.
 #[derive(Component)]
@@ -704,16 +762,11 @@ pub(crate) fn capture(
         }
         let (ctrl, alt, sup) = (*ctrl, *alt, *sup);
         match &event.logical_key {
-            Key::Enter => {
-                // A line that is a whole command is sent as it is (`/lobby create`, which an option
-                // could follow but does not have to); otherwise a suggestion picked goes in
-                // first, and the line is sent if that ends it.
-                if line.selection().is_none() || line.is_command() || line.complete() {
-                    line.entered = true;
-                }
-            }
+            Key::Enter => line.enter(),
             Key::Tab => {
-                line.complete();
+                if !line.accept_ghost() {
+                    line.complete();
+                }
             }
             Key::Escape => {
                 line.open = false;
@@ -722,14 +775,15 @@ pub(crate) fn capture(
                 line.browsing = None;
                 line.draft.clear();
                 line.selected = 0;
+                line.moved_selection = false;
             }
             Key::ArrowUp => {
-                if !line.step(false) {
+                if !line.cycle_lobby_name(false) && !line.step(false) {
                     line.older();
                 }
             }
             Key::ArrowDown => {
-                if !line.step(true) {
+                if !line.cycle_lobby_name(true) && !line.step(true) {
                     line.newer();
                 }
             }
@@ -793,9 +847,12 @@ fn paste(_: &mut CommandLine) {
 }
 
 /// Return opens the line, unless we are typing in it already.
-fn open(keys: Res<ButtonInput<KeyCode>>, mut line: ResMut<CommandLine>) {
+fn open(keys: Res<ButtonInput<KeyCode>>, time: Res<Time<Real>>, mut line: ResMut<CommandLine>) {
     if !line.open && keys.just_pressed(KeyCode::Enter) {
         line.open = true;
+        // (A browser's std hasher has fixed keys: the time is what differs there.)
+        let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
+        line.lobby_name_index = seed % suggest::LOBBY_NAME_COUNT;
     }
 }
 
@@ -888,7 +945,8 @@ pub(crate) fn input_row() -> impl Bundle {
                         font.clone(),
                         TextBackgroundColor(Color::NONE),
                     ),
-                    (AfterSpan, TextSpan::new(""), font),
+                    (AfterSpan, TextSpan::new(""), font.clone()),
+                    (GhostSpan, TextSpan::new(""), font, TextColor(ABOUT)),
                 ],
             ),
         ],
@@ -913,6 +971,10 @@ fn show(
     mut prompt: Query<&mut Text, With<CommandText>>,
     mut cursor: Query<(&mut TextSpan, &mut TextColor, &mut TextBackgroundColor), With<CursorSpan>>,
     mut after: Query<&mut TextSpan, (With<AfterSpan>, Without<CursorSpan>)>,
+    mut ghost_span: Query<
+        &mut TextSpan,
+        (With<GhostSpan>, Without<CursorSpan>, Without<AfterSpan>),
+    >,
     // What the suggestions were made for: the text and the one picked.
     mut shown: Local<Option<(String, usize)>>,
 ) {
@@ -931,7 +993,14 @@ fn show(
         return;
     }
     let (before, rest) = line.text.split_at(line.cursor);
-    let under = rest.chars().next().map_or(" ".to_string(), String::from);
+    let ghost = line.ghost().unwrap_or_default();
+    // At the end of the line the cursor sits on the first char of the name in grey.
+    let cursor_on_ghost = rest.is_empty() && !ghost.is_empty();
+    let (under, ghost_rest) = match (rest.chars().next(), ghost.chars().next()) {
+        (Some(c), _) => (c.to_string(), ghost.as_str()),
+        (None, Some(c)) => (c.to_string(), &ghost[c.len_utf8()..]),
+        (None, None) => (" ".to_string(), ""),
+    };
     let blink_on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
     for mut text in &mut prompt {
         assign(&mut text.0, &format!("> {before}"));
@@ -941,7 +1010,10 @@ fn show(
         let (ink, back) = if blink_on {
             (Color::BLACK, Color::WHITE)
         } else {
-            (Color::WHITE, Color::NONE)
+            (
+                if cursor_on_ghost { ABOUT } else { Color::WHITE },
+                Color::NONE,
+            )
         };
         if color.0 != ink {
             color.0 = ink;
@@ -955,6 +1027,9 @@ fn show(
             &mut span.0,
             rest.chars().next().map_or("", |c| &rest[c.len_utf8()..]),
         );
+    }
+    for mut span in &mut ghost_span {
+        assign(&mut span.0, ghost_rest);
     }
     let Ok(list) = suggestions.single() else {
         return;
@@ -1199,6 +1274,78 @@ mod tests {
         let mut line = CommandLine::default();
         line.insert(text);
         line
+    }
+
+    #[test]
+    fn return_takes_the_option_picked_over_a_whole_command() {
+        let mut line = typed("/debug fx ");
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/debug fx flash");
+        assert!(line.entered);
+        let mut line = typed("/debug set weapon 1");
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/debug set weapon 10");
+        assert!(line.entered);
+        // Round to the first is still a pick.
+        let mut line = typed("/debug hud ");
+        line.step(true);
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/debug hud on");
+        // Nothing picked: the command as it is.
+        let mut line = typed("/debug fx ");
+        line.enter();
+        assert_eq!(line.text, "/debug fx ");
+        assert!(line.entered);
+    }
+
+    #[test]
+    fn a_public_lobby_is_offered_a_name() {
+        let name = suggest::lobby_name_at(0);
+        let line_with_name = format!("/lobby create public {name}");
+        // Return takes it, with or without the space.
+        for text in ["/lobby create public", "/lobby create public "] {
+            let mut line = typed(text);
+            line.enter();
+            assert_eq!(line.text, line_with_name);
+            assert!(line.entered);
+        }
+        // Picking `public` stops to show it, and the next Return takes it.
+        let mut line = typed("/lobby create ");
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/lobby create public ");
+        assert!(!line.entered);
+        assert_eq!(line.ghost(), Some(name.clone()));
+        // The arrows change it, and take back what they changed, past either end.
+        assert!(line.cycle_lobby_name(true));
+        assert_eq!(line.ghost(), Some(suggest::lobby_name_at(1)));
+        assert!(line.cycle_lobby_name(false));
+        assert!(line.cycle_lobby_name(false));
+        assert_eq!(
+            line.ghost(),
+            Some(suggest::lobby_name_at(suggest::LOBBY_NAME_COUNT - 1))
+        );
+        assert!(line.cycle_lobby_name(true));
+        line.enter();
+        assert_eq!(line.text, line_with_name);
+        assert!(line.entered);
+        // With no name offered they do what they did.
+        assert!(!typed("/lobby create public Fast").cycle_lobby_name(true));
+        assert!(!typed("/race ").cycle_lobby_name(true));
+        // A name typed is kept.
+        let mut line = typed("/lobby create public Fast");
+        assert_eq!(line.ghost(), None);
+        line.enter();
+        assert_eq!(line.text, "/lobby create public Fast");
+        assert!(line.entered);
+        // A private lobby has no name.
+        let mut line = typed("/lobby create");
+        assert_eq!(line.ghost(), None);
+        line.enter();
+        assert_eq!(line.text, "/lobby create");
     }
 
     #[test]

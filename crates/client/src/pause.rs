@@ -262,7 +262,7 @@ fn browser_items(public: &PublicLobbies) -> Vec<Entry> {
 }
 
 /// The most chars of a lobby's name a row shows: the font is wide, and the screen is not.
-const NAME_SHOWN: usize = 20;
+pub(crate) const NAME_SHOWN: usize = 20;
 
 /// A volume's wedge, in texels across and down, as long as retail's when its labels are as wide
 /// as these (`380 - 30` less the widest), and its knob: a white bar in a black one a texel bigger
