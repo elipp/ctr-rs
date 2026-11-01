@@ -1,7 +1,8 @@
 //! The players in the lobby, down the left of the screen while no race is on, under a title in the
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
-//! names are for Bevy's `Text`: a nickname may have anything in it.)
+//! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
+//! has an "H" on its portrait's corner.
 
 use bevy::prelude::*;
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
@@ -46,6 +47,12 @@ const SLOT: f32 = 28.0;
 /// than a row's own gap), and from one to the next.
 const WATCHER_GAP: f32 = 12.0;
 const WATCHER_LINE: f32 = 9.0;
+
+/// The host's badge: a friendly yellow, pale at the top and golden at the bottom.
+const HOST_GRADIENT: Gradient = Gradient {
+    top: [0xff, 0xf4, 0x90],
+    bottom: [0xf0, 0xc0, 0x30],
+};
 
 /// The ping of the player with a short key.
 #[derive(Component)]
@@ -152,6 +159,9 @@ fn build(
                 ChildOf(column),
             ))
             .id();
+        if n == 0 {
+            spawn_host_badge(&mut commands, portrait, true);
+        }
         spawn_tags(&mut commands, portrait, name, key);
     }
     // Those who only watch have no portrait: a line each, a little further down.
@@ -177,6 +187,29 @@ fn build(
         ));
     }
     commands.entity(column).insert(List(players, watchers));
+}
+
+/// Puts the host's "H" on a corner of its portrait: the top right, or the top left where the
+/// race's leaderboard has its place there.
+pub(crate) fn spawn_host_badge(commands: &mut Commands, portrait: Entity, right: bool) {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        top: Val::ZERO,
+        padding: UiRect::all(Val::Px(2.0)),
+        ..default()
+    };
+    if right {
+        node.right = Val::ZERO;
+    } else {
+        node.left = Val::ZERO;
+    }
+    commands.spawn((
+        CtrText::new("H", Font::Middle, HOST_GRADIENT).fixed(hud::PIXEL / 2.0),
+        BackgroundColor(BACKGROUND),
+        node,
+        Pickable::IGNORE,
+        ChildOf(portrait),
+    ));
 }
 
 /// Puts a player's name on a portrait, at the bottom and centered, and the ping next to it, on its
