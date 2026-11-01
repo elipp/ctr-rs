@@ -146,7 +146,7 @@ pub(crate) fn switch_level(world: &mut World) {
         }
         spawn_kart(world);
     }
-    crate::loading::begin(world);
+    crate::loading::begin(world, id != current);
     for mut window in world.query::<&mut Window>().iter_mut(world) {
         window.title = format!(
             "ctr-rs: {}, {}",
@@ -170,7 +170,7 @@ pub(crate) fn rebuild_scene(world: &mut World, options: Options) {
     despawn(world, scene);
     restart_drive(world, options);
     run_scene_systems(world, options);
-    crate::loading::begin(world);
+    crate::loading::begin(world, true);
 }
 
 /// `/debug viewer`: the race becomes the viewer with the probe, or the viewer the race again; and
