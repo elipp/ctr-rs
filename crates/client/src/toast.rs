@@ -83,13 +83,14 @@ pub(crate) fn gradient(color: Color) -> Gradient {
     }
 }
 
-/// Whether the game's font can write `text`: it has no character the font lacks (apart from the
-/// new lines, which divide the text into the lines it writes).
+/// Whether the game's font (the middle one, which toasts are in) can write `text`: it has no
+/// character the font lacks (apart from the new lines, which divide the text into the lines it
+/// writes).
 fn in_game_font(text: &str) -> bool {
     !text.trim().is_empty()
         && text
             .chars()
-            .all(|c| c == ' ' || c == '\n' || render::font::glyph(c).is_some())
+            .all(|c| c == '\n' || render::font::drawable(Font::Middle, c))
 }
 
 /// The size of a texel of a toast in the game's font: the HUD's, or half of it for a small toast,
@@ -244,7 +245,9 @@ mod tests {
         assert!(in_game_font("Race starts in 5"));
         assert!(in_game_font("Lobby created! Join command copied"));
         assert!(!in_game_font("Usage: /race start | restart | stop"));
-        assert!(!in_game_font("Rollback: 3 ticks (x2)"));
+        assert!(in_game_font("Rollback: 3 ticks (x2)"));
+        assert!(in_game_font("Lap #1"));
+        assert!(!in_game_font("Rollback: 3 ticks [x2]"));
         // A new line is a line of glyphs of its own.
         assert!(in_game_font("two\nlines"));
         assert!(!in_game_font("Usage:\n/race start | stop"));
