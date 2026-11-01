@@ -102,7 +102,13 @@ pub enum Message {
         /// The laps of the race.
         laps: u8,
         roster: Vec<[u8; 32]>,
+        /// Whether each of the roster is behind a NAT of the hard kind (see [`Message::Nat`]).
+        hard: Vec<bool>,
     },
+    /// Reliable, client to host, after the Hello: whether the client's NAT gives it another
+    /// public address for each peer it talks to (`hard`), which makes it unreachable unless it is
+    /// the one that dials. The host passes it on in [`Message::Start`].
+    Nat { hard: bool },
     /// Reliable, client to host: connected to every other player, with the level up. Once the
     /// host has this from everyone (and is ready itself) it sends [`Message::Go`].
     Ready,
@@ -339,6 +345,7 @@ mod tests {
                 nick: "Penta".into(),
                 spectator: true,
             },
+            Message::Nat { hard: true },
             Message::Nick {
                 seq: 4,
                 nick: "Penta Penguin".into(),
@@ -365,6 +372,7 @@ mod tests {
                 hash: 0,
                 laps: 5,
                 roster: vec![[1; 32], [2; 32], [3; 32]],
+                hard: vec![false, true, false],
             },
             Message::Ready,
             Message::Go,
