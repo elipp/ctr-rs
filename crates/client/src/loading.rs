@@ -9,7 +9,9 @@
 //! and says what was missing in the log, rather than hold the game up for good.
 //!
 //! Most scenes settle in a few frames, so the screen is black only, and fades out (the game runs
-//! under it): the level's name comes up only if it takes longer than [`NAME_DELAY_SECONDS`].
+//! under it): the level's name comes up only if it takes longer than [`NAME_DELAY_SECONDS`]. A
+//! new kart on the same level is not covered at all, only waited for: the level is in sight
+//! already, and a black screen would make it look loaded again.
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -49,9 +51,16 @@ struct LoadingName;
 #[derive(Component)]
 struct Fading(f32);
 
-/// Covers the window and stops the game clock, until the scene that was just built has settled.
-pub fn begin(world: &mut World) {
+/// Stops the game clock until the scene that was just built has settled, and covers the window
+/// meanwhile if `covered` (a new level, not only a new kart).
+pub fn begin(world: &mut World, covered: bool) {
     if world.contains_resource::<Loading>() {
+        return;
+    }
+    let began = world.resource::<Time<Real>>().elapsed_secs();
+    world.insert_resource(Loading { frames: 0, began });
+    world.resource_mut::<Time<Virtual>>().pause();
+    if !covered {
         return;
     }
     // A screen still fading from the scene before is covered by this one.
@@ -62,9 +71,6 @@ pub fn begin(world: &mut World) {
     for screen in fading {
         world.entity_mut(screen).despawn();
     }
-    let began = world.resource::<Time<Real>>().elapsed_secs();
-    world.insert_resource(Loading { frames: 0, began });
-    world.resource_mut::<Time<Virtual>>().pause();
     let text = format!(
         "Loading {}...",
         maps::name(world.resource::<LevelNumber>().0)
