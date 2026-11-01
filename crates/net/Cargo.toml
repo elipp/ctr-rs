@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 bitcode = "0.6.9"
 bytes = "1"
-iroh = { version = "1.4.1", features = ["unstable-net-report"] }
+iroh = "1.4.1"
 # Tasks and timers, with tokio's on native and the browser's in the browser.
 n0-future = "0.3.2"
 realm-proto = { path = "../realm-proto" }
