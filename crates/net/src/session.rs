@@ -28,6 +28,9 @@ use crate::{
 /// that left, before it goes on to the next one.
 const HEIR_DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a guest waits for the connection that the host said it would dial.
+const SWAP_WAIT: Duration = Duration::from_secs(20);
+
 /// How often the packets go out, once per game tick. They are sent whether or not there is
 /// news: when a packet is lost and the game then waits for it, the resend is what gets it going.
 pub(crate) fn send_interval() -> Interval {
@@ -198,6 +201,11 @@ pub(crate) async fn run(
     // the links being dialed. The links are made in the lobby, before there is a race.
     let mut lobby_ids: Vec<EndpointId> = Vec::new();
     let mut dialing: HashMap<EndpointId, Instant> = HashMap::new();
+    // The guests whose way to the host stayed on a relay: the host dials them (the lobby and the
+    // links), and they do not dial it. A guest that is told of the swap: until the host's new
+    // connection comes, and the time it is waited for.
+    let mut reversed: HashSet<EndpointId> = HashSet::new();
+    let mut swap_due: Option<Instant> = None;
     let mut game_ready = false;
     let mut ready_sent = false;
     let mut running = false;
@@ -243,6 +251,7 @@ pub(crate) async fn run(
                                 if is_direct(&connection) == Some(true) { "direct" } else { "not direct yet" }
                             )));
                             host_connection = Some(connection);
+                            swap_due = None;
                         }
                         _ => connection.close(0u32.into(), b"no swap"),
                     }
@@ -314,20 +323,19 @@ pub(crate) async fn run(
             Some((id, connection)) = swapped.recv() => if let Some(host) = &mut host
                 && let Some(guest) = host.guests.iter_mut().find(|g| g.id == id)
             {
-                // The new one takes the guest's place; the old one is closed after a while, for
-                // what is on its way to be read.
+                // The new one takes the guest's place.
                 let old = std::mem::replace(&mut guest.connection, connection.clone());
-                retired.insert(old.stable_id());
                 listen(connection.clone(), id, heard_tx.clone());
                 io.event(Event::Link(format!(
                     "lobby: dialed {} (try {} of {}), {}",
                     id.fmt_short(), guest.swaps, REDIALS,
                     if is_direct(&connection) == Some(true) { "direct" } else { "not direct yet" }
                 )));
-                n0_future::task::spawn(async move {
-                    sleep(Duration::from_secs(3)).await;
-                    old.close(0u32.into(), b"swapped");
-                });
+                // (The old one is closed already, and the guest has missed what was said since.)
+                drop(old);
+                // The links may be dialed now (by us).
+                dialing.remove(&id);
+                tell_lobby(me, character, &nick, host, &io).await;
             },
             Some(connection) = dialed.recv() => {
                 dialing.remove(&connection.remote_id());
@@ -540,6 +548,18 @@ pub(crate) async fn run(
                         guest.nick = (seq, clean_nick(&theirs));
                         tell_lobby(me, character, &nick, host, &io).await;
                     },
+                    // The host drops everything to us and dials us afresh (see [`Message::Swap`]).
+                    Message::Swap if from == host_id && host.is_none() => {
+                        if let Some(old) = &host_connection {
+                            retired.insert(old.stable_id());
+                        }
+                        if let Some(link) = links.remove(&from) {
+                            link.scrap(&mut retired);
+                        }
+                        reversed.insert(me);
+                        swap_due = Some(Instant::now() + SWAP_WAIT);
+                        io.event(Event::Link("lobby: the host closes our connections and dials us afresh".into()));
+                    }
                     Message::Lobby { players, watching, public } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
                             .iter()
@@ -588,7 +608,7 @@ pub(crate) async fn run(
                         links.retain(|id, _| roster.contains(id));
                         start_over(&mut links, epoch);
                         (running, game_ready, ready_sent) = (false, false, false);
-                        dial_links(&endpoint, &roster, &links, &mut dialing, &dialed_tx);
+                        dial_links(&endpoint, &roster, &links, &mut dialing, &reversed, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone(), players: characters.len() });
                         io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
@@ -763,7 +783,7 @@ pub(crate) async fn run(
                         }
                     }
                     // (`listen` takes these.)
-                    Message::Ping { .. } | Message::Pong { .. } => {}
+                    Message::Ping { .. } | Message::Pong { .. } | Message::Swap => {}
                 },
                 Heard::Ping { rtt, relay } => {
                     pings.insert(from, rtt);
@@ -896,20 +916,44 @@ pub(crate) async fn run(
                         io.event(Event::Link(format!("link {} [{:.0}s]: {what}", id.fmt_short(), link.age())));
                     }
                 }
-                // A guest that stays on a relay is dialed by us (the lobby has been the guest's).
-                if let Some(host) = &mut host {
+                // A guest that stays on a relay in the lobby is dialed by us, the lobby connection
+                // and the links both afresh: what is left of the old ones could keep the way
+                // that does not work. (Not in a race: it would cut the pads.)
+                if let Some(host) = &mut host
+                    && !host.racing
+                {
                     for guest in host.guests.iter_mut().filter(|g| g.wants_swap(now)) {
                         guest.swapped(now);
+                        let id = guest.id;
                         io.event(Event::Link(format!(
-                            "lobby: {} not direct yet, dialing it (try {} of {})",
-                            guest.id.fmt_short(), guest.swaps, REDIALS
+                            "lobby: {} not direct yet, closing everything to it and dialing it afresh (try {} of {})",
+                            id.fmt_short(), guest.swaps, REDIALS
                         )));
-                        let (endpoint, swapped_tx, id) = (endpoint.clone(), swapped_tx.clone(), guest.id);
+                        reversed.insert(id);
+                        dialing.insert(id, now);
+                        if let Some(link) = links.remove(&id) {
+                            link.scrap(&mut retired);
+                        }
+                        let old = guest.connection.clone();
+                        retired.insert(old.stable_id());
+                        let (endpoint, swapped_tx) = (endpoint.clone(), swapped_tx.clone());
                         n0_future::task::spawn(async move {
+                            // It is told, and has the time to read it, before the close.
+                            let _ = send_reliably(&old, &Message::Swap).await;
+                            sleep(Duration::from_millis(300)).await;
+                            old.close(0u32.into(), b"swap");
                             if let Ok(connection) = endpoint.connect(EndpointAddr::new(id), SWAP_ALPN).await {
                                 let _ = swapped_tx.send((id, connection));
                             }
                         });
+                    }
+                }
+                // A host that said it would dial, and has not: it is gone.
+                if swap_due.is_some_and(|due| now >= due) {
+                    swap_due = None;
+                    if let Some(old) = &host_connection {
+                        retired.remove(&old.stable_id());
+                        let _ = heard_tx.send((host_id, Heard::Closed { id: old.stable_id(), kicked: false }));
                     }
                 }
                 // (One per player: the round trips are kept by player.)
@@ -1126,7 +1170,7 @@ pub(crate) async fn run(
             }
             links.retain(|id, _| roster.contains(id));
             start_over(&mut links, epoch);
-            dial_links(&endpoint, &roster, &links, &mut dialing, &dialed_tx);
+            dial_links(&endpoint, &roster, &links, &mut dialing, &reversed, &dialed_tx);
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
@@ -1151,7 +1195,7 @@ pub(crate) async fn run(
                 Some(host) => std::iter::once(me).chain(host.guests.iter().map(|g| g.id)).collect(),
                 None => lobby_ids.clone(),
             };
-            dial_links(&endpoint, &ids, &links, &mut dialing, &dialed_tx);
+            dial_links(&endpoint, &ids, &links, &mut dialing, &reversed, &dialed_tx);
         }
 
         // Connections that the roster (or the lobby) knows are links now.

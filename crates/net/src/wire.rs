@@ -186,6 +186,12 @@ pub enum Message {
     /// goes on, and the host can start the same players again. (A stop that comes after the
     /// next race's [`Message::Restart`] is of the race before, and does not count.)
     Stop { epoch: u32 },
+    /// Reliable, host to a client whose way to it stays on a relay: the host closes this
+    /// connection and every other to the client in a moment, and dials it afresh (the old ones
+    /// would leave the network paths as they are). The client waits for that connection, and does
+    /// not take the close for the host leaving. From then on the host is the one that dials the
+    /// client's links as well.
+    Swap,
 }
 
 /// How often a player pings the ones it is connected to.
@@ -368,6 +374,7 @@ mod tests {
             },
             Message::Ready,
             Message::Go,
+            Message::Swap,
             Message::Restart {
                 epoch: 2,
                 track: 7,

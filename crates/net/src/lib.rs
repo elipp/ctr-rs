@@ -73,7 +73,7 @@ fn endpoint_builder() -> Builder {
 }
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/11";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/12";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has

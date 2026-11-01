@@ -259,6 +259,15 @@ impl Link {
         })
     }
 
+    /// Closes both connections, and notes them in `retired` for their closing not to be taken for
+    /// the player leaving.
+    pub(crate) fn scrap(self, retired: &mut HashSet<usize>) {
+        for connection in std::iter::once(&self.connection).chain(&self.alt) {
+            retired.insert(connection.stable_id());
+            connection.close(0u32.into(), b"swap");
+        }
+    }
+
     /// Seconds since the link began, for the log.
     pub(crate) fn age(&self) -> f32 {
         self.born.elapsed().as_secs_f32()
@@ -305,11 +314,13 @@ fn redial_due(dialed: bool, redials: u32, waited: bool, direct: Option<bool>) ->
 /// The players of `roster` (the host first) that we dial for their links, those we are not
 /// `linked` to. A guest dials the host, as it did the lobby: that way the pair has one dialing
 /// side and the NAT of the guest has already sent out to the host. Of two guests the one with the
-/// lower id dials.
+/// lower id dials. A guest in `reversed` (its way to the host stayed on a relay) is dialed by the
+/// host instead.
 pub(crate) fn to_dial(
     me: EndpointId,
     roster: &[EndpointId],
     linked: impl Fn(&EndpointId) -> bool,
+    reversed: impl Fn(&EndpointId) -> bool,
 ) -> Vec<EndpointId> {
     let host = roster.first().copied();
     roster
@@ -317,9 +328,9 @@ pub(crate) fn to_dial(
         .copied()
         .filter(|&id| {
             let dials = if Some(me) == host {
-                false
+                reversed(&id)
             } else if Some(id) == host {
-                true
+                !reversed(&me)
             } else {
                 me.as_bytes() < id.as_bytes()
             };
@@ -340,12 +351,14 @@ pub(crate) fn dial_links(
     roster: &[EndpointId],
     links: &HashMap<EndpointId, Link>,
     pending: &mut HashMap<EndpointId, Instant>,
+    reversed: &HashSet<EndpointId>,
     dialed: &UnboundedSender<Connection>,
 ) {
     let now = Instant::now();
     pending.retain(|_, since| now.duration_since(*since) < DIAL_WAIT);
     let waiting = pending.clone();
-    for id in to_dial(endpoint.id(), roster, |id| links.contains_key(id) || waiting.contains_key(id)) {
+    let linked = |id: &EndpointId| links.contains_key(id) || waiting.contains_key(id);
+    for id in to_dial(endpoint.id(), roster, linked, |id| reversed.contains(id)) {
         pending.insert(id, now);
         dial(endpoint.clone(), id, dialed.clone());
     }
@@ -411,7 +424,7 @@ mod tests {
             let dials: Vec<(EndpointId, EndpointId)> = roster
                 .iter()
                 .flat_map(|&me| {
-                    to_dial(me, &roster, |_| false)
+                    to_dial(me, &roster, |_| false, |_| false)
                         .into_iter()
                         .map(move |id| (me, id))
                 })
@@ -443,9 +456,12 @@ mod tests {
         // The guest dials the host, whichever id is lower.
         for roster in [[a, b], [b, a]] {
             let [host, guest] = roster;
-            assert_eq!(to_dial(guest, &roster, |_| false), [host]);
-            assert!(to_dial(guest, &roster, |id| *id == host).is_empty());
-            assert!(to_dial(host, &roster, |_| false).is_empty());
+            assert_eq!(to_dial(guest, &roster, |_| false, |_| false), [host]);
+            assert!(to_dial(guest, &roster, |id| *id == host, |_| false).is_empty());
+            assert!(to_dial(host, &roster, |_| false, |_| false).is_empty());
+            // Reversed, the host dials the guest and the guest does not.
+            assert_eq!(to_dial(host, &roster, |_| false, |id| *id == guest), [guest]);
+            assert!(to_dial(guest, &roster, |_| false, |id| *id == guest).is_empty());
         }
     }
 
@@ -453,13 +469,13 @@ mod tests {
     fn guests_dial_the_host_and_the_lower_of_two_guests_dials() {
         let ids: [EndpointId; 3] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
         let roster = ids.to_vec();
-        assert!(to_dial(ids[0], &roster, |_| false).is_empty());
+        assert!(to_dial(ids[0], &roster, |_| false, |_| false).is_empty());
         for guest in &ids[1..] {
-            assert!(to_dial(*guest, &roster, |_| false).contains(&ids[0]));
+            assert!(to_dial(*guest, &roster, |_| false, |_| false).contains(&ids[0]));
         }
         let (low, high) = if ids[1].as_bytes() < ids[2].as_bytes() { (ids[1], ids[2]) } else { (ids[2], ids[1]) };
-        assert_eq!(to_dial(low, &roster, |_| false).len(), 2);
-        assert_eq!(to_dial(high, &roster, |_| false), [ids[0]]);
+        assert_eq!(to_dial(low, &roster, |_| false, |_| false).len(), 2);
+        assert_eq!(to_dial(high, &roster, |_| false, |_| false), [ids[0]]);
     }
 
     #[test]
