@@ -3,17 +3,33 @@
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use race::Pad;
 use vehicle::{Input, buttons};
 
 use crate::config::Config;
 use crate::controls::Control;
 
+/// The pads, as long as the window has focus: a pad pushed while another window is in front is not
+/// ours to read.
+#[derive(SystemParam)]
+pub(crate) struct Pads<'w, 's> {
+    pads: Query<'w, 's, &'static Gamepad>,
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+}
+
+impl Pads<'_, '_> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Gamepad> {
+        let focused = self.windows.iter().any(|w| w.focused);
+        self.pads.iter().filter(move |_| focused)
+    }
+}
+
 /// The keyboard, the pads, and the keys the config binds.
 #[derive(SystemParam)]
 pub(super) struct Controller<'w, 's> {
     pub keys: Res<'w, ButtonInput<KeyCode>>,
-    pads: Query<'w, 's, &'static Gamepad>,
+    pads: Pads<'w, 's>,
     config: Res<'w, Config>,
 }
 
@@ -25,7 +41,7 @@ impl Controller<'_, '_> {
 
 fn read_input(
     keys: &ButtonInput<KeyCode>,
-    pads: &Query<&Gamepad>,
+    pads: &Pads,
     config: &Config,
     previous_held: u32,
 ) -> Input {
