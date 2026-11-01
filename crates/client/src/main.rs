@@ -35,7 +35,6 @@ mod flash;
 mod fly;
 mod font;
 mod frame;
-mod free_drive;
 mod fx;
 mod heat;
 mod hud;
@@ -311,7 +310,6 @@ fn main() {
             toast::ToastPlugin,
             wrong_way::WrongWayPlugin,
             version::VersionPlugin,
-            free_drive::FreeDrivePlugin,
         ),
         config::ConfigPlugin,
         probe::ProbePlugin,

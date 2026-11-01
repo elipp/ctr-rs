@@ -37,7 +37,7 @@ use vehicle::demo::Demo;
 
 use crate::Track;
 use follow::{View, chase, view_of};
-use overlay::{hud, reserves_hud, split_hud, wumpa_hud};
+use overlay::{hud, reserves_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
 pub use follow::ChaseCamera;
@@ -132,7 +132,6 @@ impl Plugin for DrivePlugin {
         app.insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
             .init_resource::<crate::flash::Flash>()
-            .init_resource::<overlay::DebugText>()
             .add_systems(Update, overlay::debug_text_command)
             .add_systems(Startup, spawn_hud)
             .add_systems(
@@ -160,7 +159,7 @@ impl Plugin for DrivePlugin {
                     crate::flash::show,
                     hud,
                     wumpa_hud,
-                    split_hud,
+                    split_toast,
                     reserves_hud,
                 )
                     .chain()

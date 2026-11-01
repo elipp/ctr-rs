@@ -1,4 +1,4 @@
-//! The text on the screen of a race: wumpa, checkpoint split, boost reserves, readouts.
+//! The text on the screen of a race: wumpa, checkpoint split (a toast), boost reserves, readouts.
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -11,30 +11,18 @@ use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 #[derive(Component)]
 pub(super) struct Hud;
 
-/// Whether the development text of the race shows: the speed under the frame rate,
-/// and the boost reserves (`/debug hud`). The frame rate always shows, and the viewer's text does.
-#[derive(Resource)]
-pub(crate) struct DebugText(pub(crate) bool);
-
-impl Default for DebugText {
-    fn default() -> Self {
-        DebugText(true)
-    }
-}
-
-/// `/debug hud`.
+/// `/debug hud`: the development text of the race, kept in the config (`Config::debug_hud`).
 pub(crate) fn debug_text_command(
     mut actions: MessageReader<crate::command::Action>,
-    mut shown: ResMut<DebugText>,
+    mut config: ResMut<crate::config::Config>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
     for action in actions.read() {
         if let crate::command::Action::DebugHud(setting) = action {
-            shown.0 = setting.unwrap_or(!shown.0);
-            toasts.write(crate::toast::Toast::new(
-                format!("Debug text {}", if shown.0 { "on" } else { "off" }),
-                2000,
-            ));
+            config.debug_hud = setting.unwrap_or(!config.debug_hud);
+            if let Err(why) = config.save() {
+                toasts.write(crate::toast::Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+            }
         }
     }
 }
@@ -43,14 +31,8 @@ pub(crate) fn debug_text_command(
 #[derive(Component)]
 pub(crate) struct WumpaHud;
 
-/// The time at the checkpoint just passed: green if we were the first there, else red and how
-/// far behind the first.
-#[derive(Component)]
-pub(super) struct SplitHud;
-
-/// How long a checkpoint time stays up, in milliseconds of the race. (The last one, at the finish
-/// line, stays.)
-const SPLIT_SHOW_MS: i32 = 3000;
+/// How long a checkpoint time's toast stays up, in milliseconds.
+const SPLIT_SHOW_MS: u64 = 3000;
 
 /// The width of the reserves' text, in pixels: "Reserves: " and 5 digits at the default font size.
 const RESERVES_WIDTH: f32 = 150.0;
@@ -64,21 +46,6 @@ pub(super) struct ReservesHud;
 pub(super) struct DemoHud;
 
 pub(crate) fn spawn_hud(mut commands: Commands) {
-    commands.spawn((
-        SplitHud,
-        Text::new(""),
-        TextFont {
-            font_size: 30.0.into(),
-            ..default()
-        },
-        TextLayout::justify(Justify::Center),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(70.0),
-            width: Val::Percent(100.0),
-            ..default()
-        },
-    ));
     // The counter: a small "x" and the count in the big orange digits, level with the middle of
     // the fruit, right of it. The "x" is orange too, and its middle is the digits' (retail draws
     // it 4 lines down from their top, 8 tall, on digits 16 tall).
@@ -162,44 +129,42 @@ fn split_time(ms: i32) -> String {
     format!("{}:{:02}.{:02}", ms / 60000, ms / 1000 % 60, ms % 1000 / 10)
 }
 
-/// Shows the time of the checkpoint we passed last (see `race::Race::last_split`) against the
-/// first kart to pass it.
-pub(super) fn split_hud(
+/// Toasts the time of each checkpoint we pass (see `race::Race::last_split`) against the first
+/// kart to pass it: green if we were the first there, else red and how far behind the first.
+/// `announced` is the number of the last checkpoint toasted, so that a rollback that takes a
+/// pass back and plays it again does not toast it twice.
+pub(super) fn split_toast(
     sim: Res<crate::props::Sim>,
     lobby: Res<crate::lobby::Lobby>,
-    mut text: Query<(&mut Text, &mut TextColor), With<SplitHud>>,
+    mut announced: Local<usize>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    let race = &*sim.race;
-    let finished = sim.driver().actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    let shown = lobby
-        .online
-        .as_ref()
-        .and(race.last_split(sim.own))
-        .filter(|&(_, time, _)| finished || race.event_ms - time < SPLIT_SHOW_MS);
-    let (line, color) = match shown {
-        Some((_, time, 0)) => (split_time(time), Color::srgb(0.4, 1.0, 0.4)),
-        Some((_, _, behind)) => (
-            format!("+{}", split_time(behind)),
-            Color::srgb(1.0, 0.3, 0.3),
-        ),
-        None => (String::new(), Color::WHITE),
+    let Some((number, time, behind)) = lobby.online.as_ref().and(sim.race.last_split(sim.own))
+    else {
+        *announced = 0;
+        return;
     };
-    for (mut text, mut text_color) in &mut text {
-        if text.0 != line {
-            text.0 = line.clone();
-        }
-        text_color.0 = color;
+    if number <= *announced {
+        return;
     }
+    *announced = number;
+    let toast = if behind == 0 {
+        crate::toast::Toast::new(split_time(time), SPLIT_SHOW_MS).color(Color::srgb(0.4, 1.0, 0.4))
+    } else {
+        crate::toast::Toast::new(format!("+{}", split_time(behind)), SPLIT_SHOW_MS)
+            .color(Color::srgb(1.0, 0.3, 0.3))
+    };
+    toasts.write(toast);
 }
 
-/// The boost reserves, always, up to 10000.
+/// The boost reserves, up to 10000, with the development text.
 pub(super) fn reserves_hud(
     sim: Res<crate::props::Sim>,
-    shown: Res<DebugText>,
+    config: Res<crate::config::Config>,
     mut text: Query<&mut Text, With<ReservesHud>>,
 ) {
     for mut text in &mut text {
-        text.0 = if shown.0 {
+        text.0 = if config.debug_hud {
             format!("Reserves: {}", sim.driver().reserves)
         } else {
             String::new()
@@ -207,16 +172,24 @@ pub(super) fn reserves_hud(
     }
 }
 
-/// The bottom-left lines: the frame rate and the time a frame takes (smoothed over the last few
-/// frames), then where the kart is and what it does, the name of our lobby if it is public, and
-/// the version of the build.
+/// The development text (see `Config::debug_hud`): the frame rate and the time a frame takes
+/// (smoothed over the last few frames), then where the kart is and what it does, the name of our
+/// lobby if it is public, and the version of the build.
 pub(super) fn hud(
     sim: Res<crate::props::Sim>,
     lobby: Res<crate::lobby::Lobby>,
     diagnostics: Res<DiagnosticsStore>,
-    shown: Res<DebugText>,
+    config: Res<crate::config::Config>,
     mut text: Query<&mut Text, With<Hud>>,
 ) {
+    if !config.debug_hud {
+        for mut text in &mut text {
+            if !text.0.is_empty() {
+                text.0.clear();
+            }
+        }
+        return;
+    }
     let d = sim.driver();
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     let read = |path| diagnostics.get(path).and_then(|d| d.smoothed());
@@ -228,10 +201,6 @@ pub(super) fn hud(
         _ => String::new(),
     };
     for mut text in &mut text {
-        if !shown.0 {
-            text.0 = fps.clone();
-            continue;
-        }
         text.0 = format!(
             "{fps}\nspeed {:5}  {:?}{}{}{}{}{}\nbuild {}",
             d.speed_approx,
