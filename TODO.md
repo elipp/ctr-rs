@@ -38,8 +38,6 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 - Not done: the viewer builds crate models once at load (`props.rs`, `CrateBody(i)`), so a runtime crate also needs an entity spawned.
 - the crates' shape in `Objects` (for a `/debug add crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
 
-## Annoyances
-- Fix the checkpoint split thing to be a toast
 
 # Bugs
 
