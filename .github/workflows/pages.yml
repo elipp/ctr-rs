@@ -42,7 +42,7 @@ jobs:
       - run: ./web/build.sh dist
         env:
           LLVM: /usr
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: target/web
 
