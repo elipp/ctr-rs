@@ -153,6 +153,9 @@ pub(crate) async fn run(
     // The host: the sends of maps that ended.
     let (sent_tx, mut sent) = unbounded_channel::<Transfer>();
 
+    // What the host was last told of our NAT (see `hard_nat`).
+    let mut nat_sent = false;
+
     match &role {
         Role::Host => {
             tokio::select! {
@@ -179,7 +182,8 @@ pub(crate) async fn run(
                 spectator,
             };
             send_reliably(&connection, &hello).await?;
-            send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await?;
+            nat_sent = hard_nat(&endpoint);
+            send_reliably(&connection, &Message::Nat { hard: nat_sent }).await?;
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
             host_connection = Some(connection);
@@ -287,7 +291,8 @@ pub(crate) async fn run(
                             // As if we joined it: the host takes the latest Hello it has.
                             let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
                             let _ = send_reliably(&connection, &hello).await;
-                            let _ = send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await;
+                            nat_sent = hard_nat(&endpoint);
+                            let _ = send_reliably(&connection, &Message::Nat { hard: nat_sent }).await;
                             hellos += 1;
                         }
                         None => {
@@ -826,6 +831,14 @@ pub(crate) async fn run(
                 }
             },
             _ = ping_timer.tick() => {
+                // The host has our NAT as iroh finds it out, which may change (or come late).
+                let hard = hard_nat(&endpoint);
+                if hard != nat_sent
+                    && let Some(connection) = &host_connection
+                    && send_reliably(connection, &Message::Nat { hard }).await.is_ok()
+                {
+                    nat_sent = hard;
+                }
                 // (One per player: the round trips are kept by player.)
                 let connections = one_per_peer(
                     links.values().map(|l| &l.connection),

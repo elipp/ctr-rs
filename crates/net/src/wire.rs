@@ -107,7 +107,7 @@ pub enum Message {
     },
     /// Reliable, client to host, after the Hello: whether the client's NAT gives it another
     /// public address for each peer it talks to (`hard`), which makes it unreachable unless it is
-    /// the one that dials. The host passes it on in [`Message::Start`].
+    /// the one that dials. Sent again whenever it changes. The host passes it on in [`Message::Start`].
     Nat { hard: bool },
     /// Reliable, client to host: connected to every other player, with the level up. Once the
     /// host has this from everyone (and is ready itself) it sends [`Message::Go`].
