@@ -315,7 +315,7 @@ fn input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut key_events: MessageReader<KeyboardInput>,
     mut focus_lost: MessageReader<KeyboardFocusLost>,
-    pads: Query<&Gamepad>,
+    pads: crate::drive::Pads,
     lobby: Res<Lobby>,
     mut public: ResMut<PublicLobbies>,
     mut config: ResMut<Config>,
