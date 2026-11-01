@@ -128,6 +128,15 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "The most frames to draw a second, 0 for no limit",
                     "<frames a second>",
                 ),
+                node(
+                    "msaa",
+                    "Anti-aliasing samples of the cameras",
+                    &[
+                        leaf("off", "None (fastest)"),
+                        leaf("2", "2 samples"),
+                        leaf("4", "4 samples"),
+                    ],
+                ),
                 #[cfg(not(target_arch = "wasm32"))]
                 node(
                     "relay-only",
