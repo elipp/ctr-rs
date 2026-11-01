@@ -11,16 +11,16 @@ use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, ti
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::conn::{
-    Heard, RACE_IN_PROGRESS, dial, listen, one_per_peer, send_datagram, send_reliably, stamp,
+    Heard, RACE_IN_PROGRESS, dial, is_direct, listen, one_per_peer, send_datagram, send_reliably, stamp,
 };
 use crate::peers::{
-    Departure, Guest, Heirs, HostState, Link, Plan, Role, dial_links, stalled, start_over,
+    Departure, Guest, Heirs, HostState, Link, Plan, REDIALS, Role, dial_links, stalled, start_over,
 };
 use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player, Public,
+    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player, Public, SWAP_ALPN,
     RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
 
@@ -131,6 +131,11 @@ pub(crate) async fn run(
     let me = endpoint.id();
     let (heard_tx, mut heard) = unbounded_channel::<(EndpointId, Heard)>();
     let (dialed_tx, mut dialed) = unbounded_channel::<Connection>();
+    // The host: the lobby connections it dialed to guests that stayed on a relay.
+    let (swapped_tx, mut swapped) = unbounded_channel::<(EndpointId, Connection)>();
+    // The connections we closed ourselves, or that were replaced by another to the same player:
+    // their closing is not the player leaving.
+    let mut retired: HashSet<usize> = HashSet::new();
 
     // The lobby. The host has the guests (in `host`); a guest has the host.
     let mut host: Option<HostState> = None;
@@ -189,6 +194,10 @@ pub(crate) async fn run(
     let mut links: HashMap<EndpointId, Link> = HashMap::new();
     // Connections from players that are not in the roster (yet): the start may not have come.
     let mut unclaimed: Vec<Connection> = Vec::new();
+    // The players of the lobby as the host last told (a guest keeps it for the links to them), and
+    // the links being dialed. The links are made in the lobby, before there is a race.
+    let mut lobby_ids: Vec<EndpointId> = Vec::new();
+    let mut dialing: HashMap<EndpointId, Instant> = HashMap::new();
     let mut game_ready = false;
     let mut ready_sent = false;
     let mut running = false;
@@ -222,6 +231,23 @@ pub(crate) async fn run(
                 let Ok(accepting) = incoming.accept() else { continue };
                 let Ok(connection) = accepting.await else { continue };
                 let id = connection.remote_id();
+                // The host dialed us because our way to it stayed on a relay: this is the lobby
+                // connection from now on.
+                if connection.alpn() == SWAP_ALPN {
+                    match &host_connection {
+                        Some(old) if host.is_none() && id == host_id => {
+                            retired.insert(old.stable_id());
+                            listen(connection.clone(), id, heard_tx.clone());
+                            io.event(Event::Link(format!(
+                                "lobby: the host dialed us, its connection replaces ours ({})",
+                                if is_direct(&connection) == Some(true) { "direct" } else { "not direct yet" }
+                            )));
+                            host_connection = Some(connection);
+                        }
+                        _ => connection.close(0u32.into(), b"no swap"),
+                    }
+                    continue;
+                }
                 // A link of the race, from a player of the roster (or one that is early).
                 if connection.alpn() == MESH_ALPN {
                     listen(connection.clone(), id, heard_tx.clone());
@@ -239,7 +265,7 @@ pub(crate) async fn run(
                         }
                         host.guests.retain(|g| g.id != id);
                         host.gone.remove(&id);
-                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()), spectator: false };
+                        let guest = Guest::new(id, connection.clone());
                         io.event(Event::PeerJoined(id));
                         if host.racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
@@ -285,7 +311,26 @@ pub(crate) async fn run(
                     }
                 }
             }
+            Some((id, connection)) = swapped.recv() => if let Some(host) = &mut host
+                && let Some(guest) = host.guests.iter_mut().find(|g| g.id == id)
+            {
+                // The new one takes the guest's place; the old one is closed after a while, for
+                // what is on its way to be read.
+                let old = std::mem::replace(&mut guest.connection, connection.clone());
+                retired.insert(old.stable_id());
+                listen(connection.clone(), id, heard_tx.clone());
+                io.event(Event::Link(format!(
+                    "lobby: dialed {} (try {} of {}), {}",
+                    id.fmt_short(), guest.swaps, REDIALS,
+                    if is_direct(&connection) == Some(true) { "direct" } else { "not direct yet" }
+                )));
+                n0_future::task::spawn(async move {
+                    sleep(Duration::from_secs(3)).await;
+                    old.close(0u32.into(), b"swapped");
+                });
+            },
             Some(connection) = dialed.recv() => {
+                dialing.remove(&connection.remote_id());
                 listen(connection.clone(), connection.remote_id(), heard_tx.clone());
                 unclaimed.push(connection);
             }
@@ -517,6 +562,7 @@ pub(crate) async fn run(
                             })
                             .collect::<Result<_, _>>()?;
                         let you = players.iter().position(|p| p.id == me);
+                        lobby_ids = players.iter().chain(&spectators).map(|p| p.id).collect();
                         // The lobby is in the hands of a host that is there: what we kept of the
                         // ones before it, and what players told us in its place, is over.
                         heirs.order = players.iter().map(|p| p.id).collect();
@@ -542,7 +588,7 @@ pub(crate) async fn run(
                         links.retain(|id, _| roster.contains(id));
                         start_over(&mut links, epoch);
                         (running, game_ready, ready_sent) = (false, false, false);
-                        dial_links(&endpoint, &roster, &links, &dialed_tx);
+                        dial_links(&endpoint, &roster, &links, &mut dialing, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone(), players: characters.len() });
                         io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
@@ -723,9 +769,21 @@ pub(crate) async fn run(
                     pings.insert(from, rtt);
                     io.event(Event::Rtt { id: from, rtt, relay });
                 }
+                // A connection that was replaced or dropped on purpose.
+                Heard::Closed { id: closed, .. } if retired.remove(&closed) => {}
                 Heard::Closed { id: closed, kicked } => {
+                    // A player with another connection left (the other side of a redial or of
+                    // a swap closed one): it is not leaving.
+                    let lobby_closed = host_connection.as_ref().is_some_and(|c| c.stable_id() == closed)
+                        || host.iter().flat_map(|h| &h.guests).any(|g| g.connection.stable_id() == closed);
+                    // A link of the lobby (no race yet) that goes is not the player leaving it:
+                    // its lobby connection says so.
+                    let link_only = plan.is_none() && !lobby_closed;
+                    let spare = link_only || links.get(&from).is_some_and(|l| {
+                        l.alt.is_some() && (l.connection.stable_id() == closed || l.alt.as_ref().is_some_and(|a| a.stable_id() == closed))
+                    }) || unclaimed.iter().any(|c| c.stable_id() == closed);
                     // The old connection of a player that came back: the new one is in `guests`.
-                    let stale = host
+                    let stale = spare || host
                         .iter()
                         .flat_map(|h| &h.guests)
                         .any(|g| g.id == from && g.connection.stable_id() != closed);
@@ -734,17 +792,19 @@ pub(crate) async fn run(
                         pings.remove(&from);
                     }
                     // A link goes with its own connection, or with the player's lobby one.
-                    let lobby_closed = host_connection.as_ref().is_some_and(|c| c.stable_id() == closed)
-                        || host.iter().flat_map(|h| &h.guests).any(|g| g.connection.stable_id() == closed);
                     if lobby_closed {
                         links.remove(&from);
                     } else if let Some(link) = links.get_mut(&from) {
                         if link.alt.as_ref().is_some_and(|c| c.stable_id() == closed) {
                             link.alt = None;
+                            io.event(Event::Link(format!("link {}: the second connection closed", from.fmt_short())));
                         } else if link.connection.stable_id() == closed {
                             // The other one carries on, if there is one.
                             match link.alt.take() {
-                                Some(alt) => link.connection = alt,
+                                Some(alt) => {
+                                    link.connection = alt;
+                                    io.event(Event::Link(format!("link {}: the first connection closed, the second carries on", from.fmt_short())));
+                                }
                                 None => {
                                     links.remove(&from);
                                 }
@@ -825,8 +885,31 @@ pub(crate) async fn run(
                 let now = Instant::now();
                 for (&id, link) in links.iter_mut() {
                     if link.wants_redial(now) {
-                        link.redialed(now);
+                        retired.extend(link.redialed(now));
+                        io.event(Event::Link(format!(
+                            "link {} [{:.0}s]: not direct yet, dialing it as well (try {} of {})",
+                            id.fmt_short(), link.age(), link.redials, REDIALS
+                        )));
                         dial(endpoint.clone(), id, dialed_tx.clone());
+                    }
+                    if let Some(what) = link.changed() {
+                        io.event(Event::Link(format!("link {} [{:.0}s]: {what}", id.fmt_short(), link.age())));
+                    }
+                }
+                // A guest that stays on a relay is dialed by us (the lobby has been the guest's).
+                if let Some(host) = &mut host {
+                    for guest in host.guests.iter_mut().filter(|g| g.wants_swap(now)) {
+                        guest.swapped(now);
+                        io.event(Event::Link(format!(
+                            "lobby: {} not direct yet, dialing it (try {} of {})",
+                            guest.id.fmt_short(), guest.swaps, REDIALS
+                        )));
+                        let (endpoint, swapped_tx, id) = (endpoint.clone(), swapped_tx.clone(), guest.id);
+                        n0_future::task::spawn(async move {
+                            if let Ok(connection) = endpoint.connect(EndpointAddr::new(id), SWAP_ALPN).await {
+                                let _ = swapped_tx.send((id, connection));
+                            }
+                        });
                     }
                 }
                 // (One per player: the round trips are kept by player.)
@@ -906,13 +989,7 @@ pub(crate) async fn run(
                             continue;
                         }
                         io.event(Event::PeerJoined(id));
-                        state.guests.push(Guest {
-                            id,
-                            connection,
-                            hello: None,
-                            nick: (0, String::new()),
-                            spectator: false,
-                        });
+                        state.guests.push(Guest::new(id, connection));
                     }
                     if let Some(public) = &state.public {
                         let mut publisher =
@@ -1049,7 +1126,7 @@ pub(crate) async fn run(
             }
             links.retain(|id, _| roster.contains(id));
             start_over(&mut links, epoch);
-            dial_links(&endpoint, &roster, &links, &dialed_tx);
+            dial_links(&endpoint, &roster, &links, &mut dialing, &dialed_tx);
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
@@ -1068,21 +1145,45 @@ pub(crate) async fn run(
             });
         }
 
-        // Connections that the roster knows are links now.
-        if let Some(plan) = &plan {
+        // The links to make from the lobby on: to the host, and among the guests.
+        if !running {
+            let ids: Vec<EndpointId> = match &host {
+                Some(host) => std::iter::once(me).chain(host.guests.iter().map(|g| g.id)).collect(),
+                None => lobby_ids.clone(),
+            };
+            dial_links(&endpoint, &ids, &links, &mut dialing, &dialed_tx);
+        }
+
+        // Connections that the roster (or the lobby) knows are links now.
+        {
+            let lobby: Vec<EndpointId> = match &host {
+                Some(host) => host.guests.iter().map(|g| g.id).collect(),
+                None => lobby_ids.clone(),
+            };
             unclaimed.retain(|connection| {
                 let id = connection.remote_id();
-                if connection.alpn() != MESH_ALPN || plan.slot_of(id).is_none() {
+                if connection.alpn() != MESH_ALPN
+                    || !(plan.as_ref().is_some_and(|plan| plan.slot_of(id).is_some()) || lobby.contains(&id))
+                {
                     return true;
                 }
                 match links.get_mut(&id) {
                     // A second connection to a player: the redial, made by either side.
                     Some(link) if link.alt.is_none() => {
                         link.alt = Some(connection.clone());
+                        let by = if connection.side().is_client() { "we dialed" } else { "they dialed" };
+                        io.event(Event::Link(format!(
+                            "link {} [{:.0}s]: second connection up ({by})", id.fmt_short(), link.age()
+                        )));
                     }
-                    Some(_) => connection.close(0u32.into(), b"one is enough"),
+                    Some(_) => {
+                        retired.insert(connection.stable_id());
+                        connection.close(0u32.into(), b"one is enough");
+                    }
                     None => {
                         links.insert(id, Link::new(connection.clone(), epoch));
+                        let by = if connection.side().is_client() { "we dialed" } else { "they dialed" };
+                        io.event(Event::Link(format!("link {}: up ({by})", id.fmt_short())));
                     }
                 }
                 false

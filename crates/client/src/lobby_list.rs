@@ -179,24 +179,24 @@ fn build(
     commands.entity(column).insert(List(players, watchers));
 }
 
-/// Puts a player's name on a portrait, at the bottom and centered, and the ping next to it, on its
-/// right (which [`pings`] fills in). Gives the name's entity back.
+/// Puts a player's name on a portrait, at the bottom and left-aligned, and the ping after it, on its
+/// line (which [`pings`] fills in). Gives the name's entity back.
 pub(crate) fn spawn_tags(
     commands: &mut Commands,
     portrait: Entity,
     name: &str,
     key: &str,
 ) -> Entity {
-    // The name's centered under the portrait, whatever its length, and the ping hangs off its
-    // right end.
+    // The name and the ping are a line, from the portrait's left edge.
     let wrapper = commands
         .spawn((
-            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
+                left: Val::ZERO,
                 // A little below the portrait's edge.
                 bottom: Val::Px(-6.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
                 ..default()
             },
             Pickable::IGNORE,
@@ -222,20 +222,14 @@ pub(crate) fn spawn_tags(
     commands.spawn((
         PingLabel(key.to_string()),
         Text::new(""),
-        // It hangs off the name's edge, where no width is left to it: it must not wrap.
-        TextLayout::no_wrap(),
         TextFont {
-            font_size: PING_FONT_SIZE.into(),
+            font_size: FONT_SIZE.into(),
             ..default()
         },
         TextColor(Color::srgb(0.8, 0.8, 0.8)),
         BackgroundColor(BACKGROUND),
         Node {
-            position_type: PositionType::Absolute,
-            // Past the name's right edge, on its line.
-            left: Val::Percent(100.0),
-            bottom: Val::ZERO,
-            padding: UiRect::axes(Val::Px(3.0), Val::Px(1.0)),
+            padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
             display: Display::None,
             ..default()
         },
@@ -252,12 +246,12 @@ fn pings(lobby: Res<Lobby>, mut labels: Query<(&PingLabel, &mut Text, &mut Node)
         let ping = lobby.pings.get(key);
         // "d" for a direct path, "r" for a relay.
         let route = match lobby.relayed.get(key) {
-            Some(true) => "/r",
-            Some(false) => "/d",
+            Some(true) => "r/",
+            Some(false) => "d/",
             None => "",
         };
         let line = ping.map_or(String::new(), |ping| {
-            format!("{} ms{route}", ping.as_millis())
+            format!("{route}{} ms", ping.as_millis())
         });
         if text.0 != line {
             text.0 = line;

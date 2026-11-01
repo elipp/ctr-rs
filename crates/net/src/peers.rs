@@ -91,6 +91,36 @@ pub(crate) struct Guest {
     pub(crate) nick: (u32, String),
     /// It only watches: no kart, no pads (from its Hello).
     pub(crate) spectator: bool,
+    /// The tries of dialing it ourselves (see [`Guest::wants_swap`]) so far, and the earliest time
+    /// for the next.
+    pub(crate) swaps: u32,
+    pub(crate) next_swap: Instant,
+}
+
+impl Guest {
+    pub(crate) fn new(id: EndpointId, connection: Connection) -> Guest {
+        Guest {
+            id,
+            connection,
+            hello: None,
+            nick: (0, String::new()),
+            spectator: false,
+            swaps: 0,
+            next_swap: Instant::now() + RELAY_PATIENCE,
+        }
+    }
+
+    /// Whether to dial the guest ourselves, for a lobby connection the other way round from the one
+    /// it made: the way to it is not direct after the patience or the last try.
+    pub(crate) fn wants_swap(&self, now: Instant) -> bool {
+        redial_due(true, self.swaps, now >= self.next_swap, is_direct(&self.connection))
+    }
+
+    /// A swap is tried.
+    pub(crate) fn swapped(&mut self, now: Instant) {
+        self.swaps += 1;
+        self.next_swap = now + REDIAL_EVERY;
+    }
 }
 
 /// The race as agreed at the start.
@@ -162,6 +192,9 @@ pub(crate) struct Link {
     /// The tries of dialing the other way so far, and the earliest time for the next.
     pub(crate) redials: u32,
     pub(crate) next_redial: Instant,
+    /// When the link began, and what was last said of the way it goes (see [`Link::changed`]).
+    pub(crate) born: Instant,
+    said: Option<(bool, Option<bool>)>,
 }
 
 impl Link {
@@ -176,6 +209,8 @@ impl Link {
             advanced: Instant::now(),
             redials: 0,
             next_redial: Instant::now() + RELAY_PATIENCE,
+            born: Instant::now(),
+            said: None,
         }
     }
 
@@ -213,13 +248,44 @@ impl Link {
         )
     }
 
-    /// A redial is made: the one that did not come to anything is dropped.
-    pub(crate) fn redialed(&mut self, now: Instant) {
+    /// A redial is made: the one that did not come to anything is dropped. Its number is
+    /// returned, for its close not to be taken for the player leaving.
+    pub(crate) fn redialed(&mut self, now: Instant) -> Option<usize> {
         self.redials += 1;
         self.next_redial = now + REDIAL_EVERY;
-        if let Some(alt) = self.alt.take() {
+        self.alt.take().map(|alt| {
             alt.close(0u32.into(), b"redial");
+            alt.stable_id()
+        })
+    }
+
+    /// Seconds since the link began, for the log.
+    pub(crate) fn age(&self) -> f32 {
+        self.born.elapsed().as_secs_f32()
+    }
+
+    /// What to log if the way the pads go changed since the last time: over which connection, and
+    /// whether that one is direct, on a relay, or has no path yet.
+    pub(crate) fn changed(&mut self) -> Option<String> {
+        let best = self.best();
+        let now = (
+            self.alt.as_ref().is_some_and(|alt| alt.stable_id() == best.stable_id()),
+            is_direct(best),
+        );
+        if self.said == Some(now) {
+            return None;
         }
+        self.said = Some(now);
+        let (second, direct) = now;
+        Some(format!(
+            "{} connection is {}",
+            if second { "second" } else { "first" },
+            match direct {
+                Some(true) => "direct",
+                Some(false) => "on a relay",
+                None => "without a path yet",
+            }
+        ))
     }
 
     /// Sends the pads it lacks of ours, and what we have of its.
@@ -236,29 +302,51 @@ fn redial_due(dialed: bool, redials: u32, waited: bool, direct: Option<bool>) ->
     dialed && redials < REDIALS && waited && direct != Some(true)
 }
 
-/// The players of `roster` that we dial for their links, those we are not `linked` to. Of each
-/// pair the one with the lower id dials, whoever the host is and whichever way they came to the
-/// lobby, so that every link is made the same way.
+/// The players of `roster` (the host first) that we dial for their links, those we are not
+/// `linked` to. A guest dials the host, as it did the lobby: that way the pair has one dialing
+/// side and the NAT of the guest has already sent out to the host. Of two guests the one with the
+/// lower id dials.
 pub(crate) fn to_dial(
     me: EndpointId,
     roster: &[EndpointId],
     linked: impl Fn(&EndpointId) -> bool,
 ) -> Vec<EndpointId> {
+    let host = roster.first().copied();
     roster
         .iter()
         .copied()
-        .filter(|id| me.as_bytes() < id.as_bytes() && !linked(id))
+        .filter(|&id| {
+            let dials = if Some(me) == host {
+                false
+            } else if Some(id) == host {
+                true
+            } else {
+                me.as_bytes() < id.as_bytes()
+            };
+            id != me && dials && !linked(&id)
+        })
         .collect()
 }
 
-/// Dials the players that [`to_dial`] says.
+/// How long a dial in `pending` is waited for before the player is dialed again (a dial itself
+/// tries for 10 seconds).
+const DIAL_WAIT: Duration = Duration::from_secs(15);
+
+/// Dials the players that [`to_dial`] says, except those already being dialed (`pending`: when it
+/// was begun). Called from the lobby on, so that the links are up (and direct, or have been
+/// dialed the other way) by the time a race starts.
 pub(crate) fn dial_links(
     endpoint: &Endpoint,
     roster: &[EndpointId],
     links: &HashMap<EndpointId, Link>,
+    pending: &mut HashMap<EndpointId, Instant>,
     dialed: &UnboundedSender<Connection>,
 ) {
-    for id in to_dial(endpoint.id(), roster, |id| links.contains_key(id)) {
+    let now = Instant::now();
+    pending.retain(|_, since| now.duration_since(*since) < DIAL_WAIT);
+    let waiting = pending.clone();
+    for id in to_dial(endpoint.id(), roster, |id| links.contains_key(id) || waiting.contains_key(id)) {
+        pending.insert(id, now);
         dial(endpoint.clone(), id, dialed.clone());
     }
 }
@@ -352,11 +440,26 @@ mod tests {
     #[test]
     fn a_player_we_are_linked_to_is_not_dialed() {
         let [a, b] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
-        let (low, high) = if a.as_bytes() < b.as_bytes() { (a, b) } else { (b, a) };
-        let roster = [low, high];
-        assert_eq!(to_dial(low, &roster, |_| false), [high]);
-        assert!(to_dial(low, &roster, |id| *id == high).is_empty());
-        assert!(to_dial(high, &roster, |_| false).is_empty());
+        // The guest dials the host, whichever id is lower.
+        for roster in [[a, b], [b, a]] {
+            let [host, guest] = roster;
+            assert_eq!(to_dial(guest, &roster, |_| false), [host]);
+            assert!(to_dial(guest, &roster, |id| *id == host).is_empty());
+            assert!(to_dial(host, &roster, |_| false).is_empty());
+        }
+    }
+
+    #[test]
+    fn guests_dial_the_host_and_the_lower_of_two_guests_dials() {
+        let ids: [EndpointId; 3] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
+        let roster = ids.to_vec();
+        assert!(to_dial(ids[0], &roster, |_| false).is_empty());
+        for guest in &ids[1..] {
+            assert!(to_dial(*guest, &roster, |_| false).contains(&ids[0]));
+        }
+        let (low, high) = if ids[1].as_bytes() < ids[2].as_bytes() { (ids[1], ids[2]) } else { (ids[2], ids[1]) };
+        assert_eq!(to_dial(low, &roster, |_| false).len(), 2);
+        assert_eq!(to_dial(high, &roster, |_| false), [ids[0]]);
     }
 
     #[test]

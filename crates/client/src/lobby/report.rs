@@ -53,6 +53,7 @@ pub(super) fn report(
                 );
             }
             Event::Promoted { ticket, public } => promoted = Some((ticket, public)),
+            Event::Link(text) => debug!("{text}"),
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
             Event::Lobby {
                 players,

@@ -1,4 +1,4 @@
-//! The text on the screen of a race: wumpa, checkpoint split, boost reserves, readouts.
+//! The text on the screen of a race: wumpa, checkpoint split toasts, boost reserves, readouts.
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -43,14 +43,8 @@ pub(crate) fn debug_text_command(
 #[derive(Component)]
 pub(crate) struct WumpaHud;
 
-/// The time at the checkpoint just passed: green if we were the first there, else red and how
-/// far behind the first.
-#[derive(Component)]
-pub(super) struct SplitHud;
-
-/// How long a checkpoint time stays up, in milliseconds of the race. (The last one, at the finish
-/// line, stays.)
-const SPLIT_SHOW_MS: i32 = 3000;
+/// How long a checkpoint time toast stays up, in milliseconds.
+const SPLIT_SHOW_MS: u64 = 3000;
 
 /// The width of the reserves' text, in pixels: "Reserves: " and 5 digits at the default font size.
 const RESERVES_WIDTH: f32 = 150.0;
@@ -64,21 +58,6 @@ pub(super) struct ReservesHud;
 pub(super) struct DemoHud;
 
 pub(crate) fn spawn_hud(mut commands: Commands) {
-    commands.spawn((
-        SplitHud,
-        Text::new(""),
-        TextFont {
-            font_size: 30.0.into(),
-            ..default()
-        },
-        TextLayout::justify(Justify::Center),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(70.0),
-            width: Val::Percent(100.0),
-            ..default()
-        },
-    ));
     // The counter: a small "x" and the count in the big orange digits, level with the middle of
     // the fruit, right of it. The "x" is orange too, and its middle is the digits' (retail draws
     // it 4 lines down from their top, 8 tall, on digits 16 tall).
@@ -162,34 +141,33 @@ fn split_time(ms: i32) -> String {
     format!("{}:{:02}.{:02}", ms / 60000, ms / 1000 % 60, ms % 1000 / 10)
 }
 
-/// Shows the time of the checkpoint we passed last (see `race::Race::last_split`) against the
-/// first kart to pass it.
+/// Toasts the time of each checkpoint we pass (see `race::Race::last_split`): green if we were
+/// the first there, else red and how far behind the first.
 pub(super) fn split_hud(
     sim: Res<crate::props::Sim>,
     lobby: Res<crate::lobby::Lobby>,
-    mut text: Query<(&mut Text, &mut TextColor), With<SplitHud>>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+    mut seen: Local<Option<(usize, i32)>>,
 ) {
-    let race = &*sim.race;
-    let finished = sim.driver().actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    let shown = lobby
+    let split = lobby
         .online
         .as_ref()
-        .and(race.last_split(sim.own))
-        .filter(|&(_, time, _)| finished || race.event_ms - time < SPLIT_SHOW_MS);
-    let (line, color) = match shown {
-        Some((_, time, 0)) => (split_time(time), Color::srgb(0.4, 1.0, 0.4)),
-        Some((_, _, behind)) => (
-            format!("+{}", split_time(behind)),
-            Color::srgb(1.0, 0.3, 0.3),
-        ),
-        None => (String::new(), Color::WHITE),
+        .and(sim.race.last_split(sim.own));
+    let Some((number, time, behind)) = split else {
+        *seen = None;
+        return;
     };
-    for (mut text, mut text_color) in &mut text {
-        if text.0 != line {
-            text.0 = line.clone();
-        }
-        text_color.0 = color;
+    if *seen == Some((number, time)) {
+        return;
     }
+    *seen = Some((number, time));
+    let toast = if behind == 0 {
+        crate::toast::Toast::new(split_time(time), SPLIT_SHOW_MS).color(Color::srgb(0.4, 1.0, 0.4))
+    } else {
+        crate::toast::Toast::new(format!("+{}", split_time(behind)), SPLIT_SHOW_MS)
+            .color(Color::srgb(1.0, 0.3, 0.3))
+    };
+    toasts.write(toast);
 }
 
 /// The boost reserves, always, up to 10000.

@@ -81,6 +81,11 @@ pub const ALPN: &[u8] = b"ctr-rust/lobby/11";
 /// to the network.
 pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/1";
 
+/// What the host speaks when it dials a guest whose own lobby connection stays on a relay: the
+/// connection takes the place of the guest's (the NAT of the guest only lets traffic in after the
+/// host has sent out, so it may be the host that has to dial). It is the lobby's, otherwise.
+pub const SWAP_ALPN: &[u8] = b"ctr-rust/lobby-swap/1";
+
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
 pub const MAX_BLOB: usize = 32 << 20;
@@ -200,6 +205,9 @@ pub enum Event {
         /// Whether our data to it goes through a relay (none while there is no path).
         relay: Option<bool>,
     },
+    /// A line about a link to another player, for the log: it came up, was dialed again because it
+    /// stayed on a relay, got a second connection, switched between them, or changed its way.
+    Link(String),
     /// The answer to [`Session::net_info`]: how each peer is reached.
     NetInfo(Vec<PeerInfo>),
     /// The lobby is in the realm's list (see [`Session::set_public`]), or it is not and why: the
@@ -513,7 +521,7 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     // Made where it runs: the session is not `Send`.
     let session = move || async move {
         let result: Result<(), Error> = async {
-            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()]).bind().await?;
+            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec(), SWAP_ALPN.to_vec()]).bind().await?;
             let io = Io {
                 events: events_tx.clone(),
                 commands: commands_rx,
