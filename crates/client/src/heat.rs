@@ -1,5 +1,6 @@
 //! The heat shimmer of the flame jets of Tiger Temple (`emSet_fjHeat`, `Torch_Main`). Retail
-//! draws it for one player only, as it costs the PS1 a pass over the picture; we do it always.
+//! draws it for one player only, as it costs the PS1 a pass over the picture; we do it always, but
+//! only on Tiger Temple, whose camera is the only one given a [`HeatWarp`] (`scene.rs`).
 //!
 //! A heat particle is not a sprite but a lens: three octagons round it (the radii of its rings
 //! grow as it ages), and the triangles between them, which `Torch_Main` draws showing the

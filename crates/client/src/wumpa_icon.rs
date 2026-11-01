@@ -139,7 +139,6 @@ fn build(
             // Not the camera that the wheels and the smoke face.
             crate::OverlayCamera,
             Camera3d::default(),
-            Msaa::Off,
             // After the overlay camera, over its picture, with only the depth buffer cleared.
             Camera {
                 order: 3,
