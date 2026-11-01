@@ -1,8 +1,8 @@
 //! One game tick of the race: demos, the pads of the others, rollback, and what follows from it.
 
 use bevy::prelude::*;
-use race::rollback::Step;
 use race::Pad;
+use race::rollback::Step;
 use vehicle::demo::Demo;
 use vehicle::{Effect, buttons};
 
@@ -390,7 +390,12 @@ pub(super) fn drive_tick(
             particles.clods(slot, racer.driver.mud_particles);
         }
     }
-    let heights: Vec<i32> = sim.race.karts.iter().map(|k| k.driver.inst_pos[1]).collect();
+    let heights: Vec<i32> = sim
+        .race
+        .karts
+        .iter()
+        .map(|k| k.driver.inst_pos[1])
+        .collect();
     particles.tick(&heights);
 
     // The mask grab put the kart back on the track: the camera swings round behind it.
@@ -565,4 +570,3 @@ fn each_motion(
         }
     }
 }
-

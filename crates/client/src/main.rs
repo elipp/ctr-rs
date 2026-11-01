@@ -19,10 +19,10 @@ mod assets;
 mod banner;
 mod command;
 mod confetti;
-mod crash;
 mod config;
-mod controls;
 mod console;
+mod controls;
+mod crash;
 mod disc;
 mod drive;
 mod exhaust;
@@ -32,8 +32,8 @@ mod flame;
 mod flash;
 mod fly;
 mod font;
-mod free_drive;
 mod frame;
+mod free_drive;
 mod fx;
 mod heat;
 mod hud;
@@ -48,8 +48,8 @@ mod maps;
 mod mask;
 mod minimap;
 mod names;
-mod pause;
 mod paths;
+mod pause;
 mod place;
 mod probe;
 mod projectile;
@@ -152,20 +152,20 @@ fn main() {
             ..default()
         })
         .set(WindowPlugin {
-        primary_window: Some(Window {
-            title: format!(
-                "ctr-rs: {}, {}",
-                maps::name(track_id),
-                CHARACTERS[racer as usize]
-            ),
-            present_mode: config.present_mode(),
-            // In a browser, the page's canvas (`web/play.html`), as big as the page.
-            canvas: cfg!(target_arch = "wasm32").then(|| "#ctr".into()),
-            fit_canvas_to_parent: true,
+            primary_window: Some(Window {
+                title: format!(
+                    "ctr-rs: {}, {}",
+                    maps::name(track_id),
+                    CHARACTERS[racer as usize]
+                ),
+                present_mode: config.present_mode(),
+                // In a browser, the page's canvas (`web/play.html`), as big as the page.
+                canvas: cfg!(target_arch = "wasm32").then(|| "#ctr".into()),
+                fit_canvas_to_parent: true,
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
-    });
+        });
     #[cfg(target_os = "macos")]
     let plugins = if single_threaded {
         // The render thread would run the single-threaded schedules off the main thread, which
@@ -210,10 +210,7 @@ fn main() {
         // find it despawned by the change, and Bevy panics on that. (A race that starts on
         // another level is such a change.) After the input and the command line's capture of the
         // keys (`command.rs`), which clears them while it is open.
-        .add_systems(
-            PreUpdate,
-            switch_level.after(command::capture),
-        )
+        .add_systems(PreUpdate, switch_level.after(command::capture))
         .add_systems(Last, limit_frame_rate)
         // After the cameras and karts have moved this frame, before their transforms propagate.
         .add_systems(

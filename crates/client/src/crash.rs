@@ -21,10 +21,7 @@ pub fn install() {
     std::panic::set_hook(Box::new(move |info| {
         default(info);
         let path = crate::paths::crash_log();
-        let text = format!(
-            "{info}\n\n{}",
-            std::backtrace::Backtrace::force_capture()
-        );
+        let text = format!("{info}\n\n{}", std::backtrace::Backtrace::force_capture());
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -34,7 +31,10 @@ pub fn install() {
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)
                 .set_title("ctr-rs")
-                .set_description(format!("ctr-rs crashed: {info}\n\nDetails: {}", path.display()))
+                .set_description(format!(
+                    "ctr-rs crashed: {info}\n\nDetails: {}",
+                    path.display()
+                ))
                 .show();
         }
     }));

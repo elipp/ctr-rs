@@ -79,7 +79,8 @@ pub fn exhaust(d: &mut Driver) -> Vec<Puff> {
                 position,
                 velocity,
                 dark,
-                underwater: d.split_line && position[1] - velocity[1] + d.pos_curr.y < WATER_Y_LIMIT,
+                underwater: d.split_line
+                    && position[1] - velocity[1] + d.pos_curr.y < WATER_Y_LIMIT,
             }
         })
         .to_vec()

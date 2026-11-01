@@ -129,7 +129,10 @@ fn ask() -> Option<PathBuf> {
         match open_bigfile(&file) {
             Ok(_) => return Some(file),
             Err(e) => {
-                why = Some(format!("{}: {e}\n\nThat is not a CTR (USA) disc image.", file.display()))
+                why = Some(format!(
+                    "{}: {e}\n\nThat is not a CTR (USA) disc image.",
+                    file.display()
+                ))
             }
         }
     }

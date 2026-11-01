@@ -59,7 +59,10 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "create",
                 "Open a lobby for others to join",
                 &[
-                    leaf("private", "Only those with the address can join (the default)"),
+                    leaf(
+                        "private",
+                        "Only those with the address can join (the default)",
+                    ),
                     takes(
                         "public",
                         "List it in the realm, for anyone to find",
@@ -138,9 +141,21 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "volume",
                     "How loud the music, the effects and the voices are",
                     &[
-                        takes("music", "The music's volume, 100 being the game's", "<0-100>"),
-                        takes("sfx", "The effects' volume, 100 being the game's", "<0-100>"),
-                        takes("voice", "The voices' volume, 100 being the game's", "<0-100>"),
+                        takes(
+                            "music",
+                            "The music's volume, 100 being the game's",
+                            "<0-100>",
+                        ),
+                        takes(
+                            "sfx",
+                            "The effects' volume, 100 being the game's",
+                            "<0-100>",
+                        ),
+                        takes(
+                            "voice",
+                            "The voices' volume, 100 being the game's",
+                            "<0-100>",
+                        ),
                     ],
                 ),
             ],
@@ -240,6 +255,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "The development text of the race (the frame rate stays); alone: toggle",
                 &[leaf("on", "Show it"), leaf("off", "Hide it")],
             ),
+            takes("toast", "Show a text as a toast", "<text>"),
             node(
                 "crate",
                 "Crates",
@@ -359,7 +375,9 @@ mod tests {
     fn a_slash_lists_the_commands() {
         assert_eq!(
             names("/"),
-            ["lobby", "race", "cup", "config", "version", "net", "cache", "debug"]
+            [
+                "lobby", "race", "cup", "config", "version", "net", "cache", "debug"
+            ]
         );
         assert_eq!(names("/r"), ["race"]);
         assert_eq!(names("/race "), ["start", "restart", "stop"]);

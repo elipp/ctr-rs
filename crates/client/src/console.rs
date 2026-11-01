@@ -172,7 +172,10 @@ impl Console {
     /// Scrolls to older lines (positive) or newer (negative).
     pub fn scroll_by(&mut self, lines: i32, now: f32) {
         let furthest = self.lines.len().saturating_sub(1);
-        self.scroll = self.scroll.saturating_add_signed(lines as isize).min(furthest);
+        self.scroll = self
+            .scroll
+            .saturating_add_signed(lines as isize)
+            .min(furthest);
         self.active_at = now;
     }
 
@@ -306,7 +309,10 @@ fn collect(
     time: Res<Time<Real>>,
 ) {
     let now = time.elapsed_secs();
-    let from_tracing: Vec<Log> = inbox.0.lock().map_or(Vec::new(), |r| r.try_iter().collect());
+    let from_tracing: Vec<Log> = inbox
+        .0
+        .lock()
+        .map_or(Vec::new(), |r| r.try_iter().collect());
     for line in from_tracing.into_iter().chain(logs.read().cloned()) {
         if !line.pieces.is_empty() {
             console.push(line, now);
@@ -435,7 +441,13 @@ fn rebuild(
             commands.insert_resource(Portraits(handle.clone()));
             atlas = Some(handle);
         }
-        spawn_line(&mut commands, area, line, console.text_alpha(line.at, now), atlas.as_ref());
+        spawn_line(
+            &mut commands,
+            area,
+            line,
+            console.text_alpha(line.at, now),
+            atlas.as_ref(),
+        );
     }
     if console.scroll > 0 {
         let mut footer = Log::colored(format!("-- {} newer --", console.scroll), DIM_COLOR);
@@ -605,6 +617,12 @@ mod tests {
         assert_eq!(text(HOLD_SECONDS + FADE_SECONDS), 0.0);
         assert_eq!(text(f32::INFINITY), 0.0);
         // The background is gone while the text is still up.
-        assert_eq!(opacity(BACKGROUND_HOLD_SECONDS + FADE_SECONDS, BACKGROUND_HOLD_SECONDS), 0.0);
+        assert_eq!(
+            opacity(
+                BACKGROUND_HOLD_SECONDS + FADE_SECONDS,
+                BACKGROUND_HOLD_SECONDS
+            ),
+            0.0
+        );
     }
 }

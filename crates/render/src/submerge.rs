@@ -83,7 +83,11 @@ mod tests {
 
     fn triangle(ys: [f32; 3]) -> (MeshPart, Vec<f32>) {
         let part = MeshPart {
-            positions: ys.iter().enumerate().map(|(i, &y)| [i as f32, y, 0.0]).collect(),
+            positions: ys
+                .iter()
+                .enumerate()
+                .map(|(i, &y)| [i as f32, y, 0.0])
+                .collect(),
             colors: vec![[1.0; 4]; 3],
             uvs: vec![[0.0; 2]; 3],
             indices: vec![0, 1, 2],

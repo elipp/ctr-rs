@@ -1034,9 +1034,15 @@ mod tests {
     fn the_volumes_are_percents_of_the_games_and_silence_at_zero() {
         let mut howl = test_howl();
         howl.set_volumes(100, 100, 100);
-        assert_eq!((howl.volume_fx, howl.volume_voice, howl.volume_music), (215, 255, 175));
+        assert_eq!(
+            (howl.volume_fx, howl.volume_voice, howl.volume_music),
+            (215, 255, 175)
+        );
         howl.set_volumes(50, 0, 20);
-        assert_eq!((howl.volume_fx, howl.volume_voice, howl.volume_music), (107, 51, 0));
+        assert_eq!(
+            (howl.volume_fx, howl.volume_voice, howl.volume_music),
+            (107, 51, 0)
+        );
         // (More than the game's is the game's.)
         howl.set_volumes(200, 200, 200);
         assert_eq!(howl.volume_music, 175);

@@ -1217,7 +1217,9 @@ impl Particle {
         let mut p = Particle::new(&MUD_SPLASH, rng);
         for a in [axis::POS_X, axis::POS_Z] {
             p.axes[a].start += p.axes[a].velocity as i32 * MUD_VELOCITY_SCALE;
-            p.axes[a].accel = p.axes[a].accel.wrapping_sub(p.axes[a].velocity >> MUD_VELOCITY_SHIFT);
+            p.axes[a].accel = p.axes[a]
+                .accel
+                .wrapping_sub(p.axes[a].velocity >> MUD_VELOCITY_SHIFT);
         }
         p.sprite = Sprite::Mud;
         p

@@ -40,7 +40,10 @@ struct Args {
 }
 
 fn args() -> Result<Args, String> {
-    let mut args = Args { port: DEFAULT_PORT, key: DEFAULT_KEY.into() };
+    let mut args = Args {
+        port: DEFAULT_PORT,
+        key: DEFAULT_KEY.into(),
+    };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or(format!("{flag} needs a value"));
@@ -57,9 +60,9 @@ fn args() -> Result<Args, String> {
 fn secret_key(path: &Path) -> io::Result<SecretKey> {
     match fs::read(path) {
         Ok(bytes) => {
-            let bytes: [u8; 32] = bytes
-                .try_into()
-                .map_err(|_| io::Error::other(format!("{} is not a 32 byte key", path.display())))?;
+            let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+                io::Error::other(format!("{} is not a 32 byte key", path.display()))
+            })?;
             Ok(SecretKey::from_bytes(&bytes))
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -83,12 +86,17 @@ async fn bind(key: SecretKey, port: u16) -> Result<Endpoint, Error> {
             .clear_ip_transports()
     };
     // Both families when the host has them, and IPv4 alone when it does not.
-    let both = builder().bind_addr(format!("0.0.0.0:{port}"))?.bind_addr(format!("[::]:{port}"))?;
+    let both = builder()
+        .bind_addr(format!("0.0.0.0:{port}"))?
+        .bind_addr(format!("[::]:{port}"))?;
     match both.bind().await {
         Ok(endpoint) => Ok(endpoint),
         Err(e) => {
             warn!("no IPv6 ({e}), IPv4 only");
-            Ok(builder().bind_addr(format!("0.0.0.0:{port}"))?.bind().await?)
+            Ok(builder()
+                .bind_addr(format!("0.0.0.0:{port}"))?
+                .bind()
+                .await?)
         }
     }
 }
@@ -109,9 +117,8 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Error> {
-    let args = args().map_err(|e| {
-        format!("{e} (usage: realm-server [--port <udp port>] [--key <key file>])")
-    })?;
+    let args = args()
+        .map_err(|e| format!("{e} (usage: realm-server [--port <udp port>] [--key <key file>])"))?;
     let endpoint = bind(secret_key(&args.key)?, args.port).await?;
     info!("realm id: {}", endpoint.id());
     info!("listening on {:?}", endpoint.bound_sockets());
@@ -129,7 +136,9 @@ async fn run() -> Result<(), Error> {
             incoming.refuse();
             continue;
         };
-        let Ok(accepting) = incoming.accept() else { continue };
+        let Ok(accepting) = incoming.accept() else {
+            continue;
+        };
         let realm = realm.clone();
         tokio::spawn(async move {
             if let Ok(connection) = accepting.await {
