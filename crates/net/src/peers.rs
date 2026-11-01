@@ -169,20 +169,30 @@ impl Link {
     }
 }
 
-/// Dials the players of `roster` that we have no link to. Of each pair the one with the lower id
-/// dials, whoever the host is and whichever way they came to the lobby, so that every link is
-/// made the same way.
+/// The players of `roster` that we dial for their links: those we are not `linked` to, and
+/// whose id is higher than ours. Of each pair the one with the lower id dials, whoever the host
+/// is and whichever way they came to the lobby, so that every link is made the same way.
+pub(crate) fn to_dial(
+    me: EndpointId,
+    roster: &[EndpointId],
+    linked: impl Fn(&EndpointId) -> bool,
+) -> Vec<EndpointId> {
+    roster
+        .iter()
+        .copied()
+        .filter(|id| me.as_bytes() < id.as_bytes() && !linked(id))
+        .collect()
+}
+
+/// Dials the players that [`to_dial`] says.
 pub(crate) fn dial_links(
     endpoint: &Endpoint,
     roster: &[EndpointId],
     links: &HashMap<EndpointId, Link>,
     dialed: &UnboundedSender<Connection>,
 ) {
-    let me = endpoint.id();
-    for &id in roster {
-        if me.as_bytes() < id.as_bytes() && !links.contains_key(&id) {
-            dial(endpoint.clone(), id, dialed.clone());
-        }
+    for id in to_dial(endpoint.id(), roster, |id| links.contains_key(id)) {
+        dial(endpoint.clone(), id, dialed.clone());
     }
 }
 
@@ -234,6 +244,39 @@ mod tests {
         assert_eq!(stalled(100, &[(a, 100, long_ago)], now), [a]);
         // The host is the furthest back: it is not blamed, nor are the others.
         assert!(stalled(90, &[(a, 100, long_ago), (b, 160, long_ago)], now).is_empty());
+    }
+
+    #[test]
+    fn of_each_pair_one_dials_whoever_the_host_is() {
+        let ids: [EndpointId; 4] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
+        // Any of them can be first in the roster, which is the host.
+        for host in 0..ids.len() {
+            let mut roster = ids.to_vec();
+            roster.swap(0, host);
+            let dials: Vec<(EndpointId, EndpointId)> = roster
+                .iter()
+                .flat_map(|&me| {
+                    to_dial(me, &roster, |_| false)
+                        .into_iter()
+                        .map(move |id| (me, id))
+                })
+                .collect();
+            // Six pairs, each dialed from one side only, and never from oneself.
+            assert_eq!(dials.len(), 6);
+            for &(from, to) in &dials {
+                assert_ne!(from, to);
+                assert!(!dials.contains(&(to, from)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_player_we_are_linked_to_is_not_dialed() {
+        let [a, b] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
+        let (low, high) = if a.as_bytes() < b.as_bytes() { (a, b) } else { (b, a) };
+        assert_eq!(to_dial(low, &[low, high], |_| false), [high]);
+        assert!(to_dial(low, &[low, high], |id| *id == high).is_empty());
+        assert!(to_dial(high, &[low, high], |_| false).is_empty());
     }
 
     #[test]
