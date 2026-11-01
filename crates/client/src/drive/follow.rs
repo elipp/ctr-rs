@@ -73,6 +73,9 @@ const DOUBLE_CLICK_SECS: f32 = 0.35;
 const ZOOM_PER_LINE: f32 = 0.9;
 const ZOOM_RANGE: (f32, f32) = (0.3, 5.0);
 
+/// How long the wheel rests after scrolling the UI before it zooms: a trackpad's flick coasts on.
+const SCROLL_PAUSE_SECS: f32 = 0.25;
+
 /// How the player has turned and pulled the camera away from the sim's.
 pub(super) struct Orbit {
     /// Yaw and pitch, in radians.
@@ -108,6 +111,7 @@ pub(super) fn chase(
     line: Res<CommandLine>,
     menu: Res<PauseMenu>,
     mut orbit: Local<Orbit>,
+    mut ui_scrolled_at: Local<Option<f32>>,
     karts: Query<&Transform, (With<Kart>, Without<ChaseCamera>)>,
     mut cameras: Query<&mut Transform, With<ChaseCamera>>,
 ) {
@@ -131,8 +135,12 @@ pub(super) fn chase(
         MouseScrollUnit::Line => -scroll.delta.y,
         MouseScrollUnit::Pixel => -scroll.delta.y / 40.0,
     };
-    // The wheel scrolls the console while the command line is open, and the menu's about page.
-    if lines != 0.0 && !line.is_open() && !menu.open {
+    let for_ui = line.is_open()
+        || menu.open
+        || ui_scrolled_at.is_some_and(|at| now - at < SCROLL_PAUSE_SECS);
+    if lines != 0.0 && for_ui {
+        *ui_scrolled_at = Some(now);
+    } else if lines != 0.0 {
         orbit.zoom = (orbit.zoom * ZOOM_PER_LINE.powf(lines)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
     }
     let t = fixed.overstep_fraction();
