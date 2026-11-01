@@ -295,7 +295,7 @@ mod rng_tests {
     use super::*;
 
     #[test]
-    fn the_generator_steps_as_the_reference_formula() {
+    fn the_generator_steps_as_the_original_formula() {
         let mut state = RANDOM_NUMBER_INIT;
         let first = mix_rng_scramble(&mut state);
         assert_eq!((first, state), (40781, 40781));

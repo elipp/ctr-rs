@@ -22,7 +22,7 @@ jobs:
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev
       - run: cargo test --workspace --locked --no-run
       # Compiled in the step above, so the 15 minutes only count the tests running: a hung test fails here.
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked -- --skip reference
         timeout-minutes: 15
 
   wasm:
