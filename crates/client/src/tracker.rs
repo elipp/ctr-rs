@@ -345,7 +345,6 @@ fn show(
         commands.spawn((
             crate::OverlayCamera,
             Camera3d::default(),
-            Msaa::Off,
             // Over the picture of the cameras before it, with only the depth buffer cleared.
             Camera {
                 order: 4,
