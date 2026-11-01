@@ -586,23 +586,23 @@ pub(crate) fn setup(
             );
         }
         let projection = Projection::Perspective(perspective);
-        commands
-            .spawn((
-                Camera3d::default(),
-                Msaa::Off,
-                Camera {
-                    clear_color: sky_clear,
-                    ..default()
-                },
-                projection.clone(),
-                Transform::default(),
-                drive::ChaseCamera::new(),
-                crate::heat::HeatWarp::default(),
-            ))
-            .with_child((
+        let mut main = commands.spawn((
+            Camera3d::default(),
+            Camera {
+                clear_color: sky_clear,
+                ..default()
+            },
+            projection.clone(),
+            Transform::default(),
+            drive::ChaseCamera::new(),
+        ));
+        // The heat shimmer is a pass over the whole picture: only Tiger Temple's flame jets have it.
+        if track.1 == LevelId::TIGER_TEMPLE {
+            main.insert(crate::heat::HeatWarp::default());
+        }
+        main.with_child((
                 OverlayCamera,
                 Camera3d::default(),
-                Msaa::Off,
                 // After the main camera, on top of its picture, with only the depth buffer cleared.
                 Camera {
                     order: 1,
@@ -616,7 +616,6 @@ pub(crate) fn setup(
             .with_child((
                 OverlayCamera,
                 Camera3d::default(),
-                Msaa::Off,
                 // And the shield over the kart, likewise.
                 Camera {
                     order: 2,
@@ -648,7 +647,6 @@ pub(crate) fn setup(
         };
         commands.spawn((
             Camera3d::default(),
-            Msaa::Off,
             Camera {
                 clear_color: sky_clear,
                 ..default()

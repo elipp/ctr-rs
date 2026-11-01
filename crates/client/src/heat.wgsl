@@ -9,6 +9,9 @@ const LENSES: u32 = 12u;
 // Per lens: the box round it (min x, min y, max x, max y), its centre, and the 8 points of each of
 // its 3 rings: top, top right, right, bottom right, bottom, bottom left, left, top left.
 const PER_LENS: u32 = 26u;
+// How much further than retail the picture is taken from: 1 is `Torch_Main`'s own, more makes the
+// air wobble harder (the shift is 0 at a lens's rim, so it still blends in).
+const STRENGTH: f32 = 2.9;
 
 struct HeatWarp {
     count: u32,
@@ -123,7 +126,7 @@ fn fragment(in: Input) -> @location(0) vec4<f32> {
             break;
         }
         let lens = heat.count - 1u - i;
-        uv = warp_lens(uv, lens);
+        uv += (warp_lens(uv, lens) - uv) * STRENGTH;
     }
     return textureSample(screen_texture, texture_sampler, uv);
 }
