@@ -8,12 +8,15 @@
 //! there is a weapon, behind the weapon (`UI_Weapon_DrawBG`).
 
 use bevy::prelude::*;
+use render::font::{Font, Gradient};
 use render::weapons::{
     HEIGHT, SHINE_IMAGE_HEIGHT, SHINE_IMAGE_WIDTH, SHINE_SCALE, WIDTH, cell, icon_id, shine_image,
     shine_pulse, weapon_atlas,
 };
 use vehicle::item::held;
 
+use crate::font::CtrText;
+use crate::hud;
 use crate::leaderboard::{atlas_image, pack_icons};
 
 /// The pictures of the weapons and of the glow, loaded when the first race needs them.
@@ -120,7 +123,7 @@ fn show(
     mut images: ResMut<Assets<Image>>,
     icons: Option<Res<WeaponIcons>>,
     mut hud: Query<(&mut ImageNode, &mut Visibility, &Children), With<WeaponHud>>,
-    mut quantity: Query<&mut Text, With<Quantity>>,
+    mut quantity: Query<&mut CtrText, With<Quantity>>,
 ) {
     let driver = sim.driver();
     let Ok((mut image, mut visibility, children)) = hud.single_mut() else {
@@ -156,17 +159,14 @@ fn show(
                 Pickable::IGNORE,
             ))
             .id();
+        // Retail writes it at the icon's top left, in the small font (`UI_Weapon_DrawSelf`).
         commands.spawn((
             Quantity,
-            Text::new(""),
-            TextFont {
-                font_size: 28.0.into(),
-                ..default()
-            },
+            CtrText::new("", Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(-18.0),
-                bottom: Val::Px(0.0),
+                left: Val::ZERO,
+                top: Val::ZERO,
                 ..default()
             },
             ChildOf(root),
@@ -203,9 +203,9 @@ fn show(
     };
     for &child in children {
         if let Ok(mut text) = quantity.get_mut(child)
-            && text.0 != count
+            && text.text != count
         {
-            text.0 = count.clone();
+            text.text = count.clone();
         }
     }
 }

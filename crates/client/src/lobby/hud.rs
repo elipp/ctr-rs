@@ -2,6 +2,10 @@
 
 use super::Lobby;
 use bevy::prelude::*;
+use render::font::{Font, Gradient};
+
+use crate::font::CtrText;
+use crate::hud;
 
 /// The label for the players who wait for the host.
 #[derive(Component)]
@@ -13,16 +17,24 @@ pub(super) const BLINK_SECONDS: f32 = 1.0;
 pub fn spawn_waiting(mut commands: Commands) {
     commands.spawn((
         WaitingHud,
-        Text::new("Waiting for host to start the race"),
-        TextColor(Color::srgb(1.0, 0.65, 0.1)),
-        TextLayout::justify(Justify::Center),
         Visibility::Hidden,
         Node {
             position_type: PositionType::Absolute,
             top: Val::Percent(20.0),
             width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
             ..default()
         },
+        Pickable::IGNORE,
+        children![(
+            CtrText::new(
+                "WAITING FOR HOST TO START THE RACE",
+                Font::Middle,
+                Gradient::ORANGE
+            )
+            .fixed(hud::PIXEL / 2.0),
+            Pickable::IGNORE,
+        )],
     ));
 }
 
