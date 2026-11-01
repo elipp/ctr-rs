@@ -1,0 +1,21 @@
+services:
+  relay:
+    image: ${REGISTRY_HOST:-registry.lautasliina.fi}/ctr-relay
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Host networking: 80, 443 and UDP 7842 are the box's own, and the QUIC address discovery
+    # sees the real addresses of the players.
+    network_mode: host
+    restart: unless-stopped
+    # Set in a .env file next to this one (not committed): the relay's public name, and the
+    # address Let's Encrypt writes to.
+    environment:
+      RELAY_HOSTNAME: ${RELAY_HOSTNAME:?set RELAY_HOSTNAME in .env}
+      RELAY_CONTACT: ${RELAY_CONTACT:?set RELAY_CONTACT in .env}
+    volumes:
+      - relay-data:/data
+
+volumes:
+  relay-data:

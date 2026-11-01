@@ -125,7 +125,7 @@ const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
-    "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
+    "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url>";
 
 /// The longest stall that can be set.
 const STALL_MAX_MS: f64 = 60_000.0;
@@ -198,6 +198,11 @@ impl Action {
                 "on" => Ok(Action::NetRollbacks(true)),
                 "off" => Ok(Action::NetRollbacks(false)),
                 _ => Err("Usage: /net rollbacks on|off".into()),
+            },
+            "relay" => match word(rest) {
+                ("add", url) if !url.is_empty() => net::parse_relay(url)
+                    .map(|url| Action::SetConfig(crate::config::Setting::AddRelay(url))),
+                _ => Err("Usage: /net relay add <url, like https://relay.example.com>".into()),
             },
             "" => Err(NET_USAGE.into()),
             _ => Err(format!("Unknown command: /net {sub}\n{NET_USAGE}")),

@@ -1,0 +1,17 @@
+# The relay owns 80 and 443 of the box, and gets its own Let's Encrypt certificate. The hostname
+# and the contact come from the environment (entrypoint.sh fills them in).
+enable_relay = true
+enable_quic_addr_discovery = true
+# The captive portal check, over plain HTTP.
+http_bind_addr = "[::]:80"
+
+[tls]
+https_bind_addr = "[::]:443"
+quic_bind_addr = "[::]:7842"
+cert_mode = "LetsEncrypt"
+cert_dir = "/data"
+hostname = "${RELAY_HOSTNAME}"
+contact = "${RELAY_CONTACT}"
+# Set this to false for the first tries: the staging server has far looser rate limits (but its
+# certificates are not trusted by the clients).
+prod_tls = true

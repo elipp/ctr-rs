@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use iroh::Endpoint;
+use iroh::{Endpoint, RelayConfig, RelayMode, RelayUrl};
 use iroh::endpoint::{Builder, Connection, presets};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -60,9 +60,42 @@ pub fn set_relay_only(relay_only: bool) {
     RELAY_ONLY.store(relay_only, Ordering::Relaxed);
 }
 
+static RELAYS: Mutex<Vec<RelayUrl>> = Mutex::new(Vec::new());
+
+/// A relay's URL, as `https://host`, in the form that is kept.
+pub fn parse_relay(text: &str) -> Result<String, String> {
+    text.parse::<RelayUrl>()
+        .map(|url| url.to_string())
+        .map_err(|e| format!("Not a relay URL: {e}"))
+}
+
+/// The relays to use besides iroh's public ones (and those in `CTR_RELAYS`), for the sessions and
+/// fetches that start from now on. The ones that are not URLs are left out.
+pub fn set_relays(urls: &[String]) {
+    *RELAYS.lock().unwrap() = urls.iter().filter_map(|url| url.parse().ok()).collect();
+}
+
+/// The relays an endpoint may use: iroh's public ones, those set with [`set_relays`] and the URLs
+/// in `CTR_RELAYS` (separated by commas or spaces). An endpoint takes the nearest as its home
+/// relay.
+fn relay_mode() -> RelayMode {
+    let map = iroh::defaults::prod::default_relay_map();
+    let from_env = std::env::var("CTR_RELAYS").unwrap_or_default();
+    let from_env = from_env.split([',', ' ']).filter(|url| !url.is_empty()).filter_map(|url| {
+        url.parse::<RelayUrl>()
+            .inspect_err(|e| eprintln!("CTR_RELAYS: {url}: {e}"))
+            .ok()
+    });
+    for url in RELAYS.lock().unwrap().iter().cloned().chain(from_env) {
+        // (The QUIC address discovery is on the default port, as in relay/relay.toml.)
+        map.insert(url.clone(), RelayConfig::new(url, Some(Default::default())).into());
+    }
+    RelayMode::Custom(map)
+}
+
 /// The endpoint of a session or a fetch, as [`set_relay_only`] says.
 fn endpoint_builder() -> Builder {
-    let builder = Endpoint::builder(presets::N0);
+    let builder = Endpoint::builder(presets::N0).relay_mode(relay_mode());
     // (A browser has no sockets of its own: there the relay is the only way already.)
     #[cfg(not(target_arch = "wasm32"))]
     if RELAY_ONLY.load(Ordering::Relaxed) {
