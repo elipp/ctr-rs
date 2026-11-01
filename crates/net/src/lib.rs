@@ -320,6 +320,11 @@ impl Session {
         self.events.lock().unwrap().try_iter().collect()
     }
 
+    /// The first of what happened since the last call (or [`poll`](Self::poll)), if anything did.
+    pub fn next_event(&self) -> Option<Event> {
+        self.events.lock().unwrap().try_recv().ok()
+    }
+
     /// Starts the race on level `track`, if we host the lobby. Everyone then gets
     /// [`Event::Started`]. `hash` is that of a custom track's contents (0 for the game's own),
     /// which has to be [provided](Self::provide) for the players who lack it.
