@@ -8,7 +8,7 @@ const BUILD: u32 = 1;
 fn wait_for(session: &Session, what: &str, mut f: impl FnMut(Event) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        for event in session.poll() {
+        while let Some(event) = session.next_event() {
             if let Event::Failed(why) = &event {
                 panic!("{what}: failed: {why}");
             }
@@ -541,22 +541,17 @@ fn the_race_stops_and_the_lobby_goes_on_when_the_host_leaves_it() {
 
     drop(host);
     // The race is stopped (not failed) for both, and the first guest hosts the lobby.
-    let (mut stopped, mut ticket) = ([false; 2], None);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !stopped.iter().all(|&s| s) || ticket.is_none() {
-        assert!(Instant::now() < deadline, "stopped {stopped:?}, host {ticket:?}");
-        for (i, session) in [&first, &second].into_iter().enumerate() {
-            for event in session.poll() {
-                match event {
-                    Event::Stopped => stopped[i] = true,
-                    Event::Promoted { ticket: t, .. } => ticket = Some(t),
-                    Event::Failed(why) => panic!("failed: {why}"),
-                    _ => {}
-                }
-            }
+    let (mut stopped, mut ticket) = (false, None);
+    wait_for(&first, "the race to stop and becoming the host", |e| {
+        match e {
+            Event::Stopped => stopped = true,
+            Event::Promoted { ticket: t, .. } => ticket = Some(t),
+            _ => {}
         }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        stopped && ticket.is_some()
+    });
+    // (The other guest hears of it before it follows the new host.)
+    wait_for(&second, "the race to stop", |e| matches!(e, Event::Stopped));
     // The game says the race is over, and the lobby is the new host and the other guest.
     first.over();
     second.over();
