@@ -18,6 +18,8 @@
 //! uses for something else while driving is refused, with a word on what it does. "Reset" puts
 //! the defaults back.
 //!
+//! "About" has the version, and the licenses (`about.rs`) in an accordion (`accordion.rs`).
+//!
 //! Offline the race stops while the menu is open. Online it goes on, as the others are still
 //! racing: the menu only takes our controls, and our kart gets no input until it closes.
 //!
@@ -29,6 +31,7 @@ use bevy::image::ImageSampler;
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{KeyboardFocusLost, KeyboardInput};
+use bevy::input::mouse::MouseWheel;
 use bevy::picking::events::{PointerClick, PointerMove, PointerOver, PointerPress};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
@@ -36,6 +39,8 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
 use render::font::{Font, Gradient};
 
+use crate::about;
+use crate::accordion::{self, Accordion, HasAccordion, Steer};
 use crate::command::Action;
 use crate::config::Config;
 use crate::controls::{self, Control};
@@ -44,6 +49,7 @@ use crate::lobby::Lobby;
 use crate::public_lobbies::{self, PublicLobbies, Status};
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 use crate::toast::Toast;
+use crate::version::VERSION;
 
 /// Whether the menu is open, and what it was asked to do.
 #[derive(Resource, Default)]
@@ -67,6 +73,14 @@ pub struct PauseMenu {
     unsaved: bool,
     /// The control whose key is waited for.
     capturing: Option<Control>,
+    /// The about page's list, once it is first shown.
+    about: Option<Accordion>,
+}
+
+impl HasAccordion for PauseMenu {
+    fn accordion(&mut self) -> Option<&mut Accordion> {
+        self.about.as_mut()
+    }
 }
 
 /// What the menu is showing.
@@ -80,6 +94,8 @@ enum View {
     Options,
     /// The keyboard's driving keys.
     Controls,
+    /// The version and the licenses.
+    About,
 }
 
 impl View {
@@ -102,6 +118,8 @@ enum Item {
     PublicLobbies,
     /// Shows the volumes.
     Options,
+    /// Shows the version and the licenses.
+    About,
     Quit,
     /// A volume, which Left and Right change.
     Volume(Slider),
@@ -148,6 +166,7 @@ fn items(
         View::Browser => return ("Public lobbies".into(), browser_items(public)),
         View::Options => return ("Options".into(), options_items()),
         View::Controls => return ("Controls".into(), controls_items(config, menu.capturing)),
+        View::About => return ("About".into(), vec![entry(Item::Back, "Back")]),
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
@@ -160,6 +179,7 @@ fn items(
         items.push(entry(Item::PublicLobbies, "Public lobbies"));
     }
     items.push(entry(Item::Options, "Options"));
+    items.push(entry(Item::About, "About"));
     // A page cannot close its tab: in a browser quitting would only stop the game, on its last
     // frame.
     if cfg!(not(target_arch = "wasm32")) {
@@ -264,6 +284,10 @@ const SLIDE_PER_SECOND: f32 = 4.0 / 255.0 * 100.0 * 30.0;
 /// 0xff, 0x80 being the middle (`GAMEPAD_ProcessHold`'s analog buttons).
 const STICK_PUSHED: f32 = 0x60 as f32 / 127.0;
 
+/// The about page's lines shown at once, and their height in texels of the 2D art.
+const ABOUT_LINES: usize = 22;
+const ABOUT_TEXELS: f32 = 5.0;
+
 /// The panel behind the items, the line around it, and its shadow.
 const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
 const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
@@ -315,6 +339,8 @@ fn input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut key_events: MessageReader<KeyboardInput>,
     mut focus_lost: MessageReader<KeyboardFocusLost>,
+    mut wheel: MessageReader<MouseWheel>,
+    size: Res<TexelSize>,
     pads: crate::drive::Pads,
     lobby: Res<Lobby>,
     mut public: ResMut<PublicLobbies>,
@@ -327,9 +353,14 @@ fn input(
 ) {
     // (The menu resets the keys every frame, so they no longer tell which are held.)
     let mut first_press = None;
+    // With the repeats, for the about page.
+    let mut list_keys = 0i32;
     for event in key_events.read() {
         if event.state == ButtonState::Pressed && !event.repeat {
             first_press = first_press.or(Some(event.key_code));
+        }
+        if event.state == ButtonState::Pressed {
+            list_keys = list_keys.saturating_add(accordion::key_lines(event.key_code, ABOUT_LINES));
         }
         let way = match event.key_code {
             KeyCode::ArrowLeft | KeyCode::KeyA => -1,
@@ -345,6 +376,11 @@ fn input(
     if focus_lost.read().count() > 0 {
         menu.slide_keys = 0;
     }
+    let font_size = size.0.y * ABOUT_TEXELS;
+    let wheeled: f32 = wheel
+        .read()
+        .map(|event| accordion::wheel_lines(event, font_size))
+        .sum();
     let was_open = menu.open;
     let offline = lobby.online.is_none();
     let sound = |id| {
@@ -410,17 +446,39 @@ fn input(
     } else if menu.open {
         let (_, items) = items(&lobby, &menu, &public, &config);
         let count = items.len();
-        if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up {
-            menu.selected = (menu.selected + count - 1) % count;
-            sound(MENU_MOVE_SFX);
+        let enter = key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
+            || pad(GamepadButton::South);
+        let about = menu.view == View::About;
+        if let Some(list) = menu.about.as_mut().filter(|_| about) {
+            let held = |button| pads.iter().any(|p| p.pressed(button)) as i32;
+            let taps = (pad(GamepadButton::DPadDown) || stick_down) as i32
+                - (pad(GamepadButton::DPadUp) || stick_up) as i32;
+            let pages =
+                pad(GamepadButton::RightTrigger) as i32 - pad(GamepadButton::LeftTrigger) as i32;
+            let steer = Steer {
+                lines: list_keys.saturating_add(taps + pages * ABOUT_LINES as i32),
+                held: held(GamepadButton::DPadDown) - held(GamepadButton::DPadUp) - pushed.y,
+                wheel: wheeled,
+                take: enter,
+            };
+            if list.steer(steer, time.delta_secs()) {
+                sound(MENU_TAKE_SFX);
+            }
+        } else {
+            if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up {
+                menu.selected = (menu.selected + count - 1) % count;
+                sound(MENU_MOVE_SFX);
+            }
+            if key(&[KeyCode::ArrowDown, KeyCode::KeyS])
+                || pad(GamepadButton::DPadDown)
+                || stick_down
+            {
+                menu.selected = (menu.selected + 1) % count;
+                sound(MENU_MOVE_SFX);
+            }
         }
-        if key(&[KeyCode::ArrowDown, KeyCode::KeyS]) || pad(GamepadButton::DPadDown) || stick_down {
-            menu.selected = (menu.selected + 1) % count;
-            sound(MENU_MOVE_SFX);
-        }
-        let taken = if key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
-            || pad(GamepadButton::South)
-        {
+        // (On the about page taking is for the list, and Back is clicked.)
+        let taken = if enter && menu.view != View::About {
             Some(menu.selected)
         } else {
             menu.clicked.take()
@@ -473,6 +531,11 @@ fn input(
             Some(Item::Options) => {
                 menu.view = View::Options;
                 menu.selected = 0;
+            }
+            Some(Item::About) => {
+                menu.view = View::About;
+                menu.selected = 0;
+                menu.about.get_or_insert_with(|| about::list(ABOUT_LINES));
             }
             Some(Item::Refresh) => public.refresh(),
             Some(Item::Back) => {
@@ -612,6 +675,7 @@ fn show(
     rows: Query<(&Row, &Children)>,
     mut texts: Query<&mut CtrText>,
     mut knobs: Query<(&Knob, &mut Node)>,
+    mut about_lines: accordion::Lines<PauseMenu>,
 ) {
     let wanted = menu.open.then(|| {
         let (title, items) = items(&lobby, &menu, &public, &config);
@@ -631,9 +695,13 @@ fn show(
         }
         if let Some(wanted) = wanted {
             menu.selected = menu.selected.min(wanted.items.len() - 1);
-            spawn(&mut commands, wanted, menu.selected, &size, &wedge);
+            let about = menu.about.as_ref().filter(|_| menu.view == View::About);
+            spawn(&mut commands, wanted, menu.selected, about, &size, &wedge);
         }
         return;
+    }
+    if let Some(list) = &menu.about {
+        accordion::update(list, &mut about_lines);
     }
     for (knob, mut node) in &mut knobs {
         let at = size.x(volume(&config, knob.0) as usize * (TRACK - KNOB) / 100);
@@ -662,7 +730,15 @@ fn gradient(picked: bool) -> Gradient {
     }
 }
 
-fn spawn(commands: &mut Commands, shown: Shown, selected: usize, size: &TexelSize, wedge: &Wedge) {
+/// The menu, and the about page's list if it shows it.
+fn spawn(
+    commands: &mut Commands,
+    shown: Shown,
+    selected: usize,
+    about: Option<&Accordion>,
+    size: &TexelSize,
+    wedge: &Wedge,
+) {
     let items = shown.items.clone();
     let title = shown.title.clone();
     // The whole window, to put the panel in its middle. Under the command line.
@@ -703,6 +779,9 @@ fn spawn(commands: &mut Commands, shown: Shown, selected: usize, size: &TexelSiz
             ..default()
         },
     ));
+    if let Some(list) = about {
+        spawn_about(commands, panel, list, size);
+    }
     for (i, item) in items.into_iter().enumerate() {
         let text = CtrText::new(item.label, Font::Middle, gradient(i == selected));
         // A setting has its label at the left and its value at the right.
@@ -757,6 +836,36 @@ fn spawn(commands: &mut Commands, shown: Shown, selected: usize, size: &TexelSiz
                 },
             );
     }
+}
+
+/// The about page in `panel`: the version, and the list.
+fn spawn_about(commands: &mut Commands, panel: Entity, list: &Accordion, size: &TexelSize) {
+    let font_size = size.0.y * ABOUT_TEXELS;
+    commands.spawn((
+        ChildOf(panel),
+        Text::new(format!(
+            "ctr-rs {VERSION}\nFree software under the GNU GPL 3. Source: https://github.com/elipp/ctr-rs"
+        )),
+        TextFont {
+            font_size: font_size.into(),
+            ..default()
+        },
+        TextColor(accordion::TEXT),
+        Node {
+            margin: UiRect::bottom(size.y(4)),
+            ..default()
+        },
+    ));
+    let holder = commands
+        .spawn((
+            ChildOf(panel),
+            Node {
+                margin: UiRect::bottom(size.y(4)),
+                ..default()
+            },
+        ))
+        .id();
+    accordion::spawn::<PauseMenu>(commands, holder, list, font_size);
 }
 
 /// Volume `slider`'s wedge and knob, in `row`. Pressing the wedge, or dragging over it, puts the
