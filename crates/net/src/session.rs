@@ -131,7 +131,57 @@ pub(crate) async fn run(
     build: u32,
     mut spectator: bool,
 ) -> Result<(), Error> {
+    let mut endpoint = endpoint;
+    let mut nukes = 0;
+    let result = loop {
+        match run_once(endpoint.clone(), &mut io, role.clone(), character, nick.clone(), build, spectator, nukes).await {
+            Ok(Exit::Done) => break Ok(()),
+            Ok(Exit::Nuke { character: c, nick: n, spectator: s }) => {
+                (character, nick, spectator) = (c, n, s);
+                nukes += 1;
+                // Everything of the old stack goes: the sockets, the NAT mappings made for the
+                // relay and for the host, the paths. What comes is a new id on a new port.
+                endpoint.close().await;
+                match crate::bind_endpoint().await {
+                    Ok(fresh) => endpoint = fresh,
+                    Err(e) => break Err(e),
+                }
+            }
+            Err(e) => break Err(e),
+        }
+    };
+    endpoint.close().await;
+    result
+}
+
+/// How a pass of the session ends.
+enum Exit {
+    /// The session is over.
+    Done,
+    /// A guest whose way to the host stayed on a relay for good: the session starts over from a new
+    /// endpoint, with what the player chose so far.
+    Nuke { character: u8, nick: String, spectator: bool },
+}
+
+/// How long a guest's way to the host may stay off a direct one (the host's dialing the other way
+/// round, from [`RELAY_PATIENCE`] on, included) before the guest starts over from a new endpoint,
+/// and how many times it does.
+const NUKE_AFTER: Duration = Duration::from_secs(25);
+const NUKES: u32 = 3;
+
+#[allow(clippy::too_many_arguments)]
+async fn run_once(
+    endpoint: Endpoint,
+    io: &mut Io,
+    role: Role,
+    mut character: u8,
+    mut nick: String,
+    build: u32,
+    mut spectator: bool,
+    nukes: u32,
+) -> Result<Exit, Error> {
     let me = endpoint.id();
+    let began = Instant::now();
     let (heard_tx, mut heard) = unbounded_channel::<(EndpointId, Heard)>();
     let (dialed_tx, mut dialed) = unbounded_channel::<Connection>();
     // The host: the lobby connections it dialed to guests that stayed on a relay.
@@ -153,7 +203,7 @@ pub(crate) async fn run(
     match &role {
         Role::Host => {
             tokio::select! {
-                _ = &mut io.stop => return Ok(()),
+                _ = &mut io.stop => return Ok(Exit::Done),
                 _ = endpoint.online() => {}
             }
             io.event(Event::Open(Ticket::of(&endpoint.addr())));
@@ -164,7 +214,7 @@ pub(crate) async fn run(
         }
         Role::Join(ticket) => {
             let connection: Connection = tokio::select! {
-                _ = &mut io.stop => return Ok(()),
+                _ = &mut io.stop => return Ok(Exit::Done),
                 connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
             };
             io.event(Event::Joined(ticket.id));
@@ -232,10 +282,10 @@ pub(crate) async fn run(
                 for connection in lobby.chain(linked) {
                     connection.close(0u32.into(), b"bye");
                 }
-                return Ok(());
+                return Ok(Exit::Done);
             }
             incoming = endpoint.accept() => {
-                let Some(incoming) = incoming else { return Ok(()) };
+                let Some(incoming) = incoming else { return Ok(Exit::Done) };
                 let Ok(accepting) = incoming.accept() else { continue };
                 let Ok(connection) = accepting.await else { continue };
                 let id = connection.remote_id();
@@ -901,6 +951,24 @@ pub(crate) async fn run(
                 }
             },
             _ = ping_timer.tick() => {
+                // A guest that is still not direct to the host after all the host's tries to dial
+                // it: the endpoint is thrown away and the lobby joined afresh.
+                if host.is_none()
+                    && plan.is_none()
+                    && !race_on
+                    && nukes < NUKES
+                    && began.elapsed() >= NUKE_AFTER
+                    && host_connection.as_ref().is_some_and(|c| is_direct(c) != Some(true))
+                {
+                    io.event(Event::Link(format!(
+                        "lobby: not direct to the host after {:.0}s, starting over from a new endpoint (try {} of {})",
+                        began.elapsed().as_secs_f32(), nukes + 1, NUKES
+                    )));
+                    for connection in host_connection.iter().chain(links.values().map(|l| &l.connection)) {
+                        connection.close(0u32.into(), b"bye");
+                    }
+                    return Ok(Exit::Nuke { character, nick, spectator });
+                }
                 // A link that stays on a relay is dialed the other way round (see `Link`).
                 let now = Instant::now();
                 for (&id, link) in links.iter_mut() {

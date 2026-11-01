@@ -72,6 +72,11 @@ fn endpoint_builder() -> Builder {
     builder
 }
 
+/// A new endpoint, with the protocols of a session.
+async fn bind_endpoint() -> Result<Endpoint, Error> {
+    Ok(endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec(), SWAP_ALPN.to_vec()]).bind().await?)
+}
+
 /// What the clients speak, exchanged in the connection handshake.
 pub const ALPN: &[u8] = b"ctr-rust/lobby/12";
 
@@ -521,7 +526,7 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     // Made where it runs: the session is not `Send`.
     let session = move || async move {
         let result: Result<(), Error> = async {
-            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec(), SWAP_ALPN.to_vec()]).bind().await?;
+            let endpoint = bind_endpoint().await?;
             let io = Io {
                 events: events_tx.clone(),
                 commands: commands_rx,
