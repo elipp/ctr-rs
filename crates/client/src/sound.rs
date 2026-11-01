@@ -31,12 +31,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source};
 use bevy::prelude::*;
 use howl::music::{AKU_SONG, UKA_SONG};
-use loader::howl::Cseq;
 use howl::settings::Slider;
 use howl::state::{RaceAudio, State};
 use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
-use loader::source::{Need, Source as DiscSource};
+use loader::howl::Cseq;
 use loader::lev::Level;
+use loader::source::{Need, Source as DiscSource};
 use race::{KartTick, Light, Race};
 use render::mesh::SCALE;
 use vehicle::calc::map_to_range;
@@ -507,7 +507,13 @@ impl Sfx<'_> {
                         if cheer {
                             let (voice, priority) =
                                 (fire::BIG_BOOST_VOICELINE, fire::VOICELINE_PRIORITY);
-                            sounds.request_voiceline(voice, driver.character, priority, finished, howl::Sfx::FULL);
+                            sounds.request_voiceline(
+                                voice,
+                                driver.character,
+                                priority,
+                                finished,
+                                howl::Sfx::FULL,
+                            );
                         }
                         *cooldown = fire::AUDIO_COOLDOWN_MS;
                     }
@@ -521,7 +527,10 @@ impl Sfx<'_> {
         }
         for (slot, driver) in drivers.iter().enumerate() {
             if slot != own && driver.turbo.is_none() {
-                let turbo = PEER_LOOPS.iter().position(|&l| l == audio_slot::TURBO).unwrap();
+                let turbo = PEER_LOOPS
+                    .iter()
+                    .position(|&l| l == audio_slot::TURBO)
+                    .unwrap();
                 if let Some(playing) = kept.peer_loops.get_mut(slot) {
                     sounds.recycle_mute(&mut playing[turbo]);
                 }

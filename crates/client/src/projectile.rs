@@ -356,7 +356,11 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
                 layer: if slot == sim.own { KART_LAYER } else { 0 },
             }
         });
-    projectiles.chain(mines).chain(clouds).chain(wakes).collect()
+    projectiles
+        .chain(mines)
+        .chain(clouds)
+        .chain(wakes)
+        .collect()
 }
 
 /// One game tick: the weapons the sim has are followed (born, moved, ended), the bursts it made

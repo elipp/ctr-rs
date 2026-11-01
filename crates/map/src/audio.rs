@@ -42,7 +42,13 @@ fn howl_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
     // A patch that adds data to the file moves everything after it, so the two files are
     // compared by what is in them (each sample, each pack), not sector by sector.
     let ((mut a, x), (mut b, y)) = (open_howl_with(old)?, open_howl_with(new)?);
-    writeln!(out, "{HWL}: {} samples -> {}", x.sample_sizes.len(), y.sample_sizes.len()).unwrap();
+    writeln!(
+        out,
+        "{HWL}: {} samples -> {}",
+        x.sample_sizes.len(),
+        y.sample_sizes.len()
+    )
+    .unwrap();
 
     let mut samples = Vec::new();
     for n in 0..x.sample_sizes.len().max(y.sample_sizes.len()) {
@@ -51,7 +57,13 @@ fn howl_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
             samples.push(n);
         }
     }
-    writeln!(out, "  samples that are new or differ: {} {:?}", samples.len(), &samples[..samples.len().min(40)]).unwrap();
+    writeln!(
+        out,
+        "  samples that are new or differ: {} {:?}",
+        samples.len(),
+        &samples[..samples.len().min(40)]
+    )
+    .unwrap();
     writeln!(
         out,
         "  sound effects changed: {} of {} (engines: {} of {})",
@@ -61,7 +73,15 @@ fn howl_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
         y.engine_fx.len()
     )
     .unwrap();
-    writeln!(out, "  banks: {} -> {}, song packs: {} -> {}", x.bank_offsets.len(), y.bank_offsets.len(), x.song_offsets.len(), y.song_offsets.len()).unwrap();
+    writeln!(
+        out,
+        "  banks: {} -> {}, song packs: {} -> {}",
+        x.bank_offsets.len(),
+        y.bank_offsets.len(),
+        x.song_offsets.len(),
+        y.song_offsets.len()
+    )
+    .unwrap();
 
     let mut same = 0;
     for pack in 0..x.song_offsets.len().max(y.song_offsets.len()) {
@@ -77,15 +97,31 @@ fn howl_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
             .map(|(l, _)| l)
             .collect();
         let size = |c: &Option<loader::howl::Cseq>| c.as_ref().map_or(0, |c| c.data.len());
-        write!(out, "  song pack {pack} (retail levels {levels:?}) CHANGED: {} -> {} bytes", size(&p), size(&q)).unwrap();
+        write!(
+            out,
+            "  song pack {pack} (retail levels {levels:?}) CHANGED: {} -> {} bytes",
+            size(&p),
+            size(&q)
+        )
+        .unwrap();
         let (differ, total) = sequences_differing(&p, &q);
         write!(out, "; {differ} of {total} sequences differ").unwrap();
         if let Some(q) = &q {
             let mut used: Vec<u16> = q.samples().collect();
             used.sort();
             used.dedup();
-            let new: Vec<u16> = used.iter().copied().filter(|n| samples.contains(n)).collect();
-            write!(out, "; plays {} samples, {} of them new or changed {new:?}", used.len(), new.len()).unwrap();
+            let new: Vec<u16> = used
+                .iter()
+                .copied()
+                .filter(|n| samples.contains(n))
+                .collect();
+            write!(
+                out,
+                "; plays {} samples, {} of them new or changed {new:?}",
+                used.len(),
+                new.len()
+            )
+            .unwrap();
         }
         writeln!(out).unwrap();
     }
@@ -94,7 +130,9 @@ fn howl_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
 }
 
 fn count_differing<T: PartialEq>(a: &[T], b: &[T]) -> usize {
-    (0..a.len().max(b.len())).filter(|&i| a.get(i) != b.get(i)).count()
+    (0..a.len().max(b.len()))
+        .filter(|&i| a.get(i) != b.get(i))
+        .count()
 }
 
 fn exe_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
@@ -122,9 +160,20 @@ fn exe_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
                 _ => ranges.push((i, i + 1)),
             }
         }
-        writeln!(out, "  {} changed ranges (file offset, address, bytes):", ranges.len()).unwrap();
+        writeln!(
+            out,
+            "  {} changed ranges (file offset, address, bytes):",
+            ranges.len()
+        )
+        .unwrap();
         for &(start, end) in ranges.iter().take(MAX_RANGES) {
-            writeln!(out, "    {start:#07x}  {:#010x}  {}", ram(start), end - start).unwrap();
+            writeln!(
+                out,
+                "    {start:#07x}  {:#010x}  {}",
+                ram(start),
+                end - start
+            )
+            .unwrap();
         }
         if ranges.len() > MAX_RANGES {
             writeln!(out, "    ... {} more", ranges.len() - MAX_RANGES).unwrap();
@@ -134,7 +183,12 @@ fn exe_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
     for (name, values) in TABLES {
         match find_table(&a, values) {
             Some((at, width)) => {
-                write!(out, "{name}: {width}-byte entries at {at:#x} ({:#010x}), ", ram(at)).unwrap();
+                write!(
+                    out,
+                    "{name}: {width}-byte entries at {at:#x} ({:#010x}), ",
+                    ram(at)
+                )
+                .unwrap();
                 match read_table(&b, at, width, values.len()) {
                     Some(v) if v.iter().zip(values).all(|(&x, &y)| x == y as u32) => {
                         writeln!(out, "unchanged").unwrap()
@@ -143,16 +197,21 @@ fn exe_report<A: io::Read + io::Seek, B: io::Read + io::Seek>(
                     None => writeln!(out, "gone from the patched executable").unwrap(),
                 }
             }
-            None => {
-                writeln!(out, "{name}: not found in the retail executable as u8, u16 or u32").unwrap()
-            }
+            None => writeln!(
+                out,
+                "{name}: not found in the retail executable as u8, u16 or u32"
+            )
+            .unwrap(),
         }
     }
     Ok(())
 }
 
 /// The tables of the executable that say which song pack and which reverb a level has.
-const TABLES: [(&str, &[u8]); 2] = [("levBank_Song", &LEVEL_SONGS), ("reverbMode", &LEVEL_REVERBS)];
+const TABLES: [(&str, &[u8]); 2] = [
+    ("levBank_Song", &LEVEL_SONGS),
+    ("reverbMode", &LEVEL_REVERBS),
+];
 
 /// Where a table is in the retail executable, found by its contents (the addresses are not in
 /// the symbols we have), and how wide its entries are (1, 2 or 4 bytes).
@@ -207,24 +266,37 @@ pub fn carve(
         };
         let (at, width) = find_table(a, values)?;
         let entries = read_table(b, at, width, values.len())?;
-        entries.get(level as usize).and_then(|&v| u8::try_from(v).ok())
+        entries
+            .get(level as usize)
+            .and_then(|&v| u8::try_from(v).ok())
     };
     let pack = song_pack
         .or_else(|| table(&LEVEL_SONGS))
         .or(LEVEL_SONGS.get(level as usize).copied());
     let patched = table(&LEVEL_REVERBS);
-    audio.reverb = reverb.or(patched.filter(|&r| LEVEL_REVERBS.get(level as usize).is_some_and(|&o| o != r)));
-    if audio.reverb.is_some_and(|r| r as usize >= howl::tables::REVERBS.len()) {
+    audio.reverb =
+        reverb.or(patched.filter(|&r| LEVEL_REVERBS.get(level as usize).is_some_and(|&o| o != r)));
+    if audio
+        .reverb
+        .is_some_and(|r| r as usize >= howl::tables::REVERBS.len())
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("reverb {} is not one of the game's (0 to {})", audio.reverb.unwrap(), howl::tables::REVERBS.len() - 1),
+            format!(
+                "reverb {} is not one of the game's (0 to {})",
+                audio.reverb.unwrap(),
+                howl::tables::REVERBS.len() - 1
+            ),
         ));
     }
 
     if let Some(pack) = pack {
         let ((mut a, x), (mut b, y)) = (open_howl_with(old)?, open_howl_with(new)?);
         let (p, q) = (x.cseq(&mut a, pack as u16)?, y.cseq(&mut b, pack as u16)?);
-        if let Some(q) = q.clone().filter(|_| song_pack.is_some() || !same_pack(&p, &q)) {
+        if let Some(q) = q
+            .clone()
+            .filter(|_| song_pack.is_some() || !same_pack(&p, &q))
+        {
             let mut used: Vec<u16> = q.samples().collect();
             used.sort();
             used.dedup();
@@ -276,7 +348,13 @@ fn events(data: &[u8], mut at: usize) -> Vec<Event> {
             return events;
         };
         // What the opcode takes; the bytes after it are another note's.
-        let arg = |n: usize| if n < size { data.get(at + n).copied().unwrap_or(0) } else { 0 };
+        let arg = |n: usize| {
+            if n < size {
+                data.get(at + n).copied().unwrap_or(0)
+            } else {
+                0
+            }
+        };
         events.push((delay, opcode, [arg(1), arg(2)]));
         if opcode == OPCODE_END {
             return events;
@@ -322,18 +400,30 @@ fn same_pack(a: &Option<loader::howl::Cseq>, b: &Option<loader::howl::Cseq>) -> 
 }
 
 /// How many sequences of the packs differ, of how many the second has.
-fn sequences_differing(a: &Option<loader::howl::Cseq>, b: &Option<loader::howl::Cseq>) -> (usize, usize) {
+fn sequences_differing(
+    a: &Option<loader::howl::Cseq>,
+    b: &Option<loader::howl::Cseq>,
+) -> (usize, usize) {
     let all = |c: &Option<loader::howl::Cseq>| -> Vec<(i16, bool, Vec<Event>)> {
         let Some(c) = c else {
             return Vec::new();
         };
         let songs = c.songs.iter();
         songs
-            .flat_map(|s| s.sequences.iter().map(|q| (s.bpm, q.drums, events(&c.data, q.notes))))
+            .flat_map(|s| {
+                s.sequences
+                    .iter()
+                    .map(|q| (s.bpm, q.drums, events(&c.data, q.notes)))
+            })
             .collect()
     };
     let (x, y) = (all(a), all(b));
-    ((0..y.len().max(x.len())).filter(|&i| x.get(i) != y.get(i)).count(), y.len())
+    (
+        (0..y.len().max(x.len()))
+            .filter(|&i| x.get(i) != y.get(i))
+            .count(),
+        y.len(),
+    )
 }
 
 /// A song pack that a patch changes (`changed_packs`).

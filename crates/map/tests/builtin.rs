@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
+use loader::level::LevelId;
 use map::Map;
 use map::builtin::{level_of, name_of};
-use loader::level::LevelId;
 
 /// `CTR_DISC_DIR` overrides the default of `<repo>/assets/disc`.
 #[test]

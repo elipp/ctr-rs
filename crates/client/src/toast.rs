@@ -115,7 +115,19 @@ pub struct ToastPlugin;
 impl Plugin for ToastPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Toast>()
-            .add_systems(Update, (show, expire).chain());
+            .add_systems(Update, (debug_toast, show, expire).chain());
+    }
+}
+
+/// `/debug toast <text>`.
+fn debug_toast(
+    mut actions: MessageReader<crate::command::Action>,
+    mut toasts: MessageWriter<Toast>,
+) {
+    for action in actions.read() {
+        if let crate::command::Action::DebugToast(text) = action {
+            toasts.write(Toast::new(text.clone(), 4000));
+        }
     }
 }
 

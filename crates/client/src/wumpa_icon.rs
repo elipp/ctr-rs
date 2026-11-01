@@ -241,13 +241,7 @@ fn fly(
     textures: Res<Textures>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::drive::ChaseCamera>>,
-    karts: Query<
-        &Transform,
-        (
-            With<crate::drive::Kart>,
-            Without<crate::drive::ChaseCamera>,
-        ),
-    >,
+    karts: Query<&Transform, (With<crate::drive::Kart>, Without<crate::drive::ChaseCamera>)>,
     mut images: ResMut<Assets<Image>>,
     mut flying: Query<(&FlyingWumpa, &mut Node, &mut Visibility)>,
     mut flight: Local<Flight>,

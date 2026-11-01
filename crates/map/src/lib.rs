@@ -90,11 +90,17 @@ impl Audio {
             loader::howl::Cseq::parse(pack.clone())
                 .map_err(|e| invalid(format!("the map's song pack: {e}")))?;
         }
-        if self.reverb.is_some_and(|r| r as usize >= howl::tables::REVERBS.len()) {
+        if self
+            .reverb
+            .is_some_and(|r| r as usize >= howl::tables::REVERBS.len())
+        {
             return Err(invalid("the map's reverb is not one of the game's"));
         }
         if self.samples.len() > MAX_SAMPLES
-            || self.samples.iter().any(|(_, s)| s.len() > MAX_SAMPLE || s.len() % 16 != 0)
+            || self
+                .samples
+                .iter()
+                .any(|(_, s)| s.len() > MAX_SAMPLE || s.len() % 16 != 0)
             || self.samples.iter().map(|(_, s)| s.len()).sum::<usize>() > MAX_SAMPLE_BYTES
         {
             return Err(invalid("the map's samples are too many or too big"));
@@ -176,9 +182,7 @@ impl Map {
         let mut head = [0u8; MAGIC.len() + 4];
         std::fs::File::open(path)
             .and_then(|mut f| f.read_exact(&mut head))
-            .is_ok_and(|()| {
-                head.starts_with(MAGIC) && head[MAGIC.len()..] == VERSION.to_le_bytes()
-            })
+            .is_ok_and(|()| head.starts_with(MAGIC) && head[MAGIC.len()..] == VERSION.to_le_bytes())
     }
 
     pub fn write(&self, path: &Path) -> io::Result<()> {

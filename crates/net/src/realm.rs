@@ -9,9 +9,7 @@ use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
-use realm_proto::{
-    ALPN, Listing, MAX_RESPONSE, Reject, Request, Response, State, is_name_char,
-};
+use realm_proto::{ALPN, Listing, MAX_RESPONSE, Reject, Request, Response, State, is_name_char};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,7 +43,11 @@ pub fn default_realm() -> EndpointId {
     std::env::var("CTR_REALM")
         .ok()
         .and_then(|id| id.trim().parse().ok())
-        .unwrap_or_else(|| DEFAULT_REALM.parse().expect("the default realm is an endpoint id"))
+        .unwrap_or_else(|| {
+            DEFAULT_REALM
+                .parse()
+                .expect("the default realm is an endpoint id")
+        })
 }
 
 /// What a lobby is called in the list when the host does not say.
@@ -65,7 +67,9 @@ pub fn lobby_name(name: &str) -> Result<String, String> {
         ));
     }
     if name.chars().count() > MAX_LOBBY_NAME {
-        return Err(format!("A lobby name has at most {MAX_LOBBY_NAME} characters"));
+        return Err(format!(
+            "A lobby name has at most {MAX_LOBBY_NAME} characters"
+        ));
     }
     Ok(name)
 }
@@ -98,7 +102,11 @@ impl Publisher {
     ) -> Publisher {
         let (listing, rx) = watch::channel(None);
         n0_future::task::spawn(keep(endpoint.clone(), realm, rx, events));
-        Publisher { realm, listing, about: None }
+        Publisher {
+            realm,
+            listing,
+            about: None,
+        }
     }
 
     /// Lists the lobby as `public` says, or takes it off the list (`None`).
@@ -186,10 +194,14 @@ async fn list(
                 }
                 // Asking again with the same listing would only be told the same.
                 Response::Rejected(Reject::Invalid) => {
-                    let _ = events.send(Event::Listed(Err("the realm does not take the listing".into())));
+                    let _ = events.send(Event::Listed(Err(
+                        "the realm does not take the listing".into()
+                    )));
                     said = current;
                 }
-                Response::Rejected(Reject::TooFast) => return Err("asking the realm too often".into()),
+                Response::Rejected(Reject::TooFast) => {
+                    return Err("asking the realm too often".into());
+                }
                 Response::Rejected(Reject::Full) => return Err("the realm is full".into()),
                 Response::Lobbies(_) => return Err("the realm answered nonsense".into()),
             },
@@ -298,7 +310,14 @@ async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, Error>
     Ok(entries
         .into_iter()
         .filter_map(|entry| {
-            let Listing { name, players, max_players, state, track, version } = entry.listing;
+            let Listing {
+                name,
+                players,
+                max_players,
+                state,
+                track,
+                version,
+            } = entry.listing;
             Some(PublicLobby {
                 id: EndpointId::from_bytes(&entry.id).ok()?,
                 name,

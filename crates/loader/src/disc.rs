@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::io::Write;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -259,7 +259,10 @@ pub(crate) fn write_atomically(
 }
 
 /// The first sector of the file at `path` (directories split by `/`, no version suffix).
-pub(crate) fn find<R: Read + Seek>(image: &hadris_iso::read::IsoImage<R>, path: &str) -> Option<u32> {
+pub(crate) fn find<R: Read + Seek>(
+    image: &hadris_iso::read::IsoImage<R>,
+    path: &str,
+) -> Option<u32> {
     find_sized(image, path).map(|(start, _)| start)
 }
 

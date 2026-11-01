@@ -46,8 +46,11 @@ impl PublicLobbies {
 /// The order of the list: lobbies we can join first, then the fullest, then by name.
 fn sort(lobbies: &mut [net::PublicLobby]) {
     lobbies.sort_by(|a, b| {
-        (!a.compatible, std::cmp::Reverse(a.players), &a.name)
-            .cmp(&(!b.compatible, std::cmp::Reverse(b.players), &b.name))
+        (!a.compatible, std::cmp::Reverse(a.players), &a.name).cmp(&(
+            !b.compatible,
+            std::cmp::Reverse(b.players),
+            &b.name,
+        ))
     });
 }
 

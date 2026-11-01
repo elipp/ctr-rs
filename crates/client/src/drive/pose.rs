@@ -97,4 +97,3 @@ pub(crate) fn animation_pose(
             .collect(),
     })
 }
-

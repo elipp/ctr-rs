@@ -168,8 +168,14 @@ mod tests {
 
     #[test]
     fn names_and_levels_go_both_ways() {
-        assert_eq!(level_of("__builtin__dingo_canyon"), Some(LevelId::DINGO_CANYON));
-        assert_eq!(level_of("__builtin__turbo_track"), Some(LevelId::TURBO_TRACK));
+        assert_eq!(
+            level_of("__builtin__dingo_canyon"),
+            Some(LevelId::DINGO_CANYON)
+        );
+        assert_eq!(
+            level_of("__builtin__turbo_track"),
+            Some(LevelId::TURBO_TRACK)
+        );
         assert_eq!(level_of("__builtin__nitro_court"), None);
         assert_eq!(level_of("dingo_canyon"), None);
         assert!(is_builtin_name("__builtin__anything"));

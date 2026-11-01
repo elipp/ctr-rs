@@ -1,8 +1,8 @@
 //! The lobby's commands (`/lobby`, `/race`, `/net`, `/cache`) and what they answer.
 
 use super::countdown::Then;
-use super::progress::RollbackToasts;
 use super::cup::{CupDef, Cups, Finisher, Series};
+use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, Lobby};
 use crate::command::Action;
 use crate::console::{Log, console};
@@ -237,6 +237,7 @@ pub(super) fn run(
             | Action::DebugStall(_)
             | Action::DebugViewer
             | Action::DebugHud(_)
+            | Action::DebugToast(_)
             | Action::DebugLevel(_)
             | Action::DebugCrateBias(_)
             | Action::DebugFx(_)

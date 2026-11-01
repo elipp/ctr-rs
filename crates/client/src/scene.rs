@@ -61,8 +61,7 @@ pub(crate) fn switch_level(world: &mut World) {
         .get_resource::<lobby::Lobby>()
         .and_then(|l| l.online.as_ref())
         .map(|o| (o.track, o.hash));
-    let missing =
-        race_track.is_some_and(|(track, hash)| !maps::has(track, hash));
+    let missing = race_track.is_some_and(|(track, hash)| !maps::has(track, hash));
     let race_track = race_track.map(|(track, _)| track);
     // The level shown before the race took the viewer to its own: back to it when the race is
     // over (the lobby closed, or failed).

@@ -16,7 +16,6 @@ fn overlaps(node: &BspNode, bounds: &BoundingBox) -> bool {
         && bounds.min.y <= b.max.y
 }
 
-
 /// `COLL_SearchBSP_CallbackPARAM`: calls `callback` on every BSP leaf whose
 /// bounds touch `bounds`, in the reference's order (the second child of a
 /// branch is visited before the first).

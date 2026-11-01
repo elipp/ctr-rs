@@ -32,8 +32,8 @@ use hadris_iso::read::IsoImage;
 use crate::bigfile::BigFile;
 use crate::bigindex::BigIndex;
 use crate::disc::{
-    Disc, FileDisc, RawSectorReader, USER_DATA_SIZE, find, find_sized, invalid, mount, open_bigfile,
-    open_file, write_atomically,
+    Disc, FileDisc, RawSectorReader, USER_DATA_SIZE, find, find_sized, invalid, mount,
+    open_bigfile, open_file, write_atomically,
 };
 use crate::howl::Howl;
 use crate::xa::{Category, Xnf, read_track};
@@ -384,7 +384,9 @@ impl Image {
             Need::Pack(c) => self
                 .big
                 .read(&mut self.disc, entry(BigIndex::ARCADE_1P_PACK, c)),
-            Need::SharedVram => self.big.read(&mut self.disc, BigIndex::SHARED_MPK_VRM.get()),
+            Need::SharedVram => self
+                .big
+                .read(&mut self.disc, BigIndex::SHARED_MPK_VRM.get()),
             Need::Howl => self.file("SOUNDS/KART.HWL"),
             Need::Xnf => self.file("XA/ENG.XNF"),
             Need::Xa(category, id) => {
@@ -426,7 +428,13 @@ mod tests {
         Xnf {
             files: [1, 1, 1],
             tracks: [
-                vec![track(0), Track { sectors: 0, ..track(0) }],
+                vec![
+                    track(0),
+                    Track {
+                        sectors: 0,
+                        ..track(0)
+                    },
+                ],
                 vec![track(0)],
                 Vec::new(),
             ],
