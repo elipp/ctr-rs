@@ -68,7 +68,7 @@ jobs:
           cp linux/ctr-rs.desktop linux/ctr-rs.png AppDir/
           # No FUSE on the runner: the tool (an AppImage itself) unpacks and runs.
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool AppDir "dist/$name.AppImage"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: dist/*
