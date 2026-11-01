@@ -81,6 +81,8 @@ mod weather;
 #[cfg(target_arch = "wasm32")]
 mod web;
 mod wheels;
+#[cfg(not(target_arch = "wasm32"))]
+mod window_icon;
 mod wrong_way;
 mod wumpa_icon;
 
@@ -181,6 +183,8 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     let plugins = plugins.disable::<bevy::app::PanicHandlerPlugin>();
     app.add_plugins(plugins);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_plugins(window_icon::WindowIconPlugin);
     // Bevy's own font has no ä or ö: this one takes its place as the default.
     app.world_mut()
         .resource_mut::<Assets<Font>>()
