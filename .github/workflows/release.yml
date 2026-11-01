@@ -43,6 +43,19 @@ jobs:
           mkdir -p "$name" dist
           if [ "$RUNNER_OS" = Windows ]; then
               cp target/dist/client.exe "$name/ctr-rs.exe"
+          elif [ "$RUNNER_OS" = macOS ]; then
+              app="$name/ctr-rs.app/Contents"
+              mkdir -p "$app/MacOS" "$app/Resources" ctr-rs.iconset
+              cp target/dist/client "$app/MacOS/ctr-rs"
+              cp macos/Info.plist "$app/"
+              for size in 16 32 128 256; do
+                  sips -z $size $size crates/client/icon.png --out "ctr-rs.iconset/icon_${size}x${size}.png"
+              done
+              for size in 16 32 128; do
+                  sips -z $((size * 2)) $((size * 2)) crates/client/icon.png --out "ctr-rs.iconset/icon_${size}x${size}@2x.png"
+              done
+              iconutil -c icns -o "$app/Resources/ctr-rs.icns" ctr-rs.iconset
+              codesign --force --sign - "$name/ctr-rs.app"
           else
               cp target/dist/client "$name/ctr-rs"
           fi
@@ -62,7 +75,8 @@ jobs:
           mkdir -p AppDir/usr/bin
           cp "$name/ctr-rs" AppDir/usr/bin/
           ln -s usr/bin/ctr-rs AppDir/AppRun
-          cp linux/ctr-rs.desktop linux/ctr-rs.png AppDir/
+          cp linux/ctr-rs.desktop AppDir/
+          cp crates/client/icon.png AppDir/ctr-rs.png
           # No FUSE on the runner: the tool (an AppImage itself) unpacks and runs.
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool AppDir "dist/$name.AppImage"
       - uses: actions/upload-artifact@v7
