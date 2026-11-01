@@ -15,7 +15,6 @@ pub(super) const LEAD_SMOOTHING: f32 = 0.1;
 
 pub(super) fn report(
     mut lobby: ResMut<Lobby>,
-    level: Res<crate::LevelNumber>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -26,7 +25,6 @@ pub(super) fn report(
     let mut promoted = None;
     let mut listed = None;
     let mut wanted_map = None;
-    let mut free_track = None;
     let mut got_map = None;
     let mut map_failed = None;
     let mut roster = None;
@@ -45,8 +43,7 @@ pub(super) fn report(
         match event {
             Event::Open(ticket) => {
                 copy_to_clipboard(format!("/lobby join {ticket}"));
-                // The players who join drive on the level we are on.
-                lobby.set_track(level.0);
+                lobby.list("");
                 toasts.write(
                     Toast::new(
                         "Lobby created!\nJoin command copied to clipboard".to_string(),
@@ -63,21 +60,11 @@ pub(super) fn report(
                 you,
             } => roster = Some((players, spectators, you)),
             Event::Announce(text) => {
-                toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
+                // (A cup's results are several lines, which take longer to read.)
+                let ms = 3000 + 1500 * text.lines().count().saturating_sub(1) as u64;
+                toasts.write(Toast::new(text, ms).color(ANNOUNCE_COLOR));
             }
             Event::Chat { from, text } => chats.push((from, text)),
-            // (A race decides its own level.)
-            Event::Track { track, hash } if lobby.online.is_none() => {
-                if !map::is_map_id(track) && !maps::cycle().contains(&track) {
-                    warn!("the host picked the level {track:#x}, which we do not have");
-                } else {
-                    if !maps::has(track, hash) && lobby.fetching != Some(track) {
-                        wanted_map = Some((track, hash));
-                    }
-                    free_track = Some((track, hash));
-                }
-            }
-            Event::Track { .. } => {}
             Event::Joined(id) => debug!("joined the lobby of {}", id.fmt_short()),
             Event::Rtt { id, rtt } => rtts.push((id.fmt_short().to_string(), rtt)),
             Event::PeerLeft(id) => {
@@ -98,6 +85,7 @@ pub(super) fn report(
                 players,
                 track,
                 hash,
+                laps,
             } => {
                 debug!(
                     "race started: you are player {slot} of {}, characters {characters:?}, track {track:#x}",
@@ -126,6 +114,7 @@ pub(super) fn report(
                     ids: players,
                     track,
                     hash,
+                    laps,
                     inbox: Vec::new(),
                     fresh: true,
                     built: false,
@@ -136,7 +125,7 @@ pub(super) fn report(
                     ahead: vec![0.0; characters_len],
                     checks: race::desync::Checks::new(characters_len, slot),
                     desync: Vec::new(),
-                    won: false,
+                    announced: 0,
                     gone: vec![false; characters_len],
                     watching: if slot < characters_len { slot } else { 0 },
                     asked: Vec::new(),
@@ -207,8 +196,7 @@ pub(super) fn report(
         lobby.joined = false;
         lobby.public = public.map(|public| public.name);
         copy_to_clipboard(format!("/lobby join {ticket}"));
-        // The players who join drive on the level we are on.
-        lobby.set_track(level.0);
+        lobby.list("");
         toasts.write(
             Toast::new(
                 "You are now the host!\nJoin command copied to clipboard".to_string(),
@@ -252,9 +240,6 @@ pub(super) fn report(
     let new_race = started.is_some();
     if new_race {
         lobby.online = started;
-        lobby.pending_track = None;
-    } else if free_track.is_some() && lobby.online.is_none() {
-        lobby.pending_track = free_track;
     }
     let nicks_told = roster.is_some();
     if let Some((track, hash)) = wanted_map {
@@ -276,15 +261,9 @@ pub(super) fn report(
     if let Some(why) = map_failed {
         warn!("{why}");
         toasts.write(Toast::new(why, 6000).color(Color::srgb(1.0, 0.3, 0.3)));
-        if lobby.online.is_none() {
-            // Only the level to drive on between races: we stay where we are.
-            lobby.fetching = None;
-            lobby.pending_track = None;
-        } else {
-            // The race cannot start without the map: the others would wait for us for good.
-            lobby.close();
-            return;
-        }
+        // The race cannot start without the map: the others would wait for us for good.
+        lobby.close();
+        return;
     }
     if let Some((players, spectators, you)) = roster {
         // The names are told apart among everyone in the lobby, those who only watch too.

@@ -227,8 +227,6 @@ pub(crate) async fn run(
                         if host.racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
                             let _ = send_reliably(&connection, &wait).await;
-                        } else if let Some((track, hash)) = host.lobby_track {
-                            let _ = send_reliably(&connection, &Message::Track { track, hash }).await;
                         }
                         listen(connection, id, heard_tx.clone());
                         host.guests.push(guest);
@@ -276,8 +274,8 @@ pub(crate) async fn run(
             }
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
-                Command::Start { track, hash } => if let Some(host) = &mut host {
-                    host.start_wanted = Some((track, hash));
+                Command::Start { track, hash, laps } => if let Some(host) = &mut host {
+                    host.start_wanted = Some((track, hash, laps));
                 },
                 Command::Provide { track, hash, bytes } => {
                     provided.insert((track, hash), bytes);
@@ -293,18 +291,18 @@ pub(crate) async fn run(
                     let text = "A player left the race: start a new one instead of restarting".to_string();
                     io.event(Event::Announce(text));
                 }
-                Command::Restart { track, hash } => if plan.is_some()
+                Command::Restart { track, hash, laps } => if plan.is_some()
                     && let Some(host) = &mut host
                     && let Some((slot, characters, players)) = race_info.clone()
                 {
                     epoch += 1;
                     for guest in &host.guests {
-                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track, hash }).await;
+                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track, hash, laps }).await;
                     }
                     start_over(&mut links, epoch);
                     (running, game_ready, ready_sent) = (false, false, false);
                     host.ready_from.clear();
-                    io.event(Event::Started { slot, characters, players, track, hash });
+                    io.event(Event::Started { slot, characters, players, track, hash, laps });
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -326,12 +324,6 @@ pub(crate) async fn run(
                         io.event(Event::Chat { from: me, text });
                     } else if let Some(connection) = &host_connection {
                         let _ = send_reliably(connection, &Message::Say { text }).await;
-                    }
-                },
-                Command::Track { track, hash } => if let Some(host) = &mut host && !host.racing {
-                    host.lobby_track = Some((track, hash));
-                    for guest in &host.guests {
-                        let _ = send_reliably(&guest.connection, &Message::Track { track, hash }).await;
                     }
                 },
                 Command::Character(c) => if !host.as_ref().is_some_and(|h| h.racing) {
@@ -518,7 +510,7 @@ pub(crate) async fn run(
                         heirs.heard.clear();
                         io.event(Event::Lobby { players, spectators, you });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, roster }
+                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -546,16 +538,16 @@ pub(crate) async fn run(
                         }
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone(), players: characters.len() });
-                        io.event(Event::Started { slot, characters, players: roster, track, hash });
+                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
                     }
-                    Message::Restart { epoch: new, track, hash }
+                    Message::Restart { epoch: new, track, hash, laps }
                         if plan.is_some() && from == host_id && host.is_none() =>
                     {
                         if let Some((slot, characters, players)) = race_info.clone() {
                             epoch = new;
                             start_over(&mut links, epoch);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, players, track, hash });
+                            io.event(Event::Started { slot, characters, players, track, hash, laps });
                         }
                     }
                     Message::Announce { text } => {
@@ -590,12 +582,6 @@ pub(crate) async fn run(
                             if !text.is_empty() {
                                 io.event(Event::Chat { from: speaker, text });
                             }
-                        }
-                    }
-                    Message::Track { track, hash } => {
-                        if from == host_id && host.is_none() {
-                            heirs.track = Some((track, hash));
-                            io.event(Event::Track { track, hash });
                         }
                     }
                     Message::Ready => {
@@ -871,7 +857,6 @@ pub(crate) async fn run(
                 None => return Err("the host closed the lobby".into()),
                 Some(id) if id == me => {
                     let mut state = HostState {
-                        lobby_track: heirs.track,
                         public: heirs.public.clone(),
                         ..HostState::default()
                     };
@@ -881,9 +866,6 @@ pub(crate) async fn run(
                         let id = connection.remote_id();
                         if id == me || state.guests.iter().any(|g| g.id == id) {
                             continue;
-                        }
-                        if let Some((track, hash)) = state.lobby_track {
-                            let _ = send_reliably(&connection, &Message::Track { track, hash }).await;
                         }
                         io.event(Event::PeerJoined(id));
                         state.guests.push(Guest { id, connection, hello: None, nick: (0, String::new()), spectator: false });
@@ -974,7 +956,7 @@ pub(crate) async fn run(
 
         // The host starts the race once every guest has said what it drives.
         if let Some(host) = &mut host
-            && let Some((track, hash)) = host
+            && let Some((track, hash, laps)) = host
                 .start_wanted
                 .filter(|_| host.guests.iter().all(|g| g.hello.is_some()))
         {
@@ -1010,6 +992,7 @@ pub(crate) async fn run(
                     characters: characters.clone(),
                     track,
                     hash,
+                    laps,
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                 };
                 let _ = send_reliably(&guest.connection, &start).await;
@@ -1033,6 +1016,7 @@ pub(crate) async fn run(
                 players: roster,
                 track,
                 hash,
+                laps,
             });
         }
 

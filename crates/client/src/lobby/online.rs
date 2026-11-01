@@ -21,6 +21,8 @@ pub struct Online {
     pub track: u32,
     /// The hash of the contents of the map, if it is a map (0 for the game's tracks).
     pub hash: u64,
+    /// How many laps the race has.
+    pub laps: u8,
     /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
     /// the pads).
     pub inbox: Vec<(usize, u32, Vec<Pad>)>,
@@ -42,8 +44,8 @@ pub struct Online {
     pub ahead: Vec<f32>,
     /// The players whose sim differs from ours, with the first tick it was seen at.
     pub desync: Vec<Desync>,
-    /// The winner has been announced; the race ends [`AFTERMATH_SECONDS`] later.
-    pub won: bool,
+    /// How many of the finishers (by place) have been announced.
+    pub announced: usize,
     /// The players that left the race (by slot): they have a neutral pad from their last on, and
     /// the race does not wait for them to finish.
     pub gone: Vec<bool>,

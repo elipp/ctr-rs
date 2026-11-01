@@ -47,26 +47,27 @@ pub struct Sim {
 impl Sim {
     pub fn new(level: &Level, objects: Objects, specs: &[KartSpec]) -> Sim {
         Sim {
-            race: Sim::rollback(level, objects.clone(), specs, 0, false, false),
+            race: Sim::rollback(level, objects.clone(), specs, 0, None, false),
             start: objects,
             own: 0,
         }
     }
 
-    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` for a race of
-    /// a lobby, even if we are alone in it. A `spectator` drives none: `own` is the kart it is
-    /// following, and no pad of it is waited for.
+    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the laps of
+    /// a race of a lobby, even if we are alone in it (None for a free drive). A `spectator`
+    /// drives none: `own` is the kart it is following, and no pad of it is waited for.
     fn rollback(
         level: &Level,
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
-        online: bool,
+        online: Option<u8>,
         spectator: bool,
     ) -> Rollback<Race> {
         let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
         // An online race starts with the ceremony; offline the kart drives off at once.
-        if online {
+        if let Some(laps) = online {
+            race.laps = laps;
             race.start_ceremony(level);
         } else {
             race.laps = race::FREE_DRIVE_LAPS;
@@ -92,7 +93,7 @@ impl Sim {
         level: &Level,
         specs: &[KartSpec],
         own: usize,
-        online: bool,
+        online: Option<u8>,
         spectator: bool,
     ) {
         self.race = Sim::rollback(level, self.start.clone(), specs, own, online, spectator);

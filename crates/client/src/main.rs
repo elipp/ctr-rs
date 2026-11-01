@@ -41,6 +41,7 @@ mod kart;
 mod laps;
 mod leaderboard;
 mod lights;
+mod loading;
 mod lobby;
 mod lobby_list;
 mod maps;
@@ -204,6 +205,15 @@ fn main() {
         .insert_resource(LevelNumber(track_id))
         .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
+        // Before the frame's systems, with the commands of the last all applied: a system that
+        // queued a command on an entity of the scene (the lap rows, the glyphs of a text) would
+        // find it despawned by the change, and Bevy panics on that. (A race that starts on
+        // another level is such a change.) After the input and the command line's capture of the
+        // keys (`command.rs`), which clears them while it is open.
+        .add_systems(
+            PreUpdate,
+            switch_level.after(command::capture),
+        )
         .add_systems(Last, limit_frame_rate)
         // After the cameras and karts have moved this frame, before their transforms propagate.
         .add_systems(
@@ -246,7 +256,6 @@ fn main() {
         .add_systems(
             Update,
             (
-                switch_level,
                 props::roll,
                 props::spin_fruit,
                 props::set_crate_bias,
@@ -278,6 +287,7 @@ fn main() {
         drive::DrivePlugin,
         sound::SoundPlugin,
         lobby::LobbyPlugin,
+        loading::LoadingPlugin,
         console::ConsolePlugin,
         command::CommandPlugin,
         pause::PausePlugin,
