@@ -1,0 +1,2 @@
+[alias]
+dist = "build -p client --profile dist --no-default-features"
