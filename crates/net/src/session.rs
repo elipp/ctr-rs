@@ -11,7 +11,7 @@ use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, ti
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::conn::{
-    Heard, RACE_IN_PROGRESS, listen, one_per_peer, send_datagram, send_reliably, stamp,
+    Heard, RACE_IN_PROGRESS, dial, listen, one_per_peer, send_datagram, send_reliably, stamp,
 };
 use crate::peers::{
     Departure, Guest, Heirs, HostState, Link, Plan, Role, dial_links, stalled, start_over,
@@ -119,17 +119,6 @@ fn refresh_listing(host: &HostState, build: u32) {
 /// The session of a lobby host or of a player who joined one. They differ in the lobby (the
 /// host takes the joins and starts the race) and in the barrier before tick 0 (the host collects
 /// the [`Message::Ready`]s and sends the [`Message::Go`]); the race is the same for both.
-/// Whether our NAT gives another public address for each peer we talk to, as far as iroh has
-/// found out (not, until it has). A player behind one can only be reached by dialing.
-fn hard_nat(endpoint: &Endpoint) -> bool {
-    use iroh::Watcher;
-    endpoint
-        .net_report()
-        .get()
-        .and_then(|report| report.mapping_varies_by_dest())
-        .unwrap_or(false)
-}
-
 pub(crate) async fn run(
     endpoint: Endpoint,
     mut io: Io,
@@ -152,9 +141,6 @@ pub(crate) async fn run(
     let mut fetching: HashSet<(u32, u64)> = HashSet::new();
     // The host: the sends of maps that ended.
     let (sent_tx, mut sent) = unbounded_channel::<Transfer>();
-
-    // What the host was last told of our NAT (see `hard_nat`).
-    let mut nat_sent = false;
 
     match &role {
         Role::Host => {
@@ -182,8 +168,6 @@ pub(crate) async fn run(
                 spectator,
             };
             send_reliably(&connection, &hello).await?;
-            nat_sent = hard_nat(&endpoint);
-            send_reliably(&connection, &Message::Nat { hard: nat_sent }).await?;
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
             host_connection = Some(connection);
@@ -227,7 +211,8 @@ pub(crate) async fn run(
         tokio::select! {
             _ = &mut io.stop => {
                 let lobby = host.iter().flat_map(|h| &h.guests).map(|g| &g.connection).chain(host_connection.as_ref());
-                for connection in lobby.chain(links.values().map(|l| &l.connection)) {
+                let linked = links.values().flat_map(|l| [Some(&l.connection), l.alt.as_ref()]).flatten();
+                for connection in lobby.chain(linked) {
                     connection.close(0u32.into(), b"bye");
                 }
                 return Ok(());
@@ -254,7 +239,7 @@ pub(crate) async fn run(
                         }
                         host.guests.retain(|g| g.id != id);
                         host.gone.remove(&id);
-                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()), spectator: false, hard: false };
+                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()), spectator: false };
                         io.event(Event::PeerJoined(id));
                         if host.racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
@@ -291,8 +276,6 @@ pub(crate) async fn run(
                             // As if we joined it: the host takes the latest Hello it has.
                             let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
                             let _ = send_reliably(&connection, &hello).await;
-                            nat_sent = hard_nat(&endpoint);
-                            let _ = send_reliably(&connection, &Message::Nat { hard: nat_sent }).await;
                             hellos += 1;
                         }
                         None => {
@@ -433,7 +416,7 @@ pub(crate) async fn run(
                 },
                 Command::NetInfo => {
                     let peers = one_per_peer(
-                        links.values().map(|l| &l.connection),
+                        links.values().map(|l| l.best()),
                         host.iter()
                             .flat_map(|h| &h.guests)
                             .map(|g| &g.connection)
@@ -455,7 +438,7 @@ pub(crate) async fn run(
                     let message = Message::Checksum { epoch, tick, hash };
                     for link in links.values() {
                         // On a stream of its own, which the loop does not wait for.
-                        let connection = link.connection.clone();
+                        let connection = link.best().clone();
                         let message = message.clone();
                         n0_future::task::spawn(async move {
                             let _ = send_reliably(&connection, &message).await;
@@ -467,7 +450,7 @@ pub(crate) async fn run(
                 Heard::Message(message) => match message {
                     // A player that took us for the host: it was right, or will be (we may not
                     // have found out that the host left yet). Kept for then.
-                    message @ (Message::Hello { .. } | Message::Nick { .. } | Message::Nat { .. }) if host.is_none() => {
+                    message @ (Message::Hello { .. } | Message::Nick { .. }) if host.is_none() => {
                         if from != host_id && heirs.heard.len() < 64 {
                             heirs.heard.push((from, message));
                         }
@@ -504,11 +487,6 @@ pub(crate) async fn run(
                             tell_lobby(me, character, &nick, host, &io).await;
                         }
                     }
-                    Message::Nat { hard } => if let Some(host) = &mut host
-                        && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
-                    {
-                        guest.hard = hard;
-                    },
                     // (It may beat the Hello: the guest is in the lobby once that comes.)
                     Message::Nick { seq, nick: theirs } => if let Some(host) = &mut host
                         && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
@@ -549,7 +527,7 @@ pub(crate) async fn run(
                         heirs.heard.clear();
                         io.event(Event::Lobby { players, spectators, you });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster, hard }
+                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -564,7 +542,7 @@ pub(crate) async fn run(
                         links.retain(|id, _| roster.contains(id));
                         start_over(&mut links, epoch);
                         (running, game_ready, ready_sent) = (false, false, false);
-                        dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
+                        dial_links(&endpoint, &roster, &links, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone(), players: characters.len() });
                         io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
@@ -758,8 +736,20 @@ pub(crate) async fn run(
                     // A link goes with its own connection, or with the player's lobby one.
                     let lobby_closed = host_connection.as_ref().is_some_and(|c| c.stable_id() == closed)
                         || host.iter().flat_map(|h| &h.guests).any(|g| g.connection.stable_id() == closed);
-                    if lobby_closed || links.get(&from).is_some_and(|l| l.connection.stable_id() == closed) {
+                    if lobby_closed {
                         links.remove(&from);
+                    } else if let Some(link) = links.get_mut(&from) {
+                        if link.alt.as_ref().is_some_and(|c| c.stable_id() == closed) {
+                            link.alt = None;
+                        } else if link.connection.stable_id() == closed {
+                            // The other one carries on, if there is one.
+                            match link.alt.take() {
+                                Some(alt) => link.connection = alt,
+                                None => {
+                                    links.remove(&from);
+                                }
+                            }
+                        }
                     }
                     unclaimed.retain(|c| c.stable_id() != closed);
                     // A guest whose host is gone has no lobby, nor a race: the host runs both.
@@ -831,17 +821,17 @@ pub(crate) async fn run(
                 }
             },
             _ = ping_timer.tick() => {
-                // The host has our NAT as iroh finds it out, which may change (or come late).
-                let hard = hard_nat(&endpoint);
-                if hard != nat_sent
-                    && let Some(connection) = &host_connection
-                    && send_reliably(connection, &Message::Nat { hard }).await.is_ok()
-                {
-                    nat_sent = hard;
+                // A link that stays on a relay is dialed the other way round (see `Link`).
+                let now = Instant::now();
+                for (&id, link) in links.iter_mut() {
+                    if link.wants_redial(now) {
+                        link.redialed(now);
+                        dial(endpoint.clone(), id, dialed_tx.clone());
+                    }
                 }
                 // (One per player: the round trips are kept by player.)
                 let connections = one_per_peer(
-                    links.values().map(|l| &l.connection),
+                    links.values().map(|l| l.best()),
                     host.iter()
                         .flat_map(|h| &h.guests)
                         .map(|g| &g.connection)
@@ -922,7 +912,6 @@ pub(crate) async fn run(
                             hello: None,
                             nick: (0, String::new()),
                             spectator: false,
-                            hard: false,
                         });
                     }
                     if let Some(public) = &state.public {
@@ -1046,9 +1035,6 @@ pub(crate) async fn run(
             let roster: Vec<EndpointId> = std::iter::once(me)
                 .chain(ordered.iter().map(|g| g.id))
                 .collect();
-            let hard: Vec<bool> = std::iter::once(hard_nat(&endpoint))
-                .chain(ordered.iter().map(|g| g.hard))
-                .collect();
             for (i, guest) in ordered.iter().enumerate() {
                 let start = Message::Start {
                     epoch,
@@ -1058,13 +1044,12 @@ pub(crate) async fn run(
                     hash,
                     laps,
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
-                    hard: hard.clone(),
                 };
                 let _ = send_reliably(&guest.connection, &start).await;
             }
             links.retain(|id, _| roster.contains(id));
             start_over(&mut links, epoch);
-            dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
+            dial_links(&endpoint, &roster, &links, &dialed_tx);
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
@@ -1090,9 +1075,16 @@ pub(crate) async fn run(
                 if connection.alpn() != MESH_ALPN || plan.slot_of(id).is_none() {
                     return true;
                 }
-                links
-                    .entry(id)
-                    .or_insert_with(|| Link::new(connection.clone(), epoch));
+                match links.get_mut(&id) {
+                    // A second connection to a player: the redial, made by either side.
+                    Some(link) if link.alt.is_none() => {
+                        link.alt = Some(connection.clone());
+                    }
+                    Some(_) => connection.close(0u32.into(), b"one is enough"),
+                    None => {
+                        links.insert(id, Link::new(connection.clone(), epoch));
+                    }
+                }
                 false
             });
         }

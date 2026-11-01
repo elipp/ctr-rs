@@ -59,6 +59,16 @@ pub(crate) fn distinct<'a>(
     connections.filter(|c| seen.insert(c.stable_id())).collect()
 }
 
+/// Whether the connection's selected path goes straight to the other player (`Some(true)`), or
+/// through a relay (`Some(false)`), or there is none yet.
+pub(crate) fn is_direct(connection: &Connection) -> Option<bool> {
+    connection
+        .paths()
+        .iter()
+        .find(|path| path.is_selected())
+        .map(|path| !path.is_relay())
+}
+
 /// One connection per player: the `preferred` ones, then the `rest` of those whose player has
 /// none yet. (A player in the race has its lobby connection and its link both.)
 pub(crate) fn one_per_peer<'a>(
@@ -97,11 +107,7 @@ pub(crate) fn listen(
                 }
                 Some(Ok(Message::Pong { stamp: sent })) => {
                     let rtt = Duration::from_micros(stamp().saturating_sub(sent));
-                    let relay = connection
-                        .paths()
-                        .iter()
-                        .find(|path| path.is_selected())
-                        .map(|path| path.is_relay());
+                    let relay = is_direct(&connection).map(|direct| !direct);
                     if heard.send((from, Heard::Ping { rtt, relay })).is_err() {
                         return;
                     }
