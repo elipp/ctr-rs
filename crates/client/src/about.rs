@@ -51,7 +51,10 @@ impl Part {
 pub static PARTS: LazyLock<Vec<Part>> = LazyLock::new(parts);
 
 fn parts() -> Vec<Part> {
-    let source = "Source: https://github.com/elipp/ctr-rs\n\n";
+    // (As the README says it.)
+    let source = "ctr-rs is licensed under the GNU General Public License, version 3, which is the \
+        license of ctr-native and CTR-ModSDK, the projects it is ported from.\n\n\
+        Source: https://github.com/elipp/ctr-rs\n\n";
     let mut parts = vec![Part::new("ctr-rs", "GPL-3.0", format!("{source}{LICENSE}"))];
     // A part of the notices is a `## ` heading, and its license is on the line `License: `.
     for section in NOTICES.split("\n## ").skip(1) {
@@ -259,6 +262,7 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("GNU GENERAL PUBLIC LICENSE"))
         );
+        assert!(PARTS[0].lines()[0].starts_with("ctr-rs is licensed under the GNU"));
     }
 
     #[test]
