@@ -479,6 +479,11 @@ impl CameraDc {
             self.height_smoothing = HeightSmoothing::default();
         }
 
+        // A kart revving its engine (after the mask put it back) starts the height rules over too.
+        if d.kart_state == kart_state::ENGINE_REVVING {
+            self.height_smoothing = HeightSmoothing::default();
+        }
+
         // Keep above the track.
         let kart_y = mips::sra(d.pos_curr.y, 8);
         let hit = self.find_closest_quadblock(

@@ -84,3 +84,42 @@ fn swings_out_in_a_powerslide() {
         "the camera should swing out in a powerslide, largest swing {drifting}"
     );
 }
+
+/// The mask grab pins the camera where it was, so the kart can be far from it when the mask lets
+/// go. The camera must not blend from that distance once the kart revs its engine again: retail
+/// starts the height rules over in `KS_ENGINE_REVVING`.
+#[test]
+fn does_not_swoop_down_from_the_grab_after_it() {
+    let Some(level) = level(LevelId::DINGO_CANYON) else {
+        return;
+    };
+    let mut coll = Collision::default();
+    let mut d = Driver::new(0, 0);
+    d.anim_num_frames = [30, 12, 20, 16, 24, 8, 8, 8];
+    spawn(&mut d, &mut coll, &level, 0);
+    let mut camera = CameraDc::default();
+    let input = camera::Input {
+        elapsed_time_ms: 32,
+        ..Default::default()
+    };
+    camera.follow_driver(&d, &level, &input);
+
+    // The mask holds the kart with the camera far above the track, out of reach of the ground
+    // search, so that the camera keeps the distance to the kart to blend from.
+    d.kart_state = vehicle::kart_state::MASK_GRABBED;
+    camera.pb_pos.y += 3000;
+    for _ in 0..3 {
+        camera.follow_driver(&d, &level, &input);
+    }
+
+    // The kart is back on the track, revving.
+    d.kart_state = vehicle::kart_state::ENGINE_REVVING;
+    camera.follow_driver(&d, &level, &input);
+
+    let above = camera.camera_pos.y - (d.pos_curr.y >> 8);
+    eprintln!("camera {above} above the kart");
+    assert!(
+        (0..0x400).contains(&above),
+        "the camera should be close above the kart after the grab, was {above}"
+    );
+}
