@@ -46,8 +46,6 @@ jobs:
           else
               cp target/dist/client "$name/ctr-rs"
           fi
-          cp LICENSE THIRD_PARTY_NOTICES.md "$name/"
-          cp crates/client/fonts/OFL.txt "$name/Inconsolata-OFL.txt"
           if [ "$RUNNER_OS" = Windows ]; then
               # On Windows the files go at the top of the zip, as "Extract All" makes the folder.
               (cd "$name" && 7z a "../dist/$name.zip" .)
@@ -61,9 +59,8 @@ jobs:
           curl -sSfL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c
           chmod +x appimagetool
-          mkdir -p AppDir/usr/bin AppDir/usr/share/doc/ctr-rs
+          mkdir -p AppDir/usr/bin
           cp "$name/ctr-rs" AppDir/usr/bin/
-          cp "$name"/*.txt "$name"/*.md "$name/LICENSE" AppDir/usr/share/doc/ctr-rs/
           ln -s usr/bin/ctr-rs AppDir/AppRun
           cp linux/ctr-rs.desktop linux/ctr-rs.png AppDir/
           # No FUSE on the runner: the tool (an AppImage itself) unpacks and runs.
