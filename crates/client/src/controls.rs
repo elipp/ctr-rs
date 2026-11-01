@@ -90,7 +90,10 @@ impl Control {
 
 /// The keys of each control, in [`Control::ALL`]'s order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "BTreeMap<String, Vec<String>>", into = "BTreeMap<String, Vec<String>>")]
+#[serde(
+    from = "BTreeMap<String, Vec<String>>",
+    into = "BTreeMap<String, Vec<String>>"
+)]
 pub struct Controls([Vec<KeyCode>; Control::ALL.len()]);
 
 impl Default for Controls {
@@ -157,7 +160,10 @@ impl Controls {
         if keys.is_empty() {
             return "---".into();
         }
-        keys.iter().map(|&k| label(k)).collect::<Vec<_>>().join(" / ")
+        keys.iter()
+            .map(|&k| label(k))
+            .collect::<Vec<_>>()
+            .join(" / ")
     }
 }
 
@@ -309,7 +315,10 @@ mod tests {
         let mut controls = Controls::default();
         controls.bind(Control::Gas, KeyCode::Space);
         assert_eq!(controls.keys(Control::Gas), [KeyCode::Space]);
-        assert_eq!(controls.keys(Control::Hop), [KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        assert_eq!(
+            controls.keys(Control::Hop),
+            [KeyCode::ShiftLeft, KeyCode::ShiftRight]
+        );
     }
 
     #[test]

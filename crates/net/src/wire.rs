@@ -112,7 +112,12 @@ pub enum Message {
     Inputs(Inputs),
     /// Reliable, host to each client: the race starts again, on `track`. The same players, on
     /// the same connections; `epoch` counts the races and tells their packets apart.
-    Restart { epoch: u32, track: u32, hash: u64, laps: u8 },
+    Restart {
+        epoch: u32,
+        track: u32,
+        hash: u64,
+        laps: u8,
+    },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
     /// Reliable, host to client: the custom track asked for, as the bytes it was provided as.
@@ -390,9 +395,7 @@ mod tests {
             Message::Announce {
                 text: "Restarting in 5".into(),
             },
-            Message::Say {
-                text: "gg".into(),
-            },
+            Message::Say { text: "gg".into() },
             Message::Chat {
                 from: [5; 32],
                 text: "ääh!".into(),

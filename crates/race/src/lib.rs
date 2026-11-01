@@ -494,12 +494,7 @@ impl Race {
         let mut hurt = Vec::new();
         for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
             let first = hurt.len();
-            before_tick(
-                &mut kart.driver,
-                &self.last,
-                &mut hurt,
-                effects,
-            );
+            before_tick(&mut kart.driver, &self.last, &mut hurt, effects);
             // The plant that ate the kart is the one its camera looks at.
             if let Some(&plant) = hurt.get(first) {
                 kart.driver.plant_eating_me = self.objects.plant_eater(plant);

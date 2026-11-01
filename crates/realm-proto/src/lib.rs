@@ -36,7 +36,10 @@ pub const MAX_LOBBIES: usize = 1000;
 pub fn is_name_char(c: char) -> bool {
     c == ' '
         || c.is_ascii_alphanumeric()
-        || matches!(c, '\'' | '!' | ':' | ',' | '=' | '-' | '%' | '.' | '+' | '?' | '_' | '/')
+        || matches!(
+            c,
+            '\'' | '!' | ':' | ',' | '=' | '-' | '%' | '.' | '+' | '?' | '_' | '/'
+        )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
@@ -65,9 +68,8 @@ impl Listing {
     /// Whether the realm takes this. The server checks it, and a client can too, to tell the
     /// player what is wrong before it asks.
     pub fn validate(&self) -> Result<(), Reject> {
-        let text = |s: &str, max: usize| {
-            s.chars().count() <= max && !s.chars().any(char::is_control)
-        };
+        let text =
+            |s: &str, max: usize| s.chars().count() <= max && !s.chars().any(char::is_control);
         let ok = !self.name.trim().is_empty()
             && self.name.chars().count() <= MAX_NAME
             && self.name.chars().all(is_name_char)
@@ -154,12 +156,22 @@ mod tests {
 
     #[test]
     fn messages_round_trip() {
-        for request in [Request::Announce(listing()), Request::Withdraw, Request::List] {
+        for request in [
+            Request::Announce(listing()),
+            Request::Withdraw,
+            Request::List,
+        ] {
             assert_eq!(Request::from_bytes(&request.to_bytes()).unwrap(), request);
         }
-        let lobbies = Response::Lobbies(vec![Entry { id: [7; 32], listing: listing() }]);
+        let lobbies = Response::Lobbies(vec![Entry {
+            id: [7; 32],
+            listing: listing(),
+        }]);
         for response in [Response::Ok, Response::Rejected(Reject::Full), lobbies] {
-            assert_eq!(Response::from_bytes(&response.to_bytes()).unwrap(), response);
+            assert_eq!(
+                Response::from_bytes(&response.to_bytes()).unwrap(),
+                response
+            );
         }
         assert!(Request::from_bytes(b"\xff\xff\xff").is_err());
     }
@@ -168,14 +180,39 @@ mod tests {
     fn listings_are_validated() {
         assert_eq!(listing().validate(), Ok(()));
         let bad = [
-            Listing { name: "  ".into(), ..listing() },
-            Listing { name: "x".repeat(MAX_NAME + 1), ..listing() },
-            Listing { name: "a\nb".into(), ..listing() },
-            Listing { name: "Fäst".into(), ..listing() },
-            Listing { track: "x".repeat(MAX_TRACK + 1), ..listing() },
-            Listing { version: String::new(), ..listing() },
-            Listing { max_players: 0, players: 0, ..listing() },
-            Listing { players: 9, ..listing() },
+            Listing {
+                name: "  ".into(),
+                ..listing()
+            },
+            Listing {
+                name: "x".repeat(MAX_NAME + 1),
+                ..listing()
+            },
+            Listing {
+                name: "a\nb".into(),
+                ..listing()
+            },
+            Listing {
+                name: "Fäst".into(),
+                ..listing()
+            },
+            Listing {
+                track: "x".repeat(MAX_TRACK + 1),
+                ..listing()
+            },
+            Listing {
+                version: String::new(),
+                ..listing()
+            },
+            Listing {
+                max_players: 0,
+                players: 0,
+                ..listing()
+            },
+            Listing {
+                players: 9,
+                ..listing()
+            },
         ];
         for listing in bad {
             assert_eq!(listing.validate(), Err(Reject::Invalid), "{listing:?}");

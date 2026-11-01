@@ -70,6 +70,8 @@ pub enum Action {
     /// (Debug) Show or hide the development text of the race (position, speed, reserves), or
     /// toggle it (`None`). The frame rate stays.
     DebugHud(Option<bool>),
+    /// (Debug) Show that text as a toast, to see how it is written.
+    DebugToast(String),
     /// (Debug) Change how the level is built, or toast how it is (`None`).
     DebugLevel(Option<MeshSetting>),
     /// (Debug) Set the depth bias of the crates, or toast it (`None`).
@@ -110,12 +112,13 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
-const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
+const LOBBY_USAGE: &str =
+    "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 
@@ -254,7 +257,9 @@ impl Action {
                     return Err(CUP_USAGE.into());
                 };
                 if name.chars().count() > MAX_NAME
-                    || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    || !name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
                 {
                     return Err(format!(
                         "A cup's name is letters, digits, - and _, up to {MAX_NAME}"
@@ -392,6 +397,8 @@ impl Action {
                 "off" => Ok(Action::DebugHud(Some(false))),
                 _ => Err(DEBUG_USAGE.into()),
             },
+            "toast" if !rest.is_empty() => Ok(Action::DebugToast(rest.to_string())),
+            "toast" => Err("Usage: /debug toast <text>".into()),
             "level" => Action::level(rest),
             "fx" => Action::fx(rest).map(Action::DebugFx),
             "crate" => {
@@ -519,8 +526,9 @@ impl CommandLine {
     /// The start of the word before the cursor (words are what spaces separate).
     fn word_start(&self) -> usize {
         let head = self.text[..self.cursor].trim_end();
-        head.rfind(char::is_whitespace)
-            .map_or(0, |i| i + head[i..].chars().next().map_or(1, char::len_utf8))
+        head.rfind(char::is_whitespace).map_or(0, |i| {
+            i + head[i..].chars().next().map_or(1, char::len_utf8)
+        })
     }
 
     /// The end of the word after the cursor.
@@ -903,10 +911,7 @@ fn show(
     mut rows: Query<&mut Visibility, With<InputRow>>,
     suggestions: Query<Entity, With<Suggestions>>,
     mut prompt: Query<&mut Text, With<CommandText>>,
-    mut cursor: Query<
-        (&mut TextSpan, &mut TextColor, &mut TextBackgroundColor),
-        With<CursorSpan>,
-    >,
+    mut cursor: Query<(&mut TextSpan, &mut TextColor, &mut TextBackgroundColor), With<CursorSpan>>,
     mut after: Query<&mut TextSpan, (With<AfterSpan>, Without<CursorSpan>)>,
     // What the suggestions were made for: the text and the one picked.
     mut shown: Local<Option<(String, usize)>>,
@@ -946,7 +951,10 @@ fn show(
         }
     }
     for mut span in &mut after {
-        assign(&mut span.0, rest.chars().next().map_or("", |c| &rest[c.len_utf8()..]));
+        assign(
+            &mut span.0,
+            rest.chars().next().map_or("", |c| &rest[c.len_utf8()..]),
+        );
     }
     let Ok(list) = suggestions.single() else {
         return;

@@ -95,7 +95,10 @@ fn finish(
         return;
     }
     if let Some(what) = lacks {
-        warn!("the scene is not whole after {} frames: no {what}", loading.frames);
+        warn!(
+            "the scene is not whole after {} frames: no {what}",
+            loading.frames
+        );
     }
     for screen in &screens {
         commands.entity(screen).try_despawn();

@@ -42,7 +42,10 @@ fn every_need_loads_without_the_disc() {
             }
             Need::Howl | Need::Xnf => {}
             Need::Xa(..) => {
-                assert!(!decode(&bytes).frames.is_empty(), "{key} decodes to nothing");
+                assert!(
+                    !decode(&bytes).frames.is_empty(),
+                    "{key} decodes to nothing"
+                );
             }
         }
     }

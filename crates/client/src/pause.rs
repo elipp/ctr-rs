@@ -166,7 +166,11 @@ fn items(
         items.push(entry(Item::Quit, "Quit"));
     }
     // Online the race goes on.
-    let title = if lobby.online.is_none() { "Paused" } else { "Menu" };
+    let title = if lobby.online.is_none() {
+        "Paused"
+    } else {
+        "Menu"
+    };
     (title.into(), items)
 }
 
@@ -410,8 +414,7 @@ fn input(
             menu.selected = (menu.selected + count - 1) % count;
             sound(MENU_MOVE_SFX);
         }
-        if key(&[KeyCode::ArrowDown, KeyCode::KeyS]) || pad(GamepadButton::DPadDown) || stick_down
-        {
+        if key(&[KeyCode::ArrowDown, KeyCode::KeyS]) || pad(GamepadButton::DPadDown) || stick_down {
             menu.selected = (menu.selected + 1) % count;
             sound(MENU_MOVE_SFX);
         }

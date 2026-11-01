@@ -286,7 +286,12 @@ impl Collision {
     /// `CollMoved_SelectProjection`: the edge vectors and hit point of the
     /// clip test, projected onto two axes. Swaps `v2`/`v3` so that `first_a` is
     /// the longer edge.
-    pub(super) fn select_projection(&self, v1: usize, v2: &mut usize, v3: &mut usize) -> Projection {
+    pub(super) fn select_projection(
+        &self,
+        v1: usize,
+        v2: &mut usize,
+        v3: &mut usize,
+    ) -> Projection {
         let sps = &self.sps;
         let pos = |i: usize| coords(sps.search_vert[i].pos);
         let push_out = coords(sps.candidate.push_out);

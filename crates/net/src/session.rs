@@ -13,13 +13,13 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::conn::{
     Heard, RACE_IN_PROGRESS, dial, distinct, listen, send_datagram, send_reliably, stamp,
 };
-use crate::peers::{Departure, Guest, HostState, Heirs, Link, Plan, Role, stalled, start_over};
+use crate::peers::{Departure, Guest, Heirs, HostState, Link, Plan, Role, stalled, start_over};
 use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Public, Tick,
-    Ticket, RateLimit, clean_chat, clean_nick,
+    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, PeerInfo, Player, Public,
+    RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
 
 /// How long a guest tries to reach the player that would host the lobby in the place of a host
@@ -45,7 +45,11 @@ pub(crate) async fn tell_lobby(
     host: &HostState,
     io: &Io,
 ) {
-    let guests: Vec<&Guest> = host.guests.iter().filter(|g| !host.gone.contains(&g.id)).collect();
+    let guests: Vec<&Guest> = host
+        .guests
+        .iter()
+        .filter(|g| !host.gone.contains(&g.id))
+        .collect();
     let players: Vec<Player> = std::iter::once(Player {
         id: me,
         character,
@@ -102,7 +106,11 @@ fn refresh_listing(host: &HostState, build: u32) {
             .iter()
             .filter(|g| !g.spectator && g.hello.is_some() && !host.gone.contains(&g.id))
             .count();
-        publisher.refresh((1 + driving).min(u8::MAX as usize) as u8, host.racing, build);
+        publisher.refresh(
+            (1 + driving).min(u8::MAX as usize) as u8,
+            host.racing,
+            build,
+        );
     }
 }
 
@@ -868,10 +876,17 @@ pub(crate) async fn run(
                             continue;
                         }
                         io.event(Event::PeerJoined(id));
-                        state.guests.push(Guest { id, connection, hello: None, nick: (0, String::new()), spectator: false });
+                        state.guests.push(Guest {
+                            id,
+                            connection,
+                            hello: None,
+                            nick: (0, String::new()),
+                            spectator: false,
+                        });
                     }
                     if let Some(public) = &state.public {
-                        let mut publisher = Publisher::start(&endpoint, public.realm, io.events.clone());
+                        let mut publisher =
+                            Publisher::start(&endpoint, public.realm, io.events.clone());
                         publisher.set(Some(public.clone()));
                         state.publisher = Some(publisher);
                     }
@@ -905,7 +920,12 @@ pub(crate) async fn run(
                         let mut connection = None;
                         while Instant::now() < deadline {
                             let connect = endpoint.connect(EndpointAddr::new(id), ALPN);
-                            match timeout(deadline.saturating_duration_since(Instant::now()), connect).await {
+                            match timeout(
+                                deadline.saturating_duration_since(Instant::now()),
+                                connect,
+                            )
+                            .await
+                            {
                                 Ok(Ok(c)) => {
                                     connection = Some(c);
                                     break;

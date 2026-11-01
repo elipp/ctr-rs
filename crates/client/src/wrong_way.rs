@@ -58,9 +58,9 @@ fn show(
     let race = &*sim.race;
     let shown = race.laps != race::FREE_DRIVE_LAPS
         && race
-        .karts
-        .get(sim.own)
-        .is_some_and(|kart| vehicle::lap::wrong_way(&kart.driver))
+            .karts
+            .get(sim.own)
+            .is_some_and(|kart| vehicle::lap::wrong_way(&kart.driver))
         && race.event_ms & FLASH_BIT != 0
         && !menu.open;
     visibility.set_if_neq(if shown {

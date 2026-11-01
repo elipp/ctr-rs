@@ -12,9 +12,7 @@ use loader::texture::{
 use loader::vram::Vram;
 
 use super::atlas::{Atlas, AtlasBuilder, TILE, TileKind, passes};
-use super::classify::{
-    TURBO_PAD_EXTRA_BIAS, is_collision_wall, is_marker_red, turbo_pad_visuals,
-};
+use super::classify::{TURBO_PAD_EXTRA_BIAS, is_collision_wall, is_marker_red, turbo_pad_visuals};
 use super::{MeshPart, PARTS, Part, to_world, vertex_channel};
 
 /// `BSP_LEAF_FLAG_WATER`

@@ -196,7 +196,10 @@ mod tests {
 
     #[test]
     fn four_players_get_three_two_one_nothing() {
-        assert_eq!((0..4).map(|p| points(4, p)).collect::<Vec<_>>(), [3, 2, 1, 0]);
+        assert_eq!(
+            (0..4).map(|p| points(4, p)).collect::<Vec<_>>(),
+            [3, 2, 1, 0]
+        );
     }
 
     #[test]
@@ -227,11 +230,22 @@ mod tests {
         series.score(3, &order);
         order.swap(0, 2);
         let gained = series.score(3, &order);
-        assert_eq!(gained, [("p2".to_string(), 2), ("p1".to_string(), 1), ("p0".to_string(), 0)]);
+        assert_eq!(
+            gained,
+            [
+                ("p2".to_string(), 2),
+                ("p1".to_string(), 1),
+                ("p0".to_string(), 0)
+            ]
+        );
         // 2+0, 1+1 and 0+2: all tied, in the order they were first scored.
         assert_eq!(
             series.standings(),
-            [("p0".to_string(), 2), ("p1".to_string(), 2), ("p2".to_string(), 2)]
+            [
+                ("p0".to_string(), 2),
+                ("p1".to_string(), 2),
+                ("p2".to_string(), 2)
+            ]
         );
         // A third race, won by p1, breaks the tie.
         series.score(3, &[order[1].clone(), order[0].clone(), order[2].clone()]);

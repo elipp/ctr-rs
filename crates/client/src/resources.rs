@@ -93,22 +93,22 @@ pub(crate) const CHARACTERS: [&str; 16] = [
 
 /// The colour of each racer's name in the chat, in the same order as `CHARACTERS`.
 pub(crate) const CHARACTER_COLORS: [Color; 16] = [
-    Color::srgb(1.0, 0.6, 0.2),   // Crash
-    Color::srgb(0.95, 0.9, 0.35), // Cortex
-    Color::srgb(0.85, 0.55, 0.3), // Tiny
-    Color::srgb(1.0, 0.5, 0.75),  // Coco
-    Color::srgb(0.6, 0.75, 0.9),  // N. Gin
-    Color::srgb(0.95, 0.35, 0.3), // Dingo
-    Color::srgb(0.75, 0.95, 1.0), // Polar
-    Color::srgb(0.3, 0.85, 0.8),  // Pura
-    Color::srgb(0.7, 0.7, 0.85),  // Pinstripe
-    Color::srgb(0.9, 0.8, 0.5),   // Papu
+    Color::srgb(1.0, 0.6, 0.2),    // Crash
+    Color::srgb(0.95, 0.9, 0.35),  // Cortex
+    Color::srgb(0.85, 0.55, 0.3),  // Tiny
+    Color::srgb(1.0, 0.5, 0.75),   // Coco
+    Color::srgb(0.6, 0.75, 0.9),   // N. Gin
+    Color::srgb(0.95, 0.35, 0.3),  // Dingo
+    Color::srgb(0.75, 0.95, 1.0),  // Polar
+    Color::srgb(0.3, 0.85, 0.8),   // Pura
+    Color::srgb(0.7, 0.7, 0.85),   // Pinstripe
+    Color::srgb(0.9, 0.8, 0.5),    // Papu
     Color::srgb(0.55, 0.95, 0.45), // Roo
-    Color::srgb(0.5, 0.75, 0.35), // Joe
-    Color::srgb(0.4, 0.45, 1.0),  // N. Tropy
-    Color::srgb(0.75, 0.55, 1.0), // Penta
-    Color::srgb(0.8, 0.45, 0.2),  // Fake Crash
-    Color::srgb(0.4, 1.0, 0.6),   // Oxide
+    Color::srgb(0.5, 0.75, 0.35),  // Joe
+    Color::srgb(0.4, 0.45, 1.0),   // N. Tropy
+    Color::srgb(0.75, 0.55, 1.0),  // Penta
+    Color::srgb(0.8, 0.45, 0.2),   // Fake Crash
+    Color::srgb(0.4, 1.0, 0.6),    // Oxide
 ];
 
 /// What to load the next level with.

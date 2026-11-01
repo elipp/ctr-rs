@@ -12,9 +12,7 @@ use loader::lev::SVec3;
 
 pub use atlas::Atlas;
 pub use classify::{TURBO_PAD_EXTRA_BIAS, is_collision_wall, is_turbo_pad, turbo_pad_visuals};
-pub use level::{
-    AnimatedFace, Animation, LevelMesh, SceneryCorner, WaterCorner, level_mesh,
-};
+pub use level::{AnimatedFace, Animation, LevelMesh, SceneryCorner, WaterCorner, level_mesh};
 pub use model::{ModelMesh, model_mesh, model_positions, model_vertices};
 
 /// World units per game unit.

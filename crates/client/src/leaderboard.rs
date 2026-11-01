@@ -10,9 +10,9 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use loader::source::Need;
 use loader::dram::DramFile;
 use loader::icons::{parse_groups, parse_icons};
+use loader::source::Need;
 use render::font::{Font, Gradient};
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 
@@ -76,7 +76,9 @@ impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (build, order, tint, names).chain().run_if(crate::drive::driving),
+            (build, order, tint, names)
+                .chain()
+                .run_if(crate::drive::driving),
         );
     }
 }
@@ -116,7 +118,10 @@ pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>
     images.add(image)
 }
 
-pub(crate) fn load_portraits(vram: &loader::vram::Vram, images: &mut Assets<Image>) -> Handle<Image> {
+pub(crate) fn load_portraits(
+    vram: &loader::vram::Vram,
+    images: &mut Assets<Image>,
+) -> Handle<Image> {
     atlas_image(portrait_atlas(&pack_icons(), vram), images)
 }
 

@@ -46,7 +46,12 @@ mod tests {
     #[test]
     fn places_are_said_as_ordinals() {
         let said: Vec<String> = [0, 1, 2, 3, 10, 11, 12, 20, 21].map(ordinal).into();
-        assert_eq!(said, ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"]);
+        assert_eq!(
+            said,
+            [
+                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"
+            ]
+        );
     }
 }
 

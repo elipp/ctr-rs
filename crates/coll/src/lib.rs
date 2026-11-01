@@ -33,7 +33,6 @@ mod search;
 mod triangle;
 mod types;
 
-
 use bsp::search_bsp;
 use helpers::*;
 pub use types::*;

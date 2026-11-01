@@ -42,13 +42,19 @@ fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Re
     match changes.as_slice() {
         [] => return Ok(None),
         [only] => {
-            println!("the patch changes the music of song pack {} only: using it", only.pack);
+            println!(
+                "the patch changes the music of song pack {} only: using it",
+                only.pack
+            );
             return Ok(Some(only.pack));
         }
         _ if !std::io::stdin().is_terminal() => return Ok(None),
         _ => {}
     }
-    println!("the patch changes the music of {} song packs:", changes.len());
+    println!(
+        "the patch changes the music of {} song packs:",
+        changes.len()
+    );
     for c in &changes {
         let levels = match c.levels.as_slice() {
             [] => String::new(),
@@ -246,7 +252,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     a.level,
                     a.song_pack
                         .as_ref()
-                        .map_or("the game's".into(), |p| format!("its own ({} bytes)", p.len())),
+                        .map_or("the game's".into(), |p| format!(
+                            "its own ({} bytes)",
+                            p.len()
+                        )),
                     a.reverb.map_or("the game's".into(), |r| r.to_string()),
                     a.samples.len(),
                     a.samples.iter().map(|(_, s)| s.len()).sum::<usize>()

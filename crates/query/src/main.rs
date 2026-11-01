@@ -48,6 +48,11 @@ commands:
                                       with each icon's name and texture layout
   models [ENTRY]                      the models of a pack (default the racer pack): id, name,
                                       and per LOD the faces, animations and frames
+  font middle|large [CHARS | --index N]...
+                                      the font's glyphs as grids of texels: two hex digits of
+                                      the grey (`..` is transparent, a trailing `'` marks a
+                                      set semi-transparency bit); no CHARS dumps every glyph,
+                                      --index picks a glyph by its index in the icon group
   portraits | weapons                 decodes the HUD pictures the way the viewer does and
                                       counts the texels of each
 
@@ -801,6 +806,115 @@ fn hud_pictures(which: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Dumps glyphs of `middlefont` or `largefont` as grids of texels, to draw one in the same style.
+fn font_glyphs(mut args: Args) -> Result<(), String> {
+    use render::font::{Font, glyph};
+    let which = args.positional("FONT (middle or large)")?;
+    let font = match which.as_str() {
+        "middle" => Font::Middle,
+        "large" => Font::Large,
+        other => return Err(format!("no font `{other}`: middle or large")),
+    };
+    let mut wanted = Vec::new();
+    for text in args.options("--index")? {
+        wanted.push(
+            text.parse::<usize>()
+                .map_err(|_| format!("--index is not a number: `{text}`"))?,
+        );
+    }
+    while let Ok(text) = args.positional("CHARS") {
+        for c in text.chars().filter(|c| *c != ' ') {
+            wanted.push(glyph(c).ok_or_else(|| format!("the font has no glyph for `{c}`"))?);
+        }
+    }
+    args.finish()?;
+
+    let path = std::env::var_os("CTR_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
+        });
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut vram = loader::vram::Vram::default();
+    let shared = big
+        .read(&mut disc, BigIndex::SHARED_MPK_VRM.get())
+        .map_err(|e| e.to_string())?;
+    for img in loader::vram::parse_vram_file(&shared).map_err(|e| e.to_string())? {
+        vram.upload(&img).map_err(|e| e.to_string())?;
+    }
+    let pack = big
+        .read(&mut disc, BigIndex::ARCADE_1P_PACK.get())
+        .map_err(|e| e.to_string())?;
+    let groups = loader::icons::parse_groups(&DramFile::parse(&pack).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let icons = &groups
+        .iter()
+        .find(|g| g.group_id == font.group_id())
+        .ok_or("the pack does not have the font")?
+        .icons;
+    if wanted.is_empty() {
+        wanted = (0..icons.len()).collect();
+    }
+    for index in wanted {
+        let icon = icons
+            .get(index)
+            .ok_or_else(|| format!("the font has {} glyphs, not {index}", icons.len()))?;
+        let [(u0, v0), (u1, _), (_, v2), _] = icon.layout.uv;
+        let (w, h) = (
+            u1.wrapping_sub(u0) as usize + 1,
+            v2.wrapping_sub(v0) as usize + 1,
+        );
+        let name = (0..=127u8)
+            .map(char::from)
+            .find(|c| c.is_ascii_graphic() && !c.is_ascii_lowercase() && glyph(*c) == Some(index));
+        println!(
+            "glyph {index} ({}) {font:?}: cell {w}x{h}, name {:?}",
+            name.map_or("no character".to_string(), |c| format!("`{c}`")),
+            icon.name
+        );
+        let mut ink = (w, 0);
+        let mut levels = BTreeMap::<u8, usize>::new();
+        let mut not_grey = false;
+        let mut colours = std::collections::BTreeSet::new();
+        for v in 0..h {
+            let mut row = String::new();
+            for u in 0..w {
+                let texel = vram
+                    .texel_stp(
+                        &icon.layout,
+                        u0.wrapping_add(u as u8),
+                        v0.wrapping_add(v as u8),
+                    )
+                    .map_err(|e| e.to_string())?;
+                match texel {
+                    Some(([r, g, b, a], stp)) => {
+                        colours.insert([r, g, b, a]);
+                        ink = (ink.0.min(u), ink.1.max(u + 1));
+                        not_grey |= r != g || g != b;
+                        *levels.entry(r).or_default() += 1;
+                        row += &format!("{r:02x}{}", if stp { '\'' } else { ' ' });
+                    }
+                    None => row += ".. ",
+                }
+            }
+            println!("  {row}");
+        }
+        let levels: Vec<_> = levels.iter().map(|(l, n)| format!("{l:02x}x{n}")).collect();
+        println!(
+            "  ink columns {}..{} of {w}; levels {}{}",
+            ink.0,
+            ink.1,
+            levels.join(" "),
+            if not_grey {
+                format!("; NOT GREY (red shown), colours {colours:02x?}")
+            } else {
+                String::new()
+            }
+        );
+    }
+    Ok(())
+}
+
 fn pack_models(entry: Option<usize>) -> Result<(), String> {
     let path = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
@@ -875,6 +989,9 @@ fn run() -> Result<(), String> {
     }
     if matches!(command.as_str(), "portraits" | "weapons") {
         return hud_pictures(&command);
+    }
+    if command == "font" {
+        return font_glyphs(Args(args));
     }
     if command == "crates" {
         let mut args = Args(args);
