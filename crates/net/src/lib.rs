@@ -73,7 +73,13 @@ fn endpoint_builder() -> Builder {
 }
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/10";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/11";
+
+/// What the connections between the players of a race speak. They carry the pads and nothing
+/// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
+/// one, the host's pair with each guest included, so the host is no different from the others
+/// to the network.
+pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/1";
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
@@ -188,7 +194,12 @@ pub enum Event {
     },
     /// The round trip to a player, from the latest ping (see [`Message::Ping`]): one for each
     /// ping answered, every [`wire::PING_SECONDS`].
-    Rtt { id: EndpointId, rtt: Duration },
+    Rtt {
+        id: EndpointId,
+        rtt: Duration,
+        /// Whether our data to it goes through a relay (none while there is no path).
+        relay: Option<bool>,
+    },
     /// The answer to [`Session::net_info`]: how each peer is reached.
     NetInfo(Vec<PeerInfo>),
     /// The lobby is in the realm's list (see [`Session::set_public`]), or it is not and why: the
@@ -502,7 +513,7 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     // Made where it runs: the session is not `Send`.
     let session = move || async move {
         let result: Result<(), Error> = async {
-            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec()]).bind().await?;
+            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()]).bind().await?;
             let io = Io {
                 events: events_tx.clone(),
                 commands: commands_rx,
