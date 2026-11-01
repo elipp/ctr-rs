@@ -2,13 +2,14 @@
 //! players that left it, and the link of pads to each player in it.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointId};
 use n0_future::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::conn::{dial, send_datagram};
+use crate::conn::{dial, is_direct, send_datagram};
 use crate::realm::Publisher;
 use crate::transfers::Transfers;
 use crate::wire::{InputReceiver, InputSender, Message};
@@ -90,8 +91,6 @@ pub(crate) struct Guest {
     pub(crate) nick: (u32, String),
     /// It only watches: no kart, no pads (from its Hello).
     pub(crate) spectator: bool,
-    /// Its NAT is the hard kind (from its Nat).
-    pub(crate) hard: bool,
 }
 
 /// The race as agreed at the start.
@@ -136,9 +135,20 @@ impl Departure {
     }
 }
 
+/// How long a link may be on a relay before the other side is tried as the one that dials, and
+/// how long between the tries after that, and how many there are. (Only the side that dials
+/// makes holes, so a link that is stuck on a relay may get on with the other one dialing.)
+pub(crate) const RELAY_PATIENCE: Duration = Duration::from_secs(10);
+pub(crate) const REDIAL_EVERY: Duration = Duration::from_secs(20);
+pub(crate) const REDIALS: u32 = 4;
+
 /// The connection to another player in the race, and the pads that go over it.
 pub(crate) struct Link {
+    /// The first connection made to the player.
     pub(crate) connection: Connection,
+    /// The one made later by the side that was dialed, when the first stayed on a relay (see
+    /// [`Link::wants_redial`]). Pads go over whichever of the two is direct.
+    pub(crate) alt: Option<Connection>,
     /// Our pads, until it confirms them.
     pub(crate) sender: InputSender,
     /// Its pads, as far as they have come in.
@@ -149,6 +159,9 @@ pub(crate) struct Link {
     pub(crate) epoch: u32,
     /// When its pads last went further (or the link began).
     pub(crate) advanced: Instant,
+    /// The tries of dialing the other way so far, and the earliest time for the next.
+    pub(crate) redials: u32,
+    pub(crate) next_redial: Instant,
 }
 
 impl Link {
@@ -156,10 +169,56 @@ impl Link {
         Link {
             epoch,
             connection,
+            alt: None,
             sender: InputSender::default(),
             receiver: InputReceiver::default(),
             peer_has: 0,
             advanced: Instant::now(),
+            redials: 0,
+            next_redial: Instant::now() + RELAY_PATIENCE,
+        }
+    }
+
+    /// Starts the pads over for the race of `epoch`, on the connections it has.
+    pub(crate) fn restart(&mut self, epoch: u32) {
+        self.epoch = epoch;
+        self.sender = InputSender::default();
+        self.receiver = InputReceiver::default();
+        self.peer_has = 0;
+        self.advanced = Instant::now();
+    }
+
+    /// The connection that the pads go over: the second one when only that is direct, or the
+    /// only one that is up.
+    pub(crate) fn best(&self) -> &Connection {
+        match &self.alt {
+            Some(alt)
+                if self.connection.close_reason().is_some()
+                    || (is_direct(alt) == Some(true) && is_direct(&self.connection) != Some(true)) =>
+            {
+                alt
+            }
+            _ => &self.connection,
+        }
+    }
+
+    /// Whether to dial the player again, the other way round from the first time: we were
+    /// dialed, and the way to it still is not direct, after the patience or the last try.
+    pub(crate) fn wants_redial(&self, now: Instant) -> bool {
+        redial_due(
+            self.connection.side().is_server(),
+            self.redials,
+            now >= self.next_redial,
+            is_direct(self.best()),
+        )
+    }
+
+    /// A redial is made: the one that did not come to anything is dropped.
+    pub(crate) fn redialed(&mut self, now: Instant) {
+        self.redials += 1;
+        self.next_redial = now + REDIAL_EVERY;
+        if let Some(alt) = self.alt.take() {
+            alt.close(0u32.into(), b"redial");
         }
     }
 
@@ -167,38 +226,28 @@ impl Link {
     pub(crate) fn send(&mut self) {
         let mut packet = self.sender.packet(self.peer_has, self.receiver.next());
         packet.epoch = self.epoch;
-        send_datagram(&self.connection, &Message::Inputs(packet));
+        send_datagram(self.best(), &Message::Inputs(packet));
     }
 }
 
+/// Whether a link is due to be dialed the other way: we were dialed (`dialed`), the tries are not
+/// used up, the wait is over (`waited`), and the way to the player is not direct (`direct`).
+fn redial_due(dialed: bool, redials: u32, waited: bool, direct: Option<bool>) -> bool {
+    dialed && redials < REDIALS && waited && direct != Some(true)
+}
+
 /// The players of `roster` that we dial for their links, those we are not `linked` to. Of each
-/// pair one dials, whoever the host is and whichever way they came to the lobby: a player with a
-/// `hard` NAT (see [`Message::Nat`]) when the other has not, as only the one that dials makes the
-/// holes (iroh's client side holepunches, its server side waits), and otherwise the one with the
-/// lower id. `hard` has the flag of each of the roster.
+/// pair the one with the lower id dials, whoever the host is and whichever way they came to the
+/// lobby, so that every link is made the same way.
 pub(crate) fn to_dial(
     me: EndpointId,
     roster: &[EndpointId],
-    hard: &[bool],
     linked: impl Fn(&EndpointId) -> bool,
 ) -> Vec<EndpointId> {
-    let hard_of = |i: usize| hard.get(i).copied().unwrap_or(false);
-    let Some(mine) = roster.iter().position(|&id| id == me) else {
-        return Vec::new();
-    };
     roster
         .iter()
-        .enumerate()
-        .filter(|&(i, id)| {
-            *id != me
-                && !linked(id)
-                && match (hard_of(mine), hard_of(i)) {
-                    (true, false) => true,
-                    (false, true) => false,
-                    _ => me.as_bytes() < id.as_bytes(),
-                }
-        })
-        .map(|(_, &id)| id)
+        .copied()
+        .filter(|id| me.as_bytes() < id.as_bytes() && !linked(id))
         .collect()
 }
 
@@ -206,11 +255,10 @@ pub(crate) fn to_dial(
 pub(crate) fn dial_links(
     endpoint: &Endpoint,
     roster: &[EndpointId],
-    hard: &[bool],
     links: &HashMap<EndpointId, Link>,
     dialed: &UnboundedSender<Connection>,
 ) {
-    for id in to_dial(endpoint.id(), roster, hard, |id| links.contains_key(id)) {
+    for id in to_dial(endpoint.id(), roster, |id| links.contains_key(id)) {
         dial(endpoint.clone(), id, dialed.clone());
     }
 }
@@ -237,7 +285,7 @@ pub(crate) fn stalled(
 /// connections that are up.
 pub(crate) fn start_over(links: &mut HashMap<EndpointId, Link>, epoch: u32) {
     for link in links.values_mut() {
-        *link = Link::new(link.connection.clone(), epoch);
+        link.restart(epoch);
     }
 }
 
@@ -268,38 +316,37 @@ mod tests {
     #[test]
     fn of_each_pair_one_dials_whoever_the_host_is() {
         let ids: [EndpointId; 4] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
-        let hards = [
-            [false; 4],
-            [true, false, false, false],
-            [false, true, true, false],
-            [true; 4],
-        ];
-        // Any of them can be first in the roster, which is the host, with any of them hard.
+        // Any of them can be first in the roster, which is the host.
         for host in 0..ids.len() {
             let mut roster = ids.to_vec();
             roster.swap(0, host);
-            for hard in hards {
-                let dials: Vec<(usize, usize)> = (0..roster.len())
-                    .flat_map(|me| {
-                        let wanted = to_dial(roster[me], &roster, &hard, |_| false);
-                        roster
-                            .iter()
-                            .enumerate()
-                            .filter(move |(_, id)| wanted.contains(id))
-                            .map(move |(i, _)| (me, i))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect();
-                // Six pairs, each dialed from one side only, and never from oneself.
-                assert_eq!(dials.len(), 6, "{hard:?}");
-                for &(from, to) in &dials {
-                    assert_ne!(from, to);
-                    assert!(!dials.contains(&(to, from)));
-                    // A hard NAT is the dialer when the other is not.
-                    assert!(!(hard[to] && !hard[from]), "{hard:?}: {from} dials {to}");
-                }
+            let dials: Vec<(EndpointId, EndpointId)> = roster
+                .iter()
+                .flat_map(|&me| {
+                    to_dial(me, &roster, |_| false)
+                        .into_iter()
+                        .map(move |id| (me, id))
+                })
+                .collect();
+            // Six pairs, each dialed from one side only, and never from oneself.
+            assert_eq!(dials.len(), 6);
+            for &(from, to) in &dials {
+                assert_ne!(from, to);
+                assert!(!dials.contains(&(to, from)));
             }
         }
+    }
+
+    #[test]
+    fn a_link_stuck_on_a_relay_is_dialed_the_other_way_a_few_times() {
+        // Dialed, waited, on a relay or with no path yet.
+        assert!(redial_due(true, 0, true, Some(false)));
+        assert!(redial_due(true, REDIALS - 1, true, None));
+        // Not yet, not by the side that dialed, not when direct, not for ever.
+        assert!(!redial_due(true, 0, false, Some(false)));
+        assert!(!redial_due(false, 0, true, Some(false)));
+        assert!(!redial_due(true, 0, true, Some(true)));
+        assert!(!redial_due(true, REDIALS, true, Some(false)));
     }
 
     #[test]
@@ -307,14 +354,9 @@ mod tests {
         let [a, b] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
         let (low, high) = if a.as_bytes() < b.as_bytes() { (a, b) } else { (b, a) };
         let roster = [low, high];
-        assert_eq!(to_dial(low, &roster, &[false; 2], |_| false), [high]);
-        assert!(to_dial(low, &roster, &[false; 2], |id| *id == high).is_empty());
-        assert!(to_dial(high, &roster, &[false; 2], |_| false).is_empty());
-        // The one with the hard NAT dials, the lower id or not.
-        assert!(to_dial(low, &roster, &[false, true], |_| false).is_empty());
-        assert_eq!(to_dial(high, &roster, &[false, true], |_| false), [low]);
-        // Both hard: as if neither.
-        assert_eq!(to_dial(low, &roster, &[true; 2], |_| false), [high]);
+        assert_eq!(to_dial(low, &roster, |_| false), [high]);
+        assert!(to_dial(low, &roster, |id| *id == high).is_empty());
+        assert!(to_dial(high, &roster, |_| false).is_empty());
     }
 
     #[test]
