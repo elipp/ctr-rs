@@ -12,7 +12,10 @@ fn the_sounds_load_without_the_disc() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/disc"));
     if !dir.join("MANIFEST").exists() {
-        eprintln!("skipping: {} has no MANIFEST (set CTR_DISC_DIR)", dir.display());
+        eprintln!(
+            "skipping: {} has no MANIFEST (set CTR_DISC_DIR)",
+            dir.display()
+        );
         return;
     }
     let source = Source::new(&dir, None);

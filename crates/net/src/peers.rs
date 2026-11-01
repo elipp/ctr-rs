@@ -8,9 +8,9 @@ use iroh::endpoint::Connection;
 use n0_future::time::Instant;
 
 use crate::conn::send_datagram;
-use crate::wire::{InputReceiver, InputSender, Message};
 use crate::realm::Publisher;
 use crate::transfers::Transfers;
+use crate::wire::{InputReceiver, InputSender, Message};
 use crate::{KICK_AFTER, Public, RateLimit, Ticket};
 use crate::{Pad, Tick};
 
@@ -72,7 +72,10 @@ pub(crate) struct Heirs {
 impl Heirs {
     /// The one to carry the lobby on: the first of the order that is not known to be gone.
     pub(crate) fn next_host(&self) -> Option<EndpointId> {
-        self.order.iter().copied().find(|id| !self.dead.contains(id))
+        self.order
+            .iter()
+            .copied()
+            .find(|id| !self.dead.contains(id))
     }
 }
 

@@ -38,8 +38,21 @@ impl Realm {
                 }
                 // A host that comes back on a new connection takes over its listing from the
                 // one that is yet to be found dead.
-                let was = lobbies.insert(id, Held { connection, listing: listing.clone() });
-                let Listing { name, players, max_players, state, track, version } = &listing;
+                let was = lobbies.insert(
+                    id,
+                    Held {
+                        connection,
+                        listing: listing.clone(),
+                    },
+                );
+                let Listing {
+                    name,
+                    players,
+                    max_players,
+                    state,
+                    track,
+                    version,
+                } = &listing;
                 match was {
                     None => info!(
                         %host, %name, %track, %version, ?state, lobbies = lobbies.len(),
@@ -54,7 +67,9 @@ impl Realm {
                             info!(%host, %name, "player left ({players}/{max_players})");
                         }
                         match (before.state, state) {
-                            (State::Lobby, State::Racing) => info!(%host, %name, %track, "race started"),
+                            (State::Lobby, State::Racing) => {
+                                info!(%host, %name, %track, "race started")
+                            }
                             (State::Racing, State::Lobby) => info!(%host, %name, "race over"),
                             _ => {}
                         }
@@ -76,7 +91,10 @@ impl Realm {
                 Response::Lobbies(
                     lobbies
                         .iter()
-                        .map(|(id, held)| Entry { id: *id, listing: held.listing.clone() })
+                        .map(|(id, held)| Entry {
+                            id: *id,
+                            listing: held.listing.clone(),
+                        })
                         .collect(),
                 )
             }
@@ -98,8 +116,15 @@ impl Realm {
 }
 
 /// Removes the lobby of `id`, if `connection` is still the one that holds it.
-fn remove(lobbies: &mut HashMap<[u8; 32], Held>, id: [u8; 32], connection: Connection) -> Option<Held> {
-    if lobbies.get(&id).is_some_and(|held| held.connection == connection) {
+fn remove(
+    lobbies: &mut HashMap<[u8; 32], Held>,
+    id: [u8; 32],
+    connection: Connection,
+) -> Option<Held> {
+    if lobbies
+        .get(&id)
+        .is_some_and(|held| held.connection == connection)
+    {
         return lobbies.remove(&id);
     }
     None
@@ -122,7 +147,10 @@ impl Bucket {
     const PER_SECOND: f32 = 2.0;
 
     pub fn new(now: Instant) -> Bucket {
-        Bucket { tokens: Bucket::BURST, at: now }
+        Bucket {
+            tokens: Bucket::BURST,
+            at: now,
+        }
     }
 
     pub fn take(&mut self, now: Instant) -> bool {
@@ -167,8 +195,14 @@ mod tests {
     #[test]
     fn a_lobby_lasts_as_long_as_its_connection() {
         let realm = Realm::default();
-        assert_eq!(realm.handle([1; 32], 1, Request::Announce(listing("a"))), Response::Ok);
-        assert_eq!(realm.handle([2; 32], 2, Request::Announce(listing("b"))), Response::Ok);
+        assert_eq!(
+            realm.handle([1; 32], 1, Request::Announce(listing("a"))),
+            Response::Ok
+        );
+        assert_eq!(
+            realm.handle([2; 32], 2, Request::Announce(listing("b"))),
+            Response::Ok
+        );
         assert_eq!(names(&realm), ["a", "b"]);
         realm.closed([1; 32], 1);
         assert_eq!(names(&realm), ["b"]);
@@ -201,7 +235,10 @@ mod tests {
         for i in 0..MAX_LOBBIES {
             let mut id = [0; 32];
             id[..8].copy_from_slice(&(i as u64).to_le_bytes());
-            assert_eq!(realm.handle(id, i, Request::Announce(listing("a"))), Response::Ok);
+            assert_eq!(
+                realm.handle(id, i, Request::Announce(listing("a"))),
+                Response::Ok
+            );
         }
         let response = realm.handle([0xff; 32], 0, Request::Announce(listing("b")));
         assert_eq!(response, Response::Rejected(Reject::Full));

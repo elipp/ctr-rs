@@ -60,14 +60,11 @@ fn read_input(
     if key_reverse || pad_down(&[GamepadButton::DPadDown]) {
         held |= buttons::DOWN;
     }
-    if down(Control::Hop)
-        || pad_down(&[GamepadButton::RightTrigger, GamepadButton::RightTrigger2])
+    if down(Control::Hop) || pad_down(&[GamepadButton::RightTrigger, GamepadButton::RightTrigger2])
     {
         held |= buttons::R1;
     }
-    if down(Control::Hop2)
-        || pad_down(&[GamepadButton::LeftTrigger, GamepadButton::LeftTrigger2])
-    {
+    if down(Control::Hop2) || pad_down(&[GamepadButton::LeftTrigger, GamepadButton::LeftTrigger2]) {
         held |= buttons::L1;
     }
     // Circle fires the item.
@@ -107,4 +104,3 @@ pub(crate) fn pad_of(pad: &net::Pad) -> Pad {
         ry: pad.ry,
     }
 }
-

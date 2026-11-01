@@ -110,7 +110,10 @@ pub fn load() {
         for bytes in crate::web::take_maps() {
             match Map::from_bytes(&bytes).and_then(|m| Ok((m.id()?, m.hash()?, m))) {
                 Ok((_, _, map)) if builtin::is_builtin_name(&map.name) => {
-                    eprintln!("{}: a map cannot be named for one of the game's tracks", map.name);
+                    eprintln!(
+                        "{}: a map cannot be named for one of the game's tracks",
+                        map.name
+                    );
                 }
                 Ok((id, hash, map)) => maps.push(Entry {
                     id,
@@ -264,7 +267,9 @@ pub fn make_builtins() {
         return;
     }
     let Some(image) = crate::disc::image() else {
-        eprintln!("The maps of the game's tracks are missing, and there is no disc image to make them from");
+        eprintln!(
+            "The maps of the game's tracks are missing, and there is no disc image to make them from"
+        );
         return;
     };
     eprintln!("Making maps of the game's tracks from the disc (this is done once)...");
@@ -331,7 +336,13 @@ pub fn slug(id: u32) -> String {
 fn slugify(name: &str) -> String {
     let slug: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     slug.trim_matches('_').to_string()
 }
@@ -355,11 +366,16 @@ pub fn resolve(text: &str) -> Result<u32, String> {
             Err(format!("No track has the number {text}"))
         };
     }
-    let found: Vec<u32> = ids().into_iter().filter(|&id| slug_matches(id, &slug)).collect();
+    let found: Vec<u32> = ids()
+        .into_iter()
+        .filter(|&id| slug_matches(id, &slug))
+        .collect();
     match found[..] {
         [id] => Ok(id),
         [] => Err(format!("Unknown track: {text}")),
-        _ => Err(format!("More than one map is called {text}: use its number (0x...)")),
+        _ => Err(format!(
+            "More than one map is called {text}: use its number (0x...)"
+        )),
     }
 }
 

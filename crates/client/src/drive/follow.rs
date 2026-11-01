@@ -155,4 +155,3 @@ pub(super) fn chase(
         transform.rotate_local_z(roll);
     }
 }
-

@@ -222,7 +222,10 @@ pub(super) fn report(
     match listed {
         Some(Ok(())) => {
             let name = lobby.public_name().unwrap_or_default();
-            toasts.write(Toast::new(format!("Lobby \"{name}\" listed in the realm"), 2500));
+            toasts.write(Toast::new(
+                format!("Lobby \"{name}\" listed in the realm"),
+                2500,
+            ));
         }
         Some(Err(why)) => {
             warn!("could not list the lobby in the realm: {why}");

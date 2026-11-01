@@ -57,6 +57,52 @@ const GAP: usize = 1;
 /// The glyph of `?`, which stands in for a character the fonts do not have.
 const QUESTION: usize = 46;
 
+/// The index of the first of [`OWN_MIDDLE`]: the glyphs that the discs' fonts do not have are
+/// drawn after the disc's 57, in the middle font only. In the large font, they show as `?`.
+const OWN: usize = 57;
+const HASH: usize = OWN;
+const OPEN: usize = OWN + 1;
+const CLOSE: usize = OWN + 2;
+
+/// The middle font's own glyphs (`#`, `(` and `)`), drawn in the style of its `H`, `=` and `/`:
+/// `.` is transparent, `o` the outline and `#` the fill.
+const OWN_MIDDLE: [[&str; 8]; 3] = [
+    [
+        "..ooooooo...",
+        "ooo##o##ooo.",
+        "o#########o.",
+        "ooo##o##ooo.",
+        "o#########o.",
+        "ooo##o##ooo.",
+        "..ooooooo...",
+        "............",
+    ],
+    [
+        ".oooo.",
+        "oo##o.",
+        "o##oo.",
+        "o##o..",
+        "o##oo.",
+        "oo##o.",
+        ".oooo.",
+        "......",
+    ],
+    [
+        "oooo..",
+        "o##oo.",
+        "oo##o.",
+        ".o##o.",
+        "oo##o.",
+        "o##oo.",
+        "oooo..",
+        "......",
+    ],
+];
+
+/// The outline and fill texels of the discs' fonts, as RGBA.
+const OUTLINE: [u8; 4] = [0x00, 0x00, 0x08, 0xff];
+const FILL: [u8; 4] = [0x84, 0x84, 0x84, 0xff];
+
 /// The glyph of a character: its index in the font's icon group, the same in both fonts. Letters
 /// are capitals, whatever their case. A space, and anything else the fonts do not have, is none.
 pub fn glyph(c: char) -> Option<usize> {
@@ -73,6 +119,9 @@ pub fn glyph(c: char) -> Option<usize> {
         '%' => 43,
         '.' => 44,
         '+' => 45,
+        '#' => HASH,
+        '(' => OPEN,
+        ')' => CLOSE,
         '?' => QUESTION,
         '_' => 47,
         '/' => 48,
@@ -172,7 +221,13 @@ impl FontAtlas {
                 v2.wrapping_sub(v0) as usize + 1,
             )
         };
-        let width = icons.iter().map(|i| size(i).0).sum();
+        let own: &[[&str; 8]] = if font == Font::Middle && icons.len() == OWN {
+            &OWN_MIDDLE
+        } else {
+            &[]
+        };
+        let own_width: usize = own.iter().map(|rows| rows[0].len()).sum();
+        let width = icons.iter().map(|i| size(i).0).sum::<usize>() + own_width;
         let height = icons.iter().map(|i| size(i).1).max()?;
         let mut rgba = vec![0u8; width * height * 4];
         let mut glyphs = Vec::with_capacity(icons.len());
@@ -200,6 +255,28 @@ impl FontAtlas {
                 width: w,
                 height: h,
                 ink: if ink.0 < ink.1 { ink } else { (0, w) },
+            });
+            x += w;
+        }
+        for rows in own {
+            let w = rows[0].len();
+            let mut ink = (w, 0);
+            for (v, row) in rows.iter().enumerate() {
+                for (u, c) in row.bytes().enumerate() {
+                    let texel = match c {
+                        b'o' => OUTLINE,
+                        b'#' => FILL,
+                        _ => continue,
+                    };
+                    rgba[(v * width + x + u) * 4..][..4].copy_from_slice(&texel);
+                    ink = (ink.0.min(u), ink.1.max(u + 1));
+                }
+            }
+            glyphs.push(Glyph {
+                x,
+                width: w,
+                height: rows.len(),
+                ink,
             });
             x += w;
         }
@@ -234,7 +311,9 @@ impl FontAtlas {
                 x += self.font.space();
                 continue;
             }
-            let Some(&glyph) = self.glyphs.get(glyph(c).unwrap_or(QUESTION)) else {
+            // The large font has no `#`: it shows as the `?` of a character the fonts lack.
+            let at = |i: Option<usize>| i.and_then(|i| self.glyphs.get(i));
+            let Some(&glyph) = at(glyph(c)).or(at(Some(QUESTION))) else {
                 continue;
             };
             let advance = if c.is_ascii_digit() {
@@ -296,6 +375,9 @@ mod tests {
         assert_eq!(glyph('A'), Some(10));
         assert_eq!(glyph('z'), Some(35));
         assert_eq!(glyph('/'), Some(48));
+        assert_eq!(glyph('#'), Some(HASH));
+        assert_eq!(glyph('('), Some(OPEN));
+        assert_eq!(glyph(')'), Some(CLOSE));
         assert_eq!(glyph(' '), None);
         assert_eq!(glyph('ä'), None);
     }
@@ -327,7 +409,9 @@ mod tests {
             return;
         };
         for atlas in &fonts {
-            assert_eq!(atlas.glyphs().len(), 57, "{:?}", atlas.font());
+            // The disc's 57, and the middle font's own `#`, `(` and `)`.
+            let own = if atlas.font() == Font::Middle { 3 } else { 0 };
+            assert_eq!(atlas.glyphs().len(), OWN + own, "{:?}", atlas.font());
             // Every digit and letter has texels, and is no wider than its cell.
             for glyph in &atlas.glyphs()[..36] {
                 assert!(glyph.ink_width() > 0 && glyph.ink.1 <= glyph.width);
