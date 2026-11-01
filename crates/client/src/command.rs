@@ -444,6 +444,8 @@ pub(crate) struct CommandLine {
     draft: String,
     /// The suggestion picked, of those listed for the text.
     selected: usize,
+    /// Up or Down went through the suggestions since the text changed.
+    moved_selection: bool,
     /// Where the cursor is in the text: a byte offset, always at a character.
     cursor: usize,
 }
@@ -484,6 +486,7 @@ impl CommandLine {
     fn touch(&mut self) {
         self.browsing = None;
         self.selected = 0;
+        self.moved_selection = false;
     }
 
     /// Replaces the text, with the cursor after it.
@@ -594,6 +597,7 @@ impl CommandLine {
         let count = menu.options.len();
         let next = if down { index + 1 } else { index + count - 1 };
         self.selected = next % count;
+        self.moved_selection = true;
         true
     }
 
@@ -614,6 +618,18 @@ impl CommandLine {
         };
         self.set_text(line);
         done
+    }
+
+    /// Return. A line that is a whole command is sent as it is (`/lobby create`, which an option
+    /// could follow but does not have to), unless Up or Down picked an option; otherwise a
+    /// suggestion picked goes in first, and the line is sent if that ends it.
+    fn enter(&mut self) {
+        if self.selection().is_none()
+            || (!self.moved_selection && self.is_command())
+            || self.complete()
+        {
+            self.entered = true;
+        }
     }
 
     /// Keeps the line that was sent, unless it is the same as the last.
@@ -704,14 +720,7 @@ pub(crate) fn capture(
         }
         let (ctrl, alt, sup) = (*ctrl, *alt, *sup);
         match &event.logical_key {
-            Key::Enter => {
-                // A line that is a whole command is sent as it is (`/lobby create`, which an option
-                // could follow but does not have to); otherwise a suggestion picked goes in
-                // first, and the line is sent if that ends it.
-                if line.selection().is_none() || line.is_command() || line.complete() {
-                    line.entered = true;
-                }
-            }
+            Key::Enter => line.enter(),
             Key::Tab => {
                 line.complete();
             }
@@ -722,6 +731,7 @@ pub(crate) fn capture(
                 line.browsing = None;
                 line.draft.clear();
                 line.selected = 0;
+                line.moved_selection = false;
             }
             Key::ArrowUp => {
                 if !line.step(false) {
@@ -1199,6 +1209,31 @@ mod tests {
         let mut line = CommandLine::default();
         line.insert(text);
         line
+    }
+
+    #[test]
+    fn return_takes_the_option_picked_over_a_whole_command() {
+        let mut line = typed("/debug fx ");
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/debug fx flash");
+        assert!(line.entered);
+        let mut line = typed("/debug set weapon 1");
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/debug set weapon 10");
+        assert!(line.entered);
+        // Round to the first is still a pick.
+        let mut line = typed("/debug hud ");
+        line.step(true);
+        line.step(true);
+        line.enter();
+        assert_eq!(line.text, "/debug hud on");
+        // Nothing picked: the command as it is.
+        let mut line = typed("/debug fx ");
+        line.enter();
+        assert_eq!(line.text, "/debug fx ");
+        assert!(line.entered);
     }
 
     #[test]
