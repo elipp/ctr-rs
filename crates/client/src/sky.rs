@@ -87,6 +87,7 @@ pub fn spawn(
     commands.spawn((
         SkyCamera,
         Camera3d::default(),
+        Msaa::Off,
         Camera {
             order: -1,
             clear_color: ClearColorConfig::Custom(Color::srgb_u8(r, g, b)),

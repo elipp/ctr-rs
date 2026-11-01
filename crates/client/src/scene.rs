@@ -589,6 +589,7 @@ pub(crate) fn setup(
         commands
             .spawn((
                 Camera3d::default(),
+                Msaa::Off,
                 Camera {
                     clear_color: sky_clear,
                     ..default()
@@ -601,6 +602,7 @@ pub(crate) fn setup(
             .with_child((
                 OverlayCamera,
                 Camera3d::default(),
+                Msaa::Off,
                 // After the main camera, on top of its picture, with only the depth buffer cleared.
                 Camera {
                     order: 1,
@@ -614,6 +616,7 @@ pub(crate) fn setup(
             .with_child((
                 OverlayCamera,
                 Camera3d::default(),
+                Msaa::Off,
                 // And the shield over the kart, likewise.
                 Camera {
                     order: 2,
@@ -645,6 +648,7 @@ pub(crate) fn setup(
         };
         commands.spawn((
             Camera3d::default(),
+            Msaa::Off,
             Camera {
                 clear_color: sky_clear,
                 ..default()

@@ -1129,6 +1129,15 @@ mod tests {
         ));
         assert!(Action::parse("config set fps-max fast").is_err());
         assert!(Action::parse("config set fps-max -1").is_err());
+        assert!(matches!(
+            Action::parse("config set msaa off"),
+            Ok(Action::SetConfig(crate::config::Setting::Msaa(1)))
+        ));
+        assert!(matches!(
+            Action::parse("config set msaa 4"),
+            Ok(Action::SetConfig(crate::config::Setting::Msaa(4)))
+        ));
+        assert!(Action::parse("config set msaa 8").is_err());
         assert!(matches!(Action::parse("version"), Ok(Action::Version)));
         assert!(Action::parse("version 1").is_err());
         assert!(matches!(
