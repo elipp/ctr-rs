@@ -129,6 +129,14 @@ impl Howl {
         let Some(state) = self.state else {
             return;
         };
+        // Retail's races have three laps or more, and reach the last-lap state before the line.
+        // A shorter one (a cup can have a lap or two) must still end with its jingle, so the end
+        // is heard from any state of the race.
+        if race.finished && !matches!(state, State::RaceEnd | State::RaceIntro | State::Traffic) {
+            self.race_end_xa = if race.first { WIN_XA } else { LOSS_XA };
+            self.set_state(State::RaceEnd);
+            return;
+        }
         let (lap, laps) = (race.lap as i32, race.laps as i32);
         let near = race.to_finish < NEAR_FINISH;
         match state {
@@ -175,12 +183,8 @@ impl Howl {
                     self.set_state(State::LastLap);
                 }
             }
-            State::LastLap => {
-                if race.finished {
-                    self.race_end_xa = if race.first { WIN_XA } else { LOSS_XA };
-                    self.set_state(State::RaceEnd);
-                }
-            }
+            // (The end of the race is above.)
+            State::LastLap => {}
             // As soon as the race's end is over.
             State::RaceEnd => {
                 if self.xa_state() == XaState::Idle {
@@ -332,6 +336,20 @@ mod tests {
             howl.update_state(&finished);
             assert_eq!(howl.music_playing(), Some((LEVEL_SONG, 60)));
         }
+    }
+
+    #[test]
+    fn a_race_that_ends_before_the_last_lap_state_still_has_its_jingle() {
+        let mut howl = racing();
+        howl.xnf = crate::xa::tests::xnf(100);
+        assert_eq!(howl.state, Some(State::Racing));
+        howl.update_state(&RaceAudio {
+            finished: true,
+            first: true,
+            ..on_lap(0)
+        });
+        assert_eq!(howl.state, Some(State::RaceEnd));
+        assert_eq!(howl.xa_playing(), Some((Category::Music, WIN_XA)));
     }
 
     #[test]

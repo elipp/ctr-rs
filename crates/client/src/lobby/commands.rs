@@ -2,9 +2,10 @@
 
 use super::countdown::Then;
 use super::progress::RollbackToasts;
+use super::cup::{CupDef, Cups, Finisher, Series};
 use super::{ANNOUNCE_COLOR, Lobby};
 use crate::command::Action;
-use crate::console::Log;
+use crate::console::{Log, console};
 use crate::maps;
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -59,15 +60,36 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         }
         Action::StartRace if lobby.online.is_some() => "The race has started (/race restart)",
         Action::RestartRace if lobby.online.is_none() => "No race to restart (/race start)",
+        Action::DebugRanking if !lobby.is_open() || lobby.joined || lobby.online.is_none() => {
+            "Only the host of a lobby can do that, in a race"
+        }
         Action::StopRace if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::StopRace if lobby.online.is_none() => "No race to stop",
-        Action::StartRace | Action::RestartRace if lobby.countdown.is_some() => {
+        Action::StopRace if lobby.online.is_none() && lobby.series.is_none() => "No race to stop",
+        Action::CupStart(_) if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => {
+            "A race or a cup is on (/race stop)"
+        }
+        Action::StartRace | Action::RestartRace | Action::CupStart(_)
+            if lobby.countdown.is_some() =>
+        {
             "A countdown is already running"
         }
+        Action::StartRace if lobby.series.is_some() => "A cup is on (/race stop)",
         _ => return None,
     })
+}
+
+/// Puts `items` in a random order (for the debug ranking; the std hasher is random enough).
+fn shuffle<T>(items: &mut [T]) {
+    use std::hash::BuildHasher;
+    let state = std::collections::hash_map::RandomState::new();
+    for i in (1..items.len()).rev() {
+        items.swap(i, state.hash_one(i) as usize % (i + 1));
+    }
 }
 
 /// Does what the keys and the command line ask (`command.rs`).
@@ -80,6 +102,7 @@ pub(super) fn run(
     mut smoothing: ResMut<crate::kart::Smoothing>,
     mut rollbacks: ResMut<RollbackToasts>,
     config: Res<crate::config::Config>,
+    mut cups: ResMut<Cups>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -118,7 +141,32 @@ pub(super) fn run(
                 "Lobby closed!"
             }
             Action::StartRace => {
-                lobby.count_down(Then::Start(track.1.0), now);
+                lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
+                continue;
+            }
+            Action::CupCreate { name, tracks, laps } => {
+                let cup = CupDef {
+                    name: name.clone(),
+                    tracks: tracks.clone(),
+                    laps: *laps,
+                };
+                console!(
+                    "Cup {name} {}: {} tracks, {laps} laps each",
+                    if cups.set(cup) { "replaced" } else { "created" },
+                    tracks.len()
+                );
+                for (n, &id) in tracks.iter().enumerate() {
+                    console!("  {}. {} ({})", n + 1, maps::name(id), maps::slug(id));
+                }
+                console!("Start it in a lobby with /cup start {name}");
+                continue;
+            }
+            Action::CupStart(name) => {
+                let Some(def) = cups.get(name) else {
+                    logs.write(Log::error(format!("No cup is called {name} (/cup create)")));
+                    continue;
+                };
+                lobby.start_series(Series::cup(def), now);
                 continue;
             }
             Action::PurgeCache => match maps::purge() {
@@ -161,6 +209,29 @@ pub(super) fn run(
                 continue;
             }
             // (Not the lobby's.)
+            Action::DebugRanking => {
+                // The others are told the race stopped; the host scores it like a finished one.
+                let Some(net) = &lobby.online else { continue };
+                let mut finishers: Vec<Finisher> = net
+                    .ids
+                    .iter()
+                    .zip(&net.labels)
+                    .take(net.characters.len())
+                    .map(|(id, name)| Finisher {
+                        id: *id,
+                        name: name.clone(),
+                    })
+                    .collect();
+                shuffle(&mut finishers);
+                let players = finishers.len();
+                if let Some(session) = &lobby.session {
+                    session.stop();
+                }
+                lobby.countdown = None;
+                lobby.end_race();
+                lobby.race_over(players, &finishers, now);
+                continue;
+            }
             Action::DebugAddWeapon(_)
             | Action::DebugSetWumpa(_)
             | Action::DebugStall(_)
@@ -173,18 +244,24 @@ pub(super) fn run(
             | Action::Version => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.
-                if let Some(session) = &lobby.session {
+                if let Some(session) = lobby.session.as_ref().filter(|_| lobby.online.is_some()) {
                     session.stop();
                 }
                 lobby.countdown = None;
+                let cup = lobby.series.take().is_some_and(|s| s.scored);
                 lobby.end_race();
-                toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
+                let text = if cup { "Cup stopped" } else { "Race stopped" };
+                toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
                 continue;
             }
             Action::RestartRace => {
                 if let Some(net) = &lobby.online {
-                    let then = Then::Restart(net.track, net.hash);
-                    lobby.count_down(then, now);
+                    let then = Then::Restart {
+                        track: net.track,
+                        hash: net.hash,
+                        laps: net.laps,
+                    };
+                    lobby.count_down(then, now, super::COUNTDOWN_SECONDS);
                 }
                 continue;
             }

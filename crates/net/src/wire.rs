@@ -99,6 +99,8 @@ pub enum Message {
         characters: Vec<u8>,
         track: u32,
         hash: u64,
+        /// The laps of the race.
+        laps: u8,
         roster: Vec<[u8; 32]>,
     },
     /// Reliable, client to host: connected to every other player, with the level up. Once the
@@ -110,7 +112,7 @@ pub enum Message {
     Inputs(Inputs),
     /// Reliable, host to each client: the race starts again, on `track`. The same players, on
     /// the same connections; `epoch` counts the races and tells their packets apart.
-    Restart { epoch: u32, track: u32, hash: u64 },
+    Restart { epoch: u32, track: u32, hash: u64, laps: u8 },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
     /// Reliable, host to client: the custom track asked for, as the bytes it was provided as.
@@ -142,9 +144,6 @@ pub enum Message {
     /// `text`. The host puts it together, so that everyone reads the lines in the same order and
     /// no client can speak for another.
     Chat { from: [u8; 32], text: String },
-    /// Reliable, host to each client, between races: the level to drive on (`hash` as in
-    /// [`Message::Start`]). A client that joins is sent the latest.
-    Track { track: u32, hash: u64 },
     /// Reliable. The hash of the sim after `tick`, to compare with the peer's.
     Checksum { epoch: u32, tick: Tick, hash: u64 },
     /// Reliable. The sim as it is at the start of `tick`. The bytes are the game's to make and
@@ -359,6 +358,7 @@ mod tests {
                 characters: vec![0, 5, 15],
                 track: 4,
                 hash: 0,
+                laps: 5,
                 roster: vec![[1; 32], [2; 32], [3; 32]],
             },
             Message::Ready,
@@ -367,6 +367,7 @@ mod tests {
                 epoch: 2,
                 track: 7,
                 hash: 0xfeed,
+                laps: 3,
             },
             Message::Want {
                 track: 0x8000_0001,
@@ -395,10 +396,6 @@ mod tests {
             Message::Chat {
                 from: [5; 32],
                 text: "ääh!".into(),
-            },
-            Message::Track {
-                track: 0x8000_0001,
-                hash: 77,
             },
             Message::Inputs(Inputs {
                 epoch: 1,

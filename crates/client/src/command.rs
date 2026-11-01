@@ -44,6 +44,14 @@ pub enum Action {
     PurgeCache,
     StartRace,
     RestartRace,
+    /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
+    CupCreate {
+        name: String,
+        tracks: Vec<u32>,
+        laps: u8,
+    },
+    /// Drive the cup of that name in the lobby (the host only).
+    CupStart(String),
     /// End the race in progress for everyone, with no winner (the host only).
     StopRace,
     /// (Debug) Roll that item into our hand: one of `vehicle::item::ENABLED`.
@@ -53,6 +61,9 @@ pub enum Action {
     /// (Debug) Freeze this client for that long, online only: the others wait for it, and the
     /// host removes it after `net::KICK_AFTER`.
     DebugStall(std::time::Duration),
+    /// (Debug) End the race now, as if the karts had finished in a random order (the host's;
+    /// a cup scores it).
+    DebugRanking,
     /// (Debug) Switch between the race and the fly-through viewer with the collision probe
     /// (`main.rs`).
     DebugViewer,
@@ -99,11 +110,12 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
-const LOBBY_USAGE: &str = "Usage: /lobby create [public [name]] | join <address> | spectate [address] | close";
+const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | hud [on|off] | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
+const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off";
 
@@ -132,6 +144,7 @@ impl Action {
         match name {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
+            "cup" => Action::cup(rest),
             "cache" => Action::cache(rest),
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
@@ -146,7 +159,8 @@ impl Action {
         let (sub, rest) = word(line);
         match sub {
             "create" => match word(rest) {
-                ("", _) => Ok(Action::CreateLobby { public: None }),
+                // (A private lobby is never listed: the realm is not contacted at all.)
+                ("" | "private", "") => Ok(Action::CreateLobby { public: None }),
                 ("public", name) => Ok(Action::CreateLobby {
                     public: Some(net::lobby_name(name)?),
                 }),
@@ -227,6 +241,47 @@ impl Action {
             "stop" => Ok(Action::StopRace),
             "" => Err(RACE_USAGE.into()),
             _ => Err(format!("Unknown command: /race {sub}\n{RACE_USAGE}")),
+        }
+    }
+
+    fn cup(line: &str) -> Result<Action, String> {
+        use crate::lobby::cup::{MAX_LAPS, MAX_NAME, MAX_TRACKS};
+        let (sub, rest) = word(line);
+        match sub {
+            "create" => {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                let [name, tracks, laps] = parts[..] else {
+                    return Err(CUP_USAGE.into());
+                };
+                if name.chars().count() > MAX_NAME
+                    || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    return Err(format!(
+                        "A cup's name is letters, digits, - and _, up to {MAX_NAME}"
+                    ));
+                }
+                let tracks = tracks
+                    .split(',')
+                    .map(crate::maps::resolve)
+                    .collect::<Result<Vec<u32>, String>>()?;
+                if tracks.len() > MAX_TRACKS {
+                    return Err(format!("A cup has {MAX_TRACKS} tracks at most"));
+                }
+                let laps = laps
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|n| (1..=MAX_LAPS).contains(n))
+                    .ok_or_else(|| format!("The laps are 1 to {MAX_LAPS}"))?;
+                Ok(Action::CupCreate {
+                    name: name.into(),
+                    tracks,
+                    laps,
+                })
+            }
+            "start" if rest.split_whitespace().count() == 1 => Ok(Action::CupStart(rest.into())),
+            "" => Err(CUP_USAGE.into()),
+            "start" => Err(CUP_USAGE.into()),
+            _ => Err(format!("Unknown command: /cup {sub}\n{CUP_USAGE}")),
         }
     }
 
@@ -330,6 +385,7 @@ impl Action {
                 )),
             },
             "viewer" => Ok(Action::DebugViewer),
+            "ranking" => Ok(Action::DebugRanking),
             "hud" => match rest {
                 "" => Ok(Action::DebugHud(None)),
                 "on" => Ok(Action::DebugHud(Some(true))),
@@ -533,6 +589,13 @@ impl CommandLine {
         true
     }
 
+    /// Whether the line is a command that is understood as it is.
+    fn is_command(&self) -> bool {
+        self.text
+            .strip_prefix('/')
+            .is_some_and(|command| Action::parse(command).is_ok())
+    }
+
     /// Puts the suggestion picked in the line: true if nothing can follow it.
     fn complete(&mut self) -> bool {
         let Some((line, done)) = self
@@ -634,8 +697,10 @@ pub(crate) fn capture(
         let (ctrl, alt, sup) = (*ctrl, *alt, *sup);
         match &event.logical_key {
             Key::Enter => {
-                // A suggestion picked goes in first; the line is sent if that ends it.
-                if line.selection().is_none() || line.complete() {
+                // A line that is a whole command is sent as it is (`/lobby create`, which an option
+                // could follow but does not have to); otherwise a suggestion picked goes in
+                // first, and the line is sent if that ends it.
+                if line.selection().is_none() || line.is_command() || line.complete() {
                     line.entered = true;
                 }
             }
@@ -959,7 +1024,11 @@ mod tests {
             Action::parse("lobby create public Fast lane"),
             Ok(Action::CreateLobby { public: Some(name) }) if name == "Fast lane"
         ));
-        assert!(Action::parse("lobby create private").is_err());
+        assert!(matches!(
+            Action::parse("lobby create private"),
+            Ok(Action::CreateLobby { public: None })
+        ));
+        assert!(Action::parse("lobby create private Fast").is_err());
         assert!(Action::parse("lobby create public Fäst").is_err());
         assert!(Action::parse(&format!("lobby create public {}", "a".repeat(33))).is_err());
         assert!(matches!(
@@ -976,6 +1045,16 @@ mod tests {
             Ok(Action::RestartRace)
         ));
         assert!(matches!(Action::parse("race stop"), Ok(Action::StopRace)));
+        assert!(matches!(
+            Action::parse("cup create fast dingo_canyon,crash_cove 5"),
+            Ok(Action::CupCreate { name, tracks, laps: 5 }) if name == "fast" && tracks.len() == 2
+        ));
+        assert!(Action::parse("cup create fast nowhere 5").is_err());
+        assert!(Action::parse("cup create fast dingo_canyon 0").is_err());
+        assert!(matches!(
+            Action::parse("cup start fast"),
+            Ok(Action::CupStart(name)) if name == "fast"
+        ));
         assert!(matches!(
             Action::parse("debug set wumpa 10"),
             Ok(Action::DebugSetWumpa(10))

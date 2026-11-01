@@ -28,8 +28,13 @@ pub fn build(
     track: Res<Track>,
     others: Query<Entity, (With<KartSlot>, Without<Kart>)>,
     mut builder: KartBuilder,
+    loading: Option<Res<crate::loading::Loading>>,
 ) {
-    // Not before the level of the race is up.
+    // Not before the level of the race is up, and settled (`loading.rs`): the others wait for our
+    // ready.
+    if loading.is_some() {
+        return;
+    }
     let Some(online) = lobby
         .online
         .as_mut()
