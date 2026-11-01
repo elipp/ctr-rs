@@ -42,6 +42,15 @@ impl Font {
         }
     }
 
+    /// The glyphs that the disc's font does not have and [`FontAtlas::new`] draws itself, after
+    /// the disc's: `#`, `(` and `)` in the middle font, none in the large one.
+    const fn own_glyphs(self) -> &'static [[&'static str; 8]] {
+        match self {
+            Font::Large => &[],
+            Font::Middle => &OWN_MIDDLE,
+        }
+    }
+
     /// How far a space moves the next glyph, in texels.
     const fn space(self) -> usize {
         match self {
@@ -127,6 +136,22 @@ pub fn glyph(c: char) -> Option<usize> {
         '/' => 48,
         _ => return None,
     })
+}
+
+/// Whether text in `font` can show this character: a space, or one that has a glyph, whether from
+/// the disc or one that [`FontAtlas::new`] draws itself (which the large font has none of: it shows
+/// `?` for `#`, `(` and `)`). What the in-game text (toasts) is checked against: text with a
+/// character that fails this is written in Bevy's font.
+pub fn drawable(font: Font, c: char) -> bool {
+    c == ' ' || glyph(c).is_some_and(|i| i < OWN + font.own_glyphs().len())
+}
+
+/// Whether the discs' fonts have the character: [`drawable`] in any font, without the glyphs that
+/// [`FontAtlas::new`] draws itself (`#`, `(` and `)`). What a lobby name is made of, because the
+/// realm and the builds that join through it were made before those glyphs: a name with one
+/// would show as `?` there. `realm_proto::is_name_char` is this, which the client's tests check.
+pub fn in_original_fonts(c: char) -> bool {
+    c == ' ' || glyph(c).is_some_and(|i| i < OWN)
 }
 
 /// The colours a glyph is tinted with at its top and at its bottom, as the GPU's vertex colours:
@@ -221,11 +246,7 @@ impl FontAtlas {
                 v2.wrapping_sub(v0) as usize + 1,
             )
         };
-        let own: &[[&str; 8]] = if font == Font::Middle && icons.len() == OWN {
-            &OWN_MIDDLE
-        } else {
-            &[]
-        };
+        let own = if icons.len() == OWN { font.own_glyphs() } else { &[] };
         let own_width: usize = own.iter().map(|rows| rows[0].len()).sum();
         let width = icons.iter().map(|i| size(i).0).sum::<usize>() + own_width;
         let height = icons.iter().map(|i| size(i).1).max()?;
@@ -378,6 +399,17 @@ mod tests {
         assert_eq!(glyph('#'), Some(HASH));
         assert_eq!(glyph('('), Some(OPEN));
         assert_eq!(glyph(')'), Some(CLOSE));
+        // The glyphs of its own are drawable but not in the original fonts; a space is both.
+        for c in ['#', '(', ')'] {
+            assert!(drawable(Font::Middle, c) && !in_original_fonts(c), "{c:?}");
+            assert!(!drawable(Font::Large, c), "{c:?}");
+        }
+        for c in ['A', 'z', '7', '?', ' '] {
+            for font in [Font::Middle, Font::Large] {
+                assert!(drawable(font, c) && in_original_fonts(c), "{font:?} {c:?}");
+            }
+        }
+        assert!(!drawable(Font::Middle, '[') && !in_original_fonts('[') && !drawable(Font::Middle, 'ä'));
         assert_eq!(glyph(' '), None);
         assert_eq!(glyph('ä'), None);
     }
