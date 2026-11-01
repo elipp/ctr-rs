@@ -92,12 +92,13 @@ mod tests {
         }
     }
 
-    /// What a lobby name may have is what the fonts can draw: `net` cannot see `render`, so this
-    /// is where the two are held together.
+    /// What a lobby name may have is what the discs' fonts can draw (`in_original_fonts`, not the
+    /// glyphs that the middle font has been given since): `net` cannot see `render`, so this is
+    /// where the two are held together.
     #[test]
     fn lobby_names_are_made_of_what_the_font_has() {
         for c in (0..=0x7f_u8).map(char::from).chain("äöå€".chars()) {
-            let drawn = c == ' ' || render::font::glyph(c).is_some();
+            let drawn = render::font::in_original_fonts(c);
             assert_eq!(net::is_lobby_name_char(c), drawn, "{c:?}");
         }
     }

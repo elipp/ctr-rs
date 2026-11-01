@@ -30,9 +30,10 @@ pub const MAX_RESPONSE: usize = 256 << 10;
 /// The most lobbies the realm lists, and so the most a response holds.
 pub const MAX_LOBBIES: usize = 1000;
 
-/// Whether a lobby's name may have this char: the ones the game's fonts have (`render::font`),
-/// which show a name as the menus do, and a space. (Letters are capitals there, whatever their
-/// case.)
+/// Whether a lobby's name may have this char: the ones the discs' fonts have, which show a name as
+/// the menus do, and a space. (Letters are capitals there, whatever their case.) Not `#`, `(` and
+/// `)`, which the middle font has since been given: older builds could not draw them. The
+/// client's tests keep this equal to `render::font::in_original_fonts`.
 pub fn is_name_char(c: char) -> bool {
     c == ' '
         || c.is_ascii_alphanumeric()
