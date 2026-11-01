@@ -222,8 +222,6 @@ pub(crate) fn spawn_tags(
     commands.spawn((
         PingLabel(key.to_string()),
         Text::new(""),
-        // It hangs off the name's edge, where no width is left to it: it must not wrap.
-        TextLayout::no_wrap(),
         TextFont {
             font_size: PING_FONT_SIZE.into(),
             ..default()
@@ -252,8 +250,8 @@ fn pings(lobby: Res<Lobby>, mut labels: Query<(&PingLabel, &mut Text, &mut Node)
         let ping = lobby.pings.get(key);
         // "d" for a direct path, "r" for a relay.
         let route = match lobby.relayed.get(key) {
-            Some(true) => "/r",
-            Some(false) => "/d",
+            Some(true) => " r",
+            Some(false) => " d",
             None => "",
         };
         let line = ping.map_or(String::new(), |ping| {
