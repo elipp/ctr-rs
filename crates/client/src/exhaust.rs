@@ -213,6 +213,9 @@ pub struct SparkLines {
     solid: bool,
 }
 
+/// How far behind the kart the pipes are (`exhaust::POSITION_Z`, at the model's size).
+const PIPE_Z: f32 = -56.0;
+
 /// The meshes that draw the smoke that adds, the smoke that subtracts and the sparks of `kart`.
 /// The smoke is in the kart's render layer.
 pub fn spawn(
@@ -365,12 +368,13 @@ pub fn spawn(
 
 /// Lays the particles out as camera-facing quads, between the last two ticks.
 pub fn update(
-    smoke: Query<(&Smoke, &Attached, &Mesh3d)>,
+    mut smoke: Query<(&Smoke, &Attached, &Mesh3d, &mut Transform)>,
     karts: Query<(&Transform, &KartSlot), Without<Smoke>>,
     cameras: Query<
         &Transform,
         (
             With<Camera3d>,
+            Without<Smoke>,
             Without<KartSlot>,
             Without<crate::OverlayCamera>,
             Without<crate::sky::SkyCamera>,
@@ -385,11 +389,15 @@ pub fn update(
     };
     let (right, up) = (camera.rotation * Vec3::X, camera.rotation * Vec3::Y);
     let t = fixed.overstep_fraction();
-    for (smoke, attached, mesh) in &smoke {
-        let Ok((kart, slot)) = karts.get(attached.0) else {
+    for (smoke, attached, mesh, mut transform) in &mut smoke {
+        let Ok((pose, slot)) = karts.get(attached.0) else {
             continue;
         };
-        let kart = kart.translation;
+        let kart = pose.translation;
+        // The smoke sorts as one mesh, by its centre: the pipes', so that it is ordered with the
+        // wheels as that spot is (the particles are relative to it).
+        let origin = kart + pose.rotation * Vec3::new(0.0, 0.0, PIPE_Z * SCALE);
+        transform.translation = origin;
         let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
             continue;
         };
@@ -426,7 +434,7 @@ pub fn update(
             for (k, [x, y]) in corners.into_iter().enumerate() {
                 let corner = center + right * quarter_units_to_world(x as f32)
                     - up * (quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT);
-                positions[n * 4 + k] = corner.to_array();
+                positions[n * 4 + k] = (corner - origin).to_array();
                 colors[n * 4 + k] = [gain[0], gain[1], gain[2], 1.0];
             }
         }

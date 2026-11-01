@@ -7,7 +7,7 @@ edition = "2024"
 default = ["dev"]
 # Links Bevy dynamically, which makes a rebuild fast. A shipped build leaves it out
 # (`cargo dist`), as a binary built with it needs `libbevy_dylib` beside it.
-dev = ["bevy/dynamic_linking"]
+dev = ["bevy/dynamic_linking", "bevy/debug"]
 # Records every system and render span for the Tracy profiler. It costs a lot of CPU and grows
 # memory while a profiler is attached, so it is off unless asked for: `--features tracy`.
 tracy = ["bevy/trace_tracy"]
