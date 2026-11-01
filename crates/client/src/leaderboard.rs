@@ -19,7 +19,7 @@ use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 use crate::font::CtrText;
 use crate::hud;
 use crate::lobby::Lobby;
-use crate::lobby_list::spawn_tags;
+use crate::lobby_list::{spawn_host_badge, spawn_tags};
 
 /// The portraits as a picture, loaded when the first race needs it.
 #[derive(Resource)]
@@ -195,6 +195,10 @@ fn build(
             .id();
         let label = online.labels.get(slot).map_or("", String::as_str);
         let key = online.names.get(slot).map_or("", String::as_str);
+        // The host is slot 0 (`net::Event::Start`).
+        if slot == 0 {
+            spawn_host_badge(&mut commands, portrait, false);
+        }
         let tag = spawn_tags(&mut commands, portrait, label, key);
         commands.entity(tag).insert(NameTag(slot));
     }
