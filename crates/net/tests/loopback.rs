@@ -566,3 +566,30 @@ fn the_race_stops_and_the_lobby_goes_on_when_the_host_leaves_it() {
         _ => false,
     });
 }
+
+#[test]
+fn every_player_has_one_connection_to_each_other_in_a_race() {
+    let (host, guests) = lobby_of(2);
+    host.start(5, 0, 3);
+    let sessions = [&host, &guests[0], &guests[1]];
+    for session in sessions {
+        wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
+        session.ready();
+    }
+    for session in sessions {
+        wait_for(session, "tick 0", |e| matches!(e, Event::Go));
+    }
+    // The host's links are the same kind as the guests': one per player, the lobby's connection
+    // to the same player not counted twice.
+    for session in sessions {
+        session.net_info();
+        wait_for(session, "the connections", |e| match e {
+            Event::NetInfo(peers) => {
+                assert_eq!(peers.len(), 2, "{peers:?}");
+                assert_ne!(peers[0].id, peers[1].id);
+                true
+            }
+            _ => false,
+        });
+    }
+}
