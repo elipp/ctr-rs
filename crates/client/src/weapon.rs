@@ -64,6 +64,9 @@ const WEAPON_SIZE: Vec2 = Vec2::new(
     HEIGHT as f32 * WEAPON_SCALE * HUD_PIXEL_ASPECT,
 );
 
+/// Where the icon's bottom is, in pixels from the top: what the toasts go under.
+pub(crate) const WEAPON_BOTTOM: f32 = WEAPON_TOP + WEAPON_SIZE.y;
+
 /// The glow's size on screen at a HUD scale: the mirrored picture, shrunk as the game does.
 const fn shine_at(scale: f32) -> Vec2 {
     Vec2::new(

@@ -1,5 +1,6 @@
 //! A reusable HUD event: write a [`Toast`] and its text shows for a while in a given colour,
-//! stacked under any other toasts that are still up, fading out over the last moments.
+//! stacked under any other toasts that are still up, fading out over the last moments. The stack
+//! starts under the weapon slot at the top of the screen.
 //!
 //! A toast is in the game's font (`font.rs`), in capitals and a gradient of its colour, if the
 //! font has every character of it (a new line starts another line of glyphs); one that has others
@@ -25,6 +26,9 @@ pub const DEFAULT_COLOR: Color = Color::WHITE;
 
 /// The grey behind a toast, so that it reads over any scene (the fade scales its alpha).
 const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.45);
+
+/// The pixels between the weapon slot and the first toast.
+const BELOW_WEAPON: f32 = 8.0;
 
 /// The font size of a toast unless it says otherwise.
 const DEFAULT_SIZE: f32 = 28.0;
@@ -138,7 +142,7 @@ fn column(commands: &mut Commands) -> Entity {
             ToastColumn,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(60.0),
+                top: Val::Px(crate::weapon::WEAPON_BOTTOM + BELOW_WEAPON),
                 left: Val::Px(0.0),
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
