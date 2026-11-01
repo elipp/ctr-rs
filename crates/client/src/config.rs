@@ -21,7 +21,8 @@
 //! reaches the others through the relay only.
 //!
 //! The last character driven is kept too, and is the one the client starts with, and the
-//! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`).
+//! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`), and whether
+//! the race shows its development text (`/debug hud`, off at first).
 //!
 //! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, its arm in
 //! [`apply`], its line in [`USAGE`], and its entry in the command line's suggestions
@@ -61,6 +62,9 @@ pub struct Config {
     pub volume_voice: u8,
     /// The keyboard's driving keys.
     pub controls: Controls,
+    /// Whether the race shows the frame rate, the kart's state, the build and the boost reserves
+    /// (`/debug hud`).
+    pub debug_hud: bool,
 }
 
 impl Default for Config {
@@ -77,6 +81,7 @@ impl Default for Config {
             volume_music: 100,
             volume_voice: 100,
             controls: Controls::default(),
+            debug_hud: false,
         }
     }
 }
