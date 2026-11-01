@@ -14,6 +14,7 @@
 // Bevy systems take their parameters and `Query` filters as types, so both lints fire on them.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod about;
 mod animation;
 mod assets;
 mod banner;
