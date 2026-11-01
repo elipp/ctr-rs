@@ -4,3 +4,4 @@ target/
 .venv/
 /Justfile
 .DS_Store
+/relay/.env

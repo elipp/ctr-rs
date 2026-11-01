@@ -18,6 +18,7 @@
 //!   pad put right, by the ping, by the ticks the rollbacks replay, or fixed (`kart::Smoothing`), at
 //!   any time
 //! * `/net rollbacks on|off`: a toast for each rollback (on at first)
+//! * `/net relay add <url>`: use that relay too, besides the public ones (kept in the config)
 //! * `/race stop`: end the race in progress for everyone, with no winner (the host only)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all

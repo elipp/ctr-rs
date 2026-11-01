@@ -190,6 +190,15 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "A toast for each rollback",
                 &[leaf("on", "Show them"), leaf("off", "Stop showing them")],
             ),
+            node(
+                "relay",
+                "Relays besides the public ones",
+                &[takes(
+                    "add",
+                    "Use this relay too (from the next lobby on)",
+                    "<url>",
+                )],
+            ),
         ],
     ),
     node(

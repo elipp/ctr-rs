@@ -56,6 +56,8 @@ pub struct Config {
     pub msaa: u8,
     /// Whether to play through the relay only (`/config set relay-only`).
     pub relay_only: bool,
+    /// The relays to use besides the public ones (`/net relay add`).
+    pub relays: Vec<String>,
     /// The effects', the music's and the voices' volumes, 0 to 100 (`/config set volume`).
     pub volume_fx: u8,
     pub volume_music: u8,
@@ -77,6 +79,7 @@ impl Default for Config {
             fps_max: 0,
             msaa: 1,
             relay_only: false,
+            relays: Vec::new(),
             volume_fx: 100,
             volume_music: 100,
             volume_voice: 100,
@@ -208,6 +211,8 @@ pub enum Setting {
     /// 1 (off), 2 or 4 samples.
     Msaa(u8),
     RelayOnly(bool),
+    /// A relay's URL, as `net::parse_relay` keeps it.
+    AddRelay(String),
     /// 0 to 100.
     VolumeSfx(u8),
     VolumeMusic(u8),
@@ -327,6 +332,7 @@ fn msaa(config: Res<Config>, mut cameras: Query<&mut Msaa>) {
 fn net_transport(config: Res<Config>) {
     if config.is_changed() {
         net::set_relay_only(config.relay_only);
+        net::set_relays(&config.relays);
     }
 }
 
@@ -417,6 +423,18 @@ fn apply(
                     samples => format!("Multisampling: {samples}x"),
                 };
                 toasts.write(Toast::new(text, 2000));
+            }
+            Setting::AddRelay(url) => {
+                let text = if config.relays.contains(url) {
+                    format!("Relay already added: {url}")
+                } else {
+                    config.relays.push(url.clone());
+                    if let Err(why) = config.save() {
+                        toasts.write(refuse(why));
+                    }
+                    format!("Relay added: {url} (it takes hold in the next lobby)")
+                };
+                toasts.write(Toast::new(text, 3000));
             }
             Setting::RelayOnly(on) => {
                 config.relay_only = *on;
