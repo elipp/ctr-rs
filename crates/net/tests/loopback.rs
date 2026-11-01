@@ -59,7 +59,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
     host.set_character(4);
     first.set_character(9);
     std::thread::sleep(Duration::from_millis(500));
-    host.start(5, 0);
+    host.start(5, 0, 3);
 
     // Everyone hears of the race, and says it is ready.
     let mut slots = [0; 3];
@@ -71,8 +71,10 @@ fn a_host_and_two_peers_race_over_a_mesh() {
                 players,
                 track,
                 hash,
+                laps,
             } => {
                 assert_eq!(hash, 0);
+                assert_eq!(laps, 3);
                 assert_eq!(characters, [4, 9, 11]);
                 assert_eq!(players.len(), 3);
                 assert_eq!(track, 5);
@@ -170,7 +172,7 @@ fn a_character_changed_between_races_is_the_one_that_races() {
     std::thread::sleep(Duration::from_secs(2));
     let sessions = [&host, &guest];
 
-    host.start(5, 0);
+    host.start(5, 0, 3);
     for session in sessions {
         wait_for(session, "the first start", |e| match e {
             Event::Started { characters, .. } => {
@@ -188,7 +190,7 @@ fn a_character_changed_between_races_is_the_one_that_races() {
     host.set_character(4);
     guest.set_character(9);
     std::thread::sleep(Duration::from_millis(500));
-    host.start(5, 0);
+    host.start(5, 0, 3);
     for session in sessions {
         wait_for(session, "the second start", |e| match e {
             Event::Started { characters, .. } => {
@@ -326,7 +328,7 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
         matches!(e, Event::PeerJoined(_))
     });
     std::thread::sleep(Duration::from_secs(8));
-    host.start(5, 0);
+    host.start(5, 0, 3);
     for session in [&host, &first, &second] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
         session.ready();
@@ -384,7 +386,7 @@ fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
         matches!(e, Event::PeerJoined(_))
     });
     std::thread::sleep(Duration::from_secs(8));
-    host.start(5, 0);
+    host.start(5, 0, 3);
     for session in [&host, &first, &second] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
         session.ready();
@@ -478,7 +480,7 @@ fn the_first_guest_hosts_the_lobby_when_the_host_leaves() {
     }
     // It works as a lobby: the new host starts a race with the guest.
     std::thread::sleep(Duration::from_secs(1));
-    first.start(5, 0);
+    first.start(5, 0, 3);
     for session in [&first, &second] {
         wait_for(session, "the start", |e| match e {
             Event::Started { characters, .. } => {
@@ -530,7 +532,7 @@ fn the_last_guest_hosts_a_lobby_of_one() {
 fn the_race_stops_and_the_lobby_goes_on_when_the_host_leaves_it() {
     let (host, guests) = lobby_of(2);
     let [first, second] = <[Session; 2]>::try_from(guests).ok().unwrap();
-    host.start(5, 0);
+    host.start(5, 0, 3);
     for session in [&host, &first, &second] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
         session.ready();

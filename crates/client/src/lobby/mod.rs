@@ -9,6 +9,9 @@
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (the `cache/maps` folder, see `paths.rs`)
 //! * `/race start`: start the race, once the others have joined (the host only)
+//! * `/cup create <name> <tracks> <laps>`: define a cup (`cup.rs`), and `/cup start <name>` to
+//!   drive it: its races one after another, points for the first four to finish, and
+//!   [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a cup of one race with no points.
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/net info`: how each peer is reached (direct or relay), the ping and the packets lost
 //! * `/net smoothing ping|replay|<duration>`: how long the drawing takes to ease a kart that a late
@@ -29,16 +32,21 @@ use crate::maps;
 
 use commands::run;
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
+pub use cup::Cups;
+use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
 use hud::waiting;
 pub use online::Online;
+use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
 use report::report;
 
 mod commands;
 mod countdown;
+pub(crate) mod cup;
 mod hud;
 mod online;
+mod placing;
 mod progress;
 mod report;
 
@@ -67,9 +75,8 @@ pub struct Lobby {
     pub average_pings: std::collections::HashMap<String, std::time::Duration>,
     /// The map the race is on that we are waiting for the host to send.
     fetching: Option<u32>,
-    /// The level the host picked to drive on between races (`Event::Track`) that we have not gone
-    /// to yet: we lack the map, or the level switch has not come to it.
-    pending_track: Option<(u32, u64)>,
+    /// The races the host is running (a cup, or the one of `/race start`), until the last is over.
+    series: Option<Series>,
     /// How fast we have been talking.
     chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
@@ -134,17 +141,65 @@ impl Lobby {
     }
 
     /// Starts counting `then` down from [`COUNTDOWN_SECONDS`].
-    fn count_down(&mut self, then: Then, now: f32) {
-        let text = match then {
-            Then::Start(_) => "Race starts in",
-            Then::Restart(..) => "Race restarts in",
-        };
-        self.announce(format!("{text} {COUNTDOWN_SECONDS}"));
+    fn count_down(&mut self, then: Then, now: f32, seconds: u32) {
+        // (A long wait is announced by whoever starts it; the last seconds are counted.)
+        if seconds <= COUNTDOWN_SECONDS {
+            let text = match then {
+                Then::Start { .. } => "Race starts in",
+                Then::Restart { .. } => "Race restarts in",
+            };
+            self.announce(format!("{text} {seconds}"));
+        }
         self.countdown = Some(Countdown {
             then,
-            left: COUNTDOWN_SECONDS,
+            left: seconds,
             at: now,
         });
+    }
+
+    /// Starts the series, with the countdown to its first race (the host only).
+    fn start_series(&mut self, series: Series, now: f32) {
+        let then = Then::Start {
+            track: series.track(),
+            laps: series.laps,
+        };
+        self.series = Some(series);
+        self.count_down(then, now, COUNTDOWN_SECONDS);
+    }
+
+    /// The race of the series ended with these players over the line, in order, out of `players`
+    /// (the host only). A cup scores it and, if it has another race, starts it in
+    /// [`BETWEEN_RACES_SECONDS`]; the series is over after its last.
+    fn race_over(&mut self, players: usize, finishers: &[Finisher], now: f32) {
+        let Some(mut series) = self.series.take().filter(|s| s.scored) else {
+            return;
+        };
+        let gained = series.score(players, finishers);
+        let mut text = format!(
+            "{}: race {} of {}\n{}",
+            series.name.as_deref().unwrap_or("Cup"),
+            series.race + 1,
+            series.tracks.len(),
+            cup::results_text(&gained)
+        );
+        let standings = cup::standings_text(&series.standings());
+        if series.has_next() {
+            series.race += 1;
+            text += &format!(
+                "\nStandings\n{standings}\nNext: {} in {BETWEEN_RACES_SECONDS} seconds",
+                maps::name(series.track())
+            );
+            let then = Then::Start {
+                track: series.track(),
+                laps: series.laps,
+            };
+            self.series = Some(series);
+            self.announce(text);
+            self.count_down(then, now, BETWEEN_RACES_SECONDS);
+        } else {
+            text += &format!("\nFinal standings\n{standings}");
+            self.announce(text);
+        }
     }
 
     /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,
@@ -281,18 +336,19 @@ impl Lobby {
     }
 
     /// Starts the race over on `track` (the host only).
-    pub fn restart(&self, track: u32, hash: u64) {
+    pub fn restart(&self, track: u32, hash: u64, laps: u8) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            session.restart(track, hash);
+            session.restart(track, hash, laps);
         }
     }
 
     /// Starts the race on `track` (the host only).
-    fn start(&self, track: u32) {
+    fn start(&self, track: u32, laps: u8) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            session.start(track, Self::hash_of(track));
+            session.start(track, Self::hash_of(track), laps);
+            self.list(&maps::name(track));
         }
     }
 
@@ -301,33 +357,15 @@ impl Lobby {
         self.session.is_some() && !self.joined
     }
 
-    /// Tells the lobby which level to drive on until the next race (the host only): the players
-    /// go to it, and so do the ones who join later.
-    pub fn set_track(&self, track: u32) {
-        if self.is_host()
-            && self.online.is_none()
-            && let Some(session) = &self.session
-        {
-            self.provide(session, track);
-            session.set_track(track, Self::hash_of(track));
-            if let Some(name) = &self.public {
-                session.set_public(Some(net::Public {
-                    realm: net::default_realm(),
-                    name: name.clone(),
-                    track: maps::name(track),
-                }));
-            }
+    /// Lists the lobby in the realm, if it is public, with the track it is on (empty for none).
+    fn list(&self, track: &str) {
+        if let (Some(name), Some(session)) = (&self.public, &self.session) {
+            session.set_public(Some(net::Public {
+                realm: net::default_realm(),
+                name: name.clone(),
+                track: track.to_string(),
+            }));
         }
-    }
-
-    /// The level the host picked that we have yet to go to, and the hash of its map.
-    pub(crate) fn pending_track(&self) -> Option<(u32, u64)> {
-        self.pending_track
-    }
-
-    /// We went to the level the host picked, or will not.
-    pub(crate) fn clear_pending_track(&mut self) {
-        self.pending_track = None;
     }
 
     /// The hash of the contents of the map `track`: the others compare it with theirs, which for
@@ -358,6 +396,7 @@ pub struct LobbyPlugin;
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lobby>()
+            .init_resource::<Cups>()
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()
             .add_systems(Startup, spawn_waiting)
@@ -369,6 +408,7 @@ impl Plugin for LobbyPlugin {
                     report,
                     crate::remote::build,
                     finish,
+                    placing,
                     rollback_toasts,
                     pace,
                     waiting,

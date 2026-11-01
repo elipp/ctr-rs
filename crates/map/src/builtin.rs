@@ -67,6 +67,16 @@ pub fn display_name(id: u32) -> Option<&'static str> {
     TRACKS.iter().find(|t| t.2.0 == id).map(|t| t.1)
 }
 
+/// The short name of the game's track `id` that a command can take (`dingo_canyon`).
+pub fn slug_of(id: u32) -> Option<&'static str> {
+    TRACKS.iter().find(|t| t.2.0 == id).map(|t| t.0)
+}
+
+/// The game's track that has the short name `slug` (see [`slug_of`]).
+pub fn id_of_slug(slug: &str) -> Option<u32> {
+    TRACKS.iter().find(|t| t.0 == slug).map(|t| t.2.0)
+}
+
 /// Saves a map in `dir`, if it has no file there yet or one of an older
 /// version. It is under another name until it is whole, so that a stop leaves no half map.
 pub fn save(map: &Map, dir: &Path) -> io::Result<()> {
