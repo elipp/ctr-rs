@@ -43,6 +43,8 @@ directories = "6.0.0"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 # The system clipboard, for pasting a lobby address.
 arboard = { version="3", default-features = false, features = ["wl-clipboard-rs"] }
+# The window's icon (`window_icon.rs`), which Bevy has no setting for: Bevy's own winit.
+winit = { version = "0.30", default-features = false }
 
 # The program's icon in Explorer and the taskbar (`build.rs`).
 [build-dependencies]
