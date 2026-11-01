@@ -119,6 +119,17 @@ fn refresh_listing(host: &HostState, build: u32) {
 /// The session of a lobby host or of a player who joined one. They differ in the lobby (the
 /// host takes the joins and starts the race) and in the barrier before tick 0 (the host collects
 /// the [`Message::Ready`]s and sends the [`Message::Go`]); the race is the same for both.
+/// Whether our NAT gives another public address for each peer we talk to, as far as iroh has
+/// found out (not, until it has). A player behind one can only be reached by dialing.
+fn hard_nat(endpoint: &Endpoint) -> bool {
+    use iroh::Watcher;
+    endpoint
+        .net_report()
+        .get()
+        .and_then(|report| report.mapping_varies_by_dest())
+        .unwrap_or(false)
+}
+
 pub(crate) async fn run(
     endpoint: Endpoint,
     mut io: Io,
@@ -141,6 +152,9 @@ pub(crate) async fn run(
     let mut fetching: HashSet<(u32, u64)> = HashSet::new();
     // The host: the sends of maps that ended.
     let (sent_tx, mut sent) = unbounded_channel::<Transfer>();
+
+    // What the host was last told of our NAT (see `hard_nat`).
+    let mut nat_sent = false;
 
     match &role {
         Role::Host => {
@@ -168,6 +182,8 @@ pub(crate) async fn run(
                 spectator,
             };
             send_reliably(&connection, &hello).await?;
+            nat_sent = hard_nat(&endpoint);
+            send_reliably(&connection, &Message::Nat { hard: nat_sent }).await?;
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
             host_connection = Some(connection);
@@ -238,7 +254,7 @@ pub(crate) async fn run(
                         }
                         host.guests.retain(|g| g.id != id);
                         host.gone.remove(&id);
-                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()), spectator: false };
+                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()), spectator: false, hard: false };
                         io.event(Event::PeerJoined(id));
                         if host.racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
@@ -275,6 +291,8 @@ pub(crate) async fn run(
                             // As if we joined it: the host takes the latest Hello it has.
                             let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
                             let _ = send_reliably(&connection, &hello).await;
+                            nat_sent = hard_nat(&endpoint);
+                            let _ = send_reliably(&connection, &Message::Nat { hard: nat_sent }).await;
                             hellos += 1;
                         }
                         None => {
@@ -449,7 +467,7 @@ pub(crate) async fn run(
                 Heard::Message(message) => match message {
                     // A player that took us for the host: it was right, or will be (we may not
                     // have found out that the host left yet). Kept for then.
-                    message @ (Message::Hello { .. } | Message::Nick { .. }) if host.is_none() => {
+                    message @ (Message::Hello { .. } | Message::Nick { .. } | Message::Nat { .. }) if host.is_none() => {
                         if from != host_id && heirs.heard.len() < 64 {
                             heirs.heard.push((from, message));
                         }
@@ -486,6 +504,11 @@ pub(crate) async fn run(
                             tell_lobby(me, character, &nick, host, &io).await;
                         }
                     }
+                    Message::Nat { hard } => if let Some(host) = &mut host
+                        && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
+                    {
+                        guest.hard = hard;
+                    },
                     // (It may beat the Hello: the guest is in the lobby once that comes.)
                     Message::Nick { seq, nick: theirs } => if let Some(host) = &mut host
                         && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
@@ -526,7 +549,7 @@ pub(crate) async fn run(
                         heirs.heard.clear();
                         io.event(Event::Lobby { players, spectators, you });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster }
+                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster, hard }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -541,7 +564,7 @@ pub(crate) async fn run(
                         links.retain(|id, _| roster.contains(id));
                         start_over(&mut links, epoch);
                         (running, game_ready, ready_sent) = (false, false, false);
-                        dial_links(&endpoint, &roster, &links, &dialed_tx);
+                        dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone(), players: characters.len() });
                         io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
@@ -808,6 +831,14 @@ pub(crate) async fn run(
                 }
             },
             _ = ping_timer.tick() => {
+                // The host has our NAT as iroh finds it out, which may change (or come late).
+                let hard = hard_nat(&endpoint);
+                if hard != nat_sent
+                    && let Some(connection) = &host_connection
+                    && send_reliably(connection, &Message::Nat { hard }).await.is_ok()
+                {
+                    nat_sent = hard;
+                }
                 // (One per player: the round trips are kept by player.)
                 let connections = one_per_peer(
                     links.values().map(|l| &l.connection),
@@ -891,6 +922,7 @@ pub(crate) async fn run(
                             hello: None,
                             nick: (0, String::new()),
                             spectator: false,
+                            hard: false,
                         });
                     }
                     if let Some(public) = &state.public {
@@ -1014,6 +1046,9 @@ pub(crate) async fn run(
             let roster: Vec<EndpointId> = std::iter::once(me)
                 .chain(ordered.iter().map(|g| g.id))
                 .collect();
+            let hard: Vec<bool> = std::iter::once(hard_nat(&endpoint))
+                .chain(ordered.iter().map(|g| g.hard))
+                .collect();
             for (i, guest) in ordered.iter().enumerate() {
                 let start = Message::Start {
                     epoch,
@@ -1023,12 +1058,13 @@ pub(crate) async fn run(
                     hash,
                     laps,
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
+                    hard: hard.clone(),
                 };
                 let _ = send_reliably(&guest.connection, &start).await;
             }
             links.retain(|id, _| roster.contains(id));
             start_over(&mut links, epoch);
-            dial_links(&endpoint, &roster, &links, &dialed_tx);
+            dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
