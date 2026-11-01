@@ -9,10 +9,10 @@ pub(super) const COUNTDOWN_SECONDS: u32 = 5;
 /// What the countdown ends in.
 #[derive(Clone, Copy)]
 pub(super) enum Then {
-    /// The first race of the lobby, on this track.
-    Start(u32),
+    /// A race of the series, on this track, with this many laps.
+    Start { track: u32, laps: u8 },
     /// The same players again, on this track (and the hash of its contents, see [`Online::hash`]).
-    Restart(u32, u64),
+    Restart { track: u32, hash: u64, laps: u8 },
 }
 
 /// The countdown of a start or a restart: the seconds left, and when the last one was announced.
@@ -38,14 +38,14 @@ pub(super) fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
         c.at += 1.0;
         if c.left == 0 {
             match c.then {
-                Then::Start(track) => {
-                    lobby.start(track);
-                }
-                Then::Restart(track, hash) => lobby.restart(track, hash),
+                Then::Start { track, laps } => lobby.start(track, laps),
+                Then::Restart { track, hash, laps } => lobby.restart(track, hash, laps),
             }
             return;
         }
-        lobby.announce(format!("{}...", c.left));
+        if c.left <= COUNTDOWN_SECONDS {
+            lobby.announce(format!("{}...", c.left));
+        }
     }
     lobby.countdown = Some(c);
 }

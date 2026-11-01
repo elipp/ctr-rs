@@ -35,14 +35,16 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
 #[derive(Resource, Default)]
 pub(crate) struct LevelBeforeRace(pub(crate) Option<u32>);
 
-/// How many frames the level and racer keys are ignored after a change.
-const SETTLE_FRAMES: u32 = 10;
-
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
 /// the previous racer. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
 /// on the same level.
-pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
+pub(crate) fn switch_level(world: &mut World) {
+    // A scene that was just built is still settling (`loading.rs`): another change would despawn
+    // what its commands are about to touch.
+    if world.contains_resource::<crate::loading::Loading>() {
+        return;
+    }
     let keys = world.resource::<ButtonInput<KeyCode>>();
     let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let step =
@@ -52,15 +54,6 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
         &[KeyCode::BracketLeft, KeyCode::PageDown],
     );
     let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
-    // A scene that was just built is still taking its first commands (the HUD's pictures and
-    // cameras are set up over the next frames): another change would despawn what they are about
-    // to touch. The keys wait for it.
-    // The lobby's changes wait as well (the host can change the level faster than that), and
-    // are looked at again once it is over.
-    if *settling > 0 {
-        *settling -= 1;
-        return;
-    }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)
@@ -76,13 +69,22 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
     let mut before = world
         .remove_resource::<LevelBeforeRace>()
         .unwrap_or_default();
+    let in_lobby = world
+        .get_resource::<lobby::Lobby>()
+        .is_some_and(|lobby| lobby.is_open());
     let mut back = None;
     match race_track {
         Some(track) if track != world.resource::<LevelNumber>().0 => {
             before.0.get_or_insert(world.resource::<LevelNumber>().0);
         }
         Some(_) => {}
+        // In a lobby the tracks are the races': we stay on the last until the next (a cup goes
+        // on to its next straight from it), and go back when we leave.
+        None if in_lobby => {}
         None => back = before.0.take(),
+    }
+    if in_lobby {
+        level_step = 0;
     }
     world.insert_resource(before);
     if race_track.is_some() {
@@ -90,22 +92,9 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
     }
     let mut options = *world.resource::<Options>();
     let current = world.resource::<LevelNumber>().0;
-    // The level the host picked to drive on between races, once we have its map.
-    let mut hosts_pick = None;
-    if let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>() {
-        match lobby.pending_track() {
-            _ if race_track.is_some() => lobby.clear_pending_track(),
-            Some((track, hash)) if maps::has(track, hash) => {
-                lobby.clear_pending_track();
-                hosts_pick = Some(track);
-            }
-            _ => {}
-        }
-    }
     let wanted = race_track
         .filter(|&track| track != current && !missing)
-        .or(back.filter(|&track| track != current))
-        .or(hosts_pick.filter(|&track| track != current));
+        .or(back.filter(|&track| track != current));
     if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }
@@ -114,8 +103,6 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
         let at = cycle.iter().position(|&n| n == current).unwrap_or(0) as i32;
         cycle[(at + level_step).rem_euclid(cycle.len() as i32) as usize]
     });
-    // (A change by the lobby or by the race's end is not held up by this, but starts the wait.)
-    *settling = SETTLE_FRAMES;
     options.racer = (options.racer as i32 + racer_step).rem_euclid(CHARACTERS.len() as i32) as u32;
     world.insert_resource(options);
     if racer_step != 0 {
@@ -140,18 +127,10 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
         world.insert_resource(LevelNumber(id));
         restart_drive(world, options);
         run_scene_systems(world, options);
-        let text = if hosts_pick == Some(id) {
-            format!("The host picked {}", maps::name(id))
-        } else {
-            format!("Track: {}", maps::name(id))
-        };
-        world.write_message(toast::Toast::new(text, 2500));
-        // Whoever hosts the lobby takes the others along (a race has its own level).
-        if race_track.is_none()
-            && let Some(lobby) = world.get_resource::<lobby::Lobby>()
-        {
-            lobby.set_track(id);
-        }
+        world.write_message(toast::Toast::new(
+            format!("Track: {}", maps::name(id)),
+            2500,
+        ));
     } else if let Some(character) = character {
         // Only the kart goes: the level stays, and the race starts again with the new racer.
         let kart = world
@@ -168,6 +147,7 @@ pub(crate) fn switch_level(world: &mut World, mut settling: Local<u32>) {
         }
         spawn_kart(world);
     }
+    crate::loading::begin(world);
     for mut window in world.query::<&mut Window>().iter_mut(world) {
         window.title = format!(
             "ctr-rs: {}, {}",
@@ -191,6 +171,7 @@ pub(crate) fn rebuild_scene(world: &mut World, options: Options) {
     despawn(world, scene);
     restart_drive(world, options);
     run_scene_systems(world, options);
+    crate::loading::begin(world);
 }
 
 /// `/debug viewer`: the race becomes the viewer with the probe, or the viewer the race again; and

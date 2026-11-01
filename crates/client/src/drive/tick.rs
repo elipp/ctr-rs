@@ -145,7 +145,13 @@ pub(super) fn drive_tick(
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
             None => (vec![drive.spec()], 0, false),
         };
-        sim.restart(&track.0, &specs, own, lobby.online.is_some(), spectator);
+        sim.restart(
+            &track.0,
+            &specs,
+            own,
+            lobby.online.as_ref().map(|net| net.laps),
+            spectator,
+        );
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         drive.weather = crate::weather::WeatherView::new(&track.0);

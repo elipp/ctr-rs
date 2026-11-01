@@ -58,11 +58,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
             node(
                 "create",
                 "Open a lobby for others to join",
-                &[takes(
-                    "public",
-                    "List it in the realm, for anyone to find",
-                    "[name]",
-                )],
+                &[
+                    leaf("private", "Only those with the address can join (the default)"),
+                    takes(
+                        "public",
+                        "List it in the realm, for anyone to find",
+                        "[name]",
+                    ),
+                ],
             ),
             takes("join", "Join a lobby", "<address>"),
             takes(
@@ -80,6 +83,18 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("start", "Count down to a race on this track"),
             leaf("restart", "Count down to the race again"),
             leaf("stop", "End the race for everyone, with no winner"),
+        ],
+    ),
+    node(
+        "cup",
+        "A series of races with points (the host starts it)",
+        &[
+            takes(
+                "create",
+                "Make a cup: its tracks (short names or numbers) and the laps of each race",
+                "<name> <track,track,...> <laps>",
+            ),
+            takes("start", "Count down to the first race of a cup", "<name>"),
         ],
     ),
     node(
@@ -230,6 +245,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "Crates",
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
+            leaf("ranking", "End the race with a random ranking (host)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             node(
                 "fx",
@@ -343,7 +359,7 @@ mod tests {
     fn a_slash_lists_the_commands() {
         assert_eq!(
             names("/"),
-            ["lobby", "race", "config", "version", "net", "cache", "debug"]
+            ["lobby", "race", "cup", "config", "version", "net", "cache", "debug"]
         );
         assert_eq!(names("/r"), ["race"]);
         assert_eq!(names("/race "), ["start", "restart", "stop"]);

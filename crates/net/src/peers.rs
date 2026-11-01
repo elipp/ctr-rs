@@ -32,16 +32,14 @@ pub(crate) struct HostState {
     /// The players of the race that left it. They are not told of in the lobby, and go from
     /// `guests` when the next race starts.
     pub(crate) gone: HashSet<EndpointId>,
-    /// The track of a start that waits for the Hellos.
-    pub(crate) start_wanted: Option<(u32, u64)>,
+    /// The track, its hash and the laps of a start that waits for the Hellos.
+    pub(crate) start_wanted: Option<(u32, u64, u8)>,
     /// The maps being sent.
     pub(crate) transfers: Transfers,
     /// Who is ready, before tick 0.
     pub(crate) ready_from: HashSet<EndpointId>,
     /// A race has been started and the game has not said it is over.
     pub(crate) racing: bool,
-    /// The level the lobby drives on between races, as last set.
-    pub(crate) lobby_track: Option<(u32, u64)>,
     /// The players that left the race, whose pads are still being settled, by slot.
     pub(crate) departures: HashMap<usize, Departure>,
     /// The listing of the lobby in the realm, if it is public.
@@ -59,8 +57,6 @@ pub(crate) struct Heirs {
     pub(crate) order: Vec<EndpointId>,
     /// How the lobby is listed, if it is.
     pub(crate) public: Option<Public>,
-    /// The level the host picked to drive on between races.
-    pub(crate) track: Option<(u32, u64)>,
     /// The hosts that are gone, as far as we have found out (the one that closed, and every heir
     /// that could not be reached or closed in turn).
     pub(crate) dead: HashSet<EndpointId>,

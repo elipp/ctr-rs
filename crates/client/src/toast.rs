@@ -74,7 +74,7 @@ impl Toast {
 const GRADIENT_BOTTOM: f32 = 0xb0 as f32 / 0xff as f32;
 
 /// The game's gradient for a toast of `color`: the colour at the top, darker at the bottom.
-fn gradient(color: Color) -> Gradient {
+pub(crate) fn gradient(color: Color) -> Gradient {
     let c = color.to_srgba();
     let channels = |scale: f32| [c.red, c.green, c.blue].map(|v| (v * scale * 255.0).round() as u8);
     Gradient {
@@ -94,7 +94,7 @@ fn in_game_font(text: &str) -> bool {
 
 /// The size of a texel of a toast in the game's font: the HUD's, or half of it for a small toast,
 /// so that a texel is still a whole number of pixels on most screens.
-fn texel_size(size: f32) -> Vec2 {
+pub(crate) fn texel_size(size: f32) -> Vec2 {
     let halves = (size / DEFAULT_SIZE * 2.0).round().max(1.0);
     crate::hud::PIXEL * halves / 2.0
 }

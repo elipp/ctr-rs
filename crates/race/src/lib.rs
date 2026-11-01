@@ -199,6 +199,10 @@ pub struct Race {
     /// How many karts have finished the race (`numPlayersFinishedRace`): the next to finish is
     /// that place.
     pub finished: i16,
+    /// The tick each kart that has finished crossed the line at, by place (entry 0 is the
+    /// winner's). A race that waits for the first few to finish is over once that tick is
+    /// settled.
+    pub finish_ticks: Vec<u32>,
     /// The first kart over the line of the last lap, as (slot, tick): the race has been won.
     /// None until then, and always in a free drive.
     pub winner: Option<(usize, u32)>,
@@ -242,6 +246,7 @@ impl Race {
             kart_collisions,
             laps: DEFAULT_LAPS,
             finished: 0,
+            finish_ticks: Vec::new(),
             winner: None,
             lap_times: vec![Vec::new(); specs.len()],
             checkpoints: vec![0; specs.len()],
@@ -283,6 +288,7 @@ impl Race {
                 if lap.finished {
                     d.driver_rank = self.finished;
                     self.finished += 1;
+                    self.finish_ticks.push(self.tick);
                 }
                 if d.actions_flag_set & actions::RACE_FINISHED == 0 {
                     d.driver_rank = UNSORTED;
