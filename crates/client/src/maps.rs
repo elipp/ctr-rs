@@ -319,6 +319,54 @@ pub fn name(id: u32) -> String {
     get(id).map_or_else(|| format!("level {id}"), |m| m.name.clone())
 }
 
+/// What a command calls the level `id`: the short name of a game's track (`dingo_canyon`), or a
+/// map's name in lower case with `_` for what is not a letter or a digit.
+pub fn slug(id: u32) -> String {
+    if let Some(slug) = builtin::slug_of(id) {
+        return slug.into();
+    }
+    get(id).map_or_else(|| format!("{id:#x}"), |m| slugify(&m.name))
+}
+
+fn slugify(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    slug.trim_matches('_').to_string()
+}
+
+/// The level a command means by `text`: a short name (see [`slug`]), or the level's number
+/// (`4`, or `0x80001234` for a map), which has to be one of the [`cycle`].
+pub fn resolve(text: &str) -> Result<u32, String> {
+    let text = text.trim();
+    let slug = text.to_ascii_lowercase();
+    if let Some(id) = builtin::id_of_slug(&slug) {
+        return Ok(id);
+    }
+    let number = match slug.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => slug.parse(),
+    };
+    if let Ok(id) = number {
+        return if cycle().contains(&id) {
+            Ok(id)
+        } else {
+            Err(format!("No track has the number {text}"))
+        };
+    }
+    let found: Vec<u32> = ids().into_iter().filter(|&id| slug_matches(id, &slug)).collect();
+    match found[..] {
+        [id] => Ok(id),
+        [] => Err(format!("Unknown track: {text}")),
+        _ => Err(format!("More than one map is called {text}: use its number (0x...)")),
+    }
+}
+
+fn slug_matches(id: u32, slug: &str) -> bool {
+    get(id).is_some_and(|m| slugify(&m.name) == slug)
+}
+
 /// The tracks `[` and `]` go through: the game's racing tracks, then the maps.
 pub fn cycle() -> Vec<u32> {
     use loader::level::LevelId;

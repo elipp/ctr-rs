@@ -1,5 +1,6 @@
 //! The race in progress: its end, the clock's pace and the rollback toasts.
 
+use super::cup::{self, Finisher};
 use super::{ANNOUNCE_COLOR, Lobby};
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -18,47 +19,108 @@ pub(super) const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(
 /// Bevy's own limit on a frame, for everything but an online race.
 pub(super) const NORMAL_MAX_DELTA: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// How long the race goes on after it has been won, in seconds of the race, if the players still
-/// here have not all finished by then.
-pub(super) const AFTERMATH_SECONDS: u32 = 5;
+/// How long the race goes on after the players who score have finished, in seconds of the
+/// race: the winner's confetti and music, and the places of the others, are for these.
+pub(super) const AFTERMATH_SECONDS: u32 = 15;
 
-/// Announces the winner of the race, and [`AFTERMATH_SECONDS`] later ends it: everyone goes back to
-/// a free drive (`drive_tick` puts the kart alone on the grid when there is no race). Both are
-/// counted in ticks from the win, once the tick it happened on is settled, so that every client
-/// sees the same winner whatever it predicted, and ends at the same tick. The lobby stays, and
-/// the host can start another race.
+/// How long a toast that says who finished shows, in milliseconds.
+const FINISH_TOAST_MS: u64 = 4000;
+
+/// The `place`th (from 0) as a person says it: 1st, 2nd, 3rd, 4th, ... 11th, 12th, 21st.
+pub(super) fn ordinal(place: usize) -> String {
+    let n = place + 1;
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ordinal;
+
+    #[test]
+    fn places_are_said_as_ordinals() {
+        let said: Vec<String> = [0, 1, 2, 3, 10, 11, 12, 20, 21].map(ordinal).into();
+        assert_eq!(said, ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"]);
+    }
+}
+
+/// Says who finished and in which place, as each crosses the line, and ends the race
+/// [`AFTERMATH_SECONDS`] after the last of the players who would score in a cup (the first four,
+/// or all there are if fewer) has: everyone goes back to a free drive (`drive_tick` puts the
+/// kart alone on the grid when there is no race). Both wait until the tick they happened on is
+/// settled, so that every client sees the same finishers whatever it predicted, and ends at the
+/// same tick. The lobby stays; the host scores the race for its cup and starts the next, or can
+/// start another race.
 pub(super) fn finish(
     mut lobby: ResMut<Lobby>,
     sim: Res<crate::props::Sim>,
+    time: Res<Time<Real>>,
     mut toasts: MessageWriter<Toast>,
 ) {
     let Some(net) = lobby.online.as_mut().filter(|net| net.go && !net.fresh) else {
         return;
     };
-    let Some((slot, tick)) = sim
-        .race
-        .winner
-        .filter(|&(_, tick)| tick < sim.race.settled())
-    else {
-        return;
-    };
-    if !net.won {
-        net.won = true;
+    let settled = sim.race.settled();
+    while let Some(&at) = sim.race.finish_ticks.get(net.announced)
+        && at < settled
+    {
+        let place = net.announced;
+        net.announced += 1;
+        let finished = |kart: &race::Kart| {
+            kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0
+                && kart.driver.driver_rank == place as i16
+        };
+        let Some(slot) = sim.race.karts.iter().position(finished) else {
+            continue;
+        };
         let name = net.labels.get(slot).map_or("?", String::as_str);
-        let text = format!("Race finished, player {name} won");
-        debug!("{text} (tick {tick})");
-        toasts.write(Toast::new(text, AFTERMATH_SECONDS as u64 * 1000).color(ANNOUNCE_COLOR));
+        let text = format!("{name} finished {}", ordinal(place));
+        debug!("{text} (tick {at})");
+        toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
     }
-    // The race is over when the last of the players still here crosses the line (the ones that
-    // left will not), or [`AFTERMATH_SECONDS`] after the win. The state is final at that point,
-    // so every client sees the same.
-    let all_over = sim.race.unsettled() == 0
-        && sim.race.karts.iter().enumerate().all(|(slot, kart)| {
-            net.gone.get(slot).copied().unwrap_or(false)
-                || kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0
-        });
-    if all_over || sim.race.settled() >= tick + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32 {
-        lobby.end_race();
+    // The race is over when the players that score have crossed the line (the ones that left
+    // will not, and are not waited for), and the aftermath has passed.
+    let present = net.gone.iter().filter(|gone| !**gone).count();
+    let waited_for = cup::places_waited_for(present);
+    let over_at = sim
+        .race
+        .finish_ticks
+        .get(waited_for.saturating_sub(1))
+        .map(|&at| at + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32);
+    if !over_at.is_some_and(|at| at < settled) {
+        return;
+    }
+    // (Spectators have no kart: `characters` has the players only.)
+    let finishers: Vec<Finisher> = {
+        let mut order: Vec<(i16, usize)> = sim
+            .race
+            .karts
+            .iter()
+            .enumerate()
+            .filter(|(_, kart)| kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
+            .map(|(slot, kart)| (kart.driver.driver_rank, slot))
+            .collect();
+        order.sort();
+        order
+            .into_iter()
+            .filter_map(|(_, slot)| {
+                Some(Finisher {
+                    id: *net.ids.get(slot)?,
+                    name: net.labels.get(slot)?.clone(),
+                })
+            })
+            .collect()
+    };
+    let players = net.characters.len();
+    lobby.end_race();
+    if lobby.is_host() {
+        lobby.race_over(players, &finishers, time.elapsed_secs());
     }
 }
 

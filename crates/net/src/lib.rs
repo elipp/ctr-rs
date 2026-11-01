@@ -20,7 +20,7 @@ mod ticket;
 mod transfers;
 pub mod wire;
 
-pub use iroh::EndpointId;
+pub use iroh::{EndpointId, SecretKey};
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 /// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
 /// (where std's panics).
@@ -124,13 +124,14 @@ pub enum Event {
     /// level `track` (a `LevelId`), which the game has to be showing. A custom track comes with
     /// the `hash` of its contents (0 for the game's own); a game that lacks it asks for it with
     /// [`Session::fetch`] first. Once the level is up, and the game has built the race,
-    /// [`Session::ready`] says so; [`Event::Go`] then starts it.
+    /// [`Session::ready`] says so; [`Event::Go`] then starts it. The race has `laps` laps.
     Started {
         slot: usize,
         characters: Vec<u8>,
         players: Vec<EndpointId>,
         track: u32,
         hash: u64,
+        laps: u8,
     },
     /// The host sent the custom track asked for with [`Session::fetch`], as the bytes it
     /// [provided](Session::provide) it as. They are not checked: that the contents hash to `hash`
@@ -160,11 +161,6 @@ pub enum Event {
     /// `from` said `text` to the lobby (see [`Session::say`]): us too, when we did, in the same
     /// order as everyone reads it. It is cleaned already.
     Chat { from: EndpointId, text: String },
-    /// The host picked the level `track` to drive on between races (see [`Session::set_track`]);
-    /// a guest that joins later hears of the one picked last. A custom track comes with the
-    /// `hash` of its contents (0 for the game's own), which a game that lacks it asks for with
-    /// [`Session::fetch`].
-    Track { track: u32, hash: u64 },
     /// The hash player `slot` made of the sim before `tick` (see [`Session::checksum`]).
     Checksum { slot: usize, tick: Tick, hash: u64 },
     /// A hash from `from` that was not taken in, and why: it is of another race (`sent` is not
@@ -265,10 +261,12 @@ enum Command {
     Start {
         track: u32,
         hash: u64,
+        laps: u8,
     },
     Restart {
         track: u32,
         hash: u64,
+        laps: u8,
     },
     Provide {
         track: u32,
@@ -281,10 +279,6 @@ enum Command {
     },
     Announce(String),
     Say(String),
-    Track {
-        track: u32,
-        hash: u64,
-    },
     Character(u8),
     Spectate(bool),
     Nickname(String),
@@ -327,9 +321,10 @@ impl Session {
 
     /// Starts the race on level `track`, if we host the lobby. Everyone then gets
     /// [`Event::Started`]. `hash` is that of a custom track's contents (0 for the game's own),
-    /// which has to be [provided](Self::provide) for the players who lack it.
-    pub fn start(&self, track: u32, hash: u64) {
-        let _ = self.commands.send(Command::Start { track, hash });
+    /// which has to be [provided](Self::provide) for the players who lack it. The race has `laps`
+    /// laps.
+    pub fn start(&self, track: u32, hash: u64, laps: u8) {
+        let _ = self.commands.send(Command::Start { track, hash, laps });
     }
 
     /// Makes the custom track `track` (whose contents hash to `hash`) available to the players
@@ -348,8 +343,8 @@ impl Session {
     /// Starts the race again on level `track`, if we host the lobby and a race has been started
     /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
     /// the way it did the first time.
-    pub fn restart(&self, track: u32, hash: u64) {
-        let _ = self.commands.send(Command::Restart { track, hash });
+    pub fn restart(&self, track: u32, hash: u64, laps: u8) {
+        let _ = self.commands.send(Command::Restart { track, hash, laps });
     }
 
     /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host
@@ -362,13 +357,6 @@ impl Session {
     /// host. Cleaned with [`clean_chat`]; nothing is sent if that leaves nothing.
     pub fn say(&self, text: &str) {
         let _ = self.commands.send(Command::Say(clean_chat(text)));
-    }
-
-    /// Tells everyone in the lobby which level to drive on until the next race, if we host it
-    /// and no race is on ([`Event::Track`]); a guest that joins later is told too. A custom
-    /// track has to be [provided](Self::provide) for the players who lack it.
-    pub fn set_track(&self, track: u32, hash: u64) {
-        let _ = self.commands.send(Command::Track { track, hash });
     }
 
     /// Changes the character we drive, for the race that has not started yet. (Pass the one
