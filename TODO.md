@@ -5,8 +5,6 @@
 - the bombs and missiles look for mines oldest first (`weapon::fly`), but a mine's thread goes to the front of the `MINE` bucket, so `RB_Hazard_CollideWithBucket` finds the newest first, as the hazards do (`race::set_off_mines`)
 - missile exhaust
 - flattening when jumping on top of another player?
-- tire clips exhaust again
-
 
 ## Sound
 The sound effects and the engines play through the `howl` crate: an SPU as `ctr-native` emulates it (24 voices, ADPCM decoded as they play, the Gaussian interpolation, the ADSR envelopes) under the HOWL channels, so sounds can be changed and stopped as they play and the ones that loop do (`OtherFX_Modify`, `OtherFX_Stop1/2`, `OtherFX_RecycleNew/Mute`, `EngineAudio_*`, `howl_PauseAudio`). Our kart's ground, skid, wall-rub and turbo loops play (`vehicle::emitter_sound`, `turbo`), and the boost, the mask grab's whistle, the voice lines (`howl::voiceline`: a grunt, or a line of XA), the pause menu's, the lap's, the win's and the item roulette's. So do the level's objects (crates, wumpa fruit, armadillos, fireballs, minecarts, barrels: `instance::Tick::sounds` and `loops`) and the weapons (launches, flight loops, explosions, detonations, a TNT on a head), heard from where they are. The sounds that echo (a kart in a tunnel) go through the SPU's reverb (`howl::reverb`), in the level's mode (`Howl::set_level_reverb`). The music is the level's song pack (`howl::music`): its song from the green light on, a mask's while ours is out, quieter for "FINAL LAP!" and 20 faster after it, as the states of the race say (`howl::state`). The XA (`loader::xa`: `XA/ENG.XNF`, the tracks' sectors and their ADPCM; `howl::xa`: the CD's input of the SPU and the native path of `CDSYS`) plays the voice lines and the "FINAL LAP!" and race-end jingles, which the states wait for; the viewer reads the tracks on a thread. `cargo run -p howl --example render` renders sounds to a WAV (`r2` before them for a level's reverb, `m0` for a level's song, `xm6` for an XA). What is left, in order:
@@ -18,7 +16,6 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 
 ## Net
 - auto-kick suspicious peers: count what a well-behaved client never does per guest (a duplicate `Want`, which `transfers::Verdict::Duplicate` already tells apart; a `Want` for a map the host did not provide; a `Blob` nobody asked for) and kick with `KICKED` past a threshold. Log each as a rate-limited `tracing::warn!` with `fmt_short()` ids (the `net` crate has no logging yet), and say why in the kick. A guest that never reads its stream also holds a transfer slot until QUIC's idle timeout: put a deadline on `send_reliably` for maps
-- host migration, step-down: two hosts can come of it when a guest cannot reach an heir that is up and the others can (`session.rs`, the search for the next host). The one later in the order should step down for the earlier one when it hears of it (a dial or a Hello from a player ahead of it in `Heirs::order`), and rejoin.
 - host migration in a race: a guest stops the race when the host leaves during it, and the lobby carries on (`race_on` in `session.rs`), but the race itself is lost. The heir would have to take over the host's part in it (settling a leaver's pads with `Departure`, the `Ready`s and `Go`) without the sims diverging.
 
 ## Chores
@@ -45,37 +42,18 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 # Bugs
 
 ## Confirmed
-
-- sewer speedway rollers / probably the rolling stone doesn't
-- **Bevy reports a command on a despawned entity (heisenbug).** Seen on a peer after the host quit
-  mid-race (2026-10-26), not reproduced since:
-  `bevy_ecs::error::handler: Encountered an error in command <name>: Entity despawned: The entity
-  with ID 931v4 is invalid; its index now has generation 5`, then `WARN bevy_ecs::relationship:
-  The <name>(948v4) relationship on entity 951v5 relates to an entity that does not exist. The
-  invalid relationship has been removed.` The names are hidden: run with `--features debug`
-  (forwards to `bevy/debug`) to get the command and the component. Not fixed: turning the
-  `despawn()` calls into `try_despawn()` would only silence it.
+- sewer speedway rollers / probably the rolling stone doesn't pop beakers/tnt
 - other karts' shield bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 
 ## Maybe
-
-- hot air skyway mega drop after missing the "main road" from the shortcut from the left side ("levypallo päätien kautta")
 - backing up and turning on N.Gin (some other drivers too?) looks weird (?)
+- The few usf boost pads in the game (thin)
 
-- The few usf boost pads in the game
-
-- **A color band near the top of the sky on Crash Cove.** The sky dome has open holes, filled by
-  the level's clear colors (`Level::clear_colors`, `CAM_ClearScreen`); we fill them with the top
-  color only. Looking up, a hard edge shows between the clear color `(144, 159, 255)` and the
-  dome below it. Not understood: every vertex of the dome's top rim (y 1301) is exactly the top
-  clear color, so the data has no such edge (`ctr-query sky 3` prints the rim). Retail's sky top
-  cannot be seen, so there is nothing to compare with. Converting the dome's vertex colors from
-  sRGB (they were read as linear) changed the shade but not the edge. Splitting the clear color
-  by camera pitch (top/bottom halves, as `CAM_ClearScreen` does) would not fix it either; it
-  would only show the bottom color (black on Crash Cove) under the horizon. Next step if it
-  matters: draw the dome in a flat debug color to see which triangles make the edge.
+- **A color band near the top of the sky on Crash Cove.** The sky dome has open holes, filled by the level's clear colors (`Level::clear_colors`, `CAM_ClearScreen`); we fill them with the top color only. Looking up, a hard edge shows between the clear color `(144, 159, 255)` and the dome below it. Not understood: every vertex of the dome's top rim (y 1301) is exactly the top clear color, so the data has no such edge (`ctr-query sky 3` prints the rim). Retail's sky top cannot be seen, so there is nothing to compare with. Converting the dome's vertex colors from sRGB (they were read as linear) changed the shade but not the edge. Splitting the clear color by camera pitch (top/bottom halves, as `CAM_ClearScreen` does) would not fix it either; it would only show the bottom color (black on Crash Cove) under the horizon. Next step if it matters: draw the dome in a flat debug color to see which triangles make the edge.
 
 ## Not a bug?
 - /race restart doesn't include any pending clients. Instead, one must /race stop and /race start
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
-- Custom maps don't have music
+- hot air skyway mega drop after missing the "main road" from the shortcut from the left side ("levypallo päätien kautta") - CONFIRMED NOT-A-BUG: retail does this too
+
+

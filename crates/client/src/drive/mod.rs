@@ -41,6 +41,7 @@ use overlay::{hud, reserves_hud, split_hud, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
 pub use follow::ChaseCamera;
+pub(crate) use input::Pads;
 pub(crate) use overlay::spawn_hud;
 pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 
