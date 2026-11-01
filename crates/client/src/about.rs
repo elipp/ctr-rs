@@ -1,8 +1,9 @@
 //! The pause menu's "About" (`pause.rs`): what the game is made of, a line each with its license,
 //! which taking shows under it, as Chrome's `chrome://credits` does.
 //!
-//! First ctr-rs, under the GPL; then the code and fonts it has from others, a part of
-//! `THIRD_PARTY_NOTICES.md` each; and Inconsolata, the font of the list.
+//! First ctr-rs, under the GPL; then the code it has from others, a part of
+//! `THIRD_PARTY_NOTICES.md` each; and Inconsolata, the font of the list. The notices' web page
+//! font is not in the game: the web page has its license (`web/index.html`).
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -55,6 +56,9 @@ fn parts() -> Vec<Part> {
     // A part of the notices is a `## ` heading, and its license is on the line `License: `.
     for section in NOTICES.split("\n## ").skip(1) {
         let (name, text) = section.split_once('\n').unwrap_or((section, ""));
+        if name.contains("(web page") {
+            continue;
+        }
         let license = text
             .lines()
             .find_map(|line| line.strip_prefix("License: "))
@@ -243,6 +247,7 @@ mod tests {
         assert_eq!(names[0], "ctr-rs");
         assert!(names.iter().any(|name| name.starts_with("PsyCross")));
         assert!(names.iter().any(|name| name.starts_with("Inconsolata")));
+        assert!(!names.iter().any(|name| name.starts_with("Press Start 2P")));
         let psycross = PARTS
             .iter()
             .find(|part| part.name.starts_with("PsyCross"))
