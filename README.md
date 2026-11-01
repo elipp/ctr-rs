@@ -35,6 +35,21 @@ The client has no command line options. `]` and `[` switch the level, `.` and `,
 
 `ctr-query` (`crates/query`) looks up a level's data from the disc, and `ctr-map` (`crates/map`) imports and describes maps.
 
+## Running the tests
+
+```
+cargo test --workspace --no-fail-fast
+```
+
+The tests that compare the port with the C reference (every test with `reference` in its name, and `vehicle/tests/tick.rs`) need two things, and without them they skip and pass without checking anything: the disc image (`assets/ctr-u.bin`, or `CTR_BIN`), and [ctr-native](https://github.com/CTR-tools/ctr-native) at the commit in [`docs/ctr-native.rev`](docs/ctr-native.rev), checked out at `reference/ctr-native` (git-ignored). They also build the C side with `gcc -m32`, which on Debian and Ubuntu is the `gcc-multilib` package.
+
+```
+git clone https://github.com/CTR-Tools/ctr-native reference/ctr-native
+git -C reference/ctr-native checkout "$(cat docs/ctr-native.rev)"
+```
+
+Another commit of ctr-native may not match what the tests expect (they fail to link, or differ by a field), so bump `docs/ctr-native.rev` together with the tests that need it. Run `cargo test --workspace -- --nocapture 2>&1 | grep -i skipping` to see which tests skipped. CI skips the reference tests altogether (`--skip reference`).
+
 ## Prior work
 
 This project stands on the work of the CTR community, and could not exist without it.
