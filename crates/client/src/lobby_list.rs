@@ -179,14 +179,30 @@ fn build(
     commands.entity(column).insert(List(players, watchers));
 }
 
-/// Puts a player's name on a portrait, at the bottom and centered, and the ping at the top right
-/// (which [`pings`] fills in). Gives the name's entity back.
+/// Puts a player's name on a portrait, at the bottom and centered, and the ping next to it, on its
+/// right (which [`pings`] fills in). Gives the name's entity back.
 pub(crate) fn spawn_tags(
     commands: &mut Commands,
     portrait: Entity,
     name: &str,
     key: &str,
 ) -> Entity {
+    // The name's centered under the portrait, whatever its length, and the ping hangs off its
+    // right end.
+    let wrapper = commands
+        .spawn((
+            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(50.0),
+                // A little below the portrait's edge.
+                bottom: Val::Px(-6.0),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(portrait),
+        ))
+        .id();
     let tag = commands
         .spawn((
             Text::new(name),
@@ -195,18 +211,12 @@ pub(crate) fn spawn_tags(
                 ..default()
             },
             BackgroundColor(BACKGROUND),
-            // Centered on the portrait's middle, whatever the length.
-            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
             Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                // A little below the portrait's edge.
-                bottom: Val::Px(-6.0),
                 padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
                 ..default()
             },
             Pickable::IGNORE,
-            ChildOf(portrait),
+            ChildOf(wrapper),
         ))
         .id();
     commands.spawn((
@@ -220,14 +230,15 @@ pub(crate) fn spawn_tags(
         BackgroundColor(BACKGROUND),
         Node {
             position_type: PositionType::Absolute,
-            right: Val::ZERO,
-            top: Val::ZERO,
+            // Past the name's right edge, on its line.
+            left: Val::Percent(100.0),
+            bottom: Val::ZERO,
             padding: UiRect::axes(Val::Px(3.0), Val::Px(1.0)),
             display: Display::None,
             ..default()
         },
         Pickable::IGNORE,
-        ChildOf(portrait),
+        ChildOf(wrapper),
     ));
     tag
 }
