@@ -66,7 +66,7 @@ pub(super) fn report(
             }
             Event::Chat { from, text } => chats.push((from, text)),
             Event::Joined(id) => debug!("joined the lobby of {}", id.fmt_short()),
-            Event::Rtt { id, rtt } => rtts.push((id.fmt_short().to_string(), rtt)),
+            Event::Rtt { id, rtt, relay } => rtts.push((id.fmt_short().to_string(), rtt, relay)),
             Event::PeerLeft(id) => {
                 debug!(
                     "{} left{}",
@@ -205,7 +205,7 @@ pub(super) fn report(
             .color(Color::linear_rgb(0.4, 1.0, 0.4)),
         );
     }
-    for (key, rtt) in rtts {
+    for (key, rtt, relay) in rtts {
         lobby
             .average_pings
             .entry(key.clone())
@@ -213,11 +213,16 @@ pub(super) fn report(
                 *old = old.mul_f32(1.0 - PING_SMOOTHING) + rtt.mul_f32(PING_SMOOTHING)
             })
             .or_insert(rtt);
+        match relay {
+            Some(relay) => lobby.relayed.insert(key.clone(), relay),
+            None => lobby.relayed.remove(&key),
+        };
         lobby.pings.insert(key, rtt);
     }
     for key in left {
         lobby.pings.remove(&key);
         lobby.average_pings.remove(&key);
+        lobby.relayed.remove(&key);
     }
     match listed {
         Some(Ok(())) => {

@@ -237,7 +237,15 @@ pub(crate) fn spawn_tags(
 fn pings(lobby: Res<Lobby>, mut labels: Query<(&PingLabel, &mut Text, &mut Node)>) {
     for (PingLabel(key), mut text, mut node) in &mut labels {
         let ping = lobby.pings.get(key);
-        let line = ping.map_or(String::new(), |ping| format!("{} ms", ping.as_millis()));
+        // "d" for a direct path, "r" for a relay.
+        let route = match lobby.relayed.get(key) {
+            Some(true) => " r",
+            Some(false) => " d",
+            None => "",
+        };
+        let line = ping.map_or(String::new(), |ping| {
+            format!("{} ms{route}", ping.as_millis())
+        });
         if text.0 != line {
             text.0 = line;
         }
