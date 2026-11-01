@@ -90,6 +90,8 @@ pub(crate) struct Guest {
     pub(crate) nick: (u32, String),
     /// It only watches: no kart, no pads (from its Hello).
     pub(crate) spectator: bool,
+    /// Its NAT is the hard kind (from its Nat).
+    pub(crate) hard: bool,
 }
 
 /// The race as agreed at the start.
@@ -169,18 +171,34 @@ impl Link {
     }
 }
 
-/// The players of `roster` that we dial for their links: those we are not `linked` to, and
-/// whose id is higher than ours. Of each pair the one with the lower id dials, whoever the host
-/// is and whichever way they came to the lobby, so that every link is made the same way.
+/// The players of `roster` that we dial for their links, those we are not `linked` to. Of each
+/// pair one dials, whoever the host is and whichever way they came to the lobby: a player with a
+/// `hard` NAT (see [`Message::Nat`]) when the other has not, as only the one that dials makes the
+/// holes (iroh's client side holepunches, its server side waits), and otherwise the one with the
+/// lower id. `hard` has the flag of each of the roster.
 pub(crate) fn to_dial(
     me: EndpointId,
     roster: &[EndpointId],
+    hard: &[bool],
     linked: impl Fn(&EndpointId) -> bool,
 ) -> Vec<EndpointId> {
+    let hard_of = |i: usize| hard.get(i).copied().unwrap_or(false);
+    let Some(mine) = roster.iter().position(|&id| id == me) else {
+        return Vec::new();
+    };
     roster
         .iter()
-        .copied()
-        .filter(|id| me.as_bytes() < id.as_bytes() && !linked(id))
+        .enumerate()
+        .filter(|&(i, id)| {
+            *id != me
+                && !linked(id)
+                && match (hard_of(mine), hard_of(i)) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _ => me.as_bytes() < id.as_bytes(),
+                }
+        })
+        .map(|(_, &id)| id)
         .collect()
 }
 
@@ -188,10 +206,11 @@ pub(crate) fn to_dial(
 pub(crate) fn dial_links(
     endpoint: &Endpoint,
     roster: &[EndpointId],
+    hard: &[bool],
     links: &HashMap<EndpointId, Link>,
     dialed: &UnboundedSender<Connection>,
 ) {
-    for id in to_dial(endpoint.id(), roster, |id| links.contains_key(id)) {
+    for id in to_dial(endpoint.id(), roster, hard, |id| links.contains_key(id)) {
         dial(endpoint.clone(), id, dialed.clone());
     }
 }
@@ -249,23 +268,36 @@ mod tests {
     #[test]
     fn of_each_pair_one_dials_whoever_the_host_is() {
         let ids: [EndpointId; 4] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
-        // Any of them can be first in the roster, which is the host.
+        let hards = [
+            [false; 4],
+            [true, false, false, false],
+            [false, true, true, false],
+            [true; 4],
+        ];
+        // Any of them can be first in the roster, which is the host, with any of them hard.
         for host in 0..ids.len() {
             let mut roster = ids.to_vec();
             roster.swap(0, host);
-            let dials: Vec<(EndpointId, EndpointId)> = roster
-                .iter()
-                .flat_map(|&me| {
-                    to_dial(me, &roster, |_| false)
-                        .into_iter()
-                        .map(move |id| (me, id))
-                })
-                .collect();
-            // Six pairs, each dialed from one side only, and never from oneself.
-            assert_eq!(dials.len(), 6);
-            for &(from, to) in &dials {
-                assert_ne!(from, to);
-                assert!(!dials.contains(&(to, from)));
+            for hard in hards {
+                let dials: Vec<(usize, usize)> = (0..roster.len())
+                    .flat_map(|me| {
+                        let wanted = to_dial(roster[me], &roster, &hard, |_| false);
+                        roster
+                            .iter()
+                            .enumerate()
+                            .filter(move |(_, id)| wanted.contains(id))
+                            .map(move |(i, _)| (me, i))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                // Six pairs, each dialed from one side only, and never from oneself.
+                assert_eq!(dials.len(), 6, "{hard:?}");
+                for &(from, to) in &dials {
+                    assert_ne!(from, to);
+                    assert!(!dials.contains(&(to, from)));
+                    // A hard NAT is the dialer when the other is not.
+                    assert!(!(hard[to] && !hard[from]), "{hard:?}: {from} dials {to}");
+                }
             }
         }
     }
@@ -274,9 +306,15 @@ mod tests {
     fn a_player_we_are_linked_to_is_not_dialed() {
         let [a, b] = std::array::from_fn(|_| iroh::SecretKey::generate().public());
         let (low, high) = if a.as_bytes() < b.as_bytes() { (a, b) } else { (b, a) };
-        assert_eq!(to_dial(low, &[low, high], |_| false), [high]);
-        assert!(to_dial(low, &[low, high], |id| *id == high).is_empty());
-        assert!(to_dial(high, &[low, high], |_| false).is_empty());
+        let roster = [low, high];
+        assert_eq!(to_dial(low, &roster, &[false; 2], |_| false), [high]);
+        assert!(to_dial(low, &roster, &[false; 2], |id| *id == high).is_empty());
+        assert!(to_dial(high, &roster, &[false; 2], |_| false).is_empty());
+        // The one with the hard NAT dials, the lower id or not.
+        assert!(to_dial(low, &roster, &[false, true], |_| false).is_empty());
+        assert_eq!(to_dial(high, &roster, &[false, true], |_| false), [low]);
+        // Both hard: as if neither.
+        assert_eq!(to_dial(low, &roster, &[true; 2], |_| false), [high]);
     }
 
     #[test]
