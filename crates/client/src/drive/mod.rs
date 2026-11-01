@@ -132,7 +132,6 @@ impl Plugin for DrivePlugin {
         app.insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
             .init_resource::<crate::flash::Flash>()
-            .init_resource::<overlay::DebugText>()
             .add_systems(Update, overlay::debug_text_command)
             .add_systems(Startup, spawn_hud)
             .add_systems(

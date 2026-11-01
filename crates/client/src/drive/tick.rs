@@ -59,6 +59,7 @@ pub(super) fn drive_tick(
     // The ticks waited for a late player, and the buttons a spectator held last tick.
     mut waits: Local<(u32, u32)>,
     mut sfx: crate::sound::Sfx,
+    config: Res<crate::config::Config>,
 ) {
     let drive = &mut *drive;
     let keys = &controller.keys;
@@ -173,10 +174,10 @@ pub(super) fn drive_tick(
     // Tick 0 has to come first: the others must be ready as well.
     if lobby.online.as_ref().is_some_and(|net| !net.go) {
         for mut text in &mut demo_label {
-            text.0 = lobby
-                .online
-                .as_ref()
-                .map_or_else(String::new, |net| net.summary(0, 0));
+            text.0 = match &lobby.online {
+                Some(net) if config.debug_hud => net.summary(0, 0),
+                _ => String::new(),
+            };
         }
         return;
     }
@@ -333,6 +334,7 @@ pub(super) fn drive_tick(
     }
     for mut text in &mut demo_label {
         text.0 = match &drive.demo {
+            _ if online && !config.debug_hud => String::new(),
             _ if online => lobby
                 .online
                 .as_ref()

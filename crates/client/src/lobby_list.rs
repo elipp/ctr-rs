@@ -244,12 +244,16 @@ pub(crate) fn spawn_tags(
 }
 
 /// Writes each player's ping, and shows the label once there is one (none for us, nor before
-/// the first pong).
-fn pings(lobby: Res<Lobby>, mut labels: Query<(&PingLabel, &mut Text, &mut Node)>) {
+/// the first pong). With the debug HUD on (`Config::debug_hud`), the way to the player too.
+fn pings(
+    lobby: Res<Lobby>,
+    config: Res<crate::config::Config>,
+    mut labels: Query<(&PingLabel, &mut Text, &mut Node)>,
+) {
     for (PingLabel(key), mut text, mut node) in &mut labels {
         let ping = lobby.pings.get(key);
         // "d" for a direct path, "r" for a relay.
-        let route = match lobby.relayed.get(key) {
+        let route = match lobby.relayed.get(key).filter(|_| config.debug_hud) {
             Some(true) => " r",
             Some(false) => " d",
             None => "",

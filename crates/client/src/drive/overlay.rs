@@ -11,30 +11,18 @@ use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 #[derive(Component)]
 pub(super) struct Hud;
 
-/// Whether the development text of the race shows: the speed under the frame rate,
-/// and the boost reserves (`/debug hud`). The frame rate always shows, and the viewer's text does.
-#[derive(Resource)]
-pub(crate) struct DebugText(pub(crate) bool);
-
-impl Default for DebugText {
-    fn default() -> Self {
-        DebugText(true)
-    }
-}
-
-/// `/debug hud`.
+/// `/debug hud`: the development text of the race, kept in the config (`Config::debug_hud`).
 pub(crate) fn debug_text_command(
     mut actions: MessageReader<crate::command::Action>,
-    mut shown: ResMut<DebugText>,
+    mut config: ResMut<crate::config::Config>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
     for action in actions.read() {
         if let crate::command::Action::DebugHud(setting) = action {
-            shown.0 = setting.unwrap_or(!shown.0);
-            toasts.write(crate::toast::Toast::new(
-                format!("Debug text {}", if shown.0 { "on" } else { "off" }),
-                2000,
-            ));
+            config.debug_hud = setting.unwrap_or(!config.debug_hud);
+            if let Err(why) = config.save() {
+                toasts.write(crate::toast::Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+            }
         }
     }
 }
@@ -169,14 +157,14 @@ pub(super) fn split_toast(
     toasts.write(toast);
 }
 
-/// The boost reserves, always, up to 10000.
+/// The boost reserves, up to 10000, with the development text.
 pub(super) fn reserves_hud(
     sim: Res<crate::props::Sim>,
-    shown: Res<DebugText>,
+    config: Res<crate::config::Config>,
     mut text: Query<&mut Text, With<ReservesHud>>,
 ) {
     for mut text in &mut text {
-        text.0 = if shown.0 {
+        text.0 = if config.debug_hud {
             format!("Reserves: {}", sim.driver().reserves)
         } else {
             String::new()
@@ -184,16 +172,24 @@ pub(super) fn reserves_hud(
     }
 }
 
-/// The bottom-left lines: the frame rate and the time a frame takes (smoothed over the last few
-/// frames), then where the kart is and what it does, the name of our lobby if it is public, and
-/// the version of the build.
+/// The development text (see `Config::debug_hud`): the frame rate and the time a frame takes
+/// (smoothed over the last few frames), then where the kart is and what it does, the name of our
+/// lobby if it is public, and the version of the build.
 pub(super) fn hud(
     sim: Res<crate::props::Sim>,
     lobby: Res<crate::lobby::Lobby>,
     diagnostics: Res<DiagnosticsStore>,
-    shown: Res<DebugText>,
+    config: Res<crate::config::Config>,
     mut text: Query<&mut Text, With<Hud>>,
 ) {
+    if !config.debug_hud {
+        for mut text in &mut text {
+            if !text.0.is_empty() {
+                text.0.clear();
+            }
+        }
+        return;
+    }
     let d = sim.driver();
     let grounded = d.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0;
     let read = |path| diagnostics.get(path).and_then(|d| d.smoothed());
@@ -205,10 +201,6 @@ pub(super) fn hud(
         _ => String::new(),
     };
     for mut text in &mut text {
-        if !shown.0 {
-            text.0 = fps.clone();
-            continue;
-        }
         text.0 = format!(
             "{fps}\nspeed {:5}  {:?}{}{}{}{}{}\nbuild {}",
             d.speed_approx,
