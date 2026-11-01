@@ -3,11 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use iroh::EndpointId;
 use iroh::endpoint::Connection;
+use iroh::{Endpoint, EndpointId};
 use n0_future::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 
-use crate::conn::send_datagram;
+use crate::conn::{dial, send_datagram};
 use crate::realm::Publisher;
 use crate::transfers::Transfers;
 use crate::wire::{InputReceiver, InputSender, Message};
@@ -165,6 +166,23 @@ impl Link {
         let mut packet = self.sender.packet(self.peer_has, self.receiver.next());
         packet.epoch = self.epoch;
         send_datagram(&self.connection, &Message::Inputs(packet));
+    }
+}
+
+/// Dials the players of `roster` that we have no link to. Of each pair the one with the lower id
+/// dials, whoever the host is and whichever way they came to the lobby, so that every link is
+/// made the same way.
+pub(crate) fn dial_links(
+    endpoint: &Endpoint,
+    roster: &[EndpointId],
+    links: &HashMap<EndpointId, Link>,
+    dialed: &UnboundedSender<Connection>,
+) {
+    let me = endpoint.id();
+    for &id in roster {
+        if me.as_bytes() < id.as_bytes() && !links.contains_key(&id) {
+            dial(endpoint.clone(), id, dialed.clone());
+        }
     }
 }
 

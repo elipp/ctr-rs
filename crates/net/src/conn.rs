@@ -11,7 +11,7 @@ use n0_future::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::wire::Message;
-use crate::{ALPN, Error, KICKED, MAX_BLOB};
+use crate::{Error, KICKED, MAX_BLOB, MESH_ALPN};
 
 pub(crate) async fn send_reliably(connection: &Connection, message: &Message) -> Result<(), Error> {
     let mut stream = connection.open_uni().await?;
@@ -31,8 +31,12 @@ pub(crate) const RACE_IN_PROGRESS: &str = "Race in progress, you will join the n
 /// What a connection said, tagged with who.
 pub(crate) enum Heard {
     Message(Message),
-    /// The round trip of a ping we sent, which came back.
-    Ping(Duration),
+    /// The round trip of a ping we sent, which came back, and whether the connection's selected
+    /// path goes through a relay (none when it has no path).
+    Ping {
+        rtt: Duration,
+        relay: Option<bool>,
+    },
     /// The connection closed: the number it has (see `Connection::stable_id`), and whether the
     /// host removed us ([`KICKED`]).
     Closed {
@@ -53,6 +57,19 @@ pub(crate) fn distinct<'a>(
 ) -> Vec<&'a Connection> {
     let mut seen = HashSet::new();
     connections.filter(|c| seen.insert(c.stable_id())).collect()
+}
+
+/// One connection per player: the `preferred` ones, then the `rest` of those whose player has
+/// none yet. (A player in the race has its lobby connection and its link both.)
+pub(crate) fn one_per_peer<'a>(
+    preferred: impl Iterator<Item = &'a Connection>,
+    rest: impl Iterator<Item = &'a Connection>,
+) -> Vec<&'a Connection> {
+    let mut seen = HashSet::new();
+    distinct(preferred.chain(rest))
+        .into_iter()
+        .filter(|c| seen.insert(c.remote_id()))
+        .collect()
 }
 
 /// Reads the datagrams and the reliable messages of a connection until it closes.
@@ -80,7 +97,12 @@ pub(crate) fn listen(
                 }
                 Some(Ok(Message::Pong { stamp: sent })) => {
                     let rtt = Duration::from_micros(stamp().saturating_sub(sent));
-                    if heard.send((from, Heard::Ping(rtt))).is_err() {
+                    let relay = connection
+                        .paths()
+                        .iter()
+                        .find(|path| path.is_selected())
+                        .map(|path| path.is_relay());
+                    if heard.send((from, Heard::Ping { rtt, relay })).is_err() {
                         return;
                     }
                 }
@@ -106,11 +128,11 @@ pub(crate) fn listen(
     });
 }
 
-/// Connects to a player of the roster, trying for a while: it may not be listening yet.
+/// Connects the link to a player of the roster, trying for a while: it may not be listening yet.
 pub(crate) fn dial(endpoint: Endpoint, id: EndpointId, dialed: UnboundedSender<Connection>) {
     n0_future::task::spawn(async move {
         for _ in 0..20 {
-            if let Ok(connection) = endpoint.connect(EndpointAddr::new(id), ALPN).await {
+            if let Ok(connection) = endpoint.connect(EndpointAddr::new(id), MESH_ALPN).await {
                 let _ = dialed.send(connection);
                 return;
             }

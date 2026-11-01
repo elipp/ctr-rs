@@ -73,6 +73,8 @@ pub struct Lobby {
     /// average of them (which the smoothing follows, not to be moved by one slow packet).
     pub pings: std::collections::HashMap<String, std::time::Duration>,
     pub average_pings: std::collections::HashMap<String, std::time::Duration>,
+    /// Whether the way to each player in the lobby, by short key, is a relay (`true`) or direct.
+    pub relayed: std::collections::HashMap<String, bool>,
     /// The map the race is on that we are waiting for the host to send.
     fetching: Option<u32>,
     /// The races the host is running (a cup, or the one of `/race start`), until the last is over.
