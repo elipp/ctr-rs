@@ -5,9 +5,12 @@
 
 FROM rust:1-slim-trixie
 
-RUN apt-get update \
+# gcc-multilib isn't available on ARM, so only install it on amd64.
+RUN extra=""; \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then extra="gcc-multilib"; fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
-    bash build-essential ca-certificates curl git jq less openssh-client pkg-config procps ripgrep unzip libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev python3 gcc-multilib \
+    bash build-essential ca-certificates curl git jq less openssh-client pkg-config procps ripgrep unzip libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev python3 fd-find $extra \
     && rm -rf /var/lib/apt/lists/*
 
 # Same uid as the host user, so files written to the mounted project are yours.

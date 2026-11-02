@@ -125,7 +125,7 @@ const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
-    "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url>";
+    "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
 /// The longest stall that can be set.
 const STALL_MAX_MS: f64 = 60_000.0;
@@ -202,7 +202,13 @@ impl Action {
             "relay" => match word(rest) {
                 ("add", url) if !url.is_empty() => net::parse_relay(url)
                     .map(|url| Action::SetConfig(crate::config::Setting::AddRelay(url))),
-                _ => Err("Usage: /net relay add <url, like https://relay.example.com>".into()),
+                ("clear", "") => Ok(Action::SetConfig(crate::config::Setting::ClearRelays)),
+                ("only", _) if cfg!(target_arch = "wasm32") => {
+                    Err("In a browser, every connection goes through the relay".into())
+                }
+                ("only", "on") => Ok(Action::SetConfig(crate::config::Setting::RelayOnly(true))),
+                ("only", "off") => Ok(Action::SetConfig(crate::config::Setting::RelayOnly(false))),
+                _ => Err("Usage: /net relay add <url, like relay.example.com> | clear | only on|off".into()),
             },
             "" => Err(NET_USAGE.into()),
             _ => Err(format!("Unknown command: /net {sub}\n{NET_USAGE}")),
@@ -1195,10 +1201,10 @@ mod tests {
         ));
         assert!(Action::parse("config set vsync maybe").is_err());
         assert!(matches!(
-            Action::parse("config set relay-only on"),
+            Action::parse("net relay only on"),
             Ok(Action::SetConfig(crate::config::Setting::RelayOnly(true)))
         ));
-        assert!(Action::parse("config set relay-only maybe").is_err());
+        assert!(Action::parse("net relay only maybe").is_err());
         assert!(matches!(
             Action::parse("config set fps-max 144"),
             Ok(Action::SetConfig(crate::config::Setting::FpsMax(144)))

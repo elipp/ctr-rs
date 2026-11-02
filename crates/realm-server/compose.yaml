@@ -1,6 +1,8 @@
 services:
   realm:
-    image: ${REGISTRY_HOST:-registry.lautasliina.fi}/ctr-realm
+    # The registry names the image: set REGISTRY_HOST (non-empty) in the environment or in a
+    # .env file next to this one (not committed).
+    image: ${REGISTRY_HOST:?set REGISTRY_HOST}/ctr-realm
     platform: linux/amd64
     build:
       context: ../..

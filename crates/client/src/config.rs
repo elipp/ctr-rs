@@ -9,16 +9,20 @@
 //!   default); the sim has its own clock, see `frame.rs`
 //! * `/config set msaa off|2|4`: how many samples of anti-aliasing the cameras draw with (off at
 //!   first: the picture is pixel art, and each camera's pass pays for it). It holds at once
-//! * `/config set relay-only on|off`: whether to reach the other players through the relay only,
-//!   never straight, so that they do not learn our address (off at first; it costs latency, and
-//!   holds from the next lobby we create or join)
-//!
 //! * `/config set volume music|sfx|voice <0-100>`: how loud the music, the effects and the
 //!   voices are, in percent of the game's own volumes (100 at first). The pause menu's Options
 //!   set them too
 //!
-//! A browser has no vsync, fps-max or relay-only: it paces the frames to the display itself, and
-//! reaches the others through the relay only.
+//! Two network settings are kept here too, and set with `/net`:
+//!
+//! * `/net relay only on|off`: whether to reach the other players through the relay only, never
+//!   straight, so that they do not learn our address (off at first; it costs latency, and holds
+//!   from the next lobby we create or join)
+//! * `/net relay add <url>`: another relay to use besides the public ones (each once, at most
+//!   [`MAX_RELAYS`]; it holds from the next lobby), and `/net relay clear` to drop them all
+//!
+//! A browser has no vsync or fps-max, and no relay-only: it paces the frames to the display
+//! itself, and reaches the others through the relay only.
 //!
 //! The last character driven is kept too, and is the one the client starts with, and the
 //! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`), and whether
@@ -54,7 +58,7 @@ pub struct Config {
     pub fps_max: u32,
     /// The samples of multisampling per pixel, 1 (off), 2 or 4 (`/config set msaa`).
     pub msaa: u8,
-    /// Whether to play through the relay only (`/config set relay-only`).
+    /// Whether to play through the relay only (`/net relay only`).
     pub relay_only: bool,
     /// The relays to use besides the public ones (`/net relay add`).
     pub relays: Vec<String>,
@@ -68,6 +72,9 @@ pub struct Config {
     /// (`/debug hud`).
     pub debug_hud: bool,
 }
+
+/// The most relays that can be added; every one is probed when an endpoint starts.
+const MAX_RELAYS: usize = 8;
 
 impl Default for Config {
     fn default() -> Config {
@@ -174,6 +181,14 @@ impl Config {
         match serde_json::from_str::<Config>(&text) {
             Ok(mut config) => {
                 config.nickname = net::clean_nick(&config.nickname);
+                // Each relay once, as written the same way (the file may be edited by hand).
+                let mut relays: Vec<String> = Vec::new();
+                for url in config.relays.iter().filter_map(|u| net::parse_relay(u).ok()) {
+                    if !relays.contains(&url) {
+                        relays.push(url);
+                    }
+                }
+                config.relays = relays;
                 config
             }
             Err(e) => {
@@ -213,6 +228,8 @@ pub enum Setting {
     RelayOnly(bool),
     /// A relay's URL, as `net::parse_relay` keeps it.
     AddRelay(String),
+    /// Back to the public relays only.
+    ClearRelays,
     /// 0 to 100.
     VolumeSfx(u8),
     VolumeMusic(u8),
@@ -224,7 +241,6 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set msaa off|2|4\n\
-    /config set relay-only on|off\n\
     /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
@@ -239,9 +255,6 @@ impl Setting {
             match key {
                 "vsync" | "fps-max" => {
                     return Err("In a browser, the browser sets the frame rate".into());
-                }
-                "relay-only" => {
-                    return Err("In a browser, every connection goes through the relay".into());
                 }
                 _ => {}
             }
@@ -269,11 +282,6 @@ impl Setting {
                 "2" => Ok(Setting::Msaa(2)),
                 "4" => Ok(Setting::Msaa(4)),
                 _ => Err("Usage: /config set msaa off|2|4".into()),
-            },
-            "relay-only" => match value {
-                "on" => Ok(Setting::RelayOnly(true)),
-                "off" => Ok(Setting::RelayOnly(false)),
-                _ => Err("Usage: /config set relay-only on|off".into()),
             },
             "volume" => {
                 const USAGE: &str = "Usage: /config set volume music|sfx|voice <0-100>";
@@ -427,12 +435,26 @@ fn apply(
             Setting::AddRelay(url) => {
                 let text = if config.relays.contains(url) {
                     format!("Relay already added: {url}")
+                } else if config.relays.len() >= MAX_RELAYS {
+                    format!("Too many relays (at most {MAX_RELAYS})")
                 } else {
                     config.relays.push(url.clone());
                     if let Err(why) = config.save() {
                         toasts.write(refuse(why));
                     }
-                    format!("Relay added: {url} (it takes hold in the next lobby)")
+                    format!("Relay added: {url}\nIt takes hold in the next lobby")
+                };
+                toasts.write(Toast::new(text, 3000));
+            }
+            Setting::ClearRelays => {
+                let text = if config.relays.is_empty() {
+                    "No relays added".to_string()
+                } else {
+                    config.relays.clear();
+                    if let Err(why) = config.save() {
+                        toasts.write(refuse(why));
+                    }
+                    "Relays cleared\nIt takes hold in the next lobby".to_string()
                 };
                 toasts.write(Toast::new(text, 3000));
             }
@@ -444,7 +466,7 @@ fn apply(
                 let text = match (on, lobby.is_open()) {
                     (true, false) => "Relay only: the others will not see your address",
                     (false, false) => "Relay only off: connections go straight when they can",
-                    (_, true) => "Relay only changes: it takes hold in the next lobby",
+                    (_, true) => "Relay only changes\nIt takes hold in the next lobby",
                 };
                 toasts.write(Toast::new(text, 3500));
             }
