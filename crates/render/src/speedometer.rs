@@ -1,10 +1,6 @@
-//! The speedometer that takes the minimap's place (`UI_DrawSpeedBG`, `UI_DrawSpeedNeedle`), and
-//! the digits of the jump meter it comes with (`DebugFont_DrawNumbers`).
-//!
-//! Retail draws the dial and the needle as flat polygons and lines on its 512 by 240 screen. The
-//! UI here has neither, so they are rasterized the way the PS1 does into pictures of that screen's
-//! pixels, [`WIDTH`] by [`HEIGHT`] with their top left at [`LEFT`], [`TOP`]. Retail's dithering is
-//! left out.
+//! The speedometer's dial and needle (`UI_DrawSpeedBG`, `UI_DrawSpeedNeedle`) and the jump meter's
+//! digits (`DebugFont_DrawNumbers`). The UI has no polygons or lines, so they are rasterized like
+//! the PS1 does, without its dithering.
 
 use loader::icons::Icon;
 use loader::vram::Vram;
@@ -95,14 +91,14 @@ impl Canvas {
     }
 
     /// A line, both its ends included.
-    fn line(&mut self, from: Point, to: Point, [r, g, b]: [u8; 3]) {
+    fn line(&mut self, from: Point, to: Point, color: [u8; 3]) {
         let (dx, dy) = (to.0 - from.0, to.1 - from.1);
         let steps = dx.abs().max(dy.abs());
         for step in 0..=steps {
             let along = |d: i32| (d * step * 2 + steps * d.signum()).checked_div(steps * 2);
             let x = from.0 + along(dx).unwrap_or(0);
             let y = from.1 + along(dy).unwrap_or(0);
-            self.put(x, y, [r, g, b, 255]);
+            self.put(x, y, opaque(color));
         }
     }
 
@@ -166,7 +162,8 @@ pub fn dial() -> Atlas {
     let mut canvas = Canvas::new();
     let at = |(x, y): Point| (x + DIAL_X, y + DIAL_Y);
     let spoke = |n: usize| at(SPOKES[n]);
-    let long = |n: usize| at(LONG_SPOKES[n]);
+    let long_spoke = |n: usize| at(LONG_SPOKES[n]);
+    let shadow = |(x, y): Point| (x + 1, y + 1);
 
     let dark = half_transparent([0, 0, 0, 255]);
     let hub = at((SPOKES[13].0, SPOKES[1].1));
@@ -179,7 +176,6 @@ pub fn dial() -> Atlas {
         let quad = [spoke(i), spoke(i + 1), spoke(i + 2), spoke(i + 3)];
         canvas.triangle([(quad[0], low), (quad[1], low), (quad[2], high)]);
         canvas.triangle([(quad[1], low), (quad[2], high), (quad[3], high)]);
-        let shadow = |(x, y): Point| (x + 1, y + 1);
         canvas.line(shadow(quad[1]), shadow(quad[3]), BLACK);
         canvas.line(shadow(quad[0]), shadow(quad[2]), BLACK);
         canvas.line(quad[1], quad[3], WHITE);
@@ -187,8 +183,8 @@ pub fn dial() -> Atlas {
     }
 
     for i in (0..LONG_SPOKES.len()).step_by(2).rev() {
-        let (from, to) = (long(i), long(i + 1));
-        canvas.line((from.0 + 1, from.1 + 1), (to.0 + 1, to.1 + 1), BLACK);
+        let (from, to) = (long_spoke(i), long_spoke(i + 1));
+        canvas.line(shadow(from), shadow(to), BLACK);
         canvas.line(from, to, WHITE);
     }
     canvas.atlas()
@@ -199,40 +195,38 @@ pub fn dial() -> Atlas {
 pub fn needle(angle: i32) -> Atlas {
     const CENTER: Point = (SLOT_X + 65, SLOT_Y + 41);
     const LENGTH: i32 = 60;
-    const TAIL: i32 = 6;
-    const SIDE: i32 = TAIL + 2;
+    const NEEDLE_WIDTH: i32 = 6;
 
-    // The screen's pixels are taller than wide, so the needle is flattened: `y * 1.25 / 2`,
-    // towards 0.
-    let flat = |n: i32| {
-        let scaled = n * 320;
-        (if scaled < 0 { scaled + 511 } else { scaled }) >> 9
-    };
+    // The screen's pixels are taller than wide.
+    let flat = |n: i32| n * 320 / 512;
     let (sin, cos) = math::sin_cos(angle as u32);
     let (sin_side, cos_side) = math::sin_cos((angle + 0x400) as u32);
     let (sx, sy) = CENTER;
 
     let tip = (sx + ((sin * LENGTH) >> 12), sy + flat((cos * LENGTH) >> 12));
-    let tail = (sx - ((sin * TAIL) >> 12), sy - flat((cos * TAIL) >> 12));
-    let right = (
-        sx + ((sin_side * TAIL) >> 12),
-        sy + flat((cos_side * SIDE) >> 12),
+    let tail = (
+        sx - ((sin * NEEDLE_WIDTH) >> 12),
+        sy - flat((cos * NEEDLE_WIDTH) >> 12),
     );
-    let left = (
-        sx - ((sin_side * TAIL) >> 12),
-        sy - flat((cos_side * SIDE) >> 12),
+    let dark_side = (
+        sx + ((sin_side * NEEDLE_WIDTH) >> 12),
+        sy + flat((cos_side * (NEEDLE_WIDTH + 2)) >> 12),
+    );
+    let bright_side = (
+        sx - ((sin_side * NEEDLE_WIDTH) >> 12),
+        sy - flat((cos_side * (NEEDLE_WIDTH + 2)) >> 12),
     );
 
     let mut canvas = Canvas::new();
     canvas.triangle([
         (tip, opaque(WHITE)),
         (tail, opaque([156, 105, 0])),
-        (left, opaque([255, 255, 0])),
+        (bright_side, opaque([255, 255, 0])),
     ]);
     canvas.triangle([
         (tip, opaque([91, 91, 0])),
         (tail, opaque([50, 43, 1])),
-        (right, opaque([255, 187, 0])),
+        (dark_side, opaque([255, 187, 0])),
     ]);
     canvas.atlas()
 }
@@ -346,7 +340,7 @@ mod tests {
         };
         assert_eq!(color(-60, 8), [0x00, 0xb5, 0x00, 255]);
         assert_eq!(color(11, -35), [0xdb, 0x00, 0x00, 255]);
-        // Inside the band, the dark fan, which lets the race through.
+        // The dark fan inside the band is half transparent.
         let [r, g, b, a] = color(-20, -10);
         assert_eq!([r, g, b], [0, 0, 0]);
         assert!(a > 0 && a < 255);
@@ -354,9 +348,9 @@ mod tests {
 
     #[test]
     fn the_needle_points_along_the_band() {
-        // Slowest: down the band's low end, left of the center and below it.
-        assert!(inked(&needle(3472), 479 - 25, 186 + 11));
-        // Fastest: towards its high end, right of the center and above it.
-        assert!(inked(&needle(1792), 479 + 15, 186 - 23));
+        const SLOWEST: i32 = 3472;
+        const FASTEST: i32 = 1792;
+        assert!(inked(&needle(SLOWEST), 479 - 25, 186 + 11));
+        assert!(inked(&needle(FASTEST), 479 + 15, 186 - 23));
     }
 }

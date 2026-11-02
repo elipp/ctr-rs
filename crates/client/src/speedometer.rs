@@ -1,11 +1,5 @@
-//! The speedometer, with one player, in place of the minimap (`UI_RenderFrame`): Triangle swaps
-//! the two, except while the race's intro plays. With it come the dial and needle
-//! (`render::speedometer`) and the jump meter (`UI_JumpMeter_Draw`), a bar of the kart's hang
-//! time and that time in digits. The slide meter is in both views (`slide_meter.rs`), on the dial
-//! and under the needle here, and unlike in the minimap's it stays when the race is finished.
-//!
-//! Which is showing lasts as long as the client runs: retail keeps it in `sdata` too, and starts
-//! with the minimap.
+//! The speedometer and jump meter, shown instead of the minimap (`UI_RenderFrame`,
+//! `UI_JumpMeter_Draw`). As in retail, the choice outlasts the level.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -45,10 +39,10 @@ const NUMBER_HEIGHT: i32 = 10;
 const DIGITS_X: [i32; 3] = [-16, -4, 4];
 const DIGITS_Y: i32 = NUMBER_Y + 2;
 
-/// The bar's fill by hang time (`UI_JUMP_METER_BAR_BLUE`, `_GREEN`, `_YELLOW`, `_RED`), and when
-/// empty (`_EMPTY_COLOR`).
+/// `UI_JUMP_METER_BAR_EMPTY_COLOR`
 const BAR_EMPTY: Color = Color::srgb_u8(0x80, 0x80, 0x80);
 
+/// `UI_JUMP_METER_BAR_BLUE`, `_GREEN`, `_YELLOW`, `_RED`
 fn bar_color(jump_meter: i32) -> Color {
     match jump_meter {
         m if m < HANG_SMALL => Color::srgb_u8(0, 0, 0xff),
@@ -74,9 +68,10 @@ const LOW_ANGLE: i32 = 3472;
 const MIDDLE_ANGLE: i32 = 2432;
 const HIGH_ANGLE: i32 = 1792;
 
-/// The needle's angle (`UI_DrawSpeedNeedle`): from the band's low end to its middle up to the
-/// class's top speed, and on to its high end up to that with a reserve's boost on top.
+/// The needle's angle (`UI_DrawSpeedNeedle`): low end to middle up to `accel_speed`, then middle
+/// to high end up to `accel_speed + sacred_fire_speed`.
 fn needle_angle(speed: i32, accel_speed: i32, sacred_fire_speed: i32) -> i32 {
+    // Retail's scale: only its rounding matters here.
     let scale = |n: i32| n * 108000 / 64000;
     let (accel_int, speed_int) = (accel_speed >> 8, speed >> 8);
     let (from, to, angle_from, angle_to) = if accel_speed < speed {
@@ -108,7 +103,7 @@ struct Part;
 struct BarFill;
 
 #[derive(Component)]
-struct Digit(usize);
+struct DigitSlot(usize);
 
 pub struct SpeedometerPlugin;
 
@@ -162,15 +157,15 @@ fn show(
     mut images: ResMut<Assets<Image>>,
     mut parts: Query<&mut Visibility, With<Part>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<BarFill>>,
-    mut shown_digits: Query<(&Digit, &mut ImageNode)>,
-    mut drawn: Local<Option<i32>>,
+    mut slots: Query<(&DigitSlot, &mut ImageNode)>,
+    mut drawn_angle: Local<Option<i32>>,
 ) {
     let Some(art) = art else {
-        let digits = digits(&pack_icons(), &textures.vram).unwrap_or_default();
+        let font = digits(&pack_icons(), &textures.vram).unwrap_or_default();
         commands.insert_resource(Art {
             dial: atlas_image(dial(), &mut images),
             needle: editable_image(needle(LOW_ANGLE), &mut images),
-            digits: digits
+            digits: font
                 .into_iter()
                 .map(|d| atlas_image(d, &mut images))
                 .collect(),
@@ -178,7 +173,6 @@ fn show(
         return;
     };
     if parts.is_empty() {
-        // The first frame, or of a new level (which took the nodes away).
         spawn(&mut commands, &art);
         return;
     }
@@ -200,11 +194,11 @@ fn show(
         d.stats.accel_speed_class_stat as i32,
         d.stats.sacred_fire_speed as i32,
     );
-    if *drawn != Some(angle)
+    if *drawn_angle != Some(angle)
         && let Some(mut image) = images.get_mut(&art.needle)
     {
         image.data = Some(needle(angle).rgba);
-        *drawn = Some(angle);
+        *drawn_angle = Some(angle);
     }
 
     let jump = d.jump_meter as i32;
@@ -216,16 +210,16 @@ fn show(
         }
         background.set_if_neq(BackgroundColor(bar_color(jump)));
     }
-    let digits = jump_digits(jump);
-    for (digit, mut node) in &mut shown_digits {
-        let image = &art.digits[digits[digit.0]];
+    let shown = jump_digits(jump);
+    for (slot, mut node) in &mut slots {
+        let image = &art.digits[shown[slot.0]];
         if node.image != *image {
             node.image = image.clone();
         }
     }
 }
 
-/// A node `width` by `height` at `x`, `y` of retail's screen, inside a node of the pictures' place.
+/// Retail screen coordinates, inside the `place` node.
 fn at(x: i32, y: i32, width: i32, height: i32) -> Node {
     Node {
         position_type: PositionType::Absolute,
@@ -258,7 +252,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         Visibility::Hidden,
         Pickable::IGNORE,
     ));
-    let over = commands
+    let overlay = commands
         .spawn((
             Part,
             place,
@@ -267,8 +261,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
             Pickable::IGNORE,
         ))
         .id();
-    // The outlines are a line on the first column and row of what they go round, and one just
-    // past its last, as in `slide_meter.rs`.
+    // Same outline as `slide_meter.rs`.
     let outlined = |node: Node| Node {
         width: match node.width {
             Val::Px(w) => Val::Px(w + hud::PIXEL.x),
@@ -286,7 +279,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         BorderColor::all(Color::BLACK),
         BackgroundColor(BAR_EMPTY),
         Pickable::IGNORE,
-        ChildOf(over),
+        ChildOf(overlay),
         children![(
             BarFill,
             Node {
@@ -311,12 +304,12 @@ fn spawn(commands: &mut Commands, art: &Art) {
         BorderColor::all(Color::BLACK),
         BackgroundColor(Color::WHITE),
         Pickable::IGNORE,
-        ChildOf(over),
+        ChildOf(overlay),
     ));
     if !art.digits.is_empty() {
         for (n, x) in DIGITS_X.into_iter().enumerate() {
             commands.spawn((
-                Digit(n),
+                DigitSlot(n),
                 picture(&art.digits[0]),
                 at(
                     JUMP_X + x,
@@ -325,7 +318,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
                     DIGIT_SIZE as i32,
                 ),
                 Pickable::IGNORE,
-                ChildOf(over),
+                ChildOf(overlay),
             ));
         }
     }
@@ -333,7 +326,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         picture(&art.needle),
         at(LEFT, TOP, WIDTH as i32, HEIGHT as i32),
         Pickable::IGNORE,
-        ChildOf(over),
+        ChildOf(overlay),
     ));
 }
 

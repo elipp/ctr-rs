@@ -61,7 +61,7 @@ impl Plugin for SlideMeterPlugin {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
-    speedometer: Res<ShowSpeedometer>,
+    showing: Res<ShowSpeedometer>,
     mut meter: Query<&mut Visibility, With<SlideMeter>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<Fill>>,
 ) {
@@ -72,7 +72,7 @@ fn show(
     };
     let d = sim.driver();
     let finished = d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    visibility.set_if_neq(if finished && !speedometer.0 {
+    visibility.set_if_neq(if finished && !showing.0 {
         Visibility::Hidden
     } else {
         Visibility::Inherited

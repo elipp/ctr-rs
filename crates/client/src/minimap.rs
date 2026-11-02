@@ -73,7 +73,9 @@ impl Plugin for MinimapPlugin {
         app.add_plugins(UiMaterialPlugin::<MapMaterial>::default())
             .add_systems(
                 Update,
-                (build, show, swap).chain().run_if(crate::drive::driving),
+                (build, show, hide_for_speedometer)
+                    .chain()
+                    .run_if(crate::drive::driving),
             );
     }
 }
@@ -152,13 +154,13 @@ fn build(
     ));
 }
 
-/// Hides the picture, its dots with it, while the speedometer is showing.
-fn swap(
-    speedometer: Res<crate::speedometer::ShowSpeedometer>,
+/// The dots are the picture's children, so they hide with it.
+fn hide_for_speedometer(
+    showing: Res<crate::speedometer::ShowSpeedometer>,
     mut maps: Query<&mut Visibility, With<Map>>,
 ) {
     for mut map in &mut maps {
-        map.set_if_neq(if speedometer.0 {
+        map.set_if_neq(if showing.0 {
             Visibility::Hidden
         } else {
             Visibility::Inherited
