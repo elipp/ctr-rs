@@ -121,14 +121,27 @@ window.AudioContext = new Proxy(window.AudioContext, {
     return context;
   },
 });
-const gestures = ["keydown", "pointerdown", "touchend"];
+// iOS would have its Silent Mode mute the game.
+if (navigator.audioSession) navigator.audioSession.type = "playback";
+// (iOS only counts a touch as a gesture when it ends, and it can interrupt a context that was
+// running at any time, as when the page is left: this keeps listening.)
+const unlocked = new WeakSet();
 function resume() {
-  audio.forEach((context) => context.state === "suspended" && context.resume());
-  if (audio.length > 0 && audio.every((context) => context.state === "running")) {
-    gestures.forEach((name) => removeEventListener(name, resume, true));
+  for (const context of audio) {
+    if (context.state === "running" || context.state === "closed") continue;
+    context.resume();
+    if (!unlocked.has(context)) {
+      unlocked.add(context);
+      const silence = context.createBufferSource();
+      silence.buffer = context.createBuffer(1, 1, context.sampleRate);
+      silence.connect(context.destination);
+      silence.start();
+    }
   }
 }
-gestures.forEach((name) => addEventListener(name, resume, true));
+for (const name of ["keydown", "pointerdown", "pointerup", "touchend", "click"]) {
+  addEventListener(name, resume, true);
+}
 </script>
 <script type="module">
 import init from "./client.js";
