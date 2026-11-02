@@ -38,7 +38,7 @@ pub(crate) struct LevelBeforeRace(pub(crate) Option<u32>);
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
 /// the previous racer. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
-/// on the same level.
+/// on the same level. On a touch screen the page's buttons step to the next (`web/play.html`).
 pub(crate) fn switch_level(world: &mut World) {
     // A scene that was just built is still settling (`loading.rs`): another change would despawn
     // what its commands are about to touch.
@@ -54,6 +54,11 @@ pub(crate) fn switch_level(world: &mut World) {
         &[KeyCode::BracketLeft, KeyCode::PageDown],
     );
     let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
+    #[cfg(target_arch = "wasm32")]
+    {
+        level_step += crate::web::take_level_step();
+        racer_step += crate::web::take_racer_step();
+    }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)

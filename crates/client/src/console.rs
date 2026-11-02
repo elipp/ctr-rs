@@ -54,6 +54,7 @@ const FONT_SIZE: f32 = 18.0;
 /// 3.)
 const ICON_SIZE: Vec2 = Vec2::new(25.0, 22.0);
 const LOG_HEIGHT: f32 = 300.0;
+const BOTTOM: f32 = 40.0;
 const BACKGROUND_ALPHA: f32 = 0.25;
 
 /// Seconds the text stays up after the last line or scroll, and how long it then fades for. The
@@ -244,6 +245,8 @@ impl Plugin for ConsolePlugin {
             .add_message::<Log>()
             .add_systems(Startup, spawn)
             .add_systems(Update, (collect, scroll, fade, rebuild).chain());
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Update, sync_with_page);
     }
 }
 
@@ -272,7 +275,7 @@ pub(crate) fn spawn(mut commands: Commands) {
         ConsoleWindow,
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(40.0),
+            bottom: Val::Px(BOTTOM),
             left: Val::Px(20.0),
             width: Val::Percent(40.0),
             min_width: Val::Px(480.0),
@@ -299,6 +302,27 @@ pub(crate) fn spawn(mut commands: Commands) {
             command::input_row(),
         ],
     ));
+}
+
+/// Keeps the window, and so the command line, above the page's on-screen keyboard, and tells the
+/// page where it is.
+#[cfg(target_arch = "wasm32")]
+fn sync_with_page(
+    mut windows: Query<(&mut Node, &ComputedNode, &UiGlobalTransform), With<ConsoleWindow>>,
+    mut told: Local<Option<Rect>>,
+) {
+    let bottom = Val::Px(BOTTOM.max(crate::web::keyboard_inset()));
+    for (mut node, computed, transform) in &mut windows {
+        if node.bottom != bottom {
+            node.bottom = bottom;
+        }
+        let scale = computed.inverse_scale_factor;
+        let area = Rect::from_center_size(transform.translation * scale, computed.size * scale);
+        if *told != Some(area) {
+            crate::web::console_area(area.min.x, area.min.y, area.max.x, area.max.y);
+            *told = Some(area);
+        }
+    }
 }
 
 /// Takes in the lines that were sent.

@@ -15,6 +15,9 @@
 //!
 //! While it is open it takes the keyboard: the keys are cleared from the game's input every frame,
 //! so that typing does not drive the kart.
+//!
+//! On a touch screen a tap on the console opens it, and the page's text field is what the
+//! on-screen keyboard types in: the line is replaced with what the field holds (`web/play.html`).
 
 use std::collections::VecDeque;
 use std::collections::hash_map::RandomState;
@@ -732,6 +735,8 @@ impl Plugin for CommandPlugin {
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
             .add_systems(Update, (open, submit, show).chain());
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Update, tell_page.after(submit));
     }
 }
 
@@ -772,6 +777,13 @@ pub(crate) fn capture(
     #[cfg(target_arch = "wasm32")]
     if let Some(text) = crate::web::take_pasted() {
         line.insert(&text.replace(|c: char| c.is_control(), ""));
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(text) = crate::web::take_typed() {
+        let text = text.replace(|c: char| c.is_control(), "");
+        if text != line.text {
+            line.set_text(text);
+        }
     }
     for (event, Modifiers { ctrl, alt, sup }) in &typed {
         if event.state != ButtonState::Pressed {
@@ -870,6 +882,20 @@ fn open(keys: Res<ButtonInput<KeyCode>>, time: Res<Time<Real>>, mut line: ResMut
         // (A browser's std hasher has fixed keys: the time is what differs there.)
         let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
         line.lobby_name_index = seed % suggest::LOBBY_NAME_COUNT;
+    }
+}
+
+/// Keeps the page's touch buttons and text field up with the line and the menu.
+#[cfg(target_arch = "wasm32")]
+fn tell_page(
+    line: Res<CommandLine>,
+    menu: Res<crate::pause::PauseMenu>,
+    mut told: Local<Option<(bool, String, bool)>>,
+) {
+    let now = (line.open, line.text.clone(), menu.open);
+    if told.as_ref() != Some(&now) {
+        crate::web::show_line(now.0, &now.1, now.2);
+        *told = Some(now);
     }
 }
 
