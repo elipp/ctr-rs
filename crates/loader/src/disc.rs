@@ -131,7 +131,7 @@ impl Seek for FileDisc {
     }
 }
 
-pub(crate) fn open_file(path: &Path) -> io::Result<FileDisc> {
+pub fn open_file(path: &Path) -> io::Result<FileDisc> {
     match IN_MEMORY.get() {
         Some((at, bytes)) if at == path => Ok(FileDisc::Memory(Cursor::new(bytes))),
         _ => File::open(path).map(|file| FileDisc::File(BufReader::new(file))),

@@ -7,7 +7,7 @@
 //! * the pause menu's "Public lobbies" (`pause.rs`): the realm's list, where a lobby is joined by taking it
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
-//! * `/cache purge`: delete the maps other players sent us (the `cache/maps` folder, see `paths.rs`)
+//! * `/cache purge`: delete the maps other players sent us (the `.cache/custom-tracks` folder, see `paths.rs`)
 //! * `/race start`: start the race, once the others have joined (the host only)
 //! * `/cup create <name> <tracks> <laps>`: define a cup (`cup.rs`), and `/cup start <name>` to
 //!   drive it: its races one after another, points for the first four to finish, and

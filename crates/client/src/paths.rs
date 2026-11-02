@@ -37,15 +37,10 @@ pub fn builtin_maps() -> PathBuf {
     disc().join("maps")
 }
 
-/// The maps that are ours.
-pub fn maps() -> PathBuf {
-    root().join("maps")
-}
-
-/// The maps that other players sent: everything in it may go. (Not the same folder as `maps`
-/// in any build: `/cache purge` deletes this one whole.)
+/// The maps that other players sent and the ones dropped on the window: everything in it may go
+/// (`/cache purge` deletes this folder whole), and so do the ones `ctr-map import` makes.
 pub fn cached_maps() -> PathBuf {
-    root().join(".cache").join("maps")
+    root().join(".cache").join("custom-tracks")
 }
 
 fn cache() -> PathBuf {

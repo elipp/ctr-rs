@@ -103,7 +103,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
     // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
     let map = maps::get(id).unwrap_or_else(|| {
         if map::is_map_id(id) {
-            panic!("map {id:#x} is not in the maps folder")
+            panic!("map {id:#x} is not in the tracks folder")
         } else {
             panic!(
                 "the map of the game's track {id} is missing: it is made from the disc when the \
@@ -111,7 +111,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
             )
         }
     });
-    debug!("level {id:#x} ({}): loaded from its map", maps::name(id));
+    debug!("level {id:#x} ({}): loaded from its track file", maps::name(id));
     // A map brings its own level and texture pages; the shared ones are the disc's.
     let mut vram = Vram::default();
     for img in &map.vram {

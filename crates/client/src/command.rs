@@ -53,6 +53,8 @@ pub enum Action {
     Promote(String),
     /// Delete the maps other players sent us (`maps::purge`).
     PurgeCache,
+    /// Lists the tracks there are (`/track list`).
+    ListTracks,
     StartRace,
     RestartRace,
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
@@ -127,9 +129,10 @@ const LOBBY_USAGE: &str =
     "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
+const TRACK_USAGE: &str = "Usage: /track list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
+const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
@@ -163,6 +166,7 @@ impl Action {
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
             "promote" => Ok(Action::Promote(rest.into())),
             "cache" => Action::cache(rest),
+            "track" => Action::track(rest),
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
             "version" => Err("Usage: /version".into()),
@@ -249,6 +253,15 @@ impl Action {
             "set" => crate::config::Setting::parse(rest).map(Action::SetConfig),
             "" => Err(CONFIG_USAGE.into()),
             _ => Err(format!("Unknown command: /config {sub}\n{CONFIG_USAGE}")),
+        }
+    }
+
+    fn track(line: &str) -> Result<Action, String> {
+        let (sub, _) = word(line);
+        match sub {
+            "list" => Ok(Action::ListTracks),
+            "" => Err(TRACK_USAGE.into()),
+            _ => Err(format!("Unknown command: /track {sub}\n{TRACK_USAGE}")),
         }
     }
 
@@ -1164,6 +1177,10 @@ mod tests {
         assert!(matches!(
             Action::parse("cache purge"),
             Ok(Action::PurgeCache)
+        ));
+        assert!(matches!(
+            Action::parse("track list"),
+            Ok(Action::ListTracks)
         ));
         assert!(matches!(Action::parse("race start"), Ok(Action::StartRace)));
         assert!(matches!(

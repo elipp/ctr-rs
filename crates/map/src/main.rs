@@ -12,11 +12,12 @@ usage:
       reads the patch against the USA disc image (CTR_BIN, or assets/ctr-u.bin; --disc picks
       one), finds where the patch put its map (a track's slot, or the entries that CTR Editor
       uses; --level N when it changes several different tracks, --entries LEV,VRAM to name
-      the BIGFILE entries by hand; --song-pack N takes the music from song pack N of KART.HWL when
-      the patch's is not the track's slot's, see `audio`; when the patch changes several
-      packs, it lists them and asks, unless the option is given; --reverb N, 0 to 4, sets the
+      the BIGFILE entries by hand; every song pack the patch changes is a soundtrack of the map, which can be
+      stepped through in the client; --song-pack N makes pack N of KART.HWL the one that plays
+      first (see `audio`); when the patch changes several packs, it lists them and asks, unless
+      the option is given; --reverb N, 0 to 4, sets the
       map's reverb mode; the patch's reverbs are asked for in the same way when it changes
-      some, and the track's own is the default), and saves it (default: assets/maps/NAME.ctrmap)
+      some, and the track's own is the default), and saves it (default: assets/.cache/custom-tracks/NAME.ctrmap)
   ctr-map audio PATCH.xdelta [--disc BIN]
       whether the patch changes the game's audio: the song packs of SOUNDS/KART.HWL, and the
       executable's tables of each level's song and reverb
@@ -64,9 +65,10 @@ fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Re
             "  {:>2}{levels}: {} of {} sequences differ, bpm {:?} -> {:?}, {} samples changed",
             c.pack, c.sequences.0, c.sequences.1, c.was, c.now, c.samples
         );
+        println!("      differs in: {}", c.differs);
     }
     loop {
-        print!("which is the map's music? a number, or nothing for its track's own pack: ");
+        print!("which plays first? a number, or nothing for its track's own pack: ");
         std::io::stdout().flush()?;
         let mut line = String::new();
         if std::io::stdin().lock().read_line(&mut line)? == 0 {
@@ -100,7 +102,7 @@ fn ask_reverb(patch: &std::path::Path, disc: &std::path::Path) -> std::io::Resul
         println!("  level {level:>2}: {was} -> {now}");
     }
     loop {
-        print!("which reverb is the map's? a mode 0 to 4, or nothing for its track's own: ");
+        print!("which reverb does the track have? a mode 0 to 4, or nothing for the original track's own: ");
         std::io::stdout().flush()?;
         let mut line = String::new();
         if std::io::stdin().lock().read_line(&mut line)? == 0 {
@@ -172,7 +174,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let done = map::import::import(&disc_path, &patch, level, entries, song_pack, reverb)
                 .map_err(|e| format!("{}: {e}", patch.display()))?;
             let out = out.unwrap_or_else(|| {
-                PathBuf::from("assets/maps").join(format!("{}.ctrmap", done.map.name))
+                PathBuf::from("assets/.cache/custom-tracks").join(format!("{}.ctrmap", done.map.name))
             });
             if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
                 std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -219,7 +221,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             let made = map::builtin::export(&disc_path, &out)
                 .map_err(|e| format!("{}: {e}", disc_path.display()))?;
-            println!("made {made} maps in {}", out.display());
+            println!("made {made} tracks in {}", out.display());
             Ok(())
         }
         Some("info") => {
@@ -247,19 +249,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 map.vram.len()
             );
             match &map.audio {
-                Some(a) => println!(
-                    "audio: over track {}; song pack {}, reverb {}, {} samples ({} bytes)",
-                    a.level,
-                    a.song_pack
-                        .as_ref()
-                        .map_or("the game's".into(), |p| format!(
-                            "its own ({} bytes)",
-                            p.len()
-                        )),
-                    a.reverb.map_or("the game's".into(), |r| r.to_string()),
-                    a.samples.len(),
-                    a.samples.iter().map(|(_, s)| s.len()).sum::<usize>()
-                ),
+                Some(a) => {
+                    println!(
+                        "audio: over track {}; reverb {}; {} soundtracks",
+                        a.level,
+                        a.reverb.map_or("the game's".into(), |r| r.to_string()),
+                        a.soundtracks.len()
+                    );
+                    for t in &a.soundtracks {
+                        println!(
+                            "  song pack {} ({} bytes), {} samples ({} bytes)",
+                            t.pack,
+                            t.song_pack.len(),
+                            t.samples.len(),
+                            t.samples.iter().map(|(_, s)| s.len()).sum::<usize>()
+                        );
+                    }
+                }
                 None => println!("audio: none"),
             }
             Ok(())

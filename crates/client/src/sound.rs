@@ -170,36 +170,68 @@ fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds
     commands.spawn((AudioPlayer(mixer), PlaybackSettings::ONCE));
 }
 
+/// The key that steps through a map's soundtracks.
+const SOUNDTRACK_KEY: KeyCode = KeyCode::KeyM;
+
 /// `Music_LoadBanks` and `Music_AsyncParseBanks`: a level that loads sets its reverb and loads
 /// its song pack. There are no boss races. A map brings what its patch changed (`map::Audio`),
-/// and has the game's for the track it was made over where it brings none.
-fn level_audio(track: Res<Track>, sounds: Res<Sounds>) {
-    if track.is_changed() {
-        let audio = map::is_map_id(track.1.0)
-            .then(|| crate::maps::get(track.1.0))
-            .flatten()
-            .and_then(|m| m.audio.as_ref());
-        let mut sounds = sounds.lock();
-        let Some(audio) = audio else {
-            sounds.set_level_audio(track.1.0, None, None, Vec::new());
-            return;
-        };
-        // The pack was checked when the map was read.
-        let pack = audio.song_pack.clone().and_then(|p| Cseq::parse(p).ok());
-        info!(
-            "map audio: over track {}, song pack {:?} ({} bytes, {} songs), reverb {:?}, {} samples",
-            audio.level,
-            pack.is_some(),
-            audio.song_pack.as_ref().map_or(0, Vec::len),
-            pack.as_ref().map_or(0, |p| p.songs.len()),
-            audio.reverb,
-            audio.samples.len()
-        );
-        let samples = (audio.samples.iter())
-            .map(|(n, adpcm)| (*n, adpcm.clone().into_boxed_slice()))
-            .collect();
-        sounds.set_level_audio(audio.level, pack, audio.reverb, samples);
+/// and has the game's for the track it was made over where it brings none. A map that has
+/// several soundtracks plays the first, and `M` steps through them (the choice is ours alone: it
+/// is only what we hear).
+fn level_audio(
+    track: Res<Track>,
+    sounds: Res<Sounds>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut chosen: Local<usize>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+) {
+    let stepped = keys.just_pressed(SOUNDTRACK_KEY);
+    if !track.is_changed() && !stepped {
+        return;
     }
+    let audio = map::is_map_id(track.1.0)
+        .then(|| crate::maps::get(track.1.0))
+        .flatten()
+        .and_then(|m| m.audio.as_ref());
+    let count = audio.map_or(0, |a| a.soundtracks.len());
+    if track.is_changed() {
+        *chosen = 0;
+        if count > 1 {
+            toasts.write(crate::toast::Toast::new(
+                format!("This track has {count} soundtracks\nPress M to cycle"),
+                4000,
+            ));
+        }
+    } else if count > 1 {
+        *chosen = (*chosen + 1) % count;
+        toasts.write(crate::toast::Toast::new(
+            format!("Soundtrack {} of {count}", *chosen + 1),
+            2000,
+        ));
+    } else {
+        return;
+    }
+    let mut sounds = sounds.lock();
+    let Some(audio) = audio else {
+        sounds.set_level_audio(track.1.0, None, None, Vec::new());
+        return;
+    };
+    let soundtrack = audio.soundtracks.get(*chosen);
+    // The pack was checked when the map was read.
+    let pack = soundtrack.and_then(|t| Cseq::parse(t.song_pack.clone()).ok());
+    debug!(
+        "custom track audio: over track {}, soundtrack {} of {count} (pack {:?}, {} songs), reverb {:?}",
+        audio.level,
+        *chosen + 1,
+        soundtrack.map(|t| t.pack),
+        pack.as_ref().map_or(0, |p| p.songs.len()),
+        audio.reverb,
+    );
+    let samples = (soundtrack.iter())
+        .flat_map(|t| &t.samples)
+        .map(|(n, adpcm)| (*n, adpcm.clone().into_boxed_slice()))
+        .collect();
+    sounds.set_level_audio(audio.level, pack, audio.reverb, samples);
 }
 
 /// The volumes the config asks for, when it changes (and once the sounds are there).
