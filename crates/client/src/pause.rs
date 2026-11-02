@@ -1,7 +1,7 @@
 //! The pause menu, in the game's fonts. Escape, P or a pad's Start opens and closes it. Up and
 //! Down (W and S, the D-pad, the left stick pushed most of the way) pick an item, Return or Space (Cross) takes it, and Backspace
 //! (Triangle) goes back to the race. The mouse picks an item by pointing at it, and a click takes
-//! it.
+//! it, as a tap does on a touch screen.
 //!
 //! Outside a lobby it also offers "Public lobbies": the realm's list (`public_lobbies.rs`), where
 //! taking a lobby joins it. Backspace goes back from there to the menu, not to the race.
@@ -32,8 +32,8 @@ use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{KeyboardFocusLost, KeyboardInput};
 use bevy::input::mouse::MouseWheel;
-use bevy::picking::events::{PointerClick, PointerMove, PointerOver, PointerPress};
-use bevy::picking::pointer::PointerButton;
+use bevy::picking::events::{PointerClick, PointerMove, PointerOver, PointerPress, PointerRelease};
+use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
@@ -834,6 +834,15 @@ fn spawn(
                         menu.clicked = Some(i);
                     }
                 },
+            )
+            // A touch's pointer is new in the frame it presses, when it is over nothing yet: Bevy
+            // has no press on the row, and so no click.
+            .observe(
+                move |release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
+                    if matches!(release.pointer.id, PointerId::Touch(_)) {
+                        menu.clicked = Some(i);
+                    }
+                },
             );
     }
 }
@@ -901,8 +910,20 @@ fn spawn_track(
                   mouse: Res<ButtonInput<MouseButton>>,
                   mut config: ResMut<Config>,
                   mut menu: ResMut<PauseMenu>| {
-                if mouse.pressed(MouseButton::Left) {
+                if mouse.pressed(MouseButton::Left)
+                    || matches!(moved.pointer.id, PointerId::Touch(_))
+                {
                     put_knob(&mut config, &mut menu, slider, moved.hit.position);
+                }
+            },
+        )
+        // (A touch has no press on it, as on a row.)
+        .observe(
+            move |release: On<PointerRelease>,
+                  mut config: ResMut<Config>,
+                  mut menu: ResMut<PauseMenu>| {
+                if matches!(release.pointer.id, PointerId::Touch(_)) {
+                    put_knob(&mut config, &mut menu, slider, release.hit.position);
                 }
             },
         )
