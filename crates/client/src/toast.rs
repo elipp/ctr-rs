@@ -251,7 +251,8 @@ mod tests {
         assert!(!in_game_font("Usage: /race start | restart | stop"));
         assert!(in_game_font("Rollback: 3 ticks (x2)"));
         assert!(in_game_font("Lap #1"));
-        assert!(!in_game_font("Rollback: 3 ticks [x2]"));
+        assert!(in_game_font("Rollback: 3 ticks [x2]"));
+        assert!(!in_game_font("Rollback: 3 ticks [x2 | x3]"));
         // A new line is a line of glyphs of its own.
         assert!(in_game_font("two\nlines"));
         assert!(!in_game_font("Usage:\n/race start | stop"));
