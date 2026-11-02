@@ -158,6 +158,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
             takes("start", "Count down to the first race of a cup", "<name>"),
         ],
     ),
+    takes(
+        "promote",
+        "Make a player the host of the lobby (the host only)",
+        "<player>",
+    ),
     node(
         "config",
         "Change a setting",
@@ -467,7 +472,7 @@ mod tests {
         assert_eq!(
             names("/"),
             [
-                "lobby", "race", "cup", "config", "version", "net", "cache", "debug"
+                "lobby", "race", "cup", "promote", "config", "version", "net", "cache", "debug"
             ]
         );
         assert_eq!(names("/r"), ["race"]);

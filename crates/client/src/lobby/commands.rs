@@ -50,9 +50,17 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::ToggleSpectator if !lobby.is_open() || !lobby.joined => {
             "Only a guest of a lobby can do that (the host drives)"
         }
-        Action::ToggleSpectator if lobby.online.is_some() => "Not during a race",
+        Action::ToggleSpectator if lobby.online.is_some() => net::NOT_NOW,
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
-        Action::PurgeCache if lobby.online.is_some() => "Not during a race",
+        Action::Promote(_) if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::Promote(_)
+            if lobby.online.is_some() || lobby.series.is_some() || lobby.countdown.is_some() =>
+        {
+            net::NOT_NOW
+        }
+        Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::Say(_) if !lobby.is_open() => "Not in a lobby to talk to (/lobby create)",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
@@ -71,14 +79,14 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "Only the host of a lobby can do that"
         }
         Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => {
-            "A race or a cup is on (/race stop)"
+            net::NOT_NOW
         }
         Action::StartRace | Action::RestartRace | Action::CupStart(_)
             if lobby.countdown.is_some() =>
         {
-            "A countdown is already running"
+            net::NOT_NOW
         }
-        Action::StartRace if lobby.series.is_some() => "A cup is on (/race stop)",
+        Action::StartRace if lobby.series.is_some() => net::NOT_NOW,
         _ => return None,
     })
 }
@@ -139,6 +147,22 @@ pub(super) fn run(
             Action::CloseLobby => {
                 lobby.close();
                 "Lobby closed!"
+            }
+            Action::Promote(name) => {
+                // The answer, if the session turns it down, comes as an event (`report`).
+                match lobby.player_named(name) {
+                    Ok((id, label)) => {
+                        let text = format!("Promoting {label}...");
+                        if let Some(session) = &lobby.session {
+                            session.promote(id);
+                        }
+                        toasts.write(Toast::new(text, 2500));
+                    }
+                    Err(why) => {
+                        toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    }
+                }
+                continue;
             }
             Action::StartRace => {
                 lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);

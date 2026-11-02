@@ -40,6 +40,11 @@ impl Transfers {
         }
     }
 
+    /// Whether no map is being sent.
+    pub fn idle(&self) -> bool {
+        self.active.is_empty()
+    }
+
     pub fn finish(&mut self, transfer: &Transfer) {
         self.active.remove(transfer);
     }

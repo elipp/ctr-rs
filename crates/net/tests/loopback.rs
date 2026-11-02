@@ -593,3 +593,127 @@ fn every_player_has_one_connection_to_each_other_in_a_race() {
         });
     }
 }
+
+/// The ids of the players of the lobby of `host`, in its order (it asks for the lobby to be told
+/// again, and reads that).
+fn lobby_ids(host: &Session, players: usize) -> Vec<iroh::EndpointId> {
+    host.set_character(3);
+    let mut ids = Vec::new();
+    wait_for(host, "the lobby", |e| match e {
+        Event::Lobby { players: p, .. } if p.len() == players => {
+            ids = p.iter().map(|p| p.id).collect();
+            true
+        }
+        _ => false,
+    });
+    ids
+}
+
+/// Waits for the host to say why a handover was turned down.
+fn refused(host: &Session, why: &str) {
+    wait_for(host, "the handover to be turned down", |e| {
+        matches!(&e, Event::Announce(text) if text.contains(why))
+    });
+}
+
+#[test]
+fn the_host_hands_the_lobby_over_to_a_guest() {
+    let (host, guests) = lobby_of(2);
+    let [first, second] = <[Session; 2]>::try_from(guests).ok().unwrap();
+    let ids = lobby_ids(&host, 3);
+
+    // The first guest is the one picked, whatever the order of the lobby.
+    host.promote(ids[1]);
+    let ticket = promoted(&first);
+    assert_eq!(ticket.id, ids[1]);
+
+    // The old host and the other guest follow it, and are told it was no crash.
+    for session in [&host, &second] {
+        let (mut told, mut joined) = (false, false);
+        wait_for(session, "following the new host", |e| {
+            match e {
+                Event::Announce(text) if text.contains("is now the lobby host") => told = true,
+                Event::Joined(id) if id == ticket.id => joined = true,
+                _ => {}
+            }
+            told && joined
+        });
+    }
+    // The lobby is the new host and the two that follow it.
+    for (who, session) in [("the new host", &first), ("the other guest", &second), ("the old host", &host)] {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut seen = Vec::new();
+        let mut ok = false;
+        while !ok && Instant::now() < deadline {
+            for event in session.poll() {
+                if let Event::Lobby { players, .. } = event {
+                    let mut characters: Vec<u8> = players.iter().map(|p| p.character).collect();
+                    characters.sort();
+                    ok |= players.len() == 3 && players[0].id == ticket.id && characters == [3, 7, 8];
+                    seen.push(
+                        players
+                            .iter()
+                            .map(|p| format!("{}:{}", p.id.fmt_short(), p.character))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            ok,
+            "{who} never saw the lobby of three with {} first; it saw {seen:?}",
+            ticket.id.fmt_short()
+        );
+    }
+    // It works as a lobby, and the old host is a guest in it: the new host starts the race.
+    std::thread::sleep(Duration::from_secs(1));
+    first.start(5, 0, 3);
+    for session in [&first, &second, &host] {
+        wait_for(session, "the start", |e| match e {
+            Event::Started { characters, .. } => {
+                let mut characters = characters;
+                characters.sort();
+                assert_eq!(characters, [3, 7, 8]);
+                true
+            }
+            _ => false,
+        });
+    }
+}
+
+#[test]
+fn a_handover_is_turned_down_for_who_is_not_a_guest_of_the_lobby() {
+    let (host, guests) = lobby_of(1);
+    let ids = lobby_ids(&host, 2);
+    host.promote(ids[0]);
+    refused(&host, "host already");
+    host.promote(iroh::SecretKey::generate().public());
+    refused(&host, "no such player");
+    // Nothing happened to the lobby: the guest has not become the host.
+    let [guest] = <[Session; 1]>::try_from(guests).ok().unwrap();
+    for event in guest.poll() {
+        assert!(!matches!(event, Event::Promoted { .. }), "promoted");
+    }
+}
+
+#[test]
+fn a_handover_is_turned_down_in_a_race() {
+    let (host, guests) = lobby_of(1);
+    let [guest] = <[Session; 1]>::try_from(guests).ok().unwrap();
+    let ids = lobby_ids(&host, 2);
+    host.start(5, 0, 3);
+    for session in [&host, &guest] {
+        wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
+    }
+    host.promote(ids[1]);
+    refused(&host, "right now");
+    // The guest stays a guest of the host.
+    std::thread::sleep(Duration::from_secs(1));
+    for event in guest.poll() {
+        assert!(
+            !matches!(event, Event::Promoted { .. } | Event::Joined(_)),
+            "{event:?}"
+        );
+    }
+}

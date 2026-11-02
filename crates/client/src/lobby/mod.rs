@@ -13,6 +13,8 @@
 //!   drive it: its races one after another, points for the first four to finish, and
 //!   [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a cup of one race with no points.
 //! * `/race restart`: start the race in progress over (the host only)
+//! * `/promote <player>`: hand the lobby over to a player, between races (the host only): they host it
+//!   from then on, a public lobby stays listed, and we are a guest of theirs
 //! * `/net info`: how each peer is reached (direct or relay), the ping and the packets lost
 //! * `/net smoothing ping|replay|<duration>`: how long the drawing takes to ease a kart that a late
 //!   pad put right, by the ping, by the ticks the rollbacks replay, or fixed (`kart::Smoothing`), at
@@ -89,6 +91,7 @@ pub struct Lobby {
 
 /// A player in the lobby, as the last [`Event::Lobby`] said.
 struct Member {
+    id: EndpointId,
     /// The short form of the key.
     key: String,
     /// What the player is called (see [`Online::labels`]).
@@ -98,6 +101,27 @@ struct Member {
 }
 
 impl Lobby {
+    /// The player of the lobby, other than us (the host, when we are), that `name` stands for: the
+    /// nickname, the name as the lobby shows it, or the short key, whatever its case.
+    pub fn player_named(&self, name: &str) -> Result<(EndpointId, &str), String> {
+        let name = name.trim();
+        let is = |s: &str| s.eq_ignore_ascii_case(name);
+        // (The host is first, and is us when we host: the others are the ones to hand it to.)
+        let mut found = self
+            .roster
+            .iter()
+            .skip(1)
+            .filter(|m| is(&m.nick) || is(&m.label) || is(&m.key));
+        match (found.next(), found.next()) {
+            (Some(m), None) => Ok((m.id, m.label.as_str())),
+            (Some(_), Some(_)) => Err(format!("More than one player is called {name}: use the key")),
+            _ if self.roster.first().is_some_and(|m| is(&m.nick) || is(&m.label) || is(&m.key)) => {
+                Err("You are the host already".into())
+            }
+            _ => Err(format!("No player called {name} in the lobby")),
+        }
+    }
+
     /// The players in the lobby, as the last [`Event::Lobby`] said: the character, the name
     /// (the nickname, or the short key without one) and the short key of each.
     pub fn members(&self) -> impl Iterator<Item = (u8, &str, &str)> {

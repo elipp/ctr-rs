@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
 
-use realm_proto::{Entry, Listing, MAX_LOBBIES, Reject, Request, Response, State};
+use realm_proto::{
+    Entry, Listing, MAX_LOBBIES, Reject, Request, Response, State, TRANSFER_SECONDS,
+};
 
 /// A connection tells a lobby from another by this.
 pub type Connection = usize;
@@ -16,15 +18,40 @@ struct Held {
     listing: Listing,
 }
 
-/// The lobbies, by the endpoint id of the host.
+/// A lobby that was handed over and waits for its new host. It is not listed meanwhile.
+struct Handed {
+    listing: Listing,
+    until: Instant,
+}
+
+#[derive(Default)]
+struct Lobbies {
+    /// The lobbies, by the endpoint id of the host.
+    listed: HashMap<[u8; 32], Held>,
+    /// The lobbies handed over, by the endpoint id of the host they wait for.
+    handed: HashMap<[u8; 32], Handed>,
+}
+
 #[derive(Default)]
 pub struct Realm {
-    lobbies: Mutex<HashMap<[u8; 32], Held>>,
+    lobbies: Mutex<Lobbies>,
 }
 
 impl Realm {
     pub fn handle(&self, id: [u8; 32], connection: Connection, request: Request) -> Response {
-        let mut lobbies = self.lobbies.lock().unwrap();
+        self.handle_at(Instant::now(), id, connection, request)
+    }
+
+    fn handle_at(
+        &self,
+        now: Instant,
+        id: [u8; 32],
+        connection: Connection,
+        request: Request,
+    ) -> Response {
+        let mut guard = self.lobbies.lock().unwrap();
+        let Lobbies { listed: lobbies, handed } = &mut *guard;
+        handed.retain(|_, h| h.until > now);
         match request {
             Request::Announce(listing) => {
                 let host = short(&id);
@@ -81,9 +108,33 @@ impl Realm {
                 Response::Ok
             }
             Request::Withdraw => {
-                if let Some(held) = remove(&mut lobbies, id, connection) {
+                if let Some(held) = remove(lobbies, id, connection) {
                     info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby withdrawn");
                 }
+                Response::Ok
+            }
+            Request::Transfer(to) => {
+                if to == id || !lobbies.get(&id).is_some_and(|h| h.connection == connection) {
+                    return Response::Rejected(Reject::NotListed);
+                }
+                let held = lobbies.remove(&id).unwrap();
+                info!(
+                    host = %short(&id), to = %short(&to), name = %held.listing.name,
+                    "lobby handed over"
+                );
+                let until = now + Duration::from_secs(TRANSFER_SECONDS);
+                handed.insert(to, Handed { listing: held.listing, until });
+                Response::Ok
+            }
+            Request::Claim => {
+                if lobbies.len() >= MAX_LOBBIES && !lobbies.contains_key(&id) {
+                    return Response::Rejected(Reject::Full);
+                }
+                let Some(handed) = handed.remove(&id) else {
+                    return Response::Rejected(Reject::NothingToClaim);
+                };
+                info!(host = %short(&id), name = %handed.listing.name, "lobby claimed");
+                lobbies.insert(id, Held { connection, listing: handed.listing });
                 Response::Ok
             }
             Request::List => {
@@ -103,15 +154,15 @@ impl Realm {
 
     /// The connection is gone, and takes its lobby with it.
     pub fn closed(&self, id: [u8; 32], connection: Connection) {
-        let mut lobbies = self.lobbies.lock().unwrap();
-        if let Some(held) = remove(&mut lobbies, id, connection) {
+        let lobbies = &mut self.lobbies.lock().unwrap().listed;
+        if let Some(held) = remove(lobbies, id, connection) {
             info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby gone: its host disconnected");
         }
     }
 
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.lobbies.lock().unwrap().len()
+        self.lobbies.lock().unwrap().listed.len()
     }
 }
 
@@ -219,6 +270,61 @@ mod tests {
         assert_eq!(names(&realm), ["new"]);
         realm.handle([1; 32], 2, Request::Withdraw);
         assert!(names(&realm).is_empty());
+    }
+
+    #[test]
+    fn a_lobby_moves_to_the_host_that_claims_it() {
+        let realm = Realm::default();
+        let now = Instant::now();
+        realm.handle_at(now, [1; 32], 1, Request::Announce(listing("a")));
+        let response = realm.handle_at(now, [1; 32], 1, Request::Transfer([2; 32]));
+        assert_eq!(response, Response::Ok);
+        // Not listed while it waits, and the old host cannot get it back by claiming.
+        assert!(names(&realm).is_empty());
+        let response = realm.handle_at(now, [1; 32], 1, Request::Claim);
+        assert_eq!(response, Response::Rejected(Reject::NothingToClaim));
+        // The old host's connection going changes nothing.
+        realm.closed([1; 32], 1);
+        let response = realm.handle_at(now, [2; 32], 5, Request::Claim);
+        assert_eq!(response, Response::Ok);
+        let Response::Lobbies(entries) = realm.handle([0; 32], 0, Request::List) else {
+            panic!("not a list");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!((entries[0].id, entries[0].listing.name.as_str()), ([2; 32], "a"));
+        // It lasts as long as the new connection.
+        realm.closed([2; 32], 5);
+        assert!(names(&realm).is_empty());
+    }
+
+    #[test]
+    fn a_handed_over_lobby_is_claimed_in_time_or_dropped() {
+        let realm = Realm::default();
+        let now = Instant::now();
+        realm.handle_at(now, [1; 32], 1, Request::Announce(listing("a")));
+        realm.handle_at(now, [1; 32], 1, Request::Transfer([2; 32]));
+        let late = now + Duration::from_secs(TRANSFER_SECONDS + 1);
+        let response = realm.handle_at(late, [2; 32], 5, Request::Claim);
+        assert_eq!(response, Response::Rejected(Reject::NothingToClaim));
+        assert_eq!(realm.len(), 0);
+    }
+
+    #[test]
+    fn only_the_right_host_claims_and_only_the_owner_hands_over() {
+        let realm = Realm::default();
+        let now = Instant::now();
+        realm.handle_at(now, [1; 32], 1, Request::Announce(listing("a")));
+        // Nothing listed for the sender, an old connection, or to itself.
+        for (id, connection, to) in [([9; 32], 9, [2; 32]), ([1; 32], 7, [2; 32]), ([1; 32], 1, [1; 32])] {
+            let response = realm.handle_at(now, id, connection, Request::Transfer(to));
+            assert_eq!(response, Response::Rejected(Reject::NotListed));
+        }
+        assert_eq!(names(&realm), ["a"]);
+        realm.handle_at(now, [1; 32], 1, Request::Transfer([2; 32]));
+        let response = realm.handle_at(now, [3; 32], 3, Request::Claim);
+        assert_eq!(response, Response::Rejected(Reject::NothingToClaim));
+        let response = realm.handle_at(now, [2; 32], 2, Request::Claim);
+        assert_eq!(response, Response::Ok);
     }
 
     #[test]

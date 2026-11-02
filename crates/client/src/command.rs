@@ -45,6 +45,9 @@ pub enum Action {
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
     ToggleSpectator,
     CloseLobby,
+    /// Hand the lobby over to the player called that (a nickname or the short key): they host it
+    /// from now on, and we are a guest of theirs (the host only, between races).
+    Promote(String),
     /// Delete the maps other players sent us (`maps::purge`).
     PurgeCache,
     StartRace,
@@ -120,6 +123,7 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
 const LOBBY_USAGE: &str =
     "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
+const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
@@ -153,6 +157,8 @@ impl Action {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
             "cup" => Action::cup(rest),
+            "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
+            "promote" => Ok(Action::Promote(rest.into())),
             "cache" => Action::cache(rest),
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
@@ -1431,5 +1437,18 @@ mod tests {
         assert!(error("debug set wumpa x").contains("<number>"));
         assert!(error("join-lobby abc").contains("Unknown command: /join-lobby"));
         assert!(error("lobby join nonsense").starts_with("Not a lobby address"));
+    }
+
+    #[test]
+    fn promote_takes_a_player() {
+        assert!(matches!(
+            Action::parse("promote  Penta "),
+            Ok(Action::Promote(name)) if name == "Penta"
+        ));
+        assert!(matches!(
+            Action::parse("promote Pen ta"),
+            Ok(Action::Promote(name)) if name == "Pen ta"
+        ));
+        assert!(Action::parse("promote").unwrap_err().starts_with("Usage: /promote"));
     }
 }

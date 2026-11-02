@@ -47,6 +47,15 @@ pub(crate) struct HostState {
     pub(crate) publisher: Option<Publisher>,
     /// How it is listed (what the guests are told, for one of them to carry on with).
     pub(crate) public: Option<Public>,
+    /// The lobby is being handed over to a guest that has not yet answered.
+    pub(crate) handoff: Option<Handoff>,
+}
+
+/// A handover of the lobby that waits for the guest to say it is ready.
+pub(crate) struct Handoff {
+    pub(crate) to: EndpointId,
+    /// When the host gives up and stays the host.
+    pub(crate) until: Instant,
 }
 
 /// What a guest keeps of the lobby to carry it on if the host goes: the players in the order
@@ -56,6 +65,8 @@ pub(crate) struct Heirs {
     /// The players of the lobby that can host, the host first, as the latest
     /// [`Message::Lobby`] said.
     pub(crate) order: Vec<EndpointId>,
+    /// What each of them is called, as the same said (empty for none).
+    pub(crate) nicks: HashMap<EndpointId, String>,
     /// How the lobby is listed, if it is.
     pub(crate) public: Option<Public>,
     /// The hosts that are gone, as far as we have found out (the one that closed, and every heir
@@ -68,6 +79,9 @@ pub(crate) struct Heirs {
     /// What players that took us for the host said (they dialed us before we knew we were), for
     /// when we are.
     pub(crate) heard: Vec<(EndpointId, Message)>,
+    /// The host did not leave: it handed the lobby over to the first of the order, which has
+    /// the listing of the lobby waiting for it.
+    pub(crate) handed_over: bool,
 }
 
 impl Heirs {
