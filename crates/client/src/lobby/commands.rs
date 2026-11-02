@@ -151,7 +151,7 @@ pub(super) fn run(
                 // The answer, if the session turns it down, comes as an event (`report`).
                 match lobby.player_named(name) {
                     Ok((id, label)) => {
-                        let text = format!("Handing the lobby over to {label}...");
+                        let text = format!("Promoting {label}...");
                         if let Some(session) = &lobby.session {
                             session.promote(id);
                         }

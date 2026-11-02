@@ -65,6 +65,8 @@ pub(crate) struct Heirs {
     /// The players of the lobby that can host, the host first, as the latest
     /// [`Message::Lobby`] said.
     pub(crate) order: Vec<EndpointId>,
+    /// What each of them is called, as the same said (empty for none).
+    pub(crate) nicks: HashMap<EndpointId, String>,
     /// How the lobby is listed, if it is.
     pub(crate) public: Option<Public>,
     /// The hosts that are gone, as far as we have found out (the one that closed, and every heir

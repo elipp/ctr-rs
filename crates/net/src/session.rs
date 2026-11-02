@@ -21,8 +21,8 @@ use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player, Public,
-    RateLimit, Tick, Ticket, clean_chat, clean_nick,
+    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player,
+    Public, RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
 
 /// How long a guest tries to reach the player that would host the lobby in the place of a host
@@ -42,18 +42,26 @@ fn handoff_problem(host: &HostState, me: EndpointId, to: EndpointId) -> Option<&
         return Some("You are the host already");
     }
     if host.handoff.is_some() {
-        return Some("The lobby is being handed over already");
+        return Some(NOT_NOW);
     }
     if host.racing {
-        return Some("The lobby cannot be handed over in a race");
+        return Some("Cannot promote during a race");
     }
     if host.start_wanted.is_some() || !host.transfers.idle() {
-        return Some("The lobby cannot be handed over while a race starts or a map is sent");
+        return Some("Cannot promote while a race starts or a map is sent");
     }
-    match host.guests.iter().find(|g| g.id == to && !host.gone.contains(&g.id)) {
+    match host
+        .guests
+        .iter()
+        .find(|g| g.id == to && !host.gone.contains(&g.id))
+    {
         None => Some("There is no such player in the lobby"),
-        Some(g) if g.spectator || g.hello.is_none() => Some("A player who only watches cannot host"),
-        Some(g) if g.hard => Some("That player is behind a NAT that others cannot reach, and cannot host"),
+        Some(g) if g.spectator || g.hello.is_none() => {
+            Some("A player who only watches cannot host")
+        }
+        Some(g) if g.hard => {
+            Some("That player is behind a NAT that others cannot reach, and cannot host")
+        }
         Some(_) => None,
     }
 }
@@ -209,7 +217,13 @@ pub(crate) async fn run(
                 spectator,
             };
             send_reliably(&connection, &hello).await?;
-            send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await?;
+            send_reliably(
+                &connection,
+                &Message::Nat {
+                    hard: hard_nat(&endpoint),
+                },
+            )
+            .await?;
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
             host_connection = Some(connection);
@@ -302,7 +316,7 @@ pub(crate) async fn run(
                 if let Some(host) = &mut host {
                     host.handoff = None;
                 }
-                io.event(Event::Announce("The player did not take the lobby over: you are still the host".into()));
+                io.event(Event::Announce("The player did not accept the promotion: you are still the host".into()));
             }
             Some(transfer) = sent.recv() => if let Some(host) = &mut host {
                 host.transfers.finish(&transfer);
@@ -342,9 +356,7 @@ pub(crate) async fn run(
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
                 Command::Start { track, hash, laps } => if let Some(host) = &mut host {
-                    if host.handoff.is_some() {
-                        io.event(Event::Announce("The lobby is being handed over".into()));
-                    } else {
+                    if host.handoff.is_none() {
                         host.start_wanted = Some((track, hash, laps));
                     }
                 },
@@ -587,6 +599,9 @@ pub(crate) async fn run(
                     // become a guest of it as everyone else.
                     Message::HandoffAck if host.as_ref().and_then(|h| h.handoff.as_ref()).is_some_and(|h| h.to == from) => {
                         let mut old = host.take().expect("checked");
+                        let name = old.guests.iter().find(|g| g.id == from).map(|g| g.nick.1.clone())
+                            .filter(|n| !n.is_empty())
+                            .unwrap_or_else(|| from.fmt_short().to_string());
                         if let Some(publisher) = old.publisher.take() {
                             // (If it does not work, the listing goes with the publisher, and the
                             // new host lists the lobby afresh.)
@@ -615,7 +630,7 @@ pub(crate) async fn run(
                         (plan, race_info) = (None, None);
                         departed.clear();
                         (running, game_ready, ready_sent) = (false, false, false);
-                        io.event(Event::Announce("The host handed the lobby over".into()));
+                        io.event(Event::Announce(format!("{name} is now the lobby host")));
                     }
                     Message::Lobby { players, watching, public } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
@@ -642,6 +657,7 @@ pub(crate) async fn run(
                         // The lobby is in the hands of a host that is there: what we kept of the
                         // ones before it, and what players told us in its place, is over.
                         heirs.order = players.iter().map(|p| p.id).collect();
+                        heirs.nicks = players.iter().map(|p| (p.id, p.nick.clone())).collect();
                         heirs.public = public.and_then(|(realm, name, track)| {
                             Some(Public { realm: EndpointId::from_bytes(&realm).ok()?, name, track })
                         });
@@ -888,7 +904,12 @@ pub(crate) async fn run(
                             io.event(Event::Stopped);
                             io.event(Event::Announce("The host left the race".into()));
                         } else if heirs.handed_over {
-                            io.event(Event::Announce("The host handed the lobby over".into()));
+                            // (The player it went to has its own word for it: `Event::Promoted`.)
+                            if let Some(&to) = heirs.order.first() && to != me {
+                                let name = heirs.nicks.get(&to).filter(|n| !n.is_empty()).cloned()
+                                    .unwrap_or_else(|| to.fmt_short().to_string());
+                                io.event(Event::Announce(format!("{name} is now the lobby host")));
+                            }
                         } else {
                             io.event(Event::Announce("The host left the lobby".into()));
                         }

@@ -160,7 +160,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
     ),
     takes(
         "promote",
-        "Hand the lobby over to a player, who hosts it from now on (the host only)",
+        "Make a player the host of the lobby (the host only)",
         "<player>",
     ),
     node(

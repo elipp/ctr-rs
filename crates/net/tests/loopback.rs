@@ -632,7 +632,7 @@ fn the_host_hands_the_lobby_over_to_a_guest() {
         let (mut told, mut joined) = (false, false);
         wait_for(session, "following the new host", |e| {
             match e {
-                Event::Announce(text) if text.contains("handed") => told = true,
+                Event::Announce(text) if text.contains("is now the lobby host") => told = true,
                 Event::Joined(id) if id == ticket.id => joined = true,
                 _ => {}
             }

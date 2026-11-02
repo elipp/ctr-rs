@@ -123,7 +123,7 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
 const LOBBY_USAGE: &str =
     "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
-const PROMOTE_USAGE: &str = "Usage: /promote <player>, to hand the lobby over to them";
+const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon) or its number";
