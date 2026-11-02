@@ -3,8 +3,6 @@
 //! game's projection is 90 degrees wide, which stretches anything near a corner of the screen.
 //! One world unit of that camera is a pixel of the window.
 
-use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{ClearColorConfig, ScalingMode};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use loader::model::Model;
@@ -22,9 +20,9 @@ struct WumpaIcon {
     rest: Quat,
 }
 
-/// The render layer of the fruit, which only its camera draws. (0 is the world's, `KART_LAYER` 1
+/// The render layer of the fruit, which only the HUD camera (`scene.rs`) draws. (0 is the world's, `KART_LAYER` 1
 /// and the sky's 2.)
-const LAYER: usize = 3;
+pub(crate) const LAYER: usize = 3;
 
 /// How far in front of the camera it hangs, in pixels: anything between its near and far plane.
 const DEPTH: f32 = 100.0;
@@ -134,25 +132,6 @@ fn build(
         double_sided: true,
         ..default()
     };
-    let camera = commands
-        .spawn((
-            // Not the camera that the wheels and the smoke face.
-            crate::OverlayCamera,
-            Camera3d::default(),
-            // After the overlay camera, over its picture, with only the depth buffer cleared.
-            Camera {
-                order: 3,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::WindowSize,
-                ..OrthographicProjection::default_3d()
-            }),
-            Transform::default(),
-            RenderLayers::layer(LAYER),
-        ))
-        .id();
     let pivot = commands
         .spawn((
             WumpaIcon {
@@ -161,7 +140,6 @@ fn build(
             },
             Transform::default(),
             Visibility::default(),
-            ChildOf(camera),
         ))
         .id();
     crate::spawn_parts(
