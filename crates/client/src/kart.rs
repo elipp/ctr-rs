@@ -529,7 +529,7 @@ impl KartBuilder<'_, '_> {
                 shields,
                 vram,
                 kart,
-                if ours { crate::SHIELD_LAYER } else { 0 },
+                if ours { crate::KART_LAYER } else { 0 },
                 &mut self.commands,
                 &mut self.images,
                 &mut self.meshes,

@@ -309,9 +309,6 @@ pub(crate) fn restart_sim(
 /// ordered among themselves by depth, and never hidden by the track.
 pub(crate) const KART_LAYER: usize = 1;
 
-/// The render layer of our own kart's shield, which a camera draws over the kart.
-pub(crate) const SHIELD_LAYER: usize = 4;
-
 /// The cameras that draw over the picture of the main one: the one for [`KART_LAYER`], and the
 /// HUD's (`wumpa_icon` and `tracker`). The systems that follow "the camera" (the wheels' view, the smoke, the
 /// skid marks) look for the main camera, which has not got this.
@@ -614,23 +611,11 @@ pub(crate) fn setup(
                     clear_color: ClearColorConfig::None,
                     ..default()
                 },
-                projection.clone(),
+                projection,
                 Transform::default(),
                 RenderLayers::layer(KART_LAYER),
             ))
-            .with_child((
-                OverlayCamera,
-                Camera3d::default(),
-                // And the shield over the kart, likewise.
-                Camera {
-                    order: 2,
-                    clear_color: ClearColorConfig::None,
-                    ..default()
-                },
-                projection,
-                Transform::default(),
-                RenderLayers::layer(SHIELD_LAYER),
-            ));
+;
         // The HUD's figures (the fruit and the tracker) share one camera, over all the others'
         // pictures with only the depth buffer cleared. It looks at the middle of the window, with
         // y up, and the figures hang `DEPTH` pixels in front of it.

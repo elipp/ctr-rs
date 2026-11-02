@@ -4,9 +4,9 @@
 //! if not), which face the camera wherever the kart goes (they are a half-sphere), and the highlight that
 //! sweeps across them. A green bubble fades over its last two seconds, and pops in a squash and a shrink.
 //!
-//! Our own kart's bubble is in [`crate::SHIELD_LAYER`], which a camera draws over the kart's
-//! (retail files it after the kart in the ordering table); the others' is in the world, where the
-//! walls hide it.
+//! Our own kart's bubble is in [`crate::KART_LAYER`], with the kart, and the others' is in the
+//! world, where the walls hide it. Either way a bias draws it over what it is round, as retail
+//! files it after the kart and the level in the ordering table.
 //!
 //! The three layers and both colours are made for each kart (hidden); the ones the shield is, show.
 
@@ -30,6 +30,12 @@ use crate::subtract::SubtractMaterial;
 /// dome 117 deep, the highlight a strip of a sphere 160 deep), which makes it stand out of the
 /// bubble towards the camera. It is flattened by this to lie on the dome.
 const HIGHLIGHT_FLATTEN: f32 = 117.0 / 160.0;
+
+/// Pulls the bubble toward the camera, over the kart that it is round, and the ground that it
+/// dips into (it is bigger than the kart, which sits on the floor). Retail files it after both in
+/// the ordering table; here they would cut it. A wall well in front of the kart still hides it.
+/// Added to the order biases below, which sort the layers among themselves.
+const SHIELD_DEPTH_BIAS: f32 = 10_000.0;
 
 /// `alphaScale` at which the bubble is gone.
 const ALPHA_GONE: f32 = 0x1000 as f32;
@@ -128,7 +134,7 @@ fn spawn_part(
         Layer::Blue | Layer::Green | Layer::Highlight => 3,
     };
     let base = StandardMaterial {
-        depth_bias: order as f32 * DEPTH_BIAS_PER_ORDER,
+        depth_bias: SHIELD_DEPTH_BIAS + order as f32 * DEPTH_BIAS_PER_ORDER,
         base_color: Color::WHITE,
         base_color_texture: Some(images.add(atlas)),
         unlit: true,
