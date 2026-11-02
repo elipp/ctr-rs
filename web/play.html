@@ -118,7 +118,7 @@
     <p id="status">Drop Crash Team Racing (USA) .bin</p>
     <pre id="detail" hidden></pre>
     <ul id="menu" role="menu"></ul>
-    <small id="note">It stays on this computer.</small>
+    <small id="note">It stays on this device.</small>
     <input type="file" accept=".bin">
   </div>
 </div>
@@ -392,7 +392,9 @@ async function read(stream, size) {
   return bytes;
 }
 
-async function start(stream, size) {
+// `copy` is the file to keep a copy of, where the browser cannot remember a file's place
+// (`showOpenFilePicker`). Once the game has started on it, so as not to keep a wrong one.
+async function start(stream, size, copy = null) {
   if (drop.classList.contains("busy")) return;
   drop.classList.add("busy");
   disc = await read(stream, size);
@@ -415,6 +417,7 @@ async function start(stream, size) {
   drop.classList.add("hidden");
   canvas.focus();
   touchGame.hidden = !hasTouch;
+  if (copy !== null) remember(copy).then(() => navigator.storage?.persist?.());
 }
 
 let crash = null;
@@ -541,6 +544,15 @@ async function pick() {
   openHandle(handle);
 }
 
+function startKept(kept) {
+  start(kept.stream(), kept.size).catch(async (e) => {
+    console.warn(`could not read the kept disc image: ${e}`);
+    await forget();
+    drop.classList.remove("busy");
+    offer(`${kept.name} could not be read`, [["Pick it again", pick]]);
+  });
+}
+
 async function allow(handle) {
   if ((await handle.requestPermission({ mode: "read" })) === "granted") return openHandle(handle);
   await forget();
@@ -573,21 +585,26 @@ drop.addEventListener("drop", (e) => {
   if (!item) return;
   const file = item.getAsFile();
   item.getAsFileSystemHandle?.().then((handle) => handle?.kind === "file" && remember(handle));
-  start(file.stream(), file.size);
+  start(file.stream(), file.size, item.getAsFileSystemHandle ? null : file);
 });
 input.addEventListener("change", () => {
   const file = input.files[0];
-  if (file) start(file.stream(), file.size);
+  if (file) start(file.stream(), file.size, file);
 });
 
 fresh();
-const handle = await recall();
-if (handle) {
-  if ((await handle.queryPermission({ mode: "read" })) === "granted") {
-    openHandle(handle);
+const saved = await recall();
+if (saved instanceof Blob) {
+  offer(`${saved.name} was kept from last time`, [
+    ["Continue with it", () => startKept(saved)],
+    ["Pick another .bin", pick],
+  ]);
+} else if (saved) {
+  if ((await saved.queryPermission({ mode: "read" })) === "granted") {
+    openHandle(saved);
   } else {
-    offer(`${handle.name} was used last time`, [
-      ["Continue with it", () => allow(handle)],
+    offer(`${saved.name} was used last time`, [
+      ["Continue with it", () => allow(saved)],
       ["Pick another .bin", pick],
     ]);
   }
