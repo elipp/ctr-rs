@@ -300,7 +300,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 #[cfg(not(target_arch = "wasm32"))]
                 takes(
                     "pixel-scale",
-                    "Draw at a fraction of the window's resolution, in whole pixels",
+                    "Draw at 1/N of the window's resolution",
                     "<1 to 8>",
                 ),
                 #[cfg(target_arch = "wasm32")]
