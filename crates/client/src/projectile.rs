@@ -138,7 +138,7 @@ pub struct Body {
     layer: usize,
     /// The frame of the animation, for a model that loops one.
     frame: i16,
-    /// Turned to the camera each frame (the shield bomb).
+    /// Turned to the camera each frame (the shield bomb, or a model whose header says so).
     billboard: bool,
     header: ModelHeader,
     parts: [Option<Handle<Mesh>>; PARTS],
@@ -361,8 +361,8 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
                 layer: if slot == sim.own { KART_LAYER } else { 0 },
             }
         });
-    // A warpball is turned to the camera (its model's header flag 2, "always point to camera"),
-    // and shrinks and stretches as it fades.
+    // A warpball is turned to the camera by its model's header (`ModelHeader::POINT_TO_CAMERA`), and
+    // shrinks and stretches as it fades.
     let warpballs = sim.race.weapons.warpballs().iter().map(|w| Wanted {
         id: w.id,
         model: WARPBALL,
@@ -372,7 +372,7 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
             scale: Vec3::new(w.scale[0] as f32, w.scale[1] as f32, w.scale[2] as f32) / 4096.0,
         },
         animated: true,
-        billboard: true,
+        billboard: false,
         color: Color::WHITE,
         layer: 0,
     });
@@ -615,7 +615,7 @@ pub fn tick(
             id: w.id,
             layer: w.layer,
             frame: 0,
-            billboard: w.billboard,
+            billboard: w.billboard || model.header.points_to_camera(),
             header: model.header.clone(),
             parts,
             previous: w.placed,

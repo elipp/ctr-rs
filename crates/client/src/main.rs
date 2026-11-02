@@ -227,7 +227,9 @@ fn main() {
         )
         .add_systems(
             PostUpdate,
-            props::follow_reflections.before(TransformSystems::Propagate),
+            (props::face_camera, props::follow_reflections)
+                .chain()
+                .before(TransformSystems::Propagate),
         )
         .add_systems(
             PostUpdate,
