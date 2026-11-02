@@ -1,6 +1,6 @@
 services:
   relay:
-    image: ${REGISTRY_HOST:?set REGISTRY_HOST in .env}/ctr-relay
+    image: ${REGISTRY_HOST:?set REGISTRY_HOST}/ctr-relay
     platform: linux/amd64
     build:
       context: .
@@ -9,11 +9,13 @@ services:
     # sees the real addresses of the players.
     network_mode: host
     restart: unless-stopped
-    # Set in a .env file next to this one (not committed): the registry to pull
-    # from and push to, the relay's public name, and the address Let's Encrypt writes to.
+    # Set in the environment or in a .env file next to this one (not committed): the registry
+    # to pull from and push to (non-empty, also to build, as it names the image), and, to run, the
+    # relay's public name and the address Let's Encrypt writes to (the entrypoint refuses to start
+    # without them).
     environment:
-      RELAY_HOSTNAME: ${RELAY_HOSTNAME:?set RELAY_HOSTNAME in .env}
-      RELAY_CONTACT: ${RELAY_CONTACT:?set RELAY_CONTACT in .env}
+      RELAY_HOSTNAME: ${RELAY_HOSTNAME:-}
+      RELAY_CONTACT: ${RELAY_CONTACT:-}
     volumes:
       - relay-data:/data
 
