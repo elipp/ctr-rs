@@ -274,6 +274,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
         ],
     ),
     node(
+        "track",
+        "The tracks there are",
+        &[leaf("list", "Print them with their numbers")],
+    ),
+    node(
         "cache",
         "The custom tracks other players sent",
         &[leaf("purge", "Delete them")],
@@ -478,7 +483,7 @@ mod tests {
         assert_eq!(
             names("/"),
             [
-                "lobby", "race", "cup", "promote", "config", "version", "net", "cache", "debug"
+                "lobby", "race", "cup", "promote", "config", "version", "net", "track", "cache", "debug"
             ]
         );
         assert_eq!(names("/r"), ["race"]);

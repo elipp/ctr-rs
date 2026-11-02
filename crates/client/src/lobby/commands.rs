@@ -191,6 +191,12 @@ pub(super) fn run(
                 lobby.start_series(Series::cup(def), now);
                 continue;
             }
+            Action::ListTracks => {
+                for line in maps::listing() {
+                    console!("{line}");
+                }
+                continue;
+            }
             Action::PurgeCache => match maps::purge() {
                 Ok(0) => "The cache is empty",
                 Ok(n) => {

@@ -56,10 +56,7 @@ pub fn load() {
     LOADED.call_once(|| {
         let mut maps = Vec::new();
         // Whether the folder is the one the game's own tracks are in.
-        for (builtins, dir) in [
-            (true, builtin_directory()),
-            (false, cache_directory()),
-        ] {
+        for (builtins, dir) in [(true, builtin_directory()), (false, cache_directory())] {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
@@ -402,22 +399,32 @@ fn slugify(name: &str) -> String {
 }
 
 /// The level a command means by `text`: a short name (see [`slug`]), or the level's number
-/// (`4`, or `0x80001234` for a map), which has to be one of the [`cycle`].
+/// (`4`, a custom track's number as `/track list` prints it, or its long one, `80001234`).
 pub fn resolve(text: &str) -> Result<u32, String> {
     let text = text.trim();
     let slug = text.to_ascii_lowercase();
     if let Some(id) = builtin::id_of_slug(&slug) {
         return Ok(id);
     }
+    // A custom track's number as `/track list` prints it: eight hex digits (the game's numbers
+    // are small, so this is nothing else) unless no track has it, when it may be a name.
+    if slug.len() == 8 && slug.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if let Some(id) = u32::from_str_radix(&slug, 16)
+            .ok()
+            .filter(|id| cycle().contains(id))
+        {
+            return Ok(id);
+        }
+    }
     let number = match slug.strip_prefix("0x") {
         Some(hex) => u32::from_str_radix(hex, 16),
         None => slug.parse(),
     };
-    if let Ok(id) = number {
-        return if cycle().contains(&id) {
-            Ok(id)
+    if let Ok(n) = number {
+        return if cycle().contains(&n) {
+            Ok(n)
         } else {
-            Err(format!("No track has the number {text}"))
+            by_index(n).ok_or_else(|| format!("No track has the number {text}"))
         };
     }
     let found: Vec<u32> = ids()
@@ -428,9 +435,33 @@ pub fn resolve(text: &str) -> Result<u32, String> {
         [id] => Ok(id),
         [] => Err(format!("Unknown track: {text}")),
         _ => Err(format!(
-            "More than one track is called {text}: use its number (0x...)"
+            "More than one track is called {text}: use its number (/track list)"
         )),
     }
+}
+
+/// The number a custom track goes by in commands: the game's racing tracks have theirs (0 to 17),
+/// and the custom tracks carry on from there, in the order of the list of them (by name), so the
+/// numbers change as tracks are added or deleted.
+pub fn index_of(id: u32) -> Option<u32> {
+    let n = ids().iter().position(|&i| i == id)?;
+    Some(loader::level::LevelId::TURBO_TRACK.0 + 1 + n as u32)
+}
+
+/// The custom track that has the number `number` (see [`index_of`]).
+fn by_index(number: u32) -> Option<u32> {
+    let n = number.checked_sub(loader::level::LevelId::TURBO_TRACK.0 + 1)?;
+    ids().get(n as usize).copied()
+}
+
+/// What `/track list` prints: a line for each track there is.
+pub fn listing() -> Vec<String> {
+    std::iter::once("  # Name (short name) [custom track id]".to_string())
+        .chain(cycle().into_iter().map(|id| match index_of(id) {
+            Some(n) => format!("{n:>3} {} ({}) [{id:08x}]", name(id), slug(id)),
+            None => format!("{id:>3} {} ({})", name(id), slug(id)),
+        }))
+        .collect()
 }
 
 fn slug_matches(id: u32, slug: &str) -> bool {
