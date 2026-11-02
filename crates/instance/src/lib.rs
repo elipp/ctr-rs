@@ -53,6 +53,10 @@ pub enum Shape {
     Sphere,
     /// The minecart: any height above 32 units under it.
     Cylinder,
+    /// `RB_Hazard_CollideWithDrivers` for an object that is not a mine (the N. Gin Labs barrel):
+    /// the flat distance, and a height whose square is under four times the squared radius (twice
+    /// the radius either way), compared signed.
+    Column,
     /// The plant's mouth (`LinkedCollide_Hitbox`): a box in the object's own space, turned by its
     /// `matrix`, with the height taken in the world. A bound is not reached when equal on x and z.
     Hitbox {
@@ -118,6 +122,14 @@ impl Contact {
         }
     }
 
+    /// Like [`Contact::sphere`], but in reach by [`Shape::Column`].
+    pub fn column(pos: [i32; 3], damage: Damage, hit_radius: u32) -> Contact {
+        Contact {
+            shape: Shape::Column,
+            ..Contact::sphere(pos, damage, hit_radius, 0)
+        }
+    }
+
     /// The same, and a mine in reach when no driver is ([`Mines::IfNoDriver`]).
     pub fn and_mines(self) -> Contact {
         Contact {
@@ -133,6 +145,10 @@ impl Contact {
         match self.shape {
             Shape::Sphere => flat.wrapping_add(dy.wrapping_mul(dy) as u32) < self.hit_radius,
             Shape::Cylinder => flat < self.hit_radius && -0x20 < dy,
+            Shape::Column => {
+                flat < self.hit_radius
+                    && (dy.wrapping_mul(dy)) < (self.hit_radius << 2) as i32
+            }
             Shape::Hitbox { matrix, min, max } => {
                 let [x, _, z] = self.local(&matrix, target);
                 x < max[0] && min[0] < x && z < max[2] && min[2] < z && min[1] <= dy && dy < max[1]
@@ -740,6 +756,23 @@ mod tests {
         assert!(cart.hits([100, -31, 100]));
         assert!(!cart.hits([100, -32, 100]));
         assert!(!cart.hits([300, 0, 0]));
+    }
+
+    #[test]
+    fn the_column_reaches_twice_its_radius_up_and_down() {
+        // The barrel's 0x19000 is a radius of 320 units, and 640 up and down.
+        let drum = Contact::column([0, 0, 0], Damage::Squish, 0x19000);
+        assert!(drum.hits([319, 0, 0]));
+        assert!(!drum.hits([320, 0, 0]));
+        assert!(drum.hits([0, 639, 0]));
+        assert!(drum.hits([200, -639, 200]));
+        assert!(!drum.hits([0, 640, 0]));
+        assert!(!drum.hits([0, -640, 0]));
+        // Height does not count against the flat distance, as it does in a sphere.
+        assert!(drum.hits([300, 300, 0]));
+        assert!(!Contact::sphere([0, 0, 0], Damage::Squish, 0x19000, 0).hits([300, 300, 0]));
+        // The square of a great height wraps negative, and is in reach, as in retail.
+        assert!(drum.hits([0, 50_000, 0]));
     }
 
     #[test]
