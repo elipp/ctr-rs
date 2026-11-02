@@ -218,6 +218,7 @@ fn fly(
     fixed: Res<Time<Fixed>>,
     textures: Res<Textures>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::drive::ChaseCamera>>,
     karts: Query<&Transform, (With<crate::drive::Kart>, Without<crate::drive::ChaseCamera>)>,
     mut images: ResMut<Assets<Image>>,
@@ -263,7 +264,8 @@ fn fly(
         && let Ok(kart) = karts.single()
         && let Ok(at) = camera.world_to_viewport(camera_transform, kart.translation)
     {
-        flight.start = at - Vec2::new(0.0, START_LIFT * crate::hud::PIXEL.y);
+        // (The camera draws into the picture of the scene, which may be smaller than the window.)
+        flight.start = screen.to_window(at) - Vec2::new(0.0, START_LIFT * crate::hud::PIXEL.y);
     }
     flight.queued = queued;
     if queued == 0 {

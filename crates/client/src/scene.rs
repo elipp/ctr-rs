@@ -293,7 +293,10 @@ pub(crate) fn switch_mode(
 /// the gamepads have neither.
 pub(crate) fn world_scene(world: &mut World) -> Vec<Entity> {
     world
-        .query_filtered::<Entity, Or<(With<Transform>, With<Node>)>>()
+        .query_filtered::<Entity, (
+            Or<(With<Transform>, With<Node>)>,
+            Without<crate::pixel::Present>,
+        )>()
         .iter(world)
         .collect()
 }
@@ -658,6 +661,8 @@ pub(crate) fn setup(
         // y up, and the figures hang `DEPTH` pixels in front of it.
         commands.spawn((
             OverlayCamera,
+            // Not pixelated with the scene (`crate::pixel`).
+            crate::pixel::OnWindow,
             Camera3d::default(),
             Camera {
                 order: 3,
