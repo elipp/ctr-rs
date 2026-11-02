@@ -299,7 +299,9 @@ pub fn carve(
             continue;
         }
         let (p, q) = (x.cseq(&mut a, pack as u16)?, y.cseq(&mut b, pack as u16)?);
-        let wanted = q.is_some() && (song_pack == Some(pack as u8) || !same_pack(&p, &q));
+        let wanted = q.is_some()
+            && (song_pack == Some(pack as u8)
+                || (plays_in_races(pack as u8, first) && !same_pack(&p, &q)));
         if wanted && chosen.len() < crate::MAX_SOUNDTRACKS {
             chosen.push(pack as u8);
             let q = q.unwrap();
@@ -321,6 +323,14 @@ pub fn carve(
         }
     }
     Ok(Some(audio))
+}
+
+/// Whether song pack `pack` is one a race can play, so that a patch's change to it can be music
+/// for its track: a level's own (`LEVEL_SONGS`), or `also`. Not the boss races', the menu's, the
+/// intro's or the endings' and credits': a patch that changes those (the intro race's pack 29 is
+/// changed by some tools whatever the track) has not made music for a track.
+fn plays_in_races(pack: u8, also: Option<u8>) -> bool {
+    LEVEL_SONGS.contains(&pack) || also == Some(pack)
 }
 
 /// A note of a sequence: the delay before it, its opcode, and what the opcode takes.
@@ -410,6 +420,59 @@ fn same_pack(a: &Option<loader::howl::Cseq>, b: &Option<loader::howl::Cseq>) -> 
     }
 }
 
+/// What differs between two song packs that do not sound the same, in words: the parts `music`
+/// compares that `sequences_differing` does not look at (the instruments, the drums, the songs'
+/// tempos per beat and how the sequences are divided between them) as well as the notes.
+fn describe_difference(
+    a: &Option<loader::howl::Cseq>,
+    b: &Option<loader::howl::Cseq>,
+) -> String {
+    let (Some(a), Some(b)) = (a, b) else {
+        return "one of them has no pack".into();
+    };
+    let (x, y) = (music(a), music(b));
+    let mut why = Vec::new();
+    let listed = |differ: Vec<usize>| format!("{:?}", &differ[..differ.len().min(8)]);
+    if x.instruments != y.instruments {
+        let differ: Vec<usize> = (0..x.instruments.len().max(y.instruments.len()))
+            .filter(|&i| x.instruments.get(i) != y.instruments.get(i))
+            .collect();
+        why.push(format!(
+            "instruments {} -> {} ({} differ: {})",
+            x.instruments.len(),
+            y.instruments.len(),
+            differ.len(),
+            listed(differ)
+        ));
+    }
+    if x.drums != y.drums {
+        let differ: Vec<usize> = (0..x.drums.len().max(y.drums.len()))
+            .filter(|&i| x.drums.get(i) != y.drums.get(i))
+            .collect();
+        why.push(format!(
+            "drums {} -> {} ({} differ: {})",
+            x.drums.len(),
+            y.drums.len(),
+            differ.len(),
+            listed(differ)
+        ));
+    }
+    if x.songs.len() != y.songs.len() {
+        why.push(format!("songs {} -> {}", x.songs.len(), y.songs.len()));
+    }
+    for (i, (p, q)) in x.songs.iter().zip(&y.songs).enumerate() {
+        if p.1 != q.1 {
+            why.push(format!("song {i}: ticks per beat {} -> {}", p.1, q.1));
+        }
+        if p.2.len() != q.2.len() {
+            why.push(format!("song {i}: sequences {} -> {}", p.2.len(), q.2.len()));
+        } else if p.2 != q.2 || p.0 != q.0 {
+            why.push(format!("song {i}: notes or bpm differ"));
+        }
+    }
+    why.join("; ")
+}
+
 /// How many sequences of the packs differ, of how many the second has.
 fn sequences_differing(
     a: &Option<loader::howl::Cseq>,
@@ -449,6 +512,8 @@ pub struct PackChange {
     pub sequences: (usize, usize),
     /// How many of the samples it plays are new or different.
     pub samples: usize,
+    /// What differs, in words (see `describe_difference`).
+    pub differs: String,
 }
 
 /// The song packs of the patch that do not sound like the game's.
@@ -461,6 +526,9 @@ pub fn changed_packs(original: &Path, patch: &[u8]) -> io::Result<Vec<PackChange
     };
     let mut changes = Vec::new();
     for pack in 0..x.song_offsets.len().min(y.song_offsets.len()).min(256) {
+        if !plays_in_races(pack as u8, None) {
+            continue;
+        }
         let (p, q) = (x.cseq(&mut a, pack as u16)?, y.cseq(&mut b, pack as u16)?);
         if same_pack(&p, &q) {
             continue;
@@ -479,6 +547,7 @@ pub fn changed_packs(original: &Path, patch: &[u8]) -> io::Result<Vec<PackChange
             now: tempos(&q),
             sequences: sequences_differing(&p, &q),
             samples,
+            differs: describe_difference(&p, &q),
         });
     }
     Ok(changes)

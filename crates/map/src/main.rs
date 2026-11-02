@@ -65,6 +65,7 @@ fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Re
             "  {:>2}{levels}: {} of {} sequences differ, bpm {:?} -> {:?}, {} samples changed",
             c.pack, c.sequences.0, c.sequences.1, c.was, c.now, c.samples
         );
+        println!("      differs in: {}", c.differs);
     }
     loop {
         print!("which plays first? a number, or nothing for its track's own pack: ");
