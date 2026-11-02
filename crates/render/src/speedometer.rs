@@ -1,6 +1,6 @@
 //! The speedometer's dial and needle (`UI_DrawSpeedBG`, `UI_DrawSpeedNeedle`) and the jump meter's
-//! digits (`DebugFont_DrawNumbers`). The UI has no polygons or lines, so they are rasterized like
-//! the PS1 does, without its dithering.
+//! digits (`DebugFont_DrawNumbers`). The UI has no polygons or lines, so the dial is rasterized
+//! here and the needle is a shader, both deliberately finer than retail's pixels and undithered.
 
 use loader::icons::Icon;
 use loader::vram::Vram;
@@ -13,6 +13,15 @@ pub const LEFT: i32 = 405;
 pub const TOP: i32 = 145;
 pub const WIDTH: usize = 105;
 pub const HEIGHT: usize = 65;
+
+/// Picture pixels per pixel of retail's screen: one each on a 2x display, where `hud::PIXEL` is 4
+/// by 6 physical pixels.
+const SHARP_X: i32 = 4;
+const SHARP_Y: i32 = 6;
+/// Samples per picture pixel along each axis, averaged for smooth edges.
+const SAMPLES: i32 = 2;
+const FINE_X: i32 = SHARP_X * SAMPLES;
+const FINE_Y: i32 = SHARP_Y * SAMPLES;
 
 /// `hudStructPtr[UI_HUD_SLOT_SPEEDOMETER]`
 const SLOT_X: i32 = 414;
@@ -76,38 +85,55 @@ const BLACK: [u8; 3] = [0, 0, 0];
 /// A point of retail's screen.
 type Point = (i32, i32);
 
-struct Canvas(Vec<u8>);
+/// A point of the canvas's samples, from the top left of the picture.
+type Fine = (i32, i32);
+
+fn fine((x, y): Point) -> Fine {
+    ((x - LEFT) * FINE_X, (y - TOP) * FINE_Y)
+}
+
+struct Canvas {
+    samples: Vec<u8>,
+}
 
 impl Canvas {
-    fn new() -> Canvas {
-        Canvas(vec![0; WIDTH * HEIGHT * 4])
-    }
+    const WIDTH: i32 = WIDTH as i32 * FINE_X;
+    const HEIGHT: i32 = HEIGHT as i32 * FINE_Y;
 
-    fn put(&mut self, x: i32, y: i32, rgba: [u8; 4]) {
-        let (x, y) = (x - LEFT, y - TOP);
-        if (0..WIDTH as i32).contains(&x) && (0..HEIGHT as i32).contains(&y) {
-            self.0[(y as usize * WIDTH + x as usize) * 4..][..4].copy_from_slice(&rgba);
+    fn new() -> Canvas {
+        Canvas {
+            samples: vec![0; (Self::WIDTH * Self::HEIGHT * 4) as usize],
         }
     }
 
-    /// A line, both its ends included.
-    fn line(&mut self, from: Point, to: Point, color: [u8; 3]) {
+    fn put(&mut self, x: i32, y: i32, rgba: [u8; 4]) {
+        if (0..Self::WIDTH).contains(&x) && (0..Self::HEIGHT).contains(&y) {
+            self.samples[((y * Self::WIDTH + x) * 4) as usize..][..4].copy_from_slice(&rgba);
+        }
+    }
+
+    /// A line as wide as a pixel of retail's screen, from the corner of one such pixel to another's.
+    fn line(&mut self, from: Fine, to: Fine, color: [u8; 3]) {
         let (dx, dy) = (to.0 - from.0, to.1 - from.1);
         let steps = dx.abs().max(dy.abs());
         for step in 0..=steps {
             let along = |d: i32| (d * step * 2 + steps * d.signum()).checked_div(steps * 2);
             let x = from.0 + along(dx).unwrap_or(0);
             let y = from.1 + along(dy).unwrap_or(0);
-            self.put(x, y, opaque(color));
+            for py in y..y + FINE_Y {
+                for px in x..x + FINE_X {
+                    self.put(px, py, opaque(color));
+                }
+            }
         }
     }
 
     /// A triangle of a colour at each corner. Like the PS1's, it leaves out its right and bottom
     /// edges, so that triangles sharing an edge neither overlap nor leave a gap.
-    fn triangle(&mut self, corners: [(Point, [u8; 4]); 3]) {
+    fn triangle(&mut self, corners: [(Fine, [u8; 4]); 3]) {
         let [mut a, b, mut c] = corners;
         let edge =
-            |p: Point, q: Point, x: i32, y: i32| (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0);
+            |p: Fine, q: Fine, x: i32, y: i32| (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0);
         let mut area = edge(a.0, b.0, c.0.0, c.0.1);
         if area == 0 {
             return;
@@ -116,26 +142,27 @@ impl Canvas {
             std::mem::swap(&mut a, &mut c);
             area = -area;
         }
-        let excludes = |p: Point, q: Point| {
+        let excludes = |p: Fine, q: Fine| {
             let (dx, dy) = (q.0 - p.0, q.1 - p.1);
             !(dy < 0 || (dy == 0 && dx > 0))
         };
+        let excluded = [excludes(b.0, c.0), excludes(c.0, a.0), excludes(a.0, b.0)];
         let (min_x, max_x) = (a.0.0.min(b.0.0).min(c.0.0), a.0.0.max(b.0.0).max(c.0.0));
         let (min_y, max_y) = (a.0.1.min(b.0.1).min(c.0.1), a.0.1.max(b.0.1).max(c.0.1));
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 let weights = [
-                    (edge(b.0, c.0, x, y), excludes(b.0, c.0)),
-                    (edge(c.0, a.0, x, y), excludes(c.0, a.0)),
-                    (edge(a.0, b.0, x, y), excludes(a.0, b.0)),
+                    edge(b.0, c.0, x, y),
+                    edge(c.0, a.0, x, y),
+                    edge(a.0, b.0, x, y),
                 ];
-                if weights.iter().any(|&(w, out)| w < 0 || (w == 0 && out)) {
+                if (0..3).any(|n| weights[n] < 0 || (weights[n] == 0 && excluded[n])) {
                     continue;
                 }
                 let channel = |n: usize| {
-                    let sum = weights[0].0 * a.1[n] as i32
-                        + weights[1].0 * b.1[n] as i32
-                        + weights[2].0 * c.1[n] as i32;
+                    let sum = weights[0] * a.1[n] as i32
+                        + weights[1] * b.1[n] as i32
+                        + weights[2] * c.1[n] as i32;
                     (sum / area) as u8
                 };
                 self.put(x, y, std::array::from_fn(channel));
@@ -143,11 +170,35 @@ impl Canvas {
         }
     }
 
+    /// Averages the samples, weighted by alpha so that the transparent ones add no black.
     fn atlas(self) -> Atlas {
+        let (width, height) = (WIDTH * SHARP_X as usize, HEIGHT * SHARP_Y as usize);
+        let samples = SAMPLES as usize;
+        let mut rgba = vec![0; width * height * 4];
+        for y in 0..height {
+            for x in 0..width {
+                let mut sum = [0u32; 4];
+                for sample_y in y * samples..(y + 1) * samples {
+                    for sample_x in x * samples..(x + 1) * samples {
+                        let at = (sample_y * Self::WIDTH as usize + sample_x) * 4;
+                        let alpha = self.samples[at + 3] as u32;
+                        for (total, &channel) in sum.iter_mut().zip(&self.samples[at..at + 3]) {
+                            *total += channel as u32 * alpha;
+                        }
+                        sum[3] += alpha;
+                    }
+                }
+                let out = &mut rgba[(y * width + x) * 4..][..4];
+                for (channel, &total) in out.iter_mut().zip(&sum[..3]) {
+                    *channel = total.checked_div(sum[3]).unwrap_or(0) as u8;
+                }
+                out[3] = (sum[3] / (samples * samples) as u32) as u8;
+            }
+        }
         Atlas {
-            width: WIDTH,
-            height: HEIGHT,
-            rgba: self.0,
+            width,
+            height,
+            rgba,
         }
     }
 }
@@ -160,10 +211,10 @@ fn opaque([r, g, b]: [u8; 3]) -> [u8; 4] {
 /// primitives so that the first it adds is drawn last, so this goes through them backwards.
 pub fn dial() -> Atlas {
     let mut canvas = Canvas::new();
-    let at = |(x, y): Point| (x + DIAL_X, y + DIAL_Y);
+    let at = |(x, y): Point| fine((x + DIAL_X, y + DIAL_Y));
     let spoke = |n: usize| at(SPOKES[n]);
     let long_spoke = |n: usize| at(LONG_SPOKES[n]);
-    let shadow = |(x, y): Point| (x + 1, y + 1);
+    let shadow = |(x, y): Fine| (x + FINE_X, y + FINE_Y);
 
     let dark = half_transparent([0, 0, 0, 255]);
     let hub = at((SPOKES[13].0, SPOKES[1].1));
@@ -190,45 +241,39 @@ pub fn dial() -> Atlas {
     canvas.atlas()
 }
 
+/// The needle's corners, as fractions of the picture. A kite of two halves, split from tip to tail.
+pub struct Needle {
+    pub tip: [f32; 2],
+    pub tail: [f32; 2],
+    pub bright_side: [f32; 2],
+    pub dark_side: [f32; 2],
+}
+
 /// The needle at `angle`: `0x1000` is a turn, 0 points down and `0x400` right.
-/// It is a kite of two halves, the dark one over the bright one.
-pub fn needle(angle: i32) -> Atlas {
-    const CENTER: Point = (SLOT_X + 65, SLOT_Y + 41);
-    const LENGTH: i32 = 60;
-    const NEEDLE_WIDTH: i32 = 6;
+pub fn needle(angle: i32) -> Needle {
+    const CENTER: Point = (SLOT_X + 65 - LEFT, SLOT_Y + 41 - TOP);
+    const LENGTH: f32 = 60.0;
+    const NEEDLE_WIDTH: f32 = 6.0;
 
+    let unit = |angle: i32| {
+        let (sin, cos) = math::sin_cos(angle as u32);
+        (sin as f32 / 4096.0, cos as f32 / 4096.0)
+    };
+    let (sin, cos) = unit(angle);
+    let (sin_side, cos_side) = unit(angle + 0x400);
     // The screen's pixels are taller than wide.
-    let flat = |n: i32| n * 320 / 512;
-    let (sin, cos) = math::sin_cos(angle as u32);
-    let (sin_side, cos_side) = math::sin_cos((angle + 0x400) as u32);
-    let (sx, sy) = CENTER;
-
-    let tip = (sx + ((sin * LENGTH) >> 12), sy + flat((cos * LENGTH) >> 12));
-    let tail = (
-        sx - ((sin * NEEDLE_WIDTH) >> 12),
-        sy - flat((cos * NEEDLE_WIDTH) >> 12),
-    );
-    let dark_side = (
-        sx + ((sin_side * NEEDLE_WIDTH) >> 12),
-        sy + flat((cos_side * (NEEDLE_WIDTH + 2)) >> 12),
-    );
-    let bright_side = (
-        sx - ((sin_side * NEEDLE_WIDTH) >> 12),
-        sy - flat((cos_side * (NEEDLE_WIDTH + 2)) >> 12),
-    );
-
-    let mut canvas = Canvas::new();
-    canvas.triangle([
-        (tip, opaque(WHITE)),
-        (tail, opaque([156, 105, 0])),
-        (bright_side, opaque([255, 255, 0])),
-    ]);
-    canvas.triangle([
-        (tip, opaque([91, 91, 0])),
-        (tail, opaque([50, 43, 1])),
-        (dark_side, opaque([255, 187, 0])),
-    ]);
-    canvas.atlas()
+    let corner = |x: f32, y: f32| {
+        [
+            (CENTER.0 as f32 + x) / WIDTH as f32,
+            (CENTER.1 as f32 + y * 0.625) / HEIGHT as f32,
+        ]
+    };
+    Needle {
+        tip: corner(sin * LENGTH, cos * LENGTH),
+        tail: corner(-sin * NEEDLE_WIDTH, -cos * NEEDLE_WIDTH),
+        dark_side: corner(sin_side * NEEDLE_WIDTH, cos_side * (NEEDLE_WIDTH + 2.0)),
+        bright_side: corner(-sin_side * NEEDLE_WIDTH, -cos_side * (NEEDLE_WIDTH + 2.0)),
+    }
 }
 
 /// `gGT->ptrIcons[DEBUG_FONT_ICON_INDEX]`, and how its digits lie in it
@@ -271,15 +316,23 @@ pub fn digits(icons: &[Icon], vram: &Vram) -> Option<Vec<Atlas>> {
 mod tests {
     use super::*;
 
+    /// The picture's pixel in the middle of a pixel of retail's screen.
+    fn pixel(atlas: &Atlas, x: i32, y: i32) -> [u8; 4] {
+        let px = (x - LEFT) * SHARP_X + SHARP_X / 2;
+        let py = (y - TOP) * SHARP_Y + SHARP_Y / 2;
+        let at = (py as usize * atlas.width + px as usize) * 4;
+        std::array::from_fn(|n| atlas.rgba[at + n])
+    }
+
     fn inked(atlas: &Atlas, x: i32, y: i32) -> bool {
-        let at = ((y - TOP) as usize * WIDTH + (x - LEFT) as usize) * 4;
-        atlas.rgba[at + 3] != 0
+        pixel(atlas, x, y)[3] != 0
     }
 
     fn ink_on_the_border(atlas: &Atlas) -> bool {
-        let (right, bottom) = (LEFT + WIDTH as i32 - 1, TOP + HEIGHT as i32 - 1);
-        (LEFT..=right).any(|x| inked(atlas, x, TOP) || inked(atlas, x, bottom))
-            || (TOP..=bottom).any(|y| inked(atlas, LEFT, y) || inked(atlas, right, y))
+        let (w, h) = (atlas.width, atlas.height);
+        let alpha = |x: usize, y: usize| atlas.rgba[(y * w + x) * 4 + 3];
+        (0..w).any(|x| alpha(x, 0) != 0 || alpha(x, h - 1) != 0)
+            || (0..h).any(|y| alpha(0, y) != 0 || alpha(w - 1, y) != 0)
     }
 
     #[test]
@@ -287,12 +340,21 @@ mod tests {
         const SIDE: i32 = 8;
         let (x0, y0) = (LEFT + 3, TOP + 3);
         let (x1, y1) = (x0 + SIDE, y0 + SIDE);
+        let corner = |x, y| fine((x, y));
         let mut canvas = Canvas::new();
         let color = [10, 20, 30, 255];
-        canvas.triangle([((x0, y0), color), ((x1, y0), color), ((x0, y1), color)]);
-        canvas.triangle([((x1, y0), color), ((x0, y1), color), ((x1, y1), color)]);
-        let count = canvas.0.chunks(4).filter(|p| p[3] != 0).count();
-        assert_eq!(count, (SIDE * SIDE) as usize);
+        canvas.triangle([
+            (corner(x0, y0), color),
+            (corner(x1, y0), color),
+            (corner(x0, y1), color),
+        ]);
+        canvas.triangle([
+            (corner(x1, y0), color),
+            (corner(x0, y1), color),
+            (corner(x1, y1), color),
+        ]);
+        let count = canvas.samples.chunks(4).filter(|p| p[3] != 0).count();
+        assert_eq!(count, (SIDE * FINE_X * SIDE * FINE_Y) as usize);
     }
 
     #[test]
@@ -300,22 +362,23 @@ mod tests {
         let mut canvas = Canvas::new();
         let (x, y) = (LEFT + 2, TOP + 2);
         canvas.triangle([
-            ((x, y), [0, 0, 0, 255]),
-            ((x + 40, y), [200, 0, 0, 255]),
-            ((x, y + 40), [0, 0, 0, 255]),
+            (fine((x, y)), [0, 0, 0, 255]),
+            (fine((x + 40, y)), [200, 0, 0, 255]),
+            (fine((x, y + 40)), [0, 0, 0, 255]),
         ]);
-        let at = ((2 * WIDTH) + 22) * 4;
-        assert_eq!(canvas.0[at], 100);
+        let (sample_x, sample_y) = fine((x + 20, y));
+        let at = ((sample_y * Canvas::WIDTH + sample_x) * 4) as usize;
+        assert_eq!(canvas.samples[at], 100);
     }
 
     #[test]
-    fn a_line_includes_both_ends() {
+    fn a_line_covers_both_ends() {
         let mut canvas = Canvas::new();
-        canvas.line((LEFT, TOP), (LEFT + 4, TOP + 2), WHITE);
+        canvas.line(fine((LEFT, TOP)), fine((LEFT + 4, TOP + 2)), WHITE);
         let atlas = canvas.atlas();
         assert!(inked(&atlas, LEFT, TOP));
         assert!(inked(&atlas, LEFT + 4, TOP + 2));
-        assert_eq!(atlas.rgba.chunks(4).filter(|p| p[3] != 0).count(), 5);
+        assert!(!inked(&atlas, LEFT + 5, TOP + 2));
     }
 
     #[test]
@@ -323,21 +386,40 @@ mod tests {
         assert!(!ink_on_the_border(&dial()));
     }
 
+    const SLOWEST: i32 = 3472;
+    const FASTEST: i32 = 1792;
+
     #[test]
     fn the_needle_is_within_the_picture_at_every_angle() {
-        for angle in 1792..=3472 {
-            assert!(!ink_on_the_border(&needle(angle)), "{angle}");
+        for angle in FASTEST..=SLOWEST {
+            let n = needle(angle);
+            for [x, y] in [n.tip, n.tail, n.bright_side, n.dark_side] {
+                assert!(
+                    (0.0..1.0).contains(&x) && (0.0..1.0).contains(&y),
+                    "{angle}"
+                );
+            }
+        }
+    }
+
+    // The shader relies on this: its coverage is the least of the four edges, inside positive.
+    #[test]
+    fn the_needle_is_convex_and_wound_one_way_at_every_angle() {
+        for angle in 0..0x1000 {
+            let n = needle(angle);
+            let corners = [n.tip, n.bright_side, n.tail, n.dark_side];
+            for i in 0..4 {
+                let [a, b, c] = [corners[i], corners[(i + 1) % 4], corners[(i + 2) % 4]];
+                let turn = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+                assert!(turn > 0.0, "{angle}");
+            }
         }
     }
 
     #[test]
     fn the_dial_has_its_colours_at_its_ends() {
         let dial = dial();
-        let color = |x: i32, y: i32| {
-            let at = ((y + DIAL_Y - TOP) as usize * WIDTH + (x + DIAL_X - LEFT) as usize) * 4;
-            let p = &dial.rgba[at..at + 4];
-            [p[0], p[1], p[2], p[3]]
-        };
+        let color = |x: i32, y: i32| pixel(&dial, x + DIAL_X, y + DIAL_Y);
         assert_eq!(color(-60, 8), [0x00, 0xb5, 0x00, 255]);
         assert_eq!(color(11, -35), [0xdb, 0x00, 0x00, 255]);
         // The dark fan inside the band is half transparent.
@@ -348,9 +430,10 @@ mod tests {
 
     #[test]
     fn the_needle_points_along_the_band() {
-        const SLOWEST: i32 = 3472;
-        const FASTEST: i32 = 1792;
-        assert!(inked(&needle(SLOWEST), 479 - 25, 186 + 11));
-        assert!(inked(&needle(FASTEST), 479 + 15, 186 - 23));
+        let center = needle(SLOWEST).tail;
+        let slowest = needle(SLOWEST).tip;
+        assert!(slowest[0] < center[0] && slowest[1] > center[1]);
+        let fastest = needle(FASTEST).tip;
+        assert!(fastest[0] > center[0] && fastest[1] < center[1]);
     }
 }

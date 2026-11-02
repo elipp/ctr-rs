@@ -1,10 +1,13 @@
 //! The speedometer and jump meter, shown instead of the minimap (`UI_RenderFrame`,
 //! `UI_JumpMeter_Draw`). As in retail, the choice outlasts the level.
 
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{
+    AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat,
+};
+use bevy::shader::ShaderRef;
 use render::mesh::Atlas;
 use render::speedometer::{DIGIT_SIZE, HEIGHT, LEFT, TOP, WIDTH, dial, digits, needle};
 use vehicle::calc::map_to_range;
@@ -87,11 +90,46 @@ fn needle_angle(speed: i32, accel_speed: i32, sacred_fire_speed: i32) -> i32 {
     map_to_range(scale(speed_int), from, to, angle_from, angle_to)
 }
 
-/// The pictures: made once, and kept across levels, which take the nodes away.
+/// The needle's corners (`render::speedometer::Needle`).
+#[derive(ShaderType, Debug, Clone)]
+struct NeedleCorners {
+    tip: Vec2,
+    tail: Vec2,
+    bright_side: Vec2,
+    dark_side: Vec2,
+}
+
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+struct NeedleMaterial {
+    #[uniform(0)]
+    corners: NeedleCorners,
+}
+
+impl NeedleMaterial {
+    fn at(angle: i32) -> NeedleMaterial {
+        let n = needle(angle);
+        NeedleMaterial {
+            corners: NeedleCorners {
+                tip: n.tip.into(),
+                tail: n.tail.into(),
+                bright_side: n.bright_side.into(),
+                dark_side: n.dark_side.into(),
+            },
+        }
+    }
+}
+
+impl UiMaterial for NeedleMaterial {
+    fn fragment_shader() -> ShaderRef {
+        concat!("embedded://", env!("CARGO_PKG_NAME"), "/speedometer.wgsl").into()
+    }
+}
+
+/// Made once, and kept across levels, which take the nodes away.
 #[derive(Resource)]
 struct Art {
     dial: Handle<Image>,
-    needle: Handle<Image>,
+    needle: Handle<NeedleMaterial>,
     digits: Vec<Handle<Image>>,
 }
 
@@ -109,7 +147,9 @@ pub struct SpeedometerPlugin;
 
 impl Plugin for SpeedometerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShowSpeedometer>()
+        embedded_asset!(app, "speedometer.wgsl");
+        app.add_plugins(UiMaterialPlugin::<NeedleMaterial>::default())
+            .init_resource::<ShowSpeedometer>()
             .add_systems(Update, (toggle, show).chain().run_if(crate::drive::driving));
     }
 }
@@ -131,8 +171,9 @@ fn toggle(
     }
 }
 
-/// A picture the needle's system can draw on again: [`atlas_image`]'s are the GPU's alone.
-fn editable_image(atlas: Atlas, images: &mut Assets<Image>) -> Handle<Image> {
+/// Filtered, unlike [`atlas_image`]'s: finer than retail's pixels, it is only one to one on a 2x
+/// display.
+fn smooth_image(atlas: Atlas, images: &mut Assets<Image>) -> Handle<Image> {
     let mut image = Image::new(
         Extent3d {
             width: atlas.width as u32,
@@ -142,9 +183,9 @@ fn editable_image(atlas: Atlas, images: &mut Assets<Image>) -> Handle<Image> {
         TextureDimension::D2,
         atlas.rgba,
         TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
+        RenderAssetUsages::RENDER_WORLD,
     );
-    image.sampler = ImageSampler::nearest();
+    image.sampler = ImageSampler::linear();
     images.add(image)
 }
 
@@ -155,6 +196,7 @@ fn show(
     textures: Res<crate::Textures>,
     art: Option<Res<Art>>,
     mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<NeedleMaterial>>,
     mut parts: Query<&mut Visibility, With<Part>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<BarFill>>,
     mut slots: Query<(&DigitSlot, &mut ImageNode)>,
@@ -163,8 +205,8 @@ fn show(
     let Some(art) = art else {
         let font = digits(&pack_icons(), &textures.vram).unwrap_or_default();
         commands.insert_resource(Art {
-            dial: atlas_image(dial(), &mut images),
-            needle: editable_image(needle(LOW_ANGLE), &mut images),
+            dial: smooth_image(dial(), &mut images),
+            needle: materials.add(NeedleMaterial::at(LOW_ANGLE)),
             digits: font
                 .into_iter()
                 .map(|d| atlas_image(d, &mut images))
@@ -195,9 +237,9 @@ fn show(
         d.stats.sacred_fire_speed as i32,
     );
     if *drawn_angle != Some(angle)
-        && let Some(mut image) = images.get_mut(&art.needle)
+        && let Some(mut material) = materials.get_mut(&art.needle)
     {
-        image.data = Some(needle(angle).rgba);
+        *material = NeedleMaterial::at(angle);
         *drawn_angle = Some(angle);
     }
 
@@ -323,7 +365,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         }
     }
     commands.spawn((
-        picture(&art.needle),
+        MaterialNode(art.needle.clone()),
         at(LEFT, TOP, WIDTH as i32, HEIGHT as i32),
         Pickable::IGNORE,
         ChildOf(overlay),
