@@ -7,9 +7,9 @@
 //! follow it. Otherwise Up and Down go through the lines sent before.
 //!
 //! `/lobby create public` shows a name for the lobby in grey: Up and Down change it, Tab or Return
-//! takes it, and typing replaces it. `/character` and `/promote` offer the characters and the
-//! players the same way, with the portrait of the one offered after the name; typing narrows them
-//! down to the names that start with what is typed.
+//! takes it, and typing replaces it. `/character`, `/promote` and `/track` offer the characters,
+//! the players and the tracks the same way, with a portrait after the name or the track's picture
+//! over the line; typing narrows them down to the names that start with what is typed.
 //!
 //! The line is edited as in a shell: the arrows, Home and End move the cursor, and Ctrl A, E, B, F
 //! (Alt B, F by a word), Ctrl W, U, K, D, H and Alt D delete. Page
@@ -33,7 +33,8 @@ use bevy::text::TextBackgroundColor;
 use net::Ticket;
 
 use crate::console::{Console, Log, PAGE, SmallPortrait, small_portrait};
-use crate::suggest::{self, Menu};
+use crate::suggest::{self, Menu, Offer, OfferPicture};
+use crate::track_picture::TrackPictures;
 
 /// Something a player can ask for with a `/command`. The command only sends it; what it does is
 /// up to whoever handles it (the lobby's are in `lobby.rs`).
@@ -55,6 +56,9 @@ pub enum Action {
     Promote(String),
     /// Drive that character (`CHARACTERS` order), as the keys `.` and `,` go to the next.
     Character(u32),
+    /// Be on that track (a `LevelId`), as `[` and `]` go to the next. In a lobby it is ours until
+    /// a race goes to the host's, and the host's is the one its next race is on.
+    Track(u32),
     /// Delete the maps other players sent us (`maps::purge`).
     PurgeCache,
     /// Lists the tracks there are (`/track list`).
@@ -133,8 +137,8 @@ const LOBBY_USAGE: &str =
     "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
-const TRACK_USAGE: &str = "Usage: /track list";
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
+const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon), or its number (/track list)";
@@ -181,8 +185,8 @@ impl Action {
                         crate::CHARACTERS.join(", ")
                     )
                 }),
-            "cache" => Action::cache(rest),
             "track" => Action::track(rest),
+            "cache" => Action::cache(rest),
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
             "version" => Err("Usage: /version".into()),
@@ -272,12 +276,12 @@ impl Action {
         }
     }
 
+    /// `list`, or the track to be on. (So a custom track called "list" goes by its number.)
     fn track(line: &str) -> Result<Action, String> {
-        let (sub, _) = word(line);
-        match sub {
-            "list" => Ok(Action::ListTracks),
+        match line {
             "" => Err(TRACK_USAGE.into()),
-            _ => Err(format!("Unknown command: /track {sub}\n{TRACK_USAGE}")),
+            "list" => Ok(Action::ListTracks),
+            track => crate::maps::resolve(track).map(Action::Track),
         }
     }
 
@@ -483,6 +487,14 @@ const BLINK_SECONDS: f32 = 0.5;
 /// How many sent lines the history keeps.
 const HISTORY: usize = 100;
 
+/// What the line offers names of (`CommandLine::wanted`).
+#[derive(Clone, Copy)]
+enum Offering {
+    Character,
+    Player,
+    Track,
+}
+
 /// What has been typed so far, if the line is open.
 #[derive(Resource, Default)]
 pub(crate) struct CommandLine {
@@ -503,11 +515,13 @@ pub(crate) struct CommandLine {
     /// Which name a public lobby is offered (`suggest::lobby_name_at`), new each time the line
     /// opens.
     lobby_name_index: u64,
-    /// The name to offer if the line can come to it (`suggest::pick`): at first, the character we
-    /// drive.
-    wanted: String,
+    /// The name to offer if the line can come to it (`suggest::pick`), of each [`Offering`]: at
+    /// first, the character we drive and the track we are on.
+    wanted: [String; 3],
     /// Who `/promote` offers: each one's name and character.
     players: Vec<(String, usize)>,
+    /// What `/track` offers: each one's name and `LevelId`.
+    tracks: Vec<(String, u32)>,
     /// Where the cursor is in the text: a byte offset, always at a character.
     cursor: usize,
 }
@@ -702,30 +716,38 @@ impl CommandLine {
         true
     }
 
-    /// What the line has typed of a name it is offered, and the offers it can still come to.
-    fn offers(&self) -> Option<(&str, Vec<suggest::Offer<'_>>)> {
+    /// What the line offers, what it has typed of the name, and the offers it can still come to.
+    fn offers(&self) -> Option<(Offering, &str, Vec<Offer<'_>>)> {
         if let Some(typed) = suggest::typed_after(&self.text, "/character") {
-            return Some((typed, suggest::matching(typed, suggest::characters())));
+            let found = suggest::matching(typed, suggest::characters());
+            return Some((Offering::Character, typed, found));
         }
-        let typed = suggest::typed_after(&self.text, "/promote")?;
-        let players = self.players.iter().map(|(name, character)| suggest::Offer {
+        if let Some(typed) = suggest::typed_after(&self.text, "/promote") {
+            let players = self.players.iter().map(|(name, character)| Offer {
+                name,
+                picture: OfferPicture::Portrait(*character),
+            });
+            return Some((Offering::Player, typed, suggest::matching(typed, players)));
+        }
+        let typed = suggest::typed_after(&self.text, "/track")?;
+        let tracks = self.tracks.iter().map(|(name, id)| Offer {
             name,
-            character: *character,
+            picture: OfferPicture::Track(*id),
         });
-        Some((typed, suggest::matching(typed, players)))
+        Some((Offering::Track, typed, suggest::matching(typed, tracks)))
     }
 
     /// The one the line is about to name, or names.
-    fn offer(&self) -> Option<suggest::Offer<'_>> {
-        let (typed, offers) = self.offers()?;
-        suggest::pick(&offers, &self.wanted, typed)
+    fn offer(&self) -> Option<Offer<'_>> {
+        let (offering, typed, offers) = self.offers()?;
+        suggest::pick(&offers, &self.wanted[offering as usize], typed)
     }
 
     /// What to show in grey after the line, with a space if the line needs one.
     fn ghost(&self) -> Option<String> {
         self.lobby_ghost().or_else(|| {
-            let (typed, offers) = self.offers()?;
-            let offer = suggest::pick(&offers, &self.wanted, typed)?;
+            let offer = self.offer()?;
+            let (_, typed, _) = self.offers()?;
             suggest::rest_of_name(&self.text, typed, offer.name)
         })
     }
@@ -733,15 +755,16 @@ impl CommandLine {
     /// Up or Down through the offers the line can come to: false if there is no other, or the line
     /// is one of the history's.
     fn cycle_offer(&mut self, down: bool) -> bool {
-        let next = self.offers().and_then(|(typed, offers)| {
-            let current = suggest::pick(&offers, &self.wanted, typed)?;
+        let next = self.offers().and_then(|(offering, typed, offers)| {
+            let current = suggest::pick(&offers, &self.wanted[offering as usize], typed)?;
             let at = offers.iter().position(|o| o.name == current.name)?;
             let step = if down { 1 } else { offers.len() - 1 };
-            (offers.len() > 1).then(|| offers[(at + step) % offers.len()].name.to_string())
+            let name = offers[(at + step) % offers.len()].name.to_string();
+            (offers.len() > 1).then_some((offering, name))
         });
         match next.filter(|_| self.browsing.is_none()) {
-            Some(name) => {
-                self.wanted = name;
+            Some((offering, name)) => {
+                self.wanted[offering as usize] = name;
                 true
             }
             None => false,
@@ -761,6 +784,11 @@ impl CommandLine {
     /// could follow but does not have to), unless Up or Down picked an option; otherwise a
     /// suggestion picked goes in first, and the line is sent if that ends it.
     fn enter(&mut self) {
+        if self.ghost_goes_first() {
+            self.accept_ghost();
+            self.entered = true;
+            return;
+        }
         if self.selection().is_none()
             || (!self.moved_selection && self.is_command())
             || self.complete()
@@ -768,6 +796,16 @@ impl CommandLine {
             self.accept_ghost();
             self.entered = true;
         }
+    }
+
+    /// A name offered in grey is what Return takes, not an option that can go there too (`list`
+    /// of `/track `), unless Up or Down picked that. A command still without its space stops at
+    /// it first, to show the name.
+    fn ghost_goes_first(&self) -> bool {
+        !self.moved_selection
+            && self.text.contains(char::is_whitespace)
+            && self.offer().is_some()
+            && self.ghost().is_some()
     }
 
     /// Keeps the line that was sent, unless it is the same as the last.
@@ -807,6 +845,14 @@ struct InputRow;
 #[derive(Component)]
 struct Suggestions;
 
+/// The panel over them with the picture of the track the line offers ...
+#[derive(Component)]
+struct TrackPanel;
+
+/// ... and the picture.
+#[derive(Component)]
+struct TrackImage;
+
 /// The portrait of who the line offers, after the name.
 #[derive(Component)]
 struct OfferIcon;
@@ -818,7 +864,7 @@ impl Plugin for CommandPlugin {
         app.init_resource::<CommandLine>()
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
-            .add_systems(Update, (open, submit, show, show_offer_icon).chain());
+            .add_systems(Update, (open, submit, show, show_offer_picture).chain());
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, tell_page.after(submit));
     }
@@ -970,6 +1016,7 @@ fn open(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<Real>>,
     options: Res<crate::Options>,
+    level: Res<crate::LevelNumber>,
     lobby: Res<crate::lobby::Lobby>,
     mut line: ResMut<CommandLine>,
 ) {
@@ -981,7 +1028,14 @@ fn open(
     }
     if !line.open && keys.just_pressed(KeyCode::Enter) {
         line.open = true;
-        line.wanted = crate::CHARACTERS[options.racer as usize].to_string();
+        line.wanted[Offering::Character as usize] =
+            crate::CHARACTERS[options.racer as usize].to_string();
+        line.wanted[Offering::Player as usize].clear();
+        line.wanted[Offering::Track as usize] = crate::maps::name(level.0);
+        line.tracks = crate::maps::cycle()
+            .into_iter()
+            .map(|id| (crate::maps::name(id), id))
+            .collect();
         // (A browser's std hasher has fixed keys: the time is what differs there.)
         let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
         line.lobby_name_index = seed % suggest::LOBBY_NAME_COUNT;
@@ -1054,24 +1108,45 @@ pub(crate) fn input_row() -> impl Bundle {
         Visibility::Hidden,
         children![
             (
-                Suggestions,
                 // Over the log, right above the line.
                 Node {
                     position_type: PositionType::Absolute,
                     bottom: Val::Percent(100.0),
                     left: Val::Px(0.0),
                     right: Val::Px(0.0),
-                    // Two columns, the names and what they do: a row's two texts line up with the
-                    // others', and what they do wraps in its own column.
-                    display: Display::Grid,
-                    grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
-                    column_gap: Val::Px(16.0),
-                    row_gap: Val::Px(6.0),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    flex_direction: FlexDirection::Column,
                     ..default()
                 },
-                BackgroundColor(Color::BLACK),
-                Visibility::Hidden,
+                children![
+                    (
+                        TrackPanel,
+                        Node {
+                            display: Display::None,
+                            padding: UiRect::all(Val::Px(8.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::BLACK),
+                        children![(
+                            TrackImage,
+                            ImageNode::default().with_mode(NodeImageMode::Stretch),
+                            Node::default(),
+                        )],
+                    ),
+                    (
+                        Suggestions,
+                        Node {
+                            display: Display::None,
+                            // Two columns, the names and what they do: a row's two texts line up
+                            // with the others', and what they do wraps in its own column.
+                            grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
+                            column_gap: Val::Px(16.0),
+                            row_gap: Val::Px(6.0),
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::BLACK),
+                    ),
+                ],
             ),
             (
                 Node {
@@ -1125,7 +1200,7 @@ fn show(
     time: Res<Time<Real>>,
     mut commands: Commands,
     mut rows: Query<&mut Visibility, With<InputRow>>,
-    suggestions: Query<Entity, With<Suggestions>>,
+    mut suggestions: Query<(Entity, &mut Node), With<Suggestions>>,
     mut prompt: Query<&mut Text, With<CommandText>>,
     mut cursor: Query<(&mut TextSpan, &mut TextColor, &mut TextBackgroundColor), With<CursorSpan>>,
     mut after: Query<&mut TextSpan, (With<AfterSpan>, Without<CursorSpan>)>,
@@ -1189,7 +1264,7 @@ fn show(
     for mut span in &mut ghost_span {
         assign(&mut span.0, ghost_rest);
     }
-    let Ok(list) = suggestions.single() else {
+    let Ok((list, mut node)) = suggestions.single_mut() else {
         return;
     };
     let key = (line.text.clone(), line.selected);
@@ -1199,11 +1274,11 @@ fn show(
     *shown = Some(key);
     commands.entity(list).despawn_children();
     let rows = suggestion_rows(&line);
-    commands.entity(list).insert(if rows.is_empty() {
-        Visibility::Hidden
+    node.display = if rows.is_empty() {
+        Display::None
     } else {
-        Visibility::Inherited
-    });
+        Display::Grid
+    };
     let font = TextFont {
         font_size: FONT_SIZE.into(),
         ..default()
@@ -1224,18 +1299,55 @@ fn show(
     }
 }
 
-/// The portrait after the line, while it offers or names someone.
-fn show_offer_icon(
+/// What goes with what the line offers or names: the portrait after the line, or the picture of
+/// the track over it.
+fn show_offer_picture(
     line: Res<CommandLine>,
+    time: Res<Time<Real>>,
+    mut pictures: ResMut<TrackPictures>,
+    mut images: ResMut<Assets<Image>>,
     mut icons: Query<&mut SmallPortrait, With<OfferIcon>>,
+    mut panels: Query<&mut Node, With<TrackPanel>>,
+    mut track_images: Query<(&mut ImageNode, &mut Node), (With<TrackImage>, Without<TrackPanel>)>,
 ) {
-    let character = line
+    let picture = line
         .open
-        .then(|| line.offer().map(|offer| offer.character))
+        .then(|| line.offer().map(|offer| offer.picture))
         .flatten();
+    let character = match picture {
+        Some(OfferPicture::Portrait(character)) => Some(character),
+        _ => None,
+    };
     for mut icon in &mut icons {
         if icon.0 != character {
             icon.0 = character;
+        }
+    }
+    let offered = match picture {
+        Some(OfferPicture::Track(id)) => Some(id),
+        _ => None,
+    };
+    pictures.set_offered(offered, time.elapsed_secs(), &mut images);
+    let track = offered.and_then(|id| pictures.of(id, &mut images));
+    let display = if track.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut panel in &mut panels {
+        if panel.display != display {
+            panel.display = display;
+        }
+    }
+    let Some(track) = track else {
+        return;
+    };
+    for (mut image, mut node) in &mut track_images {
+        if image.rect != Some(track.rect) || image.image != track.image {
+            image.rect = Some(track.rect);
+            image.image = track.image.clone();
+            node.width = Val::Px(track.size.x);
+            node.height = Val::Px(track.size.y);
         }
     }
 }
@@ -1246,7 +1358,10 @@ fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
     let Some(menu) = line.menu() else {
         return Vec::new();
     };
-    let picked = line.selection().map(|(_, index)| index);
+    let picked = line
+        .selection()
+        .filter(|_| !line.ghost_goes_first())
+        .map(|(_, index)| index);
     let row = |name: &str, about: &str, color| (name.to_string(), about.to_string(), color);
     let mut rows: Vec<_> = menu
         .options
@@ -1530,7 +1645,7 @@ mod tests {
     fn a_character_is_offered() {
         let offered = |name: &str| {
             let mut line = typed("/character ");
-            line.wanted = name.to_string();
+            line.wanted[Offering::Character as usize] = name.to_string();
             line
         };
         // Return takes the one we drive.
@@ -1551,7 +1666,7 @@ mod tests {
         assert_eq!(line.ghost().as_deref(), Some("Crash"));
         // Picking the command stops to show it.
         let mut line = typed("/charac");
-        line.wanted = "Penta".into();
+        line.wanted[Offering::Character as usize] = "Penta".into();
         line.enter();
         assert_eq!(line.text, "/character ");
         assert!(!line.entered);
@@ -1561,7 +1676,7 @@ mod tests {
         line.insert("n");
         assert_eq!(line.ghost().as_deref(), Some(". Gin"));
         assert!(line.cycle_offer(true));
-        assert_eq!(line.offer().map(|o| o.character), Some(12));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Portrait(12)));
         assert_eq!(line.ghost().as_deref(), Some(". Tropy"));
         line.enter();
         assert_eq!(line.text, "/character n. Tropy");
@@ -1571,7 +1686,7 @@ mod tests {
         ));
         // A whole name has its portrait, and the arrows go to the history.
         let mut line = typed("/character Penta");
-        assert_eq!(line.offer().map(|o| o.character), Some(13));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Portrait(13)));
         assert_eq!(line.ghost(), None);
         assert!(!line.cycle_offer(false));
         // None by that name.
@@ -1587,16 +1702,15 @@ mod tests {
     fn a_player_is_offered_to_promote() {
         let players = |text: &str| {
             let mut line = typed(text);
-            line.wanted = "Crash".into();
             line.players = vec![("Penta".into(), 13), ("Bob".into(), 3)];
             line
         };
         let mut line = players("/promote ");
         assert_eq!(line.ghost().as_deref(), Some("Penta"));
-        assert_eq!(line.offer().map(|o| o.character), Some(13));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Portrait(13)));
         assert!(line.cycle_offer(true));
         assert_eq!(line.ghost().as_deref(), Some("Bob"));
-        assert_eq!(line.offer().map(|o| o.character), Some(3));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Portrait(3)));
         line.enter();
         assert_eq!(line.text, "/promote Bob");
         assert!(line.entered);
@@ -1612,6 +1726,59 @@ mod tests {
         line.enter();
         assert_eq!(line.text, "/promote abcde");
         assert_eq!(typed("/promote ").ghost(), None);
+    }
+
+    #[test]
+    fn a_track_is_offered() {
+        let tracks = |text: &str| {
+            let mut line = typed(text);
+            line.wanted[Offering::Track as usize] = "Crash Cove".into();
+            line.wanted[Offering::Character as usize] = "Penta".into();
+            line.tracks = vec![
+                ("Dingo Canyon".into(), 0),
+                ("Crash Cove".into(), 3),
+                ("Papu's Pyramid".into(), 5),
+            ];
+            line
+        };
+        // The one we are on first, whatever was picked of the others.
+        let mut line = tracks("/track ");
+        assert_eq!(line.ghost().as_deref(), Some("Crash Cove"));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Track(3)));
+        assert!(line.cycle_offer(true));
+        assert_eq!(line.ghost().as_deref(), Some("Papu's Pyramid"));
+        line.enter();
+        assert_eq!(line.text, "/track Papu's Pyramid");
+        assert!(line.entered);
+        assert_eq!(line.wanted[Offering::Character as usize], "Penta");
+        // Typing narrows them down, across a space too.
+        let line = tracks("/track dingo c");
+        assert_eq!(line.ghost().as_deref(), Some("anyon"));
+        // `list` goes to the list: typed, or picked past the names. Not over the name in grey.
+        assert!(matches!(Action::parse("track list"), Ok(Action::ListTracks)));
+        let mut line = tracks("/track li");
+        line.enter();
+        assert_eq!(line.text, "/track list");
+        assert!(line.entered);
+        let mut line = tracks("/track");
+        line.enter();
+        assert_eq!(line.text, "/track ");
+        assert!(!line.entered);
+        line.enter();
+        assert_eq!(line.text, "/track Crash Cove");
+        assert!(line.entered);
+        // What a command can take goes as it was typed.
+        let mut line = tracks("/track dingo_canyon");
+        assert_eq!(line.ghost(), None);
+        line.enter();
+        assert_eq!(line.text, "/track dingo_canyon");
+
+        for text in ["track Papu's Pyramid", "track papu_pyramid", "track 5"] {
+            assert!(matches!(Action::parse(text), Ok(Action::Track(5))), "{text}");
+        }
+        assert!(matches!(Action::parse("track n. gin labs"), Ok(Action::Track(11))));
+        assert!(Action::parse("track nowhere").unwrap_err().contains("Unknown track"));
+        assert!(Action::parse("track").unwrap_err().starts_with("Usage"));
     }
 
     #[test]

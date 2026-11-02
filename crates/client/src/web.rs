@@ -86,6 +86,13 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrTakeDropped)]
     fn take_dropped_files() -> js_sys::Array;
 
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeTrackPictures)]
+    fn take_saved_track_pictures() -> js_sys::Array;
+
+    /// Keeps the picture of a map we took, under `key`.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSaveTrackPicture)]
+    pub fn save_track_picture(key: &str, bytes: &[u8]);
+
     /// Tells the page that the game has crashed, with what the panic said.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCrashed)]
     pub fn crashed(message: &str);
@@ -94,6 +101,14 @@ extern "C" {
 /// The files of the maps the page keeps.
 pub fn take_maps() -> Vec<Vec<u8>> {
     take_saved_maps()
+        .iter()
+        .map(|bytes| bytes.unchecked_into::<js_sys::Uint8Array>().to_vec())
+        .collect()
+}
+
+/// The pictures of the maps the page keeps.
+pub fn take_track_pictures() -> Vec<Vec<u8>> {
+    take_saved_track_pictures()
         .iter()
         .map(|bytes| bytes.unchecked_into::<js_sys::Uint8Array>().to_vec())
         .collect()

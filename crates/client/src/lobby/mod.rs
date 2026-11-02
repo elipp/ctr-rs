@@ -44,7 +44,7 @@ use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
 use report::report;
 
-mod commands;
+pub(crate) mod commands;
 mod countdown;
 pub(crate) mod cup;
 mod hud;

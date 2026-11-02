@@ -4,7 +4,7 @@
 mod common;
 
 use loader::dram::DramFile;
-use loader::icons::{parse_groups, parse_icons};
+use loader::icons::{parse_groups, parse_icons, parse_level_icons};
 use loader::model::Model;
 use loader::source::{Check, Need, Source};
 use loader::vram::parse_vram_file;
@@ -36,7 +36,11 @@ fn every_need_loads_without_the_disc() {
                 parse_icons(&dram).unwrap_or_else(|e| panic!("{key}: {e}"));
                 parse_groups(&dram).unwrap_or_else(|e| panic!("{key}: {e}"));
             }
-            Need::SharedVram => {
+            Need::MenuLev => {
+                let dram = DramFile::parse(&bytes).unwrap_or_else(|e| panic!("{key}: {e}"));
+                parse_level_icons(&dram).unwrap_or_else(|e| panic!("{key}: {e}"));
+            }
+            Need::SharedVram | Need::MenuVram => {
                 let images = parse_vram_file(&bytes).unwrap_or_else(|e| panic!("{key}: {e}"));
                 assert!(!images.is_empty(), "{key} has no images");
             }

@@ -13,6 +13,8 @@
 //! racer/03        the model of character 3 (BIGFILE.BIG, RACER_MODEL_HI)
 //! pack/03         its pack: icons, fonts and the shared models (ARCADE_1P_PACK)
 //! shared.vrm      the texture pages every track shares (SHARED_MPK_VRM)
+//! menu.lev        the main menu's level, for its icons of the tracks (MAIN_MENU_FILE)
+//! menu.vrm        its texture pages
 //! KART.HWL        SOUNDS/KART.HWL, as on the disc
 //! ENG.XNF         XA/ENG.XNF, as on the disc
 //! xa/music/006    one XA track: the sectors of it, as `xa::read_track` makes them
@@ -30,12 +32,13 @@ use std::path::{Path, PathBuf};
 use hadris_iso::read::IsoImage;
 
 use crate::bigfile::BigFile;
-use crate::bigindex::BigIndex;
+use crate::bigindex::{BigIndex, LevFile, Lod};
 use crate::disc::{
     Disc, FileDisc, RawSectorReader, USER_DATA_SIZE, find, find_sized, invalid, mount,
     open_bigfile, open_file, write_atomically,
 };
 use crate::howl::Howl;
+use crate::level::LevelId;
 use crate::xa::{Category, Xnf, read_track};
 
 /// The version of the layout of the folder: the names and contents of the files. A folder of
@@ -70,6 +73,10 @@ pub enum Need {
     Pack(u32),
     /// The texture pages that every track shares.
     SharedVram,
+    /// The level of the main menu, whose icons have the pictures of the tracks.
+    MenuLev,
+    /// Its texture pages.
+    MenuVram,
     /// `SOUNDS/KART.HWL`: the sound effects, engines and songs.
     Howl,
     /// `XA/ENG.XNF`: where the XA tracks are.
@@ -85,6 +92,8 @@ impl Need {
             Need::Racer(c) => format!("racer/{c:02}"),
             Need::Pack(c) => format!("pack/{c:02}"),
             Need::SharedVram => "shared.vrm".into(),
+            Need::MenuLev => "menu.lev".into(),
+            Need::MenuVram => "menu.vrm".into(),
             Need::Howl => "KART.HWL".into(),
             Need::Xnf => "ENG.XNF".into(),
             Need::Xa(category, id) => {
@@ -100,7 +109,13 @@ impl Need {
 
     /// Every need there is, given the index of the XA (which is itself [`Need::Xnf`]).
     pub fn all(xnf: &Xnf) -> Vec<Need> {
-        let mut all = vec![Need::Xnf, Need::Howl, Need::SharedVram];
+        let mut all = vec![
+            Need::Xnf,
+            Need::Howl,
+            Need::SharedVram,
+            Need::MenuLev,
+            Need::MenuVram,
+        ];
         all.extend((0..CHARACTERS).map(Need::Racer));
         all.extend((0..CHARACTERS).map(Need::Pack));
         for category in Category::ALL {
@@ -228,7 +243,7 @@ impl Source {
             _ => Ok(()),
         };
         gone(std::fs::remove_file(self.dir.join(MANIFEST)))?;
-        for file in ["shared.vrm", "KART.HWL", "ENG.XNF"] {
+        for file in ["shared.vrm", "menu.lev", "menu.vrm", "KART.HWL", "ENG.XNF"] {
             gone(std::fs::remove_file(self.dir.join(file)))?;
         }
         for dir in ["racer", "pack", "xa"] {
@@ -377,6 +392,7 @@ impl Image {
 
     fn extract(&mut self, need: Need, xnf: &Xnf) -> io::Result<Vec<u8>> {
         let entry = |group: BigIndex, n: u32| group.nth(n).get();
+        let menu = |file| BigIndex::level(LevelId::MAIN_MENU_LEVEL, Lod::OnePlayer, file).get();
         match need {
             Need::Racer(c) => self
                 .big
@@ -387,6 +403,8 @@ impl Image {
             Need::SharedVram => self
                 .big
                 .read(&mut self.disc, BigIndex::SHARED_MPK_VRM.get()),
+            Need::MenuLev => self.big.read(&mut self.disc, menu(LevFile::Lev)),
+            Need::MenuVram => self.big.read(&mut self.disc, menu(LevFile::Vram)),
             Need::Howl => self.file("SOUNDS/KART.HWL"),
             Need::Xnf => self.file("XA/ENG.XNF"),
             Need::Xa(category, id) => {
@@ -445,7 +463,7 @@ mod tests {
     fn every_need_has_its_own_key() {
         let all = Need::all(&xnf());
         // The track that spans no sector is not one.
-        assert_eq!(all.len(), 3 + 2 * CHARACTERS as usize + 2);
+        assert_eq!(all.len(), 5 + 2 * CHARACTERS as usize + 2);
         let mut keys: Vec<String> = all.iter().map(|n| n.key()).collect();
         keys.sort();
         keys.dedup();

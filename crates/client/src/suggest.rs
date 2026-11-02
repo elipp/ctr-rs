@@ -70,12 +70,20 @@ fn after_the_line(line: &str, name: &str) -> String {
     }
 }
 
-/// A name the command line offers in grey, and whose portrait goes with it.
+/// What goes with a name the command line offers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum OfferPicture {
+    /// The portrait of a character (`CHARACTERS` order).
+    Portrait(usize),
+    /// The picture of a track, a `LevelId`.
+    Track(u32),
+}
+
+/// A name the command line offers in grey.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Offer<'a> {
     pub name: &'a str,
-    /// In `CHARACTERS` order.
-    pub character: usize,
+    pub picture: OfferPicture,
 }
 
 /// The characters, as what `/character` offers.
@@ -83,7 +91,10 @@ pub(crate) fn characters() -> impl Iterator<Item = Offer<'static>> {
     CHARACTERS
         .iter()
         .enumerate()
-        .map(|(character, name)| Offer { name, character })
+        .map(|(character, name)| Offer {
+            name,
+            picture: OfferPicture::Portrait(character),
+        })
 }
 
 /// What `line` has typed after `command`, if it is that command.
@@ -229,6 +240,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
         "Make a player the host (the host only): type a name, or keep the grey one (Up, Down: another)",
         "<player>",
     ),
+    Spec {
+        name: "track",
+        about: "The track to be on (in a lobby, until a race goes to the host's): type a name, or keep the grey one (Up, Down: another)",
+        options: &[leaf("list", "Print them with their numbers")],
+        arg: Some("[type a name]"),
+    },
     takes(
         "character",
         "Who to drive: type a name, or keep the grey one (Up, Down: another)",
@@ -343,11 +360,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ],
             ),
         ],
-    ),
-    node(
-        "track",
-        "The tracks there are",
-        &[leaf("list", "Print them with their numbers")],
     ),
     node(
         "cache",
@@ -558,11 +570,11 @@ mod tests {
                 "race",
                 "cup",
                 "promote",
+                "track",
                 "character",
                 "config",
                 "version",
                 "net",
-                "track",
                 "cache",
                 "debug"
             ]
@@ -633,7 +645,10 @@ mod tests {
 
     #[test]
     fn a_players_name_is_any_text() {
-        let offer = |name| Offer { name, character: 0 };
+        let offer = |name| Offer {
+            name,
+            picture: OfferPicture::Portrait(0),
+        };
         let players = [offer("Äijä"), offer("Bobby"), offer("Bob"), offer("Bob")];
         let found = |typed| matching(typed, players.iter().copied());
         // (Part of a character of more than a byte is no prefix.)

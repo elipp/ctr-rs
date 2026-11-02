@@ -35,18 +35,28 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
 #[derive(Resource, Default)]
 pub(crate) struct LevelBeforeRace(pub(crate) Option<u32>);
 
-/// The character `/character` asked for, until [`switch_level`] has switched to it.
+/// What `/character` and `/track` asked for, until [`switch_level`] has switched to it.
 #[derive(Resource, Default)]
-pub(crate) struct PickedRacer(Option<u32>);
+pub(crate) struct Picked {
+    racer: Option<u32>,
+    track: Option<u32>,
+}
 
-/// Keeps what `/character` asks for, for [`switch_level`].
-pub(crate) fn pick_racer(
+/// Keeps what `/character` and `/track` ask for, for [`switch_level`].
+pub(crate) fn keep_picks(
     mut actions: MessageReader<command::Action>,
-    mut picked: ResMut<PickedRacer>,
+    lobby: Res<lobby::Lobby>,
+    mut picked: ResMut<Picked>,
 ) {
     for action in actions.read() {
-        if let command::Action::Character(character) = action {
-            picked.0 = Some(*character);
+        // (The lobby refuses it, and says so.)
+        if lobby::commands::refusal(action, &lobby).is_some() {
+            continue;
+        }
+        match action {
+            command::Action::Character(character) => picked.racer = Some(*character),
+            command::Action::Track(track) => picked.track = Some(*track),
+            _ => {}
         }
     }
 }
@@ -89,6 +99,13 @@ pub(crate) fn switch_level(world: &mut World) {
     let mut before = world
         .remove_resource::<LevelBeforeRace>()
         .unwrap_or_default();
+    let picked = std::mem::take(&mut *world.resource_mut::<Picked>());
+    // (A race that has started since it was asked for goes first.)
+    let picked_track = picked.track.filter(|_| race_track.is_none());
+    if picked_track.is_some() {
+        // A track of our choosing is where we stay when we leave the lobby.
+        before.0 = None;
+    }
     let in_lobby = world
         .get_resource::<lobby::Lobby>()
         .is_some_and(|lobby| lobby.is_open());
@@ -111,15 +128,14 @@ pub(crate) fn switch_level(world: &mut World) {
         (level_step, racer_step) = (0, 0);
     }
     let mut options = *world.resource::<Options>();
-    // (In a race the lobby has already refused it.)
-    let picked = world.resource_mut::<PickedRacer>().0.take();
-    if let Some(picked) = picked.filter(|_| race_track.is_none()) {
-        racer_step = picked as i32 - options.racer as i32;
+    if let Some(racer) = picked.racer.filter(|_| race_track.is_none()) {
+        racer_step = racer as i32 - options.racer as i32;
     }
     let current = world.resource::<LevelNumber>().0;
     let wanted = race_track
         .filter(|&track| track != current && !missing)
-        .or(back.filter(|&track| track != current));
+        .or(back.filter(|&track| track != current))
+        .or(picked_track.filter(|&track| track != current));
     if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }

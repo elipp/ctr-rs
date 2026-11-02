@@ -40,7 +40,7 @@ pub(super) fn copy_to_clipboard(text: String) {
 }
 
 /// Why `action` cannot be done now, if it cannot.
-pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
+pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
     Some(match action {
         Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
             if lobby.is_open() =>
@@ -61,6 +61,8 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             net::NOT_NOW
         }
         Action::PurgeCache | Action::Character(_) if lobby.online.is_some() => net::NOT_NOW,
+        // (A host's countdown is to the track it is on.)
+        Action::Track(_) if lobby.online.is_some() || lobby.countdown.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::Say(_) if !lobby.is_open() => "Not in a lobby to talk to (/lobby create)",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
@@ -271,6 +273,7 @@ pub(super) fn run(
             | Action::DebugFx(_)
             | Action::SetConfig(_)
             | Action::Character(_)
+            | Action::Track(_)
             | Action::Version => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.

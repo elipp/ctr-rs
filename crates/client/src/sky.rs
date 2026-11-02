@@ -43,6 +43,34 @@ pub fn spawn(
     clear: Option<[u8; 3]>,
     mut projection: PerspectiveProjection,
 ) {
+    let Some(radius) = spawn_dome(commands, meshes, materials, sky, SKY_LAYER, None) else {
+        return;
+    };
+    let [r, g, b] = clear.unwrap_or_default();
+    projection.far = projection.far.max(radius * 2.0);
+    commands.spawn((
+        SkyCamera,
+        Camera3d::default(),
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::srgb_u8(r, g, b)),
+            ..default()
+        },
+        Projection::Perspective(projection),
+        Transform::default(),
+        RenderLayers::layer(SKY_LAYER),
+    ));
+}
+
+/// Spawns the sky mesh, in `layer`. Returns how far it reaches; none if it has nothing to draw.
+pub fn spawn_dome(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    sky: &Skybox,
+    layer: usize,
+    parent: Option<Entity>,
+) -> Option<f32> {
     let mut positions = Vec::new();
     let mut colors = Vec::new();
     let mut radius = 0.0f32;
@@ -60,7 +88,7 @@ pub fn spawn(
         }
     }
     if positions.is_empty() {
-        return;
+        return None;
     }
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -70,7 +98,7 @@ pub fn spawn(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
-    commands.spawn((
+    let mut dome = commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
@@ -80,22 +108,12 @@ pub fn spawn(
             double_sided: true,
             ..default()
         })),
-        RenderLayers::layer(SKY_LAYER),
+        RenderLayers::layer(layer),
     ));
-    let [r, g, b] = clear.unwrap_or_default();
-    projection.far = projection.far.max(radius * 2.0);
-    commands.spawn((
-        SkyCamera,
-        Camera3d::default(),
-        Camera {
-            order: -1,
-            clear_color: ClearColorConfig::Custom(Color::srgb_u8(r, g, b)),
-            ..default()
-        },
-        Projection::Perspective(projection),
-        Transform::default(),
-        RenderLayers::layer(SKY_LAYER),
-    ));
+    if let Some(parent) = parent {
+        dome.insert(ChildOf(parent));
+    }
+    Some(radius)
 }
 
 fn follow(
