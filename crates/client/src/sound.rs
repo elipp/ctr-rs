@@ -694,6 +694,15 @@ fn objects(
         };
         (p.id, Sound3D { id, pos: p.pos })
     });
+    // A warpball's hum stops when it starts to fade.
+    let warpballs = race.weapons.warpballs().iter().filter(|w| !w.fading).map(|w| {
+        let sound = Sound3D {
+            id: weapon::warpball::LOOP_SOUND,
+            pos: w.pos,
+        };
+        (w.id, sound)
+    });
+    let flying = flying.chain(warpballs);
     keep_loops(sounds, &mut kept.weapon_loops, flying, ear, echo);
 }
 

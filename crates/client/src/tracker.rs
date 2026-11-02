@@ -6,8 +6,8 @@
 //! interpolated place ([`show`]), by a camera of its own over the picture, an orthographic one
 //! whose world unit is a pixel of the window.
 //!
-//! Not here: the beep (`UI_TRACKER_BEEP_SFX`), and the electric ball (the warpball is not in the
-//! sim), whose brackets are blue.
+//! Not here: the beep (`UI_TRACKER_BEEP_SFX`), and the warning for a warpball, whose brackets are
+//! blue and which counts its distance along the track (`UI_TRACKER_TYPE_WARPBALL`).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};

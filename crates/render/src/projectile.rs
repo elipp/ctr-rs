@@ -5,7 +5,8 @@
 //! crates, which go off in the break-up of a crate (`crate_explosion`, tinted red or green) with a
 //! red or green shockwave (`RB_Blowup_Init`). The potions are the red and green beakers
 //! (`beakerred`, `beakergreen`, which loop their `bubble` animation), which shatter in the same
-//! shockwaves. The shield bomb is the shield's own model. Every racer's pack has them. Where the weapons are is
+//! shockwaves. The shield bomb is the shield's own model, and the warpball is `warpball`. Every
+//! racer's pack has them (the warpball is looked for, but not required). Where the weapons are is
 //! `weapon`'s; the entities are `view`'s.
 
 use std::io;
@@ -32,6 +33,9 @@ pub const WAKE: i16 = 0x43;
 
 /// `STATIC_CLOUD`: the red beaker's rain cloud, which loops its `billow` animation.
 pub const CLOUD: i16 = 0x42;
+
+/// `DYNAMIC_WARPBALL`, which loops its animation.
+pub const WARPBALL: i16 = 0x36;
 
 /// `STATIC_BEAKER_RED`, `STATIC_BEAKER_GREEN`
 pub const BEAKER_RED: i16 = 0x46;
@@ -62,6 +66,8 @@ pub struct Models {
     pub shield_blue: Model,
     pub shield_green: Model,
     pub cloud: Model,
+    /// The warpball, if the pack has it.
+    pub warpball: Option<Model>,
 }
 
 /// The weapons' models of a racer's pack.
@@ -90,6 +96,7 @@ pub fn models(pack: &DramFile) -> io::Result<Models> {
         shield_blue: take(crate::shield::BLUE)?,
         shield_green: take(crate::shield::GREEN)?,
         cloud: take(CLOUD)?,
+        warpball: take(WARPBALL).ok(),
     })
 }
 

@@ -4,7 +4,8 @@
 //!
 //! A bomb rolls along; a missile loops its `thrust` animation; a TNT or Nitro crate is the crate
 //! model, which grows where it was dropped and squashes and stretches on a head; a beaker bubbles
-//! where it lies, and is flown as it is when thrown. When a bomb or a
+//! where it lies, and is flown as it is when thrown. A warpball loops its animation, upright, and
+//! rises, squashes and shrinks as it fades. When a bomb or a
 //! missile goes off (`RB_Burst_Init`) three models are born under it, all turned to the camera: two
 //! copies of the burst, one turned a quarter on the screen, and a shockwave ring. When a mine does
 //! (`RB_Blowup_Init`) it is the break-up of a crate, tinted, and a shockwave of the same colour,
@@ -12,7 +13,7 @@
 //! A beaker that shatters (`RB_Explosion_InitPotion`) is the red or green shockwave, half size.
 //! Each plays its animation a frame a tick and is gone at the end of it.
 //!
-//! Not shown: the missile's exhaust, the afterimage that follows a dropped mine, and (in split screen, which there is none of) the
+//! Not shown: the missile's exhaust, the warpball's glow and reflection, the afterimage that follows a dropped mine, and (in split screen, which there is none of) the
 //! smaller burst.
 
 use ::weapon::Kind;
@@ -37,6 +38,8 @@ use crate::{DEPTH_BIAS_PER_ORDER, KART_LAYER, Textures, spawn_parts};
 pub struct ProjectileModels {
     models: Models,
     built: Option<[Built; 13]>,
+    /// The warpball, built with the others (`None` if the pack has none).
+    warpball: Option<Built>,
     /// The level's wake, if it has one (`None`: not looked for yet).
     wake: Option<Option<Built>>,
 }
@@ -46,6 +49,7 @@ impl ProjectileModels {
         ProjectileModels {
             models,
             built: None,
+            warpball: None,
             wake: None,
         }
     }
@@ -75,6 +79,7 @@ const SHIELD_BLUE: usize = 10;
 const SHIELD_GREEN: usize = 11;
 const CLOUD: usize = 12;
 const WAKE: usize = 13;
+const WARPBALL: usize = 14;
 
 /// A shield bomb's `scale` and `alphaScale` (0x400 each, `RB_ShieldDark_ThTick_Grow`): 0x1000 is
 /// the model's size, and an alpha at which it is gone.
@@ -356,7 +361,22 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
                 layer: if slot == sim.own { KART_LAYER } else { 0 },
             }
         });
+    // A warpball keeps its upright matrix, and shrinks and stretches as it fades.
+    let warpballs = sim.race.weapons.warpballs().iter().map(|w| Wanted {
+        id: w.id,
+        model: WARPBALL,
+        placed: Placed {
+            translation: world(w.pos),
+            rotation: Quat::IDENTITY,
+            scale: Vec3::new(w.scale[0] as f32, w.scale[1] as f32, w.scale[2] as f32) / 4096.0,
+        },
+        animated: true,
+        billboard: false,
+        color: Color::WHITE,
+        layer: 0,
+    });
     projectiles
+        .chain(warpballs)
         .chain(mines)
         .chain(clouds)
         .chain(wakes)
@@ -420,6 +440,11 @@ pub fn tick(
             return;
         };
         models.built = built.try_into().ok();
+        models.warpball = models
+            .models
+            .warpball
+            .clone()
+            .and_then(|m| build(&m, false, &textures, &mut images));
     }
     // The wake is the level's own, and not every level has one (retail births none then).
     if track.is_changed() {
@@ -562,6 +587,11 @@ pub fn tick(
                 continue;
             };
             wake
+        } else if w.model == WARPBALL {
+            let Some(warpball) = models.warpball.as_ref() else {
+                continue;
+            };
+            warpball
         } else {
             &built[w.model]
         };

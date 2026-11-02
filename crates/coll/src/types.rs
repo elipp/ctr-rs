@@ -80,6 +80,8 @@ pub mod model_id {
     /// `DYNAMIC_SHIELD` (the blue shield bomb) and `DYNAMIC_SHIELD_GREEN`
     pub const SHIELD: i16 = 0x56;
     pub const SHIELD_GREEN: i16 = 0x5e;
+    /// `DYNAMIC_WARPBALL`
+    pub const WARPBALL: i16 = 0x36;
 }
 
 /// `COLL_MOVED_PLAYER_HIT_RADIUS`

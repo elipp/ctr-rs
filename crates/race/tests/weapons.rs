@@ -854,3 +854,61 @@ fn a_seal_with_a_kart_in_reach_leaves_the_mine_be() {
     assert!(race.last_weapons.hits.is_empty());
     assert!(race.weapons.mines().iter().all(|m| !m.is_dead()));
 }
+
+#[test]
+fn a_warpball_chases_the_leader_hurts_it_and_fades_away() {
+    let Some((level, mut race)) = race(2) else {
+        return;
+    };
+    race.tick(&level, &pads(0, 2, &[]));
+    let shooter = race
+        .karts
+        .iter()
+        .position(|k| k.driver.driver_rank == 1)
+        .unwrap();
+    let leader = 1 - shooter;
+    race.karts[shooter].driver.held_item_id = held::WARPBALL;
+    race.weapons.warpball_held = true;
+    // Everyone drives straight; the kart in second fires on tick 1.
+    let pads = |tick: u32| -> Vec<Pad> {
+        (0..2)
+            .map(|slot| Pad {
+                held: buttons::CROSS
+                    | if slot == shooter && tick == 1 {
+                        buttons::CIRCLE
+                    } else {
+                        0
+                    },
+                ..Pad::default()
+            })
+            .collect()
+    };
+    let mut hit = None;
+    for tick in 1..400 {
+        race.tick(&level, &pads(tick));
+        if tick == 2 {
+            let balls = race.weapons.warpballs();
+            assert_eq!(balls.len(), 1, "fires on the next tick");
+            assert_eq!((balls[0].parent, balls[0].target), (shooter, Some(leader)));
+        }
+        let hits_leader = race
+            .last_weapons
+            .hits
+            .iter()
+            .any(|h| h.victim == leader && h.reason == weapon::Reason::Warpball);
+        if hits_leader {
+            hit = Some(tick);
+            break;
+        }
+    }
+    let hit = hit.expect("the warpball reached the leader");
+    // It ended on the leader, and fades for six ticks; then the roulette may give one again.
+    assert!(race.weapons.warpballs()[0].fading);
+    for tick in hit + 1..hit + 7 {
+        assert!(race.weapons.warpball_held);
+        race.tick(&level, &pads(tick));
+    }
+    assert!(race.weapons.warpballs().is_empty());
+    assert!(!race.weapons.warpball_held);
+    assert_eq!(race.karts[shooter].driver.kart_state, kart_state::NORMAL);
+}

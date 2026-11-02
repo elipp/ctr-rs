@@ -14,7 +14,9 @@
 //! A weapon breaks the fruit and weapon crates it passes through, and so does its blast
 //! ([`Tick::crate_hits`], for the objects to deal with). The Tiger Temple door opens when a weapon
 //! or a blast reaches it ([`Tick::opened_doors`]), and stops the weapons while it is shut. Not
-//! ported: the warpball it would meet, the thrown TNT a missile would be drawn away by. The sounds are their listener's to play: each projectile's loop in flight, and each
+//! ported: the thrown TNT a missile would be drawn away by.
+//!
+//! The warpball is in [`warpball`]: it flies by the track's path, and a bomb passes through it. The sounds are their listener's to play: each projectile's loop in flight, and each
 //! explosion's. How the aim differs is in [`aim`].
 //!
 //! The projectiles keep what the sim needs. Their matrices (`inst->matrix`) are for drawing:
@@ -23,6 +25,7 @@
 
 pub mod aim;
 pub mod mine;
+pub mod warpball;
 
 use coll::doors::{Doors, TEETH_MODEL};
 use coll::instance::instances_in_reach;
@@ -92,6 +95,9 @@ pub mod flags {
     pub const BOMB_BACKWARD: u16 = 0x20;
     /// A shield bomb of a juiced (blue) shield. (Retail tells it by the model.)
     pub const BLUE_SHIELD: u16 = 0x8000;
+    /// A bomb its kart can no longer set off: a warpball of the kart's ended, which clears the
+    /// kart's `instBombThrow`. (Retail keeps it in the driver.)
+    pub const UNLINKED: u16 = 0x4000;
 }
 
 /// `VEH_PICK_REASON_*`: what a hit was.
@@ -105,6 +111,8 @@ pub enum Reason {
     Missile = 3,
     /// A potion that was thrown a moment ago.
     Potion = 4,
+    /// A warpball. (Retail passes 0, as for the TNT.)
+    Warpball = 5,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +165,15 @@ pub struct Body {
     /// The Aku Aku mask or invincibility absorbs a hit (`VehPickState_NewState` is false for it).
     pub immune: bool,
     pub character: u8,
+    /// `driverRank`
+    pub rank: i16,
+    /// `ACTION_RACE_FINISHED`
+    pub finished: bool,
+    /// `distanceToFinish_curr`
+    pub distance_to_finish: u32,
+    /// `checkpoint.currentIndex` and `checkpoint.branchChoiceIndex`
+    pub checkpoint: u8,
+    pub branch_choice: u8,
 }
 
 impl Body {
@@ -177,6 +194,11 @@ impl Body {
                 || d.invincible_timer != 0
                 || d.shield.is_some_and(|s| s.holding),
             character: d.character,
+            rank: d.driver_rank,
+            finished: d.actions_flag_set & actions::RACE_FINISHED != 0,
+            distance_to_finish: d.distance_to_finish_curr,
+            checkpoint: d.checkpoint_current_index,
+            branch_choice: d.checkpoint_branch_choice_index,
         }
     }
 }
@@ -319,6 +341,10 @@ pub struct Tick {
 pub struct Weapons {
     projectiles: Vec<Projectile>,
     mines: Vec<mine::Mine>,
+    warpballs: Vec<warpball::Warpball>,
+    /// `WARPBALL_HELD`: a kart was given the warpball, and it has not faded away since. The
+    /// roulette gives three missiles instead of a second one.
+    pub warpball_held: bool,
     /// What happened outside a tick (a mine dropped into something goes off at once), which the
     /// next one tells.
     pending: Tick,
@@ -353,7 +379,17 @@ impl Weapons {
     pub fn has_bomb(&self, slot: usize) -> bool {
         self.projectiles
             .iter()
-            .any(|p| p.kind == Kind::Bomb && p.parent == slot && !p.dead)
+            .any(|p| p.kind == Kind::Bomb && p.parent == slot && !p.dead && p.flags & flags::UNLINKED == 0)
+    }
+
+    /// `driverParent->instBombThrow = NULL` of a warpball that ended: the bombs `slot` threw fly
+    /// on, but the fire button no longer sets them off.
+    fn unlink_bombs(&mut self, slot: usize) {
+        for p in &mut self.projectiles {
+            if p.kind == Kind::Bomb && p.parent == slot {
+                p.flags |= flags::UNLINKED;
+            }
+        }
     }
 
     /// `VehPickupItem_ShootNow` for the bomb and the missile: kart `shooter` (`driver`) fires one,
@@ -463,7 +499,7 @@ impl Weapons {
     /// this tick's flight.
     pub fn detonate(&mut self, slot: usize) {
         for p in &mut self.projectiles {
-            if p.kind == Kind::Bomb && p.parent == slot {
+            if p.kind == Kind::Bomb && p.parent == slot && p.flags & flags::UNLINKED == 0 {
                 p.flags |= flags::DETONATE;
             }
         }
@@ -505,6 +541,7 @@ impl Weapons {
                 bodies,
                 &self.projectiles,
                 &self.mines,
+                &self.warpballs,
                 elapsed_ms,
                 doors,
                 &mut tick,
@@ -526,6 +563,7 @@ impl Weapons {
             self.projectiles[i] = p;
         }
         self.projectiles.retain(|p| !p.dead);
+        self.tick_warpballs(level, bodies, elapsed_ms, doors, &mut coll, &mut tick);
         tick
     }
 
@@ -660,16 +698,28 @@ impl Step {
 /// ground plane and not too far above or below it. Karts held by the mask do not count, nor does
 /// the kart that fired it while the weapon is new.
 fn collide_with_drivers(p: &Projectile, bodies: &[Body]) -> Option<usize> {
+    collide_with_drivers_in(p.pos, p.parent, p.parent_safety, bodies, HIT_RADIUS)
+}
+
+/// `RB_Hazard_CollideWithDrivers` for a weapon at `pos` that reaches `radius` (a squared flat
+/// distance), fired by `parent` `parent_safety` ticks ago.
+fn collide_with_drivers_in(
+    pos: [i32; 3],
+    parent: usize,
+    parent_safety: i16,
+    bodies: &[Body],
+    radius: u32,
+) -> Option<usize> {
     bodies.iter().enumerate().position(|(slot, body)| {
-        if body.mask_grabbed || (p.parent_safety != 0 && slot == p.parent) {
+        if body.mask_grabbed || (parent_safety != 0 && slot == parent) {
             return false;
         }
-        let [dx, dy, dz] = std::array::from_fn(|a| body.at[a].wrapping_sub(p.pos[a]));
+        let [dx, dy, dz] = std::array::from_fn(|a| body.at[a].wrapping_sub(pos[a]));
         let flat = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32;
-        if flat >= HIT_RADIUS {
+        if flat >= radius {
             return false;
         }
-        dy.wrapping_mul(dy) < (HIT_RADIUS << 2) as i32
+        dy.wrapping_mul(dy) < (radius << 2) as i32
     })
 }
 
@@ -682,6 +732,7 @@ fn fly(
     bodies: &[Body],
     all: &[Projectile],
     mines: &[mine::Mine],
+    warpballs: &[warpball::Warpball],
     elapsed_ms: i32,
     doors: &Doors,
     tick: &mut Tick,
@@ -860,6 +911,24 @@ fn fly(
             return Step {
                 explodes: true,
                 missiles_hit: vec![missile],
+                mines_hit: Vec::new(),
+                driver_hit: None,
+            };
+        }
+        // A warpball it reaches it passes through, and that is the end of its tick: it is not
+        // set off, and its safety does not run down.
+        let warpball = warpballs.iter().any(|w| {
+            let [dx, dy, dz] = std::array::from_fn(|a| w.pos[a].wrapping_sub(p.pos[a]));
+            let distance = dx
+                .wrapping_mul(dx)
+                .wrapping_add(dz.wrapping_mul(dz))
+                .wrapping_add(dy.wrapping_mul(dy)) as u32;
+            distance < HIT_RADIUS
+        });
+        if warpball {
+            return Step {
+                explodes: false,
+                missiles_hit: Vec::new(),
                 mines_hit: Vec::new(),
                 driver_hit: None,
             };

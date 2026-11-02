@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 2;
+pub const SIM_VERSION: u32 = 3;
 
 const UNSORTED: i16 = -1;
 
@@ -192,7 +192,7 @@ pub struct Race {
     /// What the objects did in the last tick: where the hazards look for drivers, and the sparks
     /// of the fireballs.
     pub last: instance::Tick,
-    /// The bombs and missiles in flight.
+    /// The bombs, missiles, warpballs and mines in play.
     pub weapons: Weapons,
     /// What they did in the last tick: the explosions, for the outside to show.
     pub last_weapons: weapon::Tick,
@@ -396,6 +396,13 @@ impl Race {
         let kind = match launch {
             Launch::Bomb => weapon::Kind::Bomb,
             Launch::Missile => weapon::Kind::Missile,
+            Launch::Warpball => {
+                self.weapons
+                    .launch_warpball(slot, &kart.driver, aim.bodies, aim.level);
+                let at = self.weapons.warpballs().last().map_or(kart_at, |w| w.pos);
+                vehicle::item::launch_effects(&kart.driver, launch, at, effects);
+                return;
+            }
             Launch::Mine | Launch::Potion => {
                 // A potion goes forward with Up held, backward with Down held (Up wins), and is
                 // dropped otherwise.
@@ -630,6 +637,7 @@ impl Race {
                 racers,
                 env.elapsed_time_ms,
                 &mut self.objects.random_number,
+                &mut self.weapons.warpball_held,
             );
         }
         for (slot, kart) in self.karts.iter_mut().enumerate() {
@@ -638,7 +646,12 @@ impl Race {
         }
         // The weapon roulettes that crates started run on, and pick.
         for kart in &mut self.karts {
-            vehicle::item::tick(&mut kart.driver, racers, &mut self.objects.random_number);
+            vehicle::item::tick(
+                &mut kart.driver,
+                racers,
+                &mut self.objects.random_number,
+                &mut self.weapons.warpball_held,
+            );
         }
         let mut ticks: Vec<KartTick> = self
             .karts

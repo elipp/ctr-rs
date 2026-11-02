@@ -1,9 +1,10 @@
 //! The weapon a driver holds (`heldItemID`) and the roulette that picks it: a weapon crate starts
 //! the roulette, which runs for [`ROLL_TICKS`] and then settles on an item.
 //!
-//! Firing is ported for the turbo, the mask, the shield, the bomb and the missile (which the `weapon` crate
-//! flies), TNT and the potion (which it drops, or throws), and the clock (which hurts every other
-//! driver, see [`clock`]): see [`Launch`]. The rest stay held until they are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
+//! Firing is ported for the turbo, the mask, the shield, the bomb, the missile and the warpball
+//! (which the `weapon` crate flies), TNT and the potion (which it drops, or throws), and the clock
+//! (which hurts every other driver, see [`clock`]): see [`Launch`]. The rest stay held until they
+//! are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
 //! place (`MixRNG_Scramble() % 12`), not the item sets by place that retail rolls from.
 
 use crate::fire::{self, turbo_type};
@@ -50,9 +51,8 @@ const WUMPA_JUICED_COUNT: i8 = 10;
 /// `HELD_ITEM_STACK_COUNT`: what a triple bomb or missile holds.
 const STACK_COUNT: u8 = 3;
 
-/// The items that can be had: the warpball (the electric ball) is left out until it exists in the
-/// sim, and so is the spring, which the roulette never gives.
-pub const ENABLED: [u8; 10] = [
+/// The items that can be had: all but the spring, which the roulette never gives.
+pub const ENABLED: [u8; 11] = [
     held::TURBO,
     held::BOMB_1X,
     held::MISSILE_1X,
@@ -61,6 +61,7 @@ pub const ENABLED: [u8; 10] = [
     held::SHIELD,
     held::MASK,
     held::CLOCK,
+    held::WARPBALL,
     held::BOMB_3X,
     held::MISSILE_3X,
 ];
@@ -163,8 +164,8 @@ pub fn start_roulette(d: &mut Driver) {
 }
 
 /// The roulette, one game tick (`VehPhysProc`'s item roll): it counts down and then picks.
-/// `random_number` is `sdata->randomNumber`.
-pub fn tick(d: &mut Driver, racers: usize, random_number: &mut i32) {
+/// `random_number` is `sdata->randomNumber`, `warpball_held` the race's `WARPBALL_HELD`.
+pub fn tick(d: &mut Driver, racers: usize, random_number: &mut i32, warpball_held: &mut bool) {
     if d.held_item_id != held::ROULETTE {
         return;
     }
@@ -172,7 +173,7 @@ pub fn tick(d: &mut Driver, racers: usize, random_number: &mut i32) {
         d.item_roll_timer -= 1;
         return;
     }
-    set_held_item(d, racers, random_number);
+    set_held_item(d, racers, random_number, warpball_held);
 }
 
 /// The weapons that can be fired so far. A driver that holds another one throws it away with the
@@ -190,6 +191,7 @@ pub fn fireable(item: u8) -> bool {
             | held::POTION
             | held::SHIELD
             | held::CLOCK
+            | held::WARPBALL
     )
 }
 
@@ -213,6 +215,9 @@ pub enum Launch {
     /// A green beaker, or a red one for a driver with 10 wumpa fruit: dropped, or thrown with
     /// Up or Down held.
     Potion,
+    /// The warpball, which flies along the track to the leader (or, with 10 wumpa fruit, to each
+    /// kart ahead in turn).
+    Warpball,
 }
 
 /// `SOUND_BOMB_LAUNCH`, `SOUND_MISSILE_LAUNCH`, `VOICELINE_BOMB_LAUNCH`, `VOICELINE_MISSILE_LAUNCH`,
@@ -221,6 +226,9 @@ const BOMB_SOUND: u8 = 0x47;
 const MISSILE_SOUND: u8 = 0x4a;
 /// `SOUND_MINE_DROP`, `VOICELINE_MINE_DROP`
 const MINE_SOUND: u8 = 0x52;
+/// `SOUND_WARPBALL`, `VOICELINE_WARPBALL`
+const WARPBALL_SOUND: u8 = 0x4d;
+const WARPBALL_VOICELINE: u8 = 0xc;
 const BOMB_VOICELINE: u8 = 10;
 const MISSILE_VOICELINE: u8 = 11;
 const MINE_VOICELINE: u8 = 0xf;
@@ -248,6 +256,7 @@ pub fn launch_effects(d: &Driver, launch: Launch, at: [i32; 3], effects: &mut Ve
         Launch::Bomb => (BOMB_SOUND, BOMB_VOICELINE),
         Launch::Missile => (MISSILE_SOUND, MISSILE_VOICELINE),
         Launch::Mine | Launch::Potion => (MINE_SOUND, MINE_VOICELINE),
+        Launch::Warpball => (WARPBALL_SOUND, WARPBALL_VOICELINE),
     };
     effects.push(Effect::Sound3D(Sound3D { id, pos: at }));
     effects.push(Effect::Voiceline {
@@ -344,6 +353,7 @@ fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<Fi
         held::MISSILE_1X | held::MISSILE_3X => Some(Launch::Missile),
         held::TNT => Some(Launch::Mine),
         held::POTION => Some(Launch::Potion),
+        held::WARPBALL => Some(Launch::Warpball),
         held::CLOCK => return Some(Fired::Clock),
         _ => None,
     };
@@ -446,13 +456,15 @@ pub fn debug_roll(d: &mut Driver, item: u8) {
 }
 
 /// `VehPhysGeneral_SetHeldItem` for the rain cloud, which picks the weapon when it ends.
-pub fn pick(d: &mut Driver, racers: usize, random_number: &mut i32) {
-    set_held_item(d, racers, random_number);
+pub fn pick(d: &mut Driver, racers: usize, random_number: &mut i32, warpball_held: &mut bool) {
+    set_held_item(d, racers, random_number, warpball_held);
 }
 
 /// `VehPhysGeneral_SetHeldItem` for a race of `racers`. (Battle and the crystal challenge are not
-/// here.)
-fn set_held_item(d: &mut Driver, racers: usize, random_number: &mut i32) {
+/// here.) Only one warpball is had at a time: while `warpball_held` (`WARPBALL_HELD`), another
+/// is three missiles instead, and the one given sets it (until it fades away, see
+/// `weapon::warpball`).
+fn set_held_item(d: &mut Driver, racers: usize, random_number: &mut i32, warpball_held: &mut bool) {
     let set = item_set(
         racers,
         d.driver_rank.max(0) as usize,
@@ -461,7 +473,14 @@ fn set_held_item(d: &mut Driver, racers: usize, random_number: &mut i32) {
     );
     // (`MixRNG_Scramble() >> 3) % 200`; the shift is of an unsigned word.)
     let rng = (math::mix_rng_scramble(random_number) as u32 >> RNG_SHIFT) % RNG_BUCKETS;
-    let item = draw(set, rng);
+    let mut item = draw(set, rng);
+    if item == held::WARPBALL {
+        if *warpball_held {
+            item = held::MISSILE_3X;
+        } else {
+            *warpball_held = true;
+        }
+    }
     give(d, item);
 }
 
@@ -495,10 +514,10 @@ mod tests {
         assert_eq!(d.held_item_id, held::ROULETTE);
         let mut rng = 1;
         for _ in 0..ROLL_TICKS {
-            tick(&mut d, 8, &mut rng);
+            tick(&mut d, 8, &mut rng, &mut false);
             assert_eq!(d.held_item_id, held::ROULETTE);
         }
-        tick(&mut d, 8, &mut rng);
+        tick(&mut d, 8, &mut rng, &mut false);
         assert!(d.held_item_id <= held::MISSILE_3X);
         assert_ne!(d.held_item_id, held::SPRING);
     }
@@ -661,7 +680,7 @@ mod tests {
         for seed in 0..200 {
             let mut d = driver();
             let mut rng = seed;
-            set_held_item(&mut d, 8, &mut rng);
+            set_held_item(&mut d, 8, &mut rng, &mut false);
             let triple = matches!(d.held_item_id, held::BOMB_3X | held::MISSILE_3X);
             assert_eq!(d.num_held_items, if triple { 3 } else { 0 });
         }
@@ -674,15 +693,48 @@ mod tests {
         assert_eq!(draw(0, 199), held::SHIELD);
         // Race 4 samples 19 entries: the first is a turbo.
         assert_eq!(draw(3, 0), held::TURBO);
-        // A warpball moves on to the next enabled entry, wrapping round: Race 3 ends 9, 9, 9, 7,
-        // 7, 7, 7, 7, 8, so a warpball goes on to a mask. The clock at the end is given.
-        assert_eq!(draw(2, 11 * 200 / 20), held::MASK);
+        // Race 3 ends 9, 9, 9, 7, 7, 7, 7, 7, 8: the warpballs, the masks and the clock.
+        assert_eq!(draw(2, 11 * 200 / 20), held::WARPBALL);
+        assert_eq!(draw(2, 14 * 200 / 20), held::MASK);
         assert_eq!(draw(2, 199), held::CLOCK);
         for set in 0..4 {
             for rng in 0..RNG_BUCKETS {
                 assert!(ENABLED.contains(&draw(set, rng)));
             }
         }
+    }
+
+    #[test]
+    fn a_second_warpball_is_three_missiles() {
+        // Race 4 is mostly warpballs: entry 4 of 19 is one.
+        let rng = (0..)
+            .find(|&seed| {
+                let mut r = seed;
+                (math::mix_rng_scramble(&mut r) as u32 >> RNG_SHIFT) % RNG_BUCKETS * 19 / RNG_BUCKETS
+                    == 4
+            })
+            .unwrap();
+        let roll = |held: &mut bool| {
+            let mut d = driver();
+            d.driver_rank = 7;
+            d.lap_index = 1;
+            let mut r = rng;
+            set_held_item(&mut d, 8, &mut r, held);
+            (d.held_item_id, d.num_held_items)
+        };
+        let mut held = false;
+        assert_eq!(roll(&mut held), (held::WARPBALL, 0));
+        assert!(held);
+        assert_eq!(roll(&mut held), (held::MISSILE_3X, STACK_COUNT));
+        // It is fired like the other weapons that fly.
+        let mut d = driver();
+        d.kart_state = kart_state::NORMAL;
+        d.held_item_id = held::WARPBALL;
+        d.actions_flag_set = request_fire(&mut d, true, 0);
+        assert_eq!(
+            shoot_on_circle_press(&mut d, &mut Vec::new()),
+            Some(Fired::Weapon(Launch::Warpball))
+        );
     }
 
     #[test]
