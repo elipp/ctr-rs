@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 const MAGIC: &[u8; 8] = b"CTRMAP\0\0";
 
 /// The version of the format: changes with the structs that are saved in it.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// zstd's level for a map file: it is made once and sent many times.
 const COMPRESSION: i32 = 19;
@@ -64,17 +64,30 @@ pub struct Audio {
     /// The track the map was made over (a `LevelId`): its song pack and reverb are the map's
     /// where it carries none.
     pub level: u32,
-    /// The song pack (`loader::howl::Cseq`) as it is in `KART.HWL`.
-    pub song_pack: Option<Vec<u8>>,
     /// The reverb mode (`howl::tables::REVERBS`).
     pub reverb: Option<u8>,
+    /// The music the patch gives: one for each song pack it changes, the one the track plays
+    /// first. A player can step through them; none is the game's own.
+    pub soundtracks: Vec<Soundtrack>,
+}
+
+/// One of a map's soundtracks: a song pack, and the samples it plays that the patch changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Soundtrack {
+    /// The number of the pack in `KART.HWL` that the patch changed (for telling them apart).
+    pub pack: u8,
+    /// The song pack (`loader::howl::Cseq`) as it is in `KART.HWL`.
+    pub song_pack: Vec<u8>,
     /// The ADPCM of samples that the patch changed and the pack plays, by sample number.
     pub samples: Vec<(u16, Vec<u8>)>,
 }
 
 /// What a song pack may take (`MAX_CSEQ_SIZE` of the game).
 const MAX_SONG_PACK: usize = 11 * 2048;
-/// How many samples a map may bring, how long each may be, and all together (the SPU has 512 KB).
+/// How many soundtracks a map may have.
+pub const MAX_SOUNDTRACKS: usize = 16;
+/// How many samples a soundtrack may bring, how long each may be, and all together (the SPU has
+/// 512 KB).
 const MAX_SAMPLES: usize = 64;
 const MAX_SAMPLE: usize = 256 << 10;
 const MAX_SAMPLE_BYTES: usize = 512 << 10;
@@ -83,27 +96,30 @@ impl Audio {
     /// Whether what came in a map file is what the sound engine can take: a map is whatever
     /// another player sent.
     fn check(&self) -> io::Result<()> {
-        if let Some(pack) = &self.song_pack {
-            if pack.len() > MAX_SONG_PACK {
-                return Err(invalid("the map's song pack is too big"));
+        if self.soundtracks.len() > MAX_SOUNDTRACKS {
+            return Err(invalid("the track has too many soundtracks"));
+        }
+        for track in &self.soundtracks {
+            if track.song_pack.len() > MAX_SONG_PACK {
+                return Err(invalid("the track's song pack is too big"));
             }
-            loader::howl::Cseq::parse(pack.clone())
-                .map_err(|e| invalid(format!("the map's song pack: {e}")))?;
+            loader::howl::Cseq::parse(track.song_pack.clone())
+                .map_err(|e| invalid(format!("the track's song pack: {e}")))?;
+            let samples = &track.samples;
+            if samples.len() > MAX_SAMPLES
+                || samples
+                    .iter()
+                    .any(|(_, s)| s.len() > MAX_SAMPLE || s.len() % 16 != 0)
+                || samples.iter().map(|(_, s)| s.len()).sum::<usize>() > MAX_SAMPLE_BYTES
+            {
+                return Err(invalid("the track's samples are too many or too big"));
+            }
         }
         if self
             .reverb
             .is_some_and(|r| r as usize >= howl::tables::REVERBS.len())
         {
-            return Err(invalid("the map's reverb is not one of the game's"));
-        }
-        if self.samples.len() > MAX_SAMPLES
-            || self
-                .samples
-                .iter()
-                .any(|(_, s)| s.len() > MAX_SAMPLE || s.len() % 16 != 0)
-            || self.samples.iter().map(|(_, s)| s.len()).sum::<usize>() > MAX_SAMPLE_BYTES
-        {
-            return Err(invalid("the map's samples are too many or too big"));
+            return Err(invalid("the track's reverb is not one of the game's"));
         }
         Ok(())
     }
@@ -122,7 +138,7 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 
 impl Map {
     fn encode(&self) -> io::Result<Vec<u8>> {
-        bitcode::serialize(self).map_err(|e| invalid(format!("saving the map: {e}")))
+        bitcode::serialize(self).map_err(|e| invalid(format!("saving the track: {e}")))
     }
 
     /// The number that names the map as a track (a `LevelId`): [`is_map_id`] is true of it, and
@@ -161,13 +177,13 @@ impl Map {
         let version = u32::from_le_bytes(*version);
         if version != VERSION {
             return Err(invalid(format!(
-                "the map is version {version}, this build reads version {VERSION}"
+                "the track file is version {version}, this build reads version {VERSION}"
             )));
         }
         let unpacked = zstd::bulk::decompress(rest, MAX_UNPACKED)
-            .map_err(|e| invalid(format!("unpacking the map: {e}")))?;
+            .map_err(|e| invalid(format!("unpacking the track: {e}")))?;
         let map: Map = bitcode::deserialize(&unpacked)
-            .map_err(|e| invalid(format!("reading the map: {e}")))?;
+            .map_err(|e| invalid(format!("reading the track: {e}")))?;
         if let Some(audio) = &map.audio {
             audio.check()?;
         }
@@ -287,7 +303,7 @@ mod tests {
         bytes.extend(encoder.finish().unwrap());
         assert!(bytes.len() < 1 << 20);
         let err = Map::from_bytes(&bytes).unwrap_err();
-        assert!(err.to_string().contains("unpacking the map"), "{err}");
+        assert!(err.to_string().contains("unpacking the track"), "{err}");
     }
 
     #[test]

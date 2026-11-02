@@ -3,8 +3,7 @@
 //! [`xdelta::Patched`] (nothing is written), the entries of its index that differ from the
 //! original's are found, and the track that changed is parsed as the viewer does.
 
-use std::fs::File;
-use std::io::{self, BufReader, Read, Seek};
+use std::io::{self, Read, Seek};
 use std::path::Path;
 
 use loader::bigfile::BigFile;
@@ -132,11 +131,31 @@ pub fn import(
     let name = patch
         .file_stem()
         .map_or_else(|| "map".into(), |s| s.to_string_lossy().into_owned());
-    let bytes = std::fs::read(patch)?;
+    import_bytes(
+        original,
+        name,
+        std::fs::read(patch)?,
+        level,
+        entries,
+        song_pack,
+        reverb,
+    )
+}
+
+/// [`import`] of a patch that is already read, for the map called `name`.
+pub fn import_bytes(
+    original: &Path,
+    name: String,
+    bytes: Vec<u8>,
+    level: Option<u32>,
+    entries: Option<(usize, usize)>,
+    song_pack: Option<u8>,
+    reverb: Option<u8>,
+) -> io::Result<Import> {
 
     let (mut disc, big) = open_bigfile(original)?;
     let patched = || {
-        let source = BufReader::new(File::open(original)?);
+        let source = loader::disc::open_file(original)?;
         xdelta::Patched::new(source, bytes.clone())
     };
     let (mut new_disc, new_big) = open_bigfile_with(patched)?;
@@ -218,4 +237,15 @@ pub fn import(
         changed,
         tracks,
     })
+}
+
+/// [`import`] with nobody to ask (the client's drag and drop): the track is found as the CLI
+/// finds it, every song pack the patch changes is a soundtrack, and the reverb is the patch's
+/// when it changes exactly one, and the track's own otherwise.
+pub fn import_unattended(original: &Path, name: String, bytes: Vec<u8>) -> io::Result<Import> {
+    let reverb = match crate::audio::changed_reverbs(original, &bytes)?.as_slice() {
+        [(_, _, now)] => Some(*now),
+        _ => None,
+    };
+    import_bytes(original, name, bytes, None, None, None, reverb)
 }

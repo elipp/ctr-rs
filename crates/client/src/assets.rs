@@ -103,7 +103,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
     // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
     let map = maps::get(id).unwrap_or_else(|| {
         if map::is_map_id(id) {
-            panic!("map {id:#x} is not in the maps folder")
+            panic!("map {id:#x} is not in the tracks folder")
         } else {
             panic!(
                 "the map of the game's track {id} is missing: it is made from the disc when the \

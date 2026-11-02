@@ -560,6 +560,24 @@ addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
+// Once the game runs, a file dropped on the page is the game's: a map (`.xdelta`, `.ctrmap`).
+let dropped = [];
+window.ctrTakeDropped = () => {
+  const taken = dropped;
+  dropped = [];
+  return taken;
+};
+addEventListener("dragover", (e) => {
+  if (drop.classList.contains("hidden")) e.preventDefault();
+});
+addEventListener("drop", async (e) => {
+  if (!drop.classList.contains("hidden")) return;
+  e.preventDefault();
+  for (const file of e.dataTransfer.files) {
+    dropped.push([file.name, new Uint8Array(await file.arrayBuffer())]);
+  }
+});
+
 function fresh() {
   offer("Drop Crash Team Racing (USA) .bin", [["Or pick it", pick]]);
 }

@@ -82,6 +82,10 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrPurgeMaps)]
     pub fn purge_maps();
 
+    /// The files dropped on the running game since the last call, as `[name, Uint8Array]` pairs.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeDropped)]
+    fn take_dropped_files() -> js_sys::Array;
+
     /// Tells the page that the game has crashed, with what the panic said.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCrashed)]
     pub fn crashed(message: &str);
@@ -98,4 +102,17 @@ pub fn take_maps() -> Vec<Vec<u8>> {
 /// Copies the dropped image into memory.
 pub fn take_disc_image() {
     loader::disc::keep_in_memory(PathBuf::from(DISC), take_disc().to_vec());
+}
+
+/// The files dropped on the page while the game runs: their names and contents.
+pub fn take_dropped() -> Vec<(String, Vec<u8>)> {
+    take_dropped_files()
+        .iter()
+        .filter_map(|pair| {
+            let pair: js_sys::Array = pair.dyn_into().ok()?;
+            let name = pair.get(0).as_string()?;
+            let bytes = pair.get(1).dyn_into::<js_sys::Uint8Array>().ok()?;
+            Some((name, bytes.to_vec()))
+        })
+        .collect()
 }

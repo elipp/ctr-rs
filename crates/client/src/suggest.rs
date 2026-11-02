@@ -275,7 +275,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
     ),
     node(
         "cache",
-        "The maps other players sent",
+        "The custom tracks other players sent",
         &[leaf("purge", "Delete them")],
     ),
     node(

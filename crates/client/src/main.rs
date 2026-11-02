@@ -26,6 +26,7 @@ mod console;
 mod controls;
 mod crash;
 mod disc;
+mod drop_map;
 mod drive;
 mod exhaust;
 mod explosion;
@@ -233,6 +234,7 @@ fn main() {
         )
         .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(sky::SkyPlugin)
+        .add_plugins(drop_map::DropMapPlugin)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(

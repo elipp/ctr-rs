@@ -78,9 +78,7 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::CupStart(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => {
-            net::NOT_NOW
-        }
+        Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => net::NOT_NOW,
         Action::StartRace | Action::RestartRace | Action::CupStart(_)
             if lobby.countdown.is_some() =>
         {
@@ -197,7 +195,7 @@ pub(super) fn run(
                 Ok(0) => "The cache is empty",
                 Ok(n) => {
                     debug!("deleted {n} cached map(s)");
-                    toasts.write(Toast::new(format!("Deleted {n} cached map(s)"), 2500));
+                    toasts.write(Toast::new(format!("Deleted {n} cached track(s)"), 2500));
                     continue;
                 }
                 Err(why) => {

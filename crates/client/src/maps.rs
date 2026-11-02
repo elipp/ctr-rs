@@ -1,4 +1,5 @@
-//! The maps of `maps/*.ctrmap` (see `paths.rs`; made by `ctr-map import`), which the viewer lists
+//! The maps of the cache (`paths::cached_maps`; dropped on the window, sent by a host, or made by
+//! `ctr-map import`), which the viewer lists
 //! after the game's tracks. A map is a track under its own number (`Map::id`, with the top bit set); the
 //! rest of the viewer takes that number for a `LevelId`.
 //!
@@ -38,17 +39,13 @@ enum File {
 /// live as long as the program, so that the rest of the viewer can hold on to them).
 static MAPS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static LOADED: Once = Once::new();
-fn directory() -> PathBuf {
-    crate::paths::maps()
-}
-
 /// Where the maps of the game's own tracks are.
 fn builtin_directory() -> PathBuf {
     crate::paths::builtin_maps()
 }
 
-/// Where the maps that other players sent are kept: unlike `maps`, which is ours,
-/// everything in it may go (`/cache purge`).
+/// Where the maps are kept that other players sent, that were dropped on the window, or that
+/// `ctr-map import` made: everything in it may go (`/cache purge`).
 fn cache_directory() -> PathBuf {
     crate::paths::cached_maps()
 }
@@ -60,7 +57,6 @@ pub fn load() {
         let mut maps = Vec::new();
         // Whether the folder is the one the game's own tracks are in.
         for (builtins, dir) in [
-            (false, directory()),
             (true, builtin_directory()),
             (false, cache_directory()),
         ] {
@@ -81,9 +77,9 @@ pub fn load() {
                 };
                 if builtin::is_builtin_name(&map.name) != builtins {
                     let why = if builtins {
-                        "that folder is for the maps of the game's tracks"
+                        "that folder is for the game's own tracks"
                     } else {
-                        "a map cannot be named for one of the game's tracks"
+                        "a custom track cannot be named for one of the game's tracks"
                     };
                     eprintln!("{}: {why}", path.display());
                     continue;
@@ -92,7 +88,7 @@ pub fn load() {
                     match builtin::level_of(&map.name) {
                         Some(level) => id = level.0,
                         None => {
-                            eprintln!("{}: not a map of one of the game's tracks", path.display());
+                            eprintln!("{}: not one of the game's tracks", path.display());
                             continue;
                         }
                     }
@@ -111,7 +107,7 @@ pub fn load() {
             match Map::from_bytes(&bytes).and_then(|m| Ok((m.id()?, m.hash()?, m))) {
                 Ok((_, _, map)) if builtin::is_builtin_name(&map.name) => {
                     eprintln!(
-                        "{}: a map cannot be named for one of the game's tracks",
+                        "{}: a custom track cannot be named for one of the game's tracks",
                         map.name
                     );
                 }
@@ -121,7 +117,7 @@ pub fn load() {
                     file: File::Held(bytes),
                     map: Box::leak(Box::new(map)),
                 }),
-                Err(e) => eprintln!("A kept map: {e}"),
+                Err(e) => eprintln!("A kept track: {e}"),
             }
         }
         maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));
@@ -170,12 +166,12 @@ pub fn file(id: u32) -> Option<(u64, Vec<u8>)> {
 }
 
 /// Takes in a map that was sent to us as the bytes of its file: it has to be the map `id` with
-/// this `hash`. It is saved to the cache (`cache/maps/`), or kept by the page in a browser, and
+/// this `hash`. It is saved to the cache (`.cache/custom-tracks/`), or kept by the page in a browser, and
 /// listed from then on.
 pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
     let map = Map::from_bytes(bytes).map_err(|e| e.to_string())?;
     if builtin::is_builtin_name(&map.name) {
-        return Err("a map cannot be named for one of the game's tracks".into());
+        return Err("a custom track cannot be named for one of the game's tracks".into());
     }
     let got = (
         map.id().map_err(|e| e.to_string())?,
@@ -183,14 +179,14 @@ pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
     );
     if got != (id, hash) {
         return Err(format!(
-            "the map sent is {:#x} / {:#x}, not the {id:#x} / {hash:#x} asked for",
+            "the track sent is {:#x} / {:#x}, not the {id:#x} / {hash:#x} asked for",
             got.0, got.1
         ));
     }
     let mut maps = MAPS.lock().unwrap();
     if maps.iter().any(|e| e.id == id) {
         // Another map has this id (about one in two billion): not ours to replace.
-        return Err(format!("a different map already has the id {id:#x}"));
+        return Err(format!("a different track already has the id {id:#x}"));
     }
     let file = keep(&map.name, id, bytes)?;
     maps.push(Entry {
@@ -205,7 +201,24 @@ pub fn receive(id: u32, hash: u64, bytes: &[u8]) -> Result<(), String> {
 /// Saves a map that was sent to us to the cache.
 #[cfg(not(target_arch = "wasm32"))]
 fn keep(name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
-    let dir = cache_directory();
+    save_in(cache_directory(), name, id, bytes)
+}
+
+/// Saves a map that a player dropped on the window (see [`add`]), in the cache with the ones sent
+/// to us: easy to make again. In a browser the page keeps it like the ones sent to us.
+#[cfg(not(target_arch = "wasm32"))]
+fn keep_own(name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
+    save_in(cache_directory(), name, id, bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn keep_own(name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
+    keep(name, id, bytes)
+}
+
+/// Writes a map's file into `dir` under a name made from the map's.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_in(dir: PathBuf, name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // The name of the patch may be one that we have a map of already.
     let stem: String = name
@@ -226,6 +239,37 @@ fn keep(name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
     Ok(File::Disk(path))
 }
 
+/// Adds a map the player made or was given (a dropped patch or `.ctrmap`) to the maps that are
+/// ours, saved in `maps/`, and lists it at once: it can be picked and, in a lobby we host, sent to
+/// the others when a race starts on it. Returns its track number, and whether it is new (a map we
+/// have already is not saved twice).
+pub fn add(map: Map) -> Result<(u32, bool), String> {
+    if builtin::is_builtin_name(&map.name) {
+        return Err("a custom track cannot be named for one of the game's tracks".into());
+    }
+    let id = map.id().map_err(|e| e.to_string())?;
+    let hash = map.hash().map_err(|e| e.to_string())?;
+    let bytes = map.to_bytes().map_err(|e| e.to_string())?;
+    let mut maps = MAPS.lock().unwrap();
+    if let Some(have) = maps.iter().find(|e| e.id == id) {
+        return if have.hash == hash {
+            Ok((id, false))
+        } else {
+            Err(format!("a different track already has the id {id:#x}"))
+        };
+    }
+    let file = keep_own(&map.name, id, &bytes)?;
+    maps.push(Entry {
+        id,
+        hash,
+        file,
+        map: Box::leak(Box::new(map)),
+    });
+    // `cycle` lists the maps in this order.
+    maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));
+    Ok((id, true))
+}
+
 /// A browser has no folder: there the page keeps a map sent to us, and it is held in memory.
 #[cfg(target_arch = "wasm32")]
 fn keep(_name: &str, id: u32, bytes: &[u8]) -> Result<File, String> {
@@ -239,6 +283,13 @@ pub fn purge() -> Result<usize, String> {
     let dir = cache_directory();
     let mut maps = MAPS.lock().unwrap();
     let before = maps.len();
+    // The files too: one that could not be read (another version) is in the folder, not the list.
+    #[cfg(not(target_arch = "wasm32"))]
+    let files = std::fs::read_dir(&dir).map_or(0, |d| {
+        d.filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "ctrmap"))
+            .count()
+    });
     maps.retain(|e| match &e.file {
         File::Disk(path) => !path.starts_with(&dir),
         #[cfg(target_arch = "wasm32")]
@@ -254,6 +305,9 @@ pub fn purge() -> Result<usize, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("{}: {e}", dir.display())),
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    return Ok((before - maps.len()).max(files));
+    #[cfg(target_arch = "wasm32")]
     Ok(before - maps.len())
 }
 
@@ -268,14 +322,14 @@ pub fn make_builtins() {
     }
     let Some(image) = crate::disc::image() else {
         eprintln!(
-            "The maps of the game's tracks are missing, and there is no disc image to make them from"
+            "The game's own tracks are missing, and there is no disc image to make them from"
         );
         return;
     };
-    eprintln!("Making maps of the game's tracks from the disc (this is done once)...");
+    eprintln!("Making the game's own tracks from the disc (this is done once)...");
     match map::builtin::export(&image, &dir) {
-        Ok(made) => eprintln!("Made {made} maps in {}", dir.display()),
-        Err(e) => eprintln!("Could not make the maps of the game's tracks: {e}"),
+        Ok(made) => eprintln!("Made {made} tracks in {}", dir.display()),
+        Err(e) => eprintln!("Could not make the game's own tracks: {e}"),
     }
 }
 
@@ -289,7 +343,7 @@ pub fn make_builtins() {
     let made = match builtin::make_all(&image) {
         Ok(made) => made,
         Err(e) => {
-            eprintln!("Could not make the maps of the game's tracks: {e}");
+            eprintln!("Could not make the game's own tracks: {e}");
             return;
         }
     };
@@ -374,7 +428,7 @@ pub fn resolve(text: &str) -> Result<u32, String> {
         [id] => Ok(id),
         [] => Err(format!("Unknown track: {text}")),
         _ => Err(format!(
-            "More than one map is called {text}: use its number (0x...)"
+            "More than one track is called {text}: use its number (0x...)"
         )),
     }
 }

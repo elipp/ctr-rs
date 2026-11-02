@@ -18,12 +18,12 @@ cargo run -p map -- import assets/deltas/MarioCircuit1.xdelta
 
 This reads the patch through [`xdelta`](../xdelta) without writing the patched disc, finds the
 level file it changed in `BIGFILE.BIG`, parses the track as the viewer does, and saves it as
-`assets/maps/MarioCircuit1.ctrmap` (about 0.6 to 0.7 MB, compressed with zstd). It takes a few
+`assets/.cache/custom-tracks/MarioCircuit1.ctrmap` (about 0.6 to 0.7 MB, compressed with zstd). It takes a few
 seconds.
 
 | option | |
 |---|---|
-| `-o FILE` | where to save it (default `assets/maps/NAME.ctrmap`, the name being the patch's) |
+| `-o FILE` | where to save it (default `assets/.cache/custom-tracks/NAME.ctrmap`, the name being the patch's) |
 | `--disc BIN` | the disc image (default `CTR_BIN`, or `assets/ctr-u.bin`) |
 | `--level N` | which track's slot to read the map from |
 | `--entries LEV,VRAM` | the `BIGFILE.BIG` entries that hold the level and its textures, when they are not in a track's slot |
@@ -44,17 +44,25 @@ The overlay code the patch changes is not read.
 To see what a map holds:
 
 ```sh
-cargo run -p map -- info assets/maps/MarioCircuit1.ctrmap
+cargo run -p map -- info assets/.cache/custom-tracks/MarioCircuit1.ctrmap
 ```
 
 It prints the name, the id, the number of quad blocks, vertices, instances and restart points, the
 models used by the instances, and the size of the data.
 
+## Soundtracks
+
+A patch may change several song packs of `KART.HWL`. Every changed pack is kept in the map as a
+soundtrack (with the samples it plays that the patch changed), the first being the track's own
+slot's pack, or the one `--song-pack N` names. The client plays the first, tells the player when
+there are more, and steps through them with `M`. `ctr-map info` lists them.
+
 ## Using a map
 
-The viewer reads every `*.ctrmap` in its `maps` folder when it starts (`assets/maps` in a debug
-build; in a release build `%APPDATA%\ctr-rs\maps` on Windows, `~/.config/ctr-rs/maps` on Linux)
-and lists the maps after the game's tracks: `[` and `]` step through the tracks (from the first track, `[` goes to the last map). The
+The viewer reads every `*.ctrmap` in its cache's `custom-tracks` folder when it starts (`assets/.cache/custom-tracks`
+in a debug build; in a release build `%APPDATA%\ctr-rs\.cache\custom-tracks` on Windows,
+`~/.config/ctr-rs/.cache/custom-tracks` on Linux), where `ctr-map import`, a patch or `.ctrmap` dropped on
+the window, and the maps other players sent all go; `/cache purge` deletes it. It lists the maps after the game's tracks: `[` and `]` step through the tracks (from the first track, `[` goes to the last map). The
 window title shows the map's name. A file that cannot be read is reported on stderr and left out.
 
 A map has the id `Map::id()`, made from its contents, with the top bit set (`is_map_id`). The game's

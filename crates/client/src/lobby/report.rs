@@ -170,12 +170,12 @@ pub(super) fn report(
                     debug!("received map {track:#x} ({} bytes)", bytes.len());
                     got_map = Some(track);
                 }
-                Err(why) => map_failed = Some(format!("Could not use the map sent: {why}")),
+                Err(why) => map_failed = Some(format!("Could not use the track sent: {why}")),
             },
             Event::BlobMissing { track, .. } => {
                 // (The host sends custom maps only: the game's own tracks are made from the disc.)
                 map_failed = Some(if map::is_map_id(track) {
-                    format!("The host cannot send the map {}", maps::name(track))
+                    format!("The host cannot send the track {}", maps::name(track))
                 } else {
                     format!(
                         "Your {} is not the host's: another disc or version",
@@ -269,14 +269,14 @@ pub(super) fn report(
             session.fetch(track, hash);
         }
         lobby.fetching = Some(track);
-        toasts.write(Toast::new("Asking the host for the map...", 3000));
+        toasts.write(Toast::new("Asking the host for the track...", 3000));
     }
     if let Some(track) = got_map {
         if lobby.fetching == Some(track) {
             lobby.fetching = None;
         }
         toasts.write(
-            Toast::new(format!("Got the map {}", maps::name(track)), 2500)
+            Toast::new(format!("Got the track {}", maps::name(track)), 2500)
                 .color(Color::linear_rgb(0.4, 1.0, 0.4)),
         );
     }
