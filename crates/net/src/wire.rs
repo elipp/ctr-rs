@@ -192,6 +192,15 @@ pub enum Message {
     /// goes on, and the host can start the same players again. (A stop that comes after the
     /// next race's [`Message::Restart`] is of the race before, and does not count.)
     Stop { epoch: u32 },
+    /// Reliable, host to a client: the lobby is handed over to the player `to` (an endpoint id).
+    /// The host sends it to `to` first, which answers with [`Message::HandoffAck`]; once that
+    /// comes, it goes to everyone else, and the host closes its connections. A guest that gets
+    /// it takes `to` for the first of the heirs, and carries on with it as it would with a host
+    /// that left (see `Heirs`), so `to` hosts and the others (the old host too) join it.
+    Handoff { to: [u8; 32] },
+    /// Reliable, client to host: the answer to a [`Message::Handoff`] to us. We are ready to
+    /// host when the host closes.
+    HandoffAck,
 }
 
 /// How often a player pings the ones it is connected to.
@@ -375,6 +384,8 @@ mod tests {
                 hard: vec![false, true, false],
             },
             Message::Ready,
+            Message::Handoff { to: [9; 32] },
+            Message::HandoffAck,
             Message::Go,
             Message::Restart {
                 epoch: 2,

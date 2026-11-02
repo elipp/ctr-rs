@@ -367,6 +367,7 @@ enum Command {
     NetInfo,
     Stop,
     Public(Option<Public>),
+    Promote(EndpointId),
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -476,6 +477,15 @@ impl Session {
     /// (we do not; we know). The lobby stays, and [`Session::restart`] starts the same players again.
     pub fn stop(&self) {
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// Hands the lobby over to the guest `to`, if we host it and no race is on: it hosts from
+    /// then on, and the rest of us (we too) join it, as they would if the host had left. The
+    /// public listing, if any, goes with it. Why it cannot be done, or that the guest did not
+    /// answer, comes as an [`Event::Announce`]; on success the others get [`Event::Announce`] and
+    /// [`Event::Joined`] of the new host, and `to` gets [`Event::Promoted`].
+    pub fn promote(&self, to: EndpointId) {
+        let _ = self.commands.send(Command::Promote(to));
     }
 
     /// Lists the lobby in a realm, for anyone to find and join, or takes it off the list

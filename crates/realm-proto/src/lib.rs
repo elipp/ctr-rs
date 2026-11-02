@@ -13,7 +13,7 @@
 use bitcode::{Decode, Encode};
 
 /// What the realm server and its clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/realm/1";
+pub const ALPN: &[u8] = b"ctr-rust/realm/2";
 
 /// The most chars of a lobby's name.
 pub const MAX_NAME: usize = 32;
@@ -26,6 +26,9 @@ pub const MAX_VERSION: usize = 32;
 pub const MAX_REQUEST: usize = 1024;
 /// The most bytes of a response: the whole list.
 pub const MAX_RESPONSE: usize = 256 << 10;
+
+/// How long a lobby that was handed over waits for its new host to claim it.
+pub const TRANSFER_SECONDS: u64 = 10;
 
 /// The most lobbies the realm lists, and so the most a response holds.
 pub const MAX_LOBBIES: usize = 1000;
@@ -99,6 +102,16 @@ pub enum Request {
     Announce(Listing),
     /// Take the lobby of the connection off the list, and keep the connection.
     Withdraw,
+    /// Hand the lobby of the connection over to another host (its endpoint id, as bytes). The
+    /// lobby leaves the list now, and the new host has [`TRANSFER_SECONDS`] to [`Claim`] it
+    /// before it is dropped. (The host stays the one the lobby is joined at: the listing goes
+    /// where the lobby does.)
+    ///
+    /// [`Claim`]: Request::Claim
+    Transfer([u8; 32]),
+    /// Take the lobby that another host handed over to this connection's id. It is listed again
+    /// under the id, as it was.
+    Claim,
     List,
 }
 
@@ -118,6 +131,10 @@ pub enum Reject {
     TooFast,
     /// The realm lists as many as it does.
     Full,
+    /// A transfer of a lobby that the connection does not have listed (or to itself).
+    NotListed,
+    /// A claim of a lobby that nobody handed over, or that was not claimed in time.
+    NothingToClaim,
 }
 
 impl Request {
@@ -160,6 +177,8 @@ mod tests {
         for request in [
             Request::Announce(listing()),
             Request::Withdraw,
+            Request::Transfer([3; 32]),
+            Request::Claim,
             Request::List,
         ] {
             assert_eq!(Request::from_bytes(&request.to_bytes()).unwrap(), request);

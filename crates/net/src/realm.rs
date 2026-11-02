@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
-use tokio::sync::watch;
+use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, oneshot, watch};
 
 use crate::{Error, Event};
 
@@ -86,10 +86,32 @@ pub struct Public {
     pub track: String,
 }
 
+/// What the publisher asks of the task that holds the connection.
+enum Command {
+    /// Hand the listing over to another host (see [`Request::Transfer`]); the result comes back
+    /// on `done`.
+    Transfer {
+        to: EndpointId,
+        done: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+impl Command {
+    /// There is no connection to ask the realm with.
+    fn refuse(self) {
+        match self {
+            Command::Transfer { done, .. } => {
+                let _ = done.send(Err("the lobby is not listed in the realm".into()));
+            }
+        }
+    }
+}
+
 /// The listing of one lobby, kept up to date in one realm.
 pub(crate) struct Publisher {
     pub(crate) realm: EndpointId,
     listing: watch::Sender<Option<Listing>>,
+    commands: UnboundedSender<Command>,
     /// The name and the track.
     about: Option<(String, String)>,
 }
@@ -100,13 +122,57 @@ impl Publisher {
         realm: EndpointId,
         events: Sender<Event>,
     ) -> Publisher {
+        Publisher::spawn(endpoint, realm, events, false)
+    }
+
+    /// Like [`start`](Publisher::start), for a lobby that another host handed over to us (see
+    /// [`transfer`](Publisher::transfer)): the first thing it does in the realm is claim the
+    /// listing. If there is none to claim (it took too long, or the realm does not know of it),
+    /// the lobby is listed afresh, as `start` would.
+    pub(crate) fn claiming(
+        endpoint: &Endpoint,
+        realm: EndpointId,
+        events: Sender<Event>,
+    ) -> Publisher {
+        Publisher::spawn(endpoint, realm, events, true)
+    }
+
+    fn spawn(
+        endpoint: &Endpoint,
+        realm: EndpointId,
+        events: Sender<Event>,
+        claim: bool,
+    ) -> Publisher {
         let (listing, rx) = watch::channel(None);
-        n0_future::task::spawn(keep(endpoint.clone(), realm, rx, events));
+        let (commands, commands_rx) = unbounded_channel();
+        n0_future::task::spawn(keep(
+            endpoint.clone(),
+            realm,
+            rx,
+            commands_rx,
+            events,
+            claim,
+        ));
         Publisher {
             realm,
             listing,
+            commands,
             about: None,
         }
+    }
+
+    /// Hands the listing over to the host `to`, which has a few seconds to claim it with
+    /// [`claiming`](Publisher::claiming). The lobby is off the list meanwhile, and this
+    /// publisher is done: it lists no more, whatever is set or refreshed after.
+    pub(crate) async fn transfer(&self, to: EndpointId) -> Result<(), String> {
+        let (done, result) = oneshot::channel();
+        self.commands
+            .send(Command::Transfer { to, done })
+            .map_err(|_| "the lobby is not listed in the realm".to_string())?;
+        n0_future::time::timeout(ANSWER_TIMEOUT * 2, result)
+            .await
+            .map_err(|_| "the realm did not answer".to_string())?
+            .map_err(|_| "the lobby is not listed in the realm".to_string())?
     }
 
     /// Lists the lobby as `public` says, or takes it off the list (`None`).
@@ -134,21 +200,32 @@ impl Publisher {
 }
 
 /// Holds the connection to the realm while there is a listing, and keeps it up to date. Ends
-/// when the publisher is dropped.
+/// when the publisher is dropped, or when the listing has been handed over. `claim`: the first
+/// connection claims a listing that was handed over to us.
 async fn keep(
     endpoint: Endpoint,
     realm: EndpointId,
     mut listing: watch::Receiver<Option<Listing>>,
+    mut commands: UnboundedReceiver<Command>,
     events: Sender<Event>,
+    mut claim: bool,
 ) {
     let mut wait = RETRY_MIN;
     let mut told: Option<String> = None;
     loop {
-        if listing.wait_for(Option::is_some).await.is_err() {
-            return;
+        let listed = async { listing.wait_for(Option::is_some).await.is_ok() };
+        tokio::select! {
+            listed = listed => if !listed {
+                return;
+            },
+            Some(command) = commands.recv() => {
+                command.refuse();
+                continue;
+            }
         }
-        match list(&endpoint, realm, &mut listing, &events).await {
-            Ok(()) => {
+        match list(&endpoint, realm, &mut listing, &mut commands, &events, &mut claim).await {
+            Ok(true) => return,
+            Ok(false) => {
                 wait = RETRY_MIN;
                 told = None;
                 continue;
@@ -162,27 +239,50 @@ async fn keep(
                 }
             }
         }
-        n0_future::time::sleep(wait).await;
+        // Nothing can be handed over while there is no connection.
+        let sleep = n0_future::time::sleep(wait);
+        tokio::pin!(sleep);
+        loop {
+            tokio::select! {
+                _ = &mut sleep => break,
+                Some(command) = commands.recv() => command.refuse(),
+            }
+        }
         wait = (wait * 2).min(RETRY_MAX);
     }
 }
 
 /// One connection's worth: lists the lobby, and follows it, until it is taken off the list
-/// (`Ok`, the connection is closed) or the connection fails.
+/// (`Ok(false)`, the connection is closed), handed over (`Ok(true)`) or the connection fails.
 async fn list(
     endpoint: &Endpoint,
     realm: EndpointId,
     listing: &mut watch::Receiver<Option<Listing>>,
+    commands: &mut UnboundedReceiver<Command>,
     events: &Sender<Event>,
-) -> Result<(), Error> {
+    claim: &mut bool,
+) -> Result<bool, Error> {
     let connection = endpoint.connect(EndpointAddr::new(realm), ALPN).await?;
+    if *claim {
+        match ask(&connection, &Request::Claim).await? {
+            // Ours now. Or there was nothing to claim, and the announce below lists it afresh.
+            Response::Ok | Response::Rejected(Reject::NothingToClaim) => *claim = false,
+            Response::Rejected(Reject::TooFast) => {
+                return Err("asking the realm too often".into());
+            }
+            Response::Rejected(Reject::Full) => return Err("the realm is full".into()),
+            Response::Rejected(_) | Response::Lobbies(_) => {
+                return Err("the realm answered nonsense".into());
+            }
+        }
+    }
     let mut said: Option<Listing> = None;
     loop {
         let current = listing.borrow_and_update().clone();
         match &current {
             None => {
                 connection.close(0u32.into(), b"unlisted");
-                return Ok(());
+                return Ok(false);
             }
             Some(_) if current == said => {}
             Some(now) => match ask(&connection, &Request::Announce(now.clone())).await? {
@@ -203,13 +303,30 @@ async fn list(
                     return Err("asking the realm too often".into());
                 }
                 Response::Rejected(Reject::Full) => return Err("the realm is full".into()),
+                Response::Rejected(Reject::NotListed | Reject::NothingToClaim) => {
+                    return Err("the realm answered nonsense".into());
+                }
                 Response::Lobbies(_) => return Err("the realm answered nonsense".into()),
             },
         }
         tokio::select! {
             changed = listing.changed() => if changed.is_err() {
                 connection.close(0u32.into(), b"bye");
-                return Ok(());
+                return Ok(false);
+            },
+            Some(Command::Transfer { to, done }) = commands.recv() => {
+                let result = match ask(&connection, &Request::Transfer(*to.as_bytes())).await {
+                    Ok(Response::Ok) => Ok(()),
+                    Ok(Response::Rejected(why)) => Err(format!("the realm turned the handover down: {why:?}")),
+                    Ok(Response::Lobbies(_)) => Err("the realm answered nonsense".to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
+                let handed = result.is_ok();
+                let _ = done.send(result);
+                if handed {
+                    connection.close(0u32.into(), b"handed over");
+                    return Ok(true);
+                }
             },
             _ = connection.closed() => return Err("the realm closed the connection".into()),
         }

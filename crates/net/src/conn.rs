@@ -20,6 +20,16 @@ pub(crate) async fn send_reliably(connection: &Connection, message: &Message) ->
     Ok(())
 }
 
+/// Like [`send_reliably`], and waits for the message to be delivered (or for the peer to give it up),
+/// so that closing the connection right after does not lose it.
+pub(crate) async fn send_delivered(connection: &Connection, message: &Message) -> Result<(), Error> {
+    let mut stream = connection.open_uni().await?;
+    stream.write_all(&message.to_bytes()).await?;
+    stream.finish()?;
+    let _ = n0_future::time::timeout(Duration::from_secs(2), stream.stopped()).await;
+    Ok(())
+}
+
 pub(crate) fn send_datagram(connection: &Connection, message: &Message) {
     // A datagram that does not go is as good as one that is lost.
     let _ = connection.send_datagram(Bytes::from(message.to_bytes()));
