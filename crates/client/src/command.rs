@@ -109,6 +109,8 @@ pub enum Action {
     SetConfig(crate::config::Setting),
     /// Toast the version of this build (`version.rs`).
     Version,
+    /// Empty the console (`console.rs`). What was typed before stays in the history.
+    Clear,
     /// Say that to everyone in the lobby: a line that is not a `/command`.
     Say(String),
 }
@@ -190,6 +192,8 @@ impl Action {
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
             "version" => Err("Usage: /version".into()),
+            "clear" if rest.is_empty() => Ok(Action::Clear),
+            "clear" => Err("Usage: /clear".into()),
             "net" => Action::net(rest),
             "debug" => Action::debug(rest),
             _ => Err(format!("Unknown command: /{name}")),
@@ -1508,6 +1512,8 @@ mod tests {
         assert!(Action::parse("config set msaa 8").is_err());
         assert!(matches!(Action::parse("version"), Ok(Action::Version)));
         assert!(Action::parse("version 1").is_err());
+        assert!(matches!(Action::parse("clear"), Ok(Action::Clear)));
+        assert!(Action::parse("clear all").is_err());
         assert!(matches!(
             Action::parse("config set volume music 40"),
             Ok(Action::SetConfig(crate::config::Setting::VolumeMusic(40)))

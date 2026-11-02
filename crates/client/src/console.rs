@@ -27,7 +27,7 @@ use bevy::log::{BoxedLayer, Level};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
-use crate::command::{self, CommandLine};
+use crate::command::{self, Action, CommandLine};
 use crate::leaderboard::{Portraits, load_portraits};
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
 
@@ -185,6 +185,12 @@ impl Console {
     pub fn scroll_to_end(&mut self) {
         self.scroll = 0;
     }
+
+    fn clear(&mut self) {
+        self.lines.clear();
+        self.scroll = 0;
+        self.version += 1;
+    }
 }
 
 /// Where what the tracing layer picks up waits for `collect`.
@@ -245,7 +251,7 @@ impl Plugin for ConsolePlugin {
         app.init_resource::<Console>()
             .add_message::<Log>()
             .add_systems(Startup, spawn)
-            .add_systems(Update, (collect, scroll, fade, rebuild).chain())
+            .add_systems(Update, (clear, collect, scroll, fade, rebuild).chain())
             // (Before the layout, for one that appears to take its room right away.)
             .add_systems(PostUpdate, draw_small_portraits.before(UiSystems::Prepare));
         #[cfg(target_arch = "wasm32")]
@@ -325,6 +331,13 @@ fn sync_with_page(
             crate::web::console_area(area.min.x, area.min.y, area.max.x, area.max.y);
             *told = Some(area);
         }
+    }
+}
+
+/// `/clear`.
+fn clear(mut actions: MessageReader<Action>, mut console: ResMut<Console>) {
+    if actions.read().any(|action| matches!(action, Action::Clear)) {
+        console.clear();
     }
 }
 
@@ -611,6 +624,17 @@ mod tests {
         console.scroll_to_end();
         console.push(Log::new("newer"), 0.0);
         assert_eq!(console.scroll, 0);
+    }
+
+    #[test]
+    fn clearing_empties_the_view() {
+        let mut console = console_of(10);
+        console.scroll_by(3, 0.0);
+        let version = console.version;
+        console.clear();
+        assert!(console.lines.is_empty());
+        assert_eq!(console.scroll, 0);
+        assert_ne!(console.version, version);
     }
 
     #[test]

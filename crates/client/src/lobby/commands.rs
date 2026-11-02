@@ -274,7 +274,8 @@ pub(super) fn run(
             | Action::SetConfig(_)
             | Action::Character(_)
             | Action::Track(_)
-            | Action::Version => continue,
+            | Action::Version
+            | Action::Clear => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.
                 if let Some(session) = lobby.session.as_ref().filter(|_| lobby.online.is_some()) {

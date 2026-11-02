@@ -196,60 +196,60 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[
                     leaf(
                         "private",
-                        "Only those with the address can join (the default)",
+                        "Join by address only (the default)",
                     ),
                     takes(
                         "public",
-                        "Listed for anyone to find: type a name, or keep the grey one (Up, Down: another)",
-                        "[type a name]",
+                        "Listed for anyone to find",
+                        "[name, Up/Down]",
                     ),
                 ],
             ),
             takes("join", "Join a lobby", "<address>"),
             takes(
                 "spectate",
-                "Watch the races of a lobby (no address: switch in this one)",
+                "Watch a lobby's races",
                 "[address]",
             ),
-            leaf("close", "Leave the lobby, or close it if it is ours"),
+            leaf("close", "Leave the lobby, or close it if ours"),
         ],
     ),
     node(
         "race",
-        "The lobby's race (the host only)",
+        "The lobby's race (host only)",
         &[
-            leaf("start", "Count down to a race on this track"),
+            leaf("start", "Count down to a race here"),
             leaf("restart", "Count down to the race again"),
-            leaf("stop", "End the race for everyone, with no winner"),
+            leaf("stop", "End the race for everyone"),
         ],
     ),
     node(
         "cup",
-        "A series of races with points (the host starts it)",
+        "A series of races with points",
         &[
             takes(
                 "create",
-                "Make a cup: its tracks (short names or numbers) and the laps of each race",
-                "<name> <track,track,...> <laps>",
+                "Make a cup",
+                "<name> <tracks> <laps>",
             ),
-            takes("start", "Count down to the first race of a cup", "<name>"),
+            takes("start", "Count down to a cup's first race", "<name>"),
         ],
     ),
     takes(
         "promote",
-        "Make a player the host (the host only): type a name, or keep the grey one (Up, Down: another)",
+        "Make a player the host (host only)",
         "<player>",
     ),
     Spec {
         name: "track",
-        about: "The track to be on (in a lobby, until a race goes to the host's): type a name, or keep the grey one (Up, Down: another)",
-        options: &[leaf("list", "Print them with their numbers")],
-        arg: Some("[type a name]"),
+        about: "Go to a track",
+        options: &[leaf("list", "Print the tracks")],
+        arg: Some("[name, Up/Down]"),
     },
     takes(
         "character",
-        "Who to drive: type a name, or keep the grey one (Up, Down: another)",
-        "[type a name]",
+        "Who to drive",
+        "[name, Up/Down]",
     ),
     node(
         "config",
@@ -260,7 +260,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             &[
                 takes(
                     "nickname",
-                    "The name the others see, up to 12 characters",
+                    "The name others see (12 at most)",
                     "<name>",
                 ),
                 // (A browser has none of these three: see `config.rs`.)
@@ -276,13 +276,13 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 #[cfg(not(target_arch = "wasm32"))]
                 takes(
                     "fps-max",
-                    "The most frames to draw a second, 0 for no limit",
+                    "Frame limit, 0 for none",
                     "<frames a second>",
                 ),
                 #[cfg(target_arch = "wasm32")]
                 takes(
                     "render-scale",
-                    "The part of the screen's resolution to draw at",
+                    "How much of the resolution to draw",
                     "<0.25 to 1>",
                 ),
                 node(
@@ -296,21 +296,21 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ),
                 node(
                     "volume",
-                    "How loud the music, the effects and the voices are",
+                    "Music, effects and voices",
                     &[
                         takes(
                             "music",
-                            "The music's volume, 100 being the game's",
+                            "Music volume, 100 is the game's",
                             "<0-100>",
                         ),
                         takes(
                             "sfx",
-                            "The effects' volume, 100 being the game's",
+                            "Effects volume, 100 is the game's",
                             "<0-100>",
                         ),
                         takes(
                             "voice",
-                            "The voices' volume, 100 being the game's",
+                            "Voice volume, 100 is the game's",
                             "<0-100>",
                         ),
                     ],
@@ -319,6 +319,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
         )],
     ),
     leaf("version", "Show the version of this build"),
+    leaf("clear", "Empty the console"),
     node(
         "net",
         "The connection to the others",
@@ -326,12 +327,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("info", "How each peer is connected"),
             Spec {
                 name: "smoothing",
-                about: "How the others' karts ease after a rollback",
+                about: "How karts ease after a rollback",
                 options: &[
                     leaf("ping", "By the round trip to each player"),
                     leaf("replay", "By how far the rollbacks replay"),
                 ],
-                arg: Some("<duration, like 120ms>"),
+                arg: Some("<like 120ms>"),
             },
             node(
                 "rollbacks",
@@ -344,14 +345,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[
                     takes(
                         "add",
-                        "Use this relay too (from the next lobby on)",
+                        "Use this relay too, from the next lobby",
                         "<url>",
                     ),
-                    leaf("clear", "Drop the added relays (from the next lobby on)"),
+                    leaf("clear", "Drop added relays, from the next lobby"),
                     #[cfg(not(target_arch = "wasm32"))]
                     node(
                         "only",
-                        "Reach the others through the relay only, hiding your address",
+                        "Hide your address behind the relay",
                         &[
                             leaf("on", "Never connect straight (slower, private)"),
                             leaf("off", "Connect straight when possible"),
@@ -411,7 +412,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                     node(
                         "crate-fixup",
-                        "Move the crates the level puts in the ground",
+                        "Move crates out of the ground",
                         &[
                             leaf("on", "Move them"),
                             leaf("off", "Draw them where the level has them"),
@@ -426,11 +427,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
             ),
             leaf(
                 "viewer",
-                "Switch between the race and the fly-through viewer",
+                "Race or fly-through viewer",
             ),
             node(
                 "hud",
-                "The development text of the race (the frame rate stays); alone: toggle",
+                "The race's dev text (alone: toggle)",
                 &[leaf("on", "Show it"), leaf("off", "Hide it")],
             ),
             takes("toast", "Show a text as a toast", "<text>"),
@@ -439,11 +440,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "Crates",
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
-            leaf("ranking", "End the race with a random ranking (host)"),
+            leaf("ranking", "Random ranking (host)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             node(
                 "fx",
-                "Try a visual effect (alone: the panel, F3)",
+                "Try a visual effect (alone: the panel)",
                 &[
                     node(
                         "confetti",
@@ -574,6 +575,7 @@ mod tests {
                 "character",
                 "config",
                 "version",
+                "clear",
                 "net",
                 "cache",
                 "debug"
@@ -660,6 +662,49 @@ mod tests {
         assert_eq!(pick(&found("bob"), "", "bob").unwrap().name, "Bob");
         assert_eq!(pick(&found("bob"), "Bobby", "bob").unwrap().name, "Bobby");
         assert_eq!(pick(&found("b"), "", "b").unwrap().name, "Bobby");
+    }
+
+    /// How many lines `text` takes in a column of `width` characters.
+    fn lines(text: &str, width: usize) -> usize {
+        let (mut lines, mut used) = (1, 0);
+        for word in text.split(' ') {
+            let length = word.chars().count();
+            if used > 0 && used + 1 + length > width {
+                lines += 1;
+                used = 0;
+            }
+            if used > 0 {
+                used += 1;
+            }
+            used += length;
+            lines += used.saturating_sub(1) / width.max(1);
+            used = (used.saturating_sub(1) % width.max(1)) + 1;
+        }
+        lines
+    }
+
+    /// What a command does fits two lines of the suggestions, in the narrowest console.
+    #[test]
+    fn the_descriptions_are_short() {
+        /// `console::spawn`'s least width, less the padding, in the line's characters of 12 pixels;
+        /// and the gap between the columns.
+        const COLUMNS: usize = 37;
+        const GAP: usize = 2;
+        fn walk(about: &str, specs: &[Spec], arg: Option<&str>) {
+            let names = specs.iter().map(|s| s.name).chain(arg);
+            let name = names.map(|n| n.chars().count()).max().unwrap_or(0);
+            let width = COLUMNS - name - GAP;
+            let rows = specs.iter().map(|s| s.about).chain(arg.map(|_| about));
+            for row in rows {
+                assert!(lines(row, width) <= 2, "{row} in {width} columns");
+            }
+            for spec in specs {
+                walk(spec.about, spec.options, spec.arg);
+            }
+        }
+        assert_eq!(lines("one two", 7), 1);
+        assert_eq!(lines("one two", 6), 2);
+        walk("", COMMANDS, None);
     }
 
     /// Every word of the tree is a command `Action::parse` knows: a leaf parses, and one that
