@@ -442,7 +442,7 @@ fn apply(
                     if let Err(why) = config.save() {
                         toasts.write(refuse(why));
                     }
-                    format!("Relay added: {url} (it takes hold in the next lobby)")
+                    format!("Relay added: {url}\nIt takes hold in the next lobby")
                 };
                 toasts.write(Toast::new(text, 3000));
             }
@@ -454,7 +454,7 @@ fn apply(
                     if let Err(why) = config.save() {
                         toasts.write(refuse(why));
                     }
-                    "Relays cleared (it takes hold in the next lobby)".to_string()
+                    "Relays cleared\nIt takes hold in the next lobby".to_string()
                 };
                 toasts.write(Toast::new(text, 3000));
             }
@@ -466,7 +466,7 @@ fn apply(
                 let text = match (on, lobby.is_open()) {
                     (true, false) => "Relay only: the others will not see your address",
                     (false, false) => "Relay only off: connections go straight when they can",
-                    (_, true) => "Relay only changes: it takes hold in the next lobby",
+                    (_, true) => "Relay only changes\nIt takes hold in the next lobby",
                 };
                 toasts.write(Toast::new(text, 3500));
             }
