@@ -130,6 +130,18 @@ impl Lobby {
             .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
     }
 
+    /// Who the lobby could be handed to, the character and the name of each: the others, if we
+    /// are its host.
+    pub fn promotable(&self) -> impl Iterator<Item = (u8, &str)> {
+        let hosting = self.is_open() && !self.joined;
+        // (As in `player_named`: the first is us.)
+        self.roster
+            .iter()
+            .skip(1)
+            .filter(move |_| hosting)
+            .map(|m| (m.character, m.label.as_str()))
+    }
+
     /// The guests that only watch: the name and the short key of each.
     pub fn watchers(&self) -> impl Iterator<Item = (&str, &str)> {
         self.watchers.iter().map(|(n, k)| (n.as_str(), k.as_str()))

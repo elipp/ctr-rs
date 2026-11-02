@@ -60,7 +60,7 @@ pub(super) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         {
             net::NOT_NOW
         }
-        Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
+        Action::PurgeCache | Action::Character(_) if lobby.online.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::Say(_) if !lobby.is_open() => "Not in a lobby to talk to (/lobby create)",
         Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
@@ -270,6 +270,7 @@ pub(super) fn run(
             | Action::DebugCrateBias(_)
             | Action::DebugFx(_)
             | Action::SetConfig(_)
+            | Action::Character(_)
             | Action::Version => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.

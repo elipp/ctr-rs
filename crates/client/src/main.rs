@@ -317,7 +317,8 @@ fn main() {
         probe::ProbePlugin,
     ));
     app.add_systems(Update, fly.run_if(not(drive::driving)))
-        .add_systems(Update, switch_mode);
+        .init_resource::<scene::PickedRacer>()
+        .add_systems(Update, (switch_mode, scene::pick_racer));
     app.insert_resource(scene_systems);
     // The multi-threaded executor spawns and wakes a task per system; for a frame this light
     // those hand-offs cost more than the systems. `CTR_EXECUTOR=multi` brings it back.

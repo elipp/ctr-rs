@@ -5,6 +5,8 @@
 //!
 //! [`Action::parse`]: crate::command::Action
 
+use crate::CHARACTERS;
+
 /// A public lobby's offered name is one of these and one of [`LOBBY_NOUNS`]. Neither list has a
 /// place: a name like a track's would read as the track the lobby races on.
 const LOBBY_ADJECTIVES: &[&str] = &[
@@ -56,11 +58,75 @@ pub(crate) fn name_to_add(line: &str, name: &str) -> Option<String> {
     if !line.split_whitespace().eq(["/lobby", "create", "public"]) {
         return None;
     }
-    Some(if line.ends_with(char::is_whitespace) {
+    Some(after_the_line(line, name))
+}
+
+/// `name` as what `line` takes to have it after its last word, with a space if it needs one.
+fn after_the_line(line: &str, name: &str) -> String {
+    if line.ends_with(char::is_whitespace) {
         name.to_string()
     } else {
         format!(" {name}")
-    })
+    }
+}
+
+/// A name the command line offers in grey, and whose portrait goes with it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Offer<'a> {
+    pub name: &'a str,
+    /// In `CHARACTERS` order.
+    pub character: usize,
+}
+
+/// The characters, as what `/character` offers.
+pub(crate) fn characters() -> impl Iterator<Item = Offer<'static>> {
+    CHARACTERS
+        .iter()
+        .enumerate()
+        .map(|(character, name)| Offer { name, character })
+}
+
+/// What `line` has typed after `command`, if it is that command.
+pub(crate) fn typed_after<'l>(line: &'l str, command: &str) -> Option<&'l str> {
+    let rest = line.strip_prefix(command)?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim_start())
+}
+
+/// Whether `name` starts with `typed`, in any ASCII case (as `Lobby::player_named` reads names).
+fn starts_with(name: &str, typed: &str) -> bool {
+    name.as_bytes()
+        .get(..typed.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(typed.as_bytes()))
+}
+
+/// The offers that what is typed can still come to, each name once.
+pub(crate) fn matching<'a>(typed: &str, offers: impl Iterator<Item = Offer<'a>>) -> Vec<Offer<'a>> {
+    let mut found: Vec<Offer> = Vec::new();
+    for offer in offers.filter(|o| starts_with(o.name, typed)) {
+        if found.iter().all(|o| o.name != offer.name) {
+            found.push(offer);
+        }
+    }
+    found
+}
+
+/// Of the offers [`matching`] what is typed: the one called `wanted`, or else the one it names
+/// whole, so that a longer name does not take its place, or else the first.
+pub(crate) fn pick<'a>(offers: &[Offer<'a>], wanted: &str, typed: &str) -> Option<Offer<'a>> {
+    let find = |test: &dyn Fn(&Offer) -> bool| offers.iter().find(|o| test(o)).copied();
+    find(&|o| o.name == wanted)
+        .or_else(|| find(&|o| o.name.eq_ignore_ascii_case(typed)))
+        .or_else(|| offers.first().copied())
+}
+
+/// What `line`, which has `typed` of it, takes to name `name`: none if it does.
+pub(crate) fn rest_of_name(line: &str, typed: &str, name: &str) -> Option<String> {
+    if typed.is_empty() {
+        return Some(after_the_line(line, name));
+    }
+    name.get(typed.len()..)
+        .filter(|rest| !rest.is_empty())
+        .map(str::to_string)
 }
 
 /// A command, subcommand or value, and what can follow it.
@@ -160,8 +226,13 @@ pub(crate) const COMMANDS: &[Spec] = &[
     ),
     takes(
         "promote",
-        "Make a player the host of the lobby (the host only)",
+        "Make a player the host (the host only): type a name, or keep the grey one (Up, Down: another)",
         "<player>",
+    ),
+    takes(
+        "character",
+        "Who to drive: type a name, or keep the grey one (Up, Down: another)",
+        "[type a name]",
     ),
     node(
         "config",
@@ -483,7 +554,17 @@ mod tests {
         assert_eq!(
             names("/"),
             [
-                "lobby", "race", "cup", "promote", "config", "version", "net", "track", "cache", "debug"
+                "lobby",
+                "race",
+                "cup",
+                "promote",
+                "character",
+                "config",
+                "version",
+                "net",
+                "track",
+                "cache",
+                "debug"
             ]
         );
         assert_eq!(names("/r"), ["race"]);
@@ -528,6 +609,42 @@ mod tests {
         let menu = Menu::of(line).unwrap();
         assert_eq!(menu.pick(line, 0), Some(("/lobby join ".into(), false)));
         assert_eq!(menu.pick(line, 1), None);
+    }
+
+    #[test]
+    fn offers_narrow_down_to_what_is_typed() {
+        let named = |typed| -> Vec<&str> {
+            matching(typed, characters()).iter().map(|o| o.name).collect()
+        };
+        assert_eq!(named("").len(), CHARACTERS.len());
+        assert_eq!(named("n. t"), ["N. Tropy"]);
+        assert_eq!(named("PE"), ["Penta"]);
+        assert_eq!(named("fake "), ["Fake Crash"]);
+        assert!(named("nobody").is_empty());
+        assert_eq!(typed_after("/character", "/character"), Some(""));
+        assert_eq!(typed_after("/character  Pe", "/character"), Some("Pe"));
+        assert_eq!(typed_after("/characters", "/character"), None);
+
+        assert_eq!(rest_of_name("/character", "", "Penta").unwrap(), " Penta");
+        assert_eq!(rest_of_name("/character ", "", "Penta").unwrap(), "Penta");
+        assert_eq!(rest_of_name("/character pe", "pe", "Penta").unwrap(), "nta");
+        assert_eq!(rest_of_name("/character penta", "penta", "Penta"), None);
+    }
+
+    #[test]
+    fn a_players_name_is_any_text() {
+        let offer = |name| Offer { name, character: 0 };
+        let players = [offer("Äijä"), offer("Bobby"), offer("Bob"), offer("Bob")];
+        let found = |typed| matching(typed, players.iter().copied());
+        // (Part of a character of more than a byte is no prefix.)
+        assert_eq!(found("Äi"), [players[0]]);
+        assert_eq!(rest_of_name("/promote Äi", "Äi", "Äijä").unwrap(), "jä");
+        assert!(found("ä").is_empty());
+        // Each name once, and a name typed whole goes before a longer one.
+        assert_eq!(found("bob").len(), 2);
+        assert_eq!(pick(&found("bob"), "", "bob").unwrap().name, "Bob");
+        assert_eq!(pick(&found("bob"), "Bobby", "bob").unwrap().name, "Bobby");
+        assert_eq!(pick(&found("b"), "", "b").unwrap().name, "Bobby");
     }
 
     /// Every word of the tree is a command `Action::parse` knows: a leaf parses, and one that

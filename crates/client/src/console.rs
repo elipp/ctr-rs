@@ -25,6 +25,7 @@ use bevy::log::tracing_subscriber::Layer;
 use bevy::log::tracing_subscriber::layer::Context;
 use bevy::log::{BoxedLayer, Level};
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 
 use crate::command::{self, CommandLine};
 use crate::leaderboard::{Portraits, load_portraits};
@@ -244,7 +245,9 @@ impl Plugin for ConsolePlugin {
         app.init_resource::<Console>()
             .add_message::<Log>()
             .add_systems(Startup, spawn)
-            .add_systems(Update, (collect, scroll, fade, rebuild).chain());
+            .add_systems(Update, (collect, scroll, fade, rebuild).chain())
+            // (Before the layout, for one that appears to take its room right away.)
+            .add_systems(PostUpdate, draw_small_portraits.before(UiSystems::Prepare));
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, sync_with_page);
     }
@@ -369,6 +372,61 @@ fn scroll(
     }
 }
 
+/// The portrait of a character as large as the text is tall, as in the chat and after a name the
+/// command line offers. With no character (`None`) it takes up no room.
+#[derive(Component)]
+pub(crate) struct SmallPortrait(pub(crate) Option<usize>);
+
+/// A [`SmallPortrait`] that is as opaque as `alpha`.
+pub(crate) fn small_portrait(character: Option<usize>, alpha: f32) -> impl Bundle {
+    (
+        SmallPortrait(character),
+        ImageNode::default()
+            .with_mode(NodeImageMode::Stretch)
+            .with_color(Color::WHITE.with_alpha(alpha)),
+        Node {
+            display: Display::None,
+            width: Val::Px(ICON_SIZE.x),
+            height: Val::Px(ICON_SIZE.y),
+            flex_shrink: 0.0,
+            ..default()
+        },
+    )
+}
+
+/// Draws each [`SmallPortrait`] that is new or shows another character now. The portraits are made
+/// when the first one needs them (the lobby's lists may have by then).
+fn draw_small_portraits(
+    mut portraits: Query<(&SmallPortrait, &mut ImageNode, &mut Node), Changed<SmallPortrait>>,
+    textures: Res<crate::Textures>,
+    mut images: ResMut<Assets<Image>>,
+    atlas: Option<Res<Portraits>>,
+    mut commands: Commands,
+) {
+    let mut atlas = atlas.map(|a| a.0.clone());
+    for (portrait, mut image, mut node) in &mut portraits {
+        let Some(character) = portrait.0 else {
+            node.display = Display::None;
+            continue;
+        };
+        let character = character.min(ICON_IDS.len() - 1);
+        node.display = Display::Flex;
+        image.rect = Some(Rect::new(
+            0.0,
+            (character * HEIGHT) as f32,
+            WIDTH as f32,
+            ((character + 1) * HEIGHT) as f32,
+        ));
+        image.image = atlas
+            .get_or_insert_with(|| {
+                let handle = load_portraits(&textures.vram, &mut images);
+                commands.insert_resource(Portraits(handle.clone()));
+                handle
+            })
+            .clone();
+    }
+}
+
 /// How opaque something is that holds for `hold` seconds, `idle` seconds after something last
 /// happened to the window.
 fn opacity(idle: f32, hold: f32) -> f32 {
@@ -438,9 +496,6 @@ fn rebuild(
     console: Res<Console>,
     areas: Query<Entity, With<LogArea>>,
     mut commands: Commands,
-    textures: Res<crate::Textures>,
-    mut images: ResMut<Assets<Image>>,
-    portraits: Option<Res<Portraits>>,
     time: Res<Time<Real>>,
     mut shown: Local<Option<(Entity, u32, usize)>>,
 ) {
@@ -457,39 +512,20 @@ fn rebuild(
     commands.entity(area).despawn_children();
     let end = console.lines.len() - console.scroll;
     let start = end.saturating_sub(VISIBLE);
-    // The portraits are made when the first line needs them (the lobby's lists may have by then).
-    let mut atlas = portraits.map(|p| p.0.clone());
     for line in console.lines.range(start..end) {
-        if line.icon.is_some() && atlas.is_none() {
-            let handle = load_portraits(&textures.vram, &mut images);
-            commands.insert_resource(Portraits(handle.clone()));
-            atlas = Some(handle);
-        }
-        spawn_line(
-            &mut commands,
-            area,
-            line,
-            console.text_alpha(line.at, now),
-            atlas.as_ref(),
-        );
+        spawn_line(&mut commands, area, line, console.text_alpha(line.at, now));
     }
     if console.scroll > 0 {
         let mut footer = Log::colored(format!("-- {} newer --", console.scroll), DIM_COLOR);
         // (Never fades.)
         footer.at = f32::INFINITY;
-        spawn_line(&mut commands, area, &footer, 1.0, None);
+        spawn_line(&mut commands, area, &footer, 1.0);
     }
 }
 
 /// A line in the area: the first piece is the text, and the others spans of it. With a portrait
 /// the two are side by side, and the text wraps in what is left of the width.
-fn spawn_line(
-    commands: &mut Commands,
-    area: Entity,
-    line: &Log,
-    alpha: f32,
-    portraits: Option<&Handle<Image>>,
-) {
+fn spawn_line(commands: &mut Commands, area: Entity, line: &Log, alpha: f32) {
     let font = TextFont {
         font_size: FONT_SIZE.into(),
         ..default()
@@ -504,8 +540,7 @@ fn spawn_line(
         ..default()
     };
     let mut parent = area;
-    if let Some((character, portraits)) = line.icon.zip(portraits) {
-        let character = (character as usize).min(ICON_IDS.len() - 1);
+    if let Some(character) = line.icon {
         parent = commands
             .spawn((
                 Node {
@@ -519,21 +554,7 @@ fn spawn_line(
         commands.spawn((
             ChatIcon,
             Born(line.at),
-            ImageNode::new(portraits.clone())
-                .with_rect(Rect::new(
-                    0.0,
-                    (character * HEIGHT) as f32,
-                    WIDTH as f32,
-                    ((character + 1) * HEIGHT) as f32,
-                ))
-                .with_mode(NodeImageMode::Stretch)
-                .with_color(Color::WHITE.with_alpha(alpha)),
-            Node {
-                width: Val::Px(ICON_SIZE.x),
-                height: Val::Px(ICON_SIZE.y),
-                flex_shrink: 0.0,
-                ..default()
-            },
+            small_portrait(Some(character as usize), alpha),
             ChildOf(parent),
         ));
         node = Node {

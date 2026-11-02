@@ -35,6 +35,22 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
 #[derive(Resource, Default)]
 pub(crate) struct LevelBeforeRace(pub(crate) Option<u32>);
 
+/// The character `/character` asked for, until [`switch_level`] has switched to it.
+#[derive(Resource, Default)]
+pub(crate) struct PickedRacer(Option<u32>);
+
+/// Keeps what `/character` asks for, for [`switch_level`].
+pub(crate) fn pick_racer(
+    mut actions: MessageReader<command::Action>,
+    mut picked: ResMut<PickedRacer>,
+) {
+    for action in actions.read() {
+        if let command::Action::Character(character) = action {
+            picked.0 = Some(*character);
+        }
+    }
+}
+
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
 /// the previous racer. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
@@ -95,6 +111,11 @@ pub(crate) fn switch_level(world: &mut World) {
         (level_step, racer_step) = (0, 0);
     }
     let mut options = *world.resource::<Options>();
+    // (In a race the lobby has already refused it.)
+    let picked = world.resource_mut::<PickedRacer>().0.take();
+    if let Some(picked) = picked.filter(|_| race_track.is_none()) {
+        racer_step = picked as i32 - options.racer as i32;
+    }
     let current = world.resource::<LevelNumber>().0;
     let wanted = race_track
         .filter(|&track| track != current && !missing)

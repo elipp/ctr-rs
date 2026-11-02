@@ -7,7 +7,9 @@
 //! follow it. Otherwise Up and Down go through the lines sent before.
 //!
 //! `/lobby create public` shows a name for the lobby in grey: Up and Down change it, Tab or Return
-//! takes it, and typing replaces it.
+//! takes it, and typing replaces it. `/character` and `/promote` offer the characters and the
+//! players the same way, with the portrait of the one offered after the name; typing narrows them
+//! down to the names that start with what is typed.
 //!
 //! The line is edited as in a shell: the arrows, Home and End move the cursor, and Ctrl A, E, B, F
 //! (Alt B, F by a word), Ctrl W, U, K, D, H and Alt D delete. Page
@@ -30,7 +32,7 @@ use bevy::prelude::*;
 use bevy::text::TextBackgroundColor;
 use net::Ticket;
 
-use crate::console::{Console, Log, PAGE};
+use crate::console::{Console, Log, PAGE, SmallPortrait, small_portrait};
 use crate::suggest::{self, Menu};
 
 /// Something a player can ask for with a `/command`. The command only sends it; what it does is
@@ -51,6 +53,8 @@ pub enum Action {
     /// Hand the lobby over to the player called that (a nickname or the short key): they host it
     /// from now on, and we are a guest of theirs (the host only, between races).
     Promote(String),
+    /// Drive that character (`CHARACTERS` order), as the keys `.` and `,` go to the next.
+    Character(u32),
     /// Delete the maps other players sent us (`maps::purge`).
     PurgeCache,
     /// Lists the tracks there are (`/track list`).
@@ -130,6 +134,7 @@ const LOBBY_USAGE: &str =
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
 const TRACK_USAGE: &str = "Usage: /track list";
+const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon), or its number (/track list)";
@@ -165,6 +170,17 @@ impl Action {
             "cup" => Action::cup(rest),
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
             "promote" => Ok(Action::Promote(rest.into())),
+            "character" if rest.is_empty() => Err(CHARACTER_USAGE.into()),
+            "character" => crate::CHARACTERS
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(rest))
+                .map(|character| Action::Character(character as u32))
+                .ok_or_else(|| {
+                    format!(
+                        "No character is called {rest}: {}",
+                        crate::CHARACTERS.join(", ")
+                    )
+                }),
             "cache" => Action::cache(rest),
             "track" => Action::track(rest),
             "config" => Action::config(rest),
@@ -487,6 +503,11 @@ pub(crate) struct CommandLine {
     /// Which name a public lobby is offered (`suggest::lobby_name_at`), new each time the line
     /// opens.
     lobby_name_index: u64,
+    /// The name to offer if the line can come to it (`suggest::pick`): at first, the character we
+    /// drive.
+    wanted: String,
+    /// Who `/promote` offers: each one's name and character.
+    players: Vec<(String, usize)>,
     /// Where the cursor is in the text: a byte offset, always at a character.
     cursor: usize,
 }
@@ -661,15 +682,15 @@ impl CommandLine {
         done
     }
 
-    /// The name to show in grey after the line, with a space if the line needs one.
-    fn ghost(&self) -> Option<String> {
+    /// The name of a public lobby to show in grey, with a space if the line needs one.
+    fn lobby_ghost(&self) -> Option<String> {
         suggest::name_to_add(&self.text, &suggest::lobby_name_at(self.lobby_name_index))
     }
 
     /// Up or Down through the names offered, so that Up goes back to the last: false if none is
     /// shown.
     fn cycle_lobby_name(&mut self, down: bool) -> bool {
-        if self.ghost().is_none() {
+        if self.lobby_ghost().is_none() {
             return false;
         }
         let step = if down {
@@ -679,6 +700,52 @@ impl CommandLine {
         };
         self.lobby_name_index = (self.lobby_name_index + step) % suggest::LOBBY_NAME_COUNT;
         true
+    }
+
+    /// What the line has typed of a name it is offered, and the offers it can still come to.
+    fn offers(&self) -> Option<(&str, Vec<suggest::Offer<'_>>)> {
+        if let Some(typed) = suggest::typed_after(&self.text, "/character") {
+            return Some((typed, suggest::matching(typed, suggest::characters())));
+        }
+        let typed = suggest::typed_after(&self.text, "/promote")?;
+        let players = self.players.iter().map(|(name, character)| suggest::Offer {
+            name,
+            character: *character,
+        });
+        Some((typed, suggest::matching(typed, players)))
+    }
+
+    /// The one the line is about to name, or names.
+    fn offer(&self) -> Option<suggest::Offer<'_>> {
+        let (typed, offers) = self.offers()?;
+        suggest::pick(&offers, &self.wanted, typed)
+    }
+
+    /// What to show in grey after the line, with a space if the line needs one.
+    fn ghost(&self) -> Option<String> {
+        self.lobby_ghost().or_else(|| {
+            let (typed, offers) = self.offers()?;
+            let offer = suggest::pick(&offers, &self.wanted, typed)?;
+            suggest::rest_of_name(&self.text, typed, offer.name)
+        })
+    }
+
+    /// Up or Down through the offers the line can come to: false if there is no other, or the line
+    /// is one of the history's.
+    fn cycle_offer(&mut self, down: bool) -> bool {
+        let next = self.offers().and_then(|(typed, offers)| {
+            let current = suggest::pick(&offers, &self.wanted, typed)?;
+            let at = offers.iter().position(|o| o.name == current.name)?;
+            let step = if down { 1 } else { offers.len() - 1 };
+            (offers.len() > 1).then(|| offers[(at + step) % offers.len()].name.to_string())
+        });
+        match next.filter(|_| self.browsing.is_none()) {
+            Some(name) => {
+                self.wanted = name;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Takes the name shown in grey: false if there is none.
@@ -740,6 +807,10 @@ struct InputRow;
 #[derive(Component)]
 struct Suggestions;
 
+/// The portrait of who the line offers, after the name.
+#[derive(Component)]
+struct OfferIcon;
+
 pub struct CommandPlugin;
 
 impl Plugin for CommandPlugin {
@@ -747,7 +818,7 @@ impl Plugin for CommandPlugin {
         app.init_resource::<CommandLine>()
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
-            .add_systems(Update, (open, submit, show).chain());
+            .add_systems(Update, (open, submit, show, show_offer_icon).chain());
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, tell_page.after(submit));
     }
@@ -820,12 +891,18 @@ pub(crate) fn capture(
                 line.moved_selection = false;
             }
             Key::ArrowUp => {
-                if !line.cycle_lobby_name(false) && !line.step(false) {
+                if !line.cycle_lobby_name(false)
+                    && !line.cycle_offer(false)
+                    && !line.step(false)
+                {
                     line.older();
                 }
             }
             Key::ArrowDown => {
-                if !line.cycle_lobby_name(true) && !line.step(true) {
+                if !line.cycle_lobby_name(true)
+                    && !line.cycle_offer(true)
+                    && !line.step(true)
+                {
                     line.newer();
                 }
             }
@@ -889,9 +966,22 @@ fn paste(_: &mut CommandLine) {
 }
 
 /// Return opens the line, unless we are typing in it already.
-fn open(keys: Res<ButtonInput<KeyCode>>, time: Res<Time<Real>>, mut line: ResMut<CommandLine>) {
+fn open(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<Real>>,
+    options: Res<crate::Options>,
+    lobby: Res<crate::lobby::Lobby>,
+    mut line: ResMut<CommandLine>,
+) {
+    if line.open || keys.just_pressed(KeyCode::Enter) {
+        line.players = lobby
+            .promotable()
+            .map(|(character, name)| (name.to_string(), character as usize))
+            .collect();
+    }
     if !line.open && keys.just_pressed(KeyCode::Enter) {
         line.open = true;
+        line.wanted = crate::CHARACTERS[options.racer as usize].to_string();
         // (A browser's std hasher has fixed keys: the time is what differs there.)
         let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
         line.lobby_name_index = seed % suggest::LOBBY_NAME_COUNT;
@@ -984,25 +1074,37 @@ pub(crate) fn input_row() -> impl Bundle {
                 Visibility::Hidden,
             ),
             (
-                CommandText,
-                Text::new("> "),
-                // (As in the console: what is typed wraps too.)
-                TextLayout::linebreak(LineBreak::WordOrCharacter),
-                font.clone(),
                 Node {
-                    padding: UiRect::all(Val::Px(8.0)),
+                    align_items: AlignItems::Center,
                     ..default()
                 },
                 BackgroundColor(Color::BLACK),
                 children![
                     (
-                        CursorSpan,
-                        TextSpan::new(" "),
+                        CommandText,
+                        Text::new("> "),
+                        // (As in the console: what is typed wraps too.)
+                        TextLayout::linebreak(LineBreak::WordOrCharacter),
                         font.clone(),
-                        TextBackgroundColor(Color::NONE),
+                        Node {
+                            padding: UiRect::all(Val::Px(8.0)),
+                            ..default()
+                        },
+                        children![
+                            (
+                                CursorSpan,
+                                TextSpan::new(" "),
+                                font.clone(),
+                                TextBackgroundColor(Color::NONE),
+                            ),
+                            (AfterSpan, TextSpan::new(""), font.clone()),
+                            (GhostSpan, TextSpan::new(""), font, TextColor(ABOUT)),
+                        ],
                     ),
-                    (AfterSpan, TextSpan::new(""), font.clone()),
-                    (GhostSpan, TextSpan::new(""), font, TextColor(ABOUT)),
+                    (
+                        OfferIcon,
+                        small_portrait(None, 1.0),
+                    ),
                 ],
             ),
         ],
@@ -1119,6 +1221,22 @@ fn show(
             TextColor(ABOUT),
             ChildOf(list),
         ));
+    }
+}
+
+/// The portrait after the line, while it offers or names someone.
+fn show_offer_icon(
+    line: Res<CommandLine>,
+    mut icons: Query<&mut SmallPortrait, With<OfferIcon>>,
+) {
+    let character = line
+        .open
+        .then(|| line.offer().map(|offer| offer.character))
+        .flatten();
+    for mut icon in &mut icons {
+        if icon.0 != character {
+            icon.0 = character;
+        }
     }
 }
 
@@ -1406,6 +1524,94 @@ mod tests {
         assert_eq!(line.ghost(), None);
         line.enter();
         assert_eq!(line.text, "/lobby create");
+    }
+
+    #[test]
+    fn a_character_is_offered() {
+        let offered = |name: &str| {
+            let mut line = typed("/character ");
+            line.wanted = name.to_string();
+            line
+        };
+        // Return takes the one we drive.
+        let mut line = offered("Penta");
+        assert_eq!(line.ghost().as_deref(), Some("Penta"));
+        line.enter();
+        assert_eq!(line.text, "/character Penta");
+        assert!(line.entered);
+        assert!(matches!(
+            Action::parse("character Penta"),
+            Ok(Action::Character(13))
+        ));
+        // The arrows go round.
+        let mut line = offered("Crash");
+        assert!(line.cycle_offer(false));
+        assert_eq!(line.ghost().as_deref(), Some("Oxide"));
+        assert!(line.cycle_offer(true));
+        assert_eq!(line.ghost().as_deref(), Some("Crash"));
+        // Picking the command stops to show it.
+        let mut line = typed("/charac");
+        line.wanted = "Penta".into();
+        line.enter();
+        assert_eq!(line.text, "/character ");
+        assert!(!line.entered);
+        assert_eq!(line.ghost().as_deref(), Some("Penta"));
+        // Typing narrows the names down, and the arrows stay among those.
+        let mut line = offered("Crash");
+        line.insert("n");
+        assert_eq!(line.ghost().as_deref(), Some(". Gin"));
+        assert!(line.cycle_offer(true));
+        assert_eq!(line.offer().map(|o| o.character), Some(12));
+        assert_eq!(line.ghost().as_deref(), Some(". Tropy"));
+        line.enter();
+        assert_eq!(line.text, "/character n. Tropy");
+        assert!(matches!(
+            Action::parse("character n. Tropy"),
+            Ok(Action::Character(12))
+        ));
+        // A whole name has its portrait, and the arrows go to the history.
+        let mut line = typed("/character Penta");
+        assert_eq!(line.offer().map(|o| o.character), Some(13));
+        assert_eq!(line.ghost(), None);
+        assert!(!line.cycle_offer(false));
+        // None by that name.
+        let line = typed("/character nobody");
+        assert_eq!(line.offer(), None);
+        assert!(Action::parse("character nobody").unwrap_err().contains("Oxide"));
+        assert!(Action::parse("character").unwrap_err().starts_with("Usage"));
+        // Other lines have none.
+        assert_eq!(typed("/race ").offer(), None);
+    }
+
+    #[test]
+    fn a_player_is_offered_to_promote() {
+        let players = |text: &str| {
+            let mut line = typed(text);
+            line.wanted = "Crash".into();
+            line.players = vec![("Penta".into(), 13), ("Bob".into(), 3)];
+            line
+        };
+        let mut line = players("/promote ");
+        assert_eq!(line.ghost().as_deref(), Some("Penta"));
+        assert_eq!(line.offer().map(|o| o.character), Some(13));
+        assert!(line.cycle_offer(true));
+        assert_eq!(line.ghost().as_deref(), Some("Bob"));
+        assert_eq!(line.offer().map(|o| o.character), Some(3));
+        line.enter();
+        assert_eq!(line.text, "/promote Bob");
+        assert!(line.entered);
+        // Typed part of the way.
+        let mut line = players("/promote b");
+        assert_eq!(line.ghost().as_deref(), Some("ob"));
+        assert!(!line.cycle_offer(true));
+        line.enter();
+        assert_eq!(line.text, "/promote bob");
+        // A key, or a guest's line with nobody to offer, goes as it was typed.
+        let mut line = players("/promote abcde");
+        assert_eq!(line.ghost(), None);
+        line.enter();
+        assert_eq!(line.text, "/promote abcde");
+        assert_eq!(typed("/promote ").ghost(), None);
     }
 
     #[test]
