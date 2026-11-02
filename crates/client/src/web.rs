@@ -58,6 +58,10 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrTakeRacerStep)]
     pub fn take_racer_step() -> i32;
 
+    /// Draws at that part of the screen's resolution from now on.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSetRenderScale)]
+    pub fn set_render_scale(scale: f32);
+
     /// The settings the page keeps, none if it has none or cannot read them.
     #[wasm_bindgen(js_namespace = window, js_name = ctrLoadConfig)]
     pub fn load_config() -> Option<String>;

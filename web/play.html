@@ -123,6 +123,40 @@
   </div>
 </div>
 <script>
+// `/config set render-scale`: the game sizes its picture by this ratio, and the page stretches it
+// to the canvas. Without the exact size that the browser can report, it has to go by the ratio. A
+// change is told as the browser tells of a moved window's, on the query the game listens to.
+let renderScale = 1;
+try {
+  const scale = JSON.parse(localStorage.getItem("ctr-rs.config"))?.render_scale;
+  if (scale >= 0.25 && scale <= 1) renderScale = scale;
+} catch (e) {
+  console.warn(`could not read the render scale: ${e}`);
+}
+const screenRatio = Object.getOwnPropertyDescriptor(window, "devicePixelRatio").get.bind(window);
+Object.defineProperty(window, "devicePixelRatio", { get: () => screenRatio() * renderScale });
+delete ResizeObserverEntry.prototype.devicePixelContentBoxSize;
+let ratioQuery = null;
+const matchMedia = window.matchMedia.bind(window);
+window.matchMedia = (query) => {
+  const list = matchMedia(query);
+  const ratio = /resolution:\s*([\d.]+)dppx/.exec(query);
+  if (ratio === null) return list;
+  ratioQuery = list;
+  // (The real one goes by the screen, which the scale does not change.)
+  return new Proxy(list, {
+    get(target, name) {
+      if (name === "matches") return Math.abs(Number(ratio[1]) - devicePixelRatio) < 0.001;
+      const value = target[name];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+};
+window.ctrSetRenderScale = (scale) => {
+  renderScale = scale;
+  ratioQuery?.dispatchEvent(new Event("change"));
+};
+
 // Sound only starts after a key or click, so the game's audio contexts are resumed on one.
 // Must run before client.js is imported.
 const audio = [];

@@ -191,6 +191,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "The most frames to draw a second, 0 for no limit",
                     "<frames a second>",
                 ),
+                #[cfg(target_arch = "wasm32")]
+                takes(
+                    "render-scale",
+                    "The part of the screen's resolution to draw at",
+                    "<0.25 to 1>",
+                ),
                 node(
                     "msaa",
                     "Anti-aliasing samples of the cameras",
