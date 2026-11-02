@@ -21,7 +21,7 @@ use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player,
+    ALPN, Command, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player,
     Public, RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
 
@@ -45,10 +45,10 @@ fn handoff_problem(host: &HostState, me: EndpointId, to: EndpointId) -> Option<&
         return Some(NOT_NOW);
     }
     if host.racing {
-        return Some("Cannot promote during a race");
+        return Some(NOT_NOW);
     }
     if host.start_wanted.is_some() || !host.transfers.idle() {
-        return Some("Cannot promote while a race starts or a map is sent");
+        return Some(NOT_NOW);
     }
     match host
         .guests

@@ -131,6 +131,10 @@ fn endpoint_builder() -> Builder {
     builder
 }
 
+/// What a player is told of a request that cannot be taken at this moment (the lobby is in a
+/// race, a promotion is under way, ...), when the reason is plain to see.
+pub const NOT_NOW: &str = "You can't do that right now";
+
 /// What the clients speak, exchanged in the connection handshake.
 pub const ALPN: &[u8] = b"ctr-rust/lobby/11";
 

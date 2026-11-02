@@ -707,7 +707,7 @@ fn a_handover_is_turned_down_in_a_race() {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
     }
     host.promote(ids[1]);
-    refused(&host, "in a race");
+    refused(&host, "right now");
     // The guest stays a guest of the host.
     std::thread::sleep(Duration::from_secs(1));
     for event in guest.poll() {
