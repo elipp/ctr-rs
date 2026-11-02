@@ -11,6 +11,7 @@
 //! (the game predicts them until then, see `race::rollback`).
 
 mod conn;
+mod dotless;
 mod limit;
 mod names;
 mod peers;
@@ -41,11 +42,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use iroh::{Endpoint, RelayConfig, RelayMode, RelayUrl};
+use iroh::address_lookup::{PkarrPublisher, PkarrResolver};
+use iroh::{Endpoint, RelayConfig, RelayMap, RelayMode, RelayUrl};
 use iroh::endpoint::{Builder, Connection, presets};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
+use crate::dotless::Dotless;
 use crate::peers::Role;
 use crate::session::run;
 
@@ -90,6 +93,18 @@ pub fn set_relays(urls: &[String]) {
     *RELAYS.lock().unwrap() = relays;
 }
 
+fn public_relays() -> RelayMap {
+    iroh::defaults::prod::default_relay_map()
+        .relays::<Vec<_>>()
+        .into_iter()
+        .map(|relay| {
+            let mut relay = (*relay).clone();
+            relay.url = dotless::without_dot(&relay.url);
+            relay
+        })
+        .collect()
+}
+
 /// The relays besides iroh's public ones, each once: those set with [`set_relays`], then the URLs
 /// in `CTR_RELAYS` (separated by commas or spaces).
 pub fn extra_relays() -> Vec<RelayUrl> {
@@ -111,7 +126,7 @@ pub fn extra_relays() -> Vec<RelayUrl> {
 /// The relays an endpoint may use: iroh's public ones and [`extra_relays`]. An endpoint takes the
 /// nearest as its home relay.
 fn relay_mode() -> RelayMode {
-    let map = iroh::defaults::prod::default_relay_map();
+    let map = public_relays();
     for url in extra_relays() {
         // (The QUIC address discovery is on the default port, as in relay/relay.toml.)
         map.insert(url.clone(), RelayConfig::new(url, Some(Default::default())).into());
@@ -121,7 +136,14 @@ fn relay_mode() -> RelayMode {
 
 /// The endpoint of a session or a fetch, as [`set_relay_only`] says.
 fn endpoint_builder() -> Builder {
-    let builder = Endpoint::builder(presets::N0).relay_mode(relay_mode());
+    // The preset's lookups, its resolvers wrapped.
+    let builder = Endpoint::builder(presets::N0)
+        .clear_address_lookup()
+        .address_lookup(PkarrPublisher::n0_dns())
+        .address_lookup(Dotless(PkarrResolver::n0_dns()));
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder = builder.address_lookup(Dotless(iroh::address_lookup::DnsAddressLookup::n0_dns()));
+    let builder = builder.relay_mode(relay_mode());
     // (A browser has no sockets of its own: there the relay is the only way already.)
     #[cfg(not(target_arch = "wasm32"))]
     if RELAY_ONLY.load(Ordering::Relaxed) {
@@ -634,5 +656,19 @@ mod relay_url_tests {
         assert_eq!(parse_relay("relay.example.com").unwrap(), parse_relay("https://relay.example.com").unwrap());
         assert!(parse_relay("http://relay.example.com").unwrap().starts_with("http://"));
         assert!(parse_relay("relay.example.com:8443").unwrap().contains(":8443"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_relays_have_no_trailing_dot() {
+        let urls: Vec<RelayUrl> = public_relays().urls();
+        assert_eq!(urls.len(), iroh::defaults::prod::default_relay_map().len());
+        for url in urls {
+            assert!(!url.host_str().unwrap().ends_with('.'), "{url}");
+        }
     }
 }
