@@ -111,7 +111,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
             )
         }
     });
-    debug!("level {id:#x} ({}): loaded from its map", maps::name(id));
+    debug!("level {id:#x} ({}): loaded from its track file", maps::name(id));
     // A map brings its own level and texture pages; the shared ones are the disc's.
     let mut vram = Vram::default();
     for img in &map.vram {

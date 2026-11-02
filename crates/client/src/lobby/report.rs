@@ -167,7 +167,7 @@ pub(super) fn report(
             ),
             Event::Blob { track, hash, bytes } => match maps::receive(track, hash, &bytes) {
                 Ok(()) => {
-                    debug!("received map {track:#x} ({} bytes)", bytes.len());
+                    debug!("received track {track:#x} ({} bytes)", bytes.len());
                     got_map = Some(track);
                 }
                 Err(why) => map_failed = Some(format!("Could not use the track sent: {why}")),

@@ -77,7 +77,6 @@ This file is for the places where the port _intentionally_ differs from the orig
 - The race's end plays the win's jingle as our kart finishes first, the loss's otherwise; retail plays the win's in a cup whatever the place, and N. Tropy's lines after a time trial.
 - A race on a level without the fly-in starts at the traffic lights (`AUDIO_TRAFFIC`), with no jingle; retail's arcade tracks all start in `AUDIO_RACE_INTRO`, and its battle arenas at the lights. (The fly-in's jingle: see `howl::state`.)
 - All 33 song packs and their samples are loaded at start (1.7 MB more); retail loads the level's pack and music bank as the level loads.
-- A map has no song pack, so no music (its number is past the levels' table, as for its reverb). Nor do the adventure hubs play theirs as retail does (no song sets, `SongPool_AdvHub*`).
 - A note whose delay never runs out with an opcode the game does not have hangs retail; here its sequence just stops. No song of the game has one.
 
 **XA (2026-10-28, NOT listened to in a race; the tracks rendered with `--example render` sound right by their length and loudness):** `loader::xa` (`XA/ENG.XNF`, `NativeAudio_PrepareXAStream`, `NativeAudio_DecodeXASector*`), `howl::xa` (the CD's input as `NativeAudio_MixFrame` plays it, with the zig-zag interpolation; `CDSYS_XAPlay`, `_XAPauseRequest`, `_XAPauseForce`, `_XAPauseAtEnd` of the native path), the voice lines (`Voiceline_StartPlay`'s tracks and cooldown) and the race's states (`AUDIO_FINAL_LAP`, `AUDIO_RACE_END`), and `client::sound::stream_xa`. Intentional differences:

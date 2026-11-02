@@ -194,7 +194,7 @@ pub(super) fn run(
             Action::PurgeCache => match maps::purge() {
                 Ok(0) => "The cache is empty",
                 Ok(n) => {
-                    debug!("deleted {n} cached map(s)");
+                    debug!("deleted {n} cached track(s)");
                     toasts.write(Toast::new(format!("Deleted {n} cached track(s)"), 2500));
                     continue;
                 }

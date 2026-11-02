@@ -33,7 +33,7 @@ A build from the [releases](https://github.com/elipp/ctr-rs/releases) asks for t
 
 The client has no command line options. `]` and `[` switch the level, `.` and `,` switch the racer, and `/` commands go through the in-game console.
 
-`ctr-query` (`crates/query`) looks up a level's data from the disc, and `ctr-map` (`crates/map`) imports and describes maps.
+`ctr-query` (`crates/query`) looks up a level's data from the disc, and `ctr-map` (`crates/map`) imports and describes custom tracks.
 
 ## Running the tests
 
@@ -63,7 +63,7 @@ ctr-rs is a Rust port that works from these projects. It is not a fork of any of
 
 ## Notice
 
-ctr-rs is an independent fan project, not affiliated with or endorsed by Sony Interactive Entertainment, Activision Publishing, Naughty Dog or any other rights holder. It ships no game content: no art, models, textures, sounds, music, levels or disc contents. You provide your own legally obtained copy of the game, and everything is read from it at runtime. Custom maps are not shipped either: you import them yourself from patches you have obtained.
+ctr-rs is an independent fan project, not affiliated with or endorsed by Sony Interactive Entertainment, Activision Publishing, Naughty Dog or any other rights holder. It ships no game content: no art, models, textures, sounds, music, levels or disc contents. You provide your own legally obtained copy of the game, and everything is read from it at runtime. Custom tracks are not shipped either: you import them yourself from patches you have obtained.
 
 Crash Team Racing was developed by Naughty Dog and published by Sony Computer Entertainment. Crash Bandicoot and Crash Team Racing are trademarks of Activision Publishing, Inc. PlayStation is a trademark of Sony Interactive Entertainment Inc.
 
