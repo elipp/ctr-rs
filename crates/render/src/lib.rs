@@ -17,6 +17,7 @@ pub mod projectile;
 pub mod rain;
 pub mod shadow;
 pub mod shield;
+pub mod speedometer;
 pub mod submerge;
 pub mod track_thumbnails;
 pub mod tracker;

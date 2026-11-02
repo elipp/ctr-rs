@@ -15,6 +15,7 @@
 //! * Left mouse button held and mouse moves: turn the camera around the kart; scroll wheel:
 //!   closer or farther; double click or Home: back to the default view
 //! * R: back to the starting grid
+//! * H or Triangle: swap the minimap and the speedometer (`speedometer.rs`)
 //! * Escape, P or Start: the pause menu (`pause.rs`)
 //!
 //! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the

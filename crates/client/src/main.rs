@@ -71,6 +71,7 @@ mod skid;
 mod sky;
 mod slide_meter;
 mod sound;
+mod speedometer;
 mod spider;
 mod submerge;
 mod subtract;
@@ -316,6 +317,7 @@ fn main() {
             heat::HeatPlugin,
             clock::ClockPlugin,
             slide_meter::SlideMeterPlugin,
+            speedometer::SpeedometerPlugin,
             toast::ToastPlugin,
             wrong_way::WrongWayPlugin,
             version::VersionPlugin,

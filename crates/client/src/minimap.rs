@@ -1,7 +1,7 @@
 //! The minimap at the bottom right, as retail draws it with one player (`UI_Map_DrawMap`,
 //! `UI_Map_DrawDrivers`): the level's picture of the track (`render::minimap`), and a dot on it
 //! for each kart. A bot's dot is its character's colour; a player's flashes between that and
-//! white. Ours is on top of the others.
+//! white. Ours is on top of the others. The speedometer can take its place (`speedometer.rs`).
 //!
 //! The picture blends as the PS1 draws it: its texels with the STP bit (the grey edge of the
 //! track) add to the scene behind, the others cover it. The UI's images are alpha blended, so the
@@ -71,7 +71,10 @@ impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "minimap.wgsl");
         app.add_plugins(UiMaterialPlugin::<MapMaterial>::default())
-            .add_systems(Update, (build, show).chain().run_if(crate::drive::driving));
+            .add_systems(
+                Update,
+                (build, show, swap).chain().run_if(crate::drive::driving),
+            );
     }
 }
 
@@ -147,6 +150,20 @@ fn build(
         },
         Pickable::IGNORE,
     ));
+}
+
+/// Hides the picture, its dots with it, while the speedometer is showing.
+fn swap(
+    speedometer: Res<crate::speedometer::ShowSpeedometer>,
+    mut maps: Query<&mut Visibility, With<Map>>,
+) {
+    for mut map in &mut maps {
+        map.set_if_neq(if speedometer.0 {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
 }
 
 /// Moves each kart's dot to where it is, and tints it.

@@ -2,11 +2,13 @@
 //! (`UI_DrawSlideMeter`): a grey bar in a black outline, filled from its right end as a drift
 //! nears its boost. The fill is green until the meter's room left drops to the low-room warning,
 //! and red from then on. An engine that revs (the grid, a mask grab) fills it too: the sim keeps
-//! the rev in the same meter. Like retail's, it is gone once our race is finished.
+//! the rev in the same meter. Like retail's, it is gone once our race is finished, unless the
+//! speedometer is showing (`speedometer.rs`), which keeps it.
 
 use bevy::prelude::*;
 
 use crate::hud;
+use crate::speedometer::ShowSpeedometer;
 
 /// Where the bar's bottom right corner is on retail's screen (`UI_HUD_SLOT_SLIDE_METER`), and its
 /// size (`UI_SLIDE_METER_BAR_W`, `UI_SLIDE_METER_BAR_H_FULL`). The outline goes round it, on its
@@ -15,6 +17,9 @@ const RIGHT: i32 = 490;
 const BOTTOM: i32 = 206;
 const WIDTH: i32 = 49;
 const HEIGHT: i32 = 7;
+
+/// Over the speedometer's dial, and under its needle.
+pub const Z: i32 = 1;
 
 /// `ELAPSED_MS`: the meter's room is in milliseconds, its stats in frames.
 const ELAPSED_MS: i32 = 32;
@@ -56,6 +61,7 @@ impl Plugin for SlideMeterPlugin {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    speedometer: Res<ShowSpeedometer>,
     mut meter: Query<&mut Visibility, With<SlideMeter>>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<Fill>>,
 ) {
@@ -66,7 +72,7 @@ fn show(
     };
     let d = sim.driver();
     let finished = d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    visibility.set_if_neq(if finished {
+    visibility.set_if_neq(if finished && !speedometer.0 {
         Visibility::Hidden
     } else {
         Visibility::Inherited
@@ -104,6 +110,7 @@ fn spawn(commands: &mut Commands) {
         },
         BorderColor::all(Color::BLACK),
         BackgroundColor(EMPTY),
+        ZIndex(Z),
         Pickable::IGNORE,
         children![(
             Fill,
