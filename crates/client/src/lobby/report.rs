@@ -23,6 +23,7 @@ pub(super) fn report(
     };
     let mut failed = None;
     let mut promoted = None;
+    let mut handed_over = false;
     let mut listed = None;
     let mut wanted_map = None;
     let mut got_map = None;
@@ -65,7 +66,11 @@ pub(super) fn report(
                 toasts.write(Toast::new(text, ms).color(ANNOUNCE_COLOR));
             }
             Event::Chat { from, text } => chats.push((from, text)),
-            Event::Joined(id) => debug!("joined the lobby of {}", id.fmt_short()),
+            Event::Joined(id) => {
+                debug!("joined the lobby of {}", id.fmt_short());
+                // We hosted: this is the host we handed the lobby over to.
+                handed_over |= !lobby.joined;
+            }
             Event::Rtt { id, rtt, relay } => rtts.push((id.fmt_short().to_string(), rtt, relay)),
             Event::PeerLeft(id) => {
                 debug!(
@@ -191,6 +196,15 @@ pub(super) fn report(
             }
         }
     }
+    // We handed the lobby over, and are a guest of the new host: what only the host has is theirs.
+    if handed_over {
+        lobby.joined = true;
+        lobby.public = None;
+        lobby.series = None;
+        lobby.countdown = None;
+        lobby.roster.clear();
+        lobby.roster_seen = false;
+    }
     // The host left, and the lobby is ours now (the session listed it, if it was public).
     if let Some((ticket, public)) = promoted {
         lobby.joined = false;
@@ -292,6 +306,7 @@ pub(super) fn report(
             .iter()
             .zip(labels)
             .map(|(p, label)| Member {
+                id: p.id,
                 key: p.id.fmt_short().to_string(),
                 label,
                 nick: p.nick.clone(),

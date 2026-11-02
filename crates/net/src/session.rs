@@ -518,9 +518,11 @@ pub(crate) async fn run(
             Some((from, heard)) = heard.recv() => match heard {
                 Heard::Message(message) => match message {
                     // A player that took us for the host: it was right, or will be (we may not
-                    // have found out that the host left yet). Kept for then.
+                    // have found out that the host left yet). Kept for then. (Not the host's own:
+                        // it is no player of ours, unless it handed the lobby over, and joins the
+                        // one it handed it to.)
                     message @ (Message::Hello { .. } | Message::Nick { .. } | Message::Nat { .. }) if host.is_none() => {
-                        if from != host_id && heirs.heard.len() < 64 {
+                        if (from != host_id || heirs.handed_over) && heirs.heard.len() < 64 {
                             heirs.heard.push((from, message));
                         }
                     }
