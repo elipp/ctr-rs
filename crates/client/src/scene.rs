@@ -313,7 +313,7 @@ pub(crate) const KART_LAYER: usize = 1;
 pub(crate) const SHIELD_LAYER: usize = 4;
 
 /// The cameras that draw over the picture of the main one: the one for [`KART_LAYER`], and the
-/// HUD's (`wumpa_icon`). The systems that follow "the camera" (the wheels' view, the smoke, the
+/// HUD's (`wumpa_icon` and `tracker`). The systems that follow "the camera" (the wheels' view, the smoke, the
 /// skid marks) look for the main camera, which has not got this.
 #[derive(Component)]
 pub(crate) struct OverlayCamera;
@@ -631,6 +631,24 @@ pub(crate) fn setup(
                 Transform::default(),
                 RenderLayers::layer(SHIELD_LAYER),
             ));
+        // The HUD's figures (the fruit and the tracker) share one camera, over all the others'
+        // pictures with only the depth buffer cleared. It looks at the middle of the window, with
+        // y up, and the figures hang `DEPTH` pixels in front of it.
+        commands.spawn((
+            OverlayCamera,
+            Camera3d::default(),
+            Camera {
+                order: 3,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: bevy::camera::ScalingMode::WindowSize,
+                ..OrthographicProjection::default_3d()
+            }),
+            Transform::default(),
+            RenderLayers::from_layers(&[crate::wumpa_icon::LAYER, crate::tracker::LAYER]),
+        ));
     } else {
         if let Some(skybox) = &level.skybox {
             sky::spawn(

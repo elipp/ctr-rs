@@ -11,7 +11,6 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use bevy::camera::{ClearColorConfig, ScalingMode};
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -81,8 +80,8 @@ const FILL_OUTER: [u8; 3] = [0x32, 0x2b, 0x01];
 const FILL_CENTER: [u8; 3] = [0x5b, 0x5b, 0x00];
 const FILL_TIP: [u8; 3] = [0xff, 0xbb, 0x00];
 
-/// The render layer of the figure, which only its camera draws. (0 to 4 are taken.)
-const LAYER: usize = 5;
+/// The render layer of the figure, which only the HUD camera (`scene.rs`) draws. (0 to 4 are taken.)
+pub(crate) const LAYER: usize = 5;
 const DEPTH: f32 = 100.0;
 
 /// How far above the kart's place the figure is drawn, in pixels of the PlayStation's screen
@@ -342,22 +341,6 @@ fn show(
             icon: icon.clone(),
             size: Vec2::new(size.0 as f32, size.1 as f32),
         });
-        commands.spawn((
-            crate::OverlayCamera,
-            Camera3d::default(),
-            // Over the picture of the cameras before it, with only the depth buffer cleared.
-            Camera {
-                order: 4,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::WindowSize,
-                ..OrthographicProjection::default_3d()
-            }),
-            Transform::default(),
-            RenderLayers::layer(LAYER),
-        ));
         for (mesh, material) in [
             (brackets, materials.add(unlit(None))),
             (icon, materials.add(unlit(Some(image)))),
