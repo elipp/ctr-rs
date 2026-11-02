@@ -4,7 +4,7 @@
 //!
 //! A bomb rolls along; a missile loops its `thrust` animation; a TNT or Nitro crate is the crate
 //! model, which grows where it was dropped and squashes and stretches on a head; a beaker bubbles
-//! where it lies, and is flown as it is when thrown. A warpball loops its animation, upright, and
+//! where it lies, and is flown as it is when thrown. A warpball loops its animation, turned to the camera, and
 //! rises, squashes and shrinks as it fades. When a bomb or a
 //! missile goes off (`RB_Burst_Init`) three models are born under it, all turned to the camera: two
 //! copies of the burst, one turned a quarter on the screen, and a shockwave ring. When a mine does
@@ -361,7 +361,8 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
                 layer: if slot == sim.own { KART_LAYER } else { 0 },
             }
         });
-    // A warpball keeps its upright matrix, and shrinks and stretches as it fades.
+    // A warpball is turned to the camera (its model's header flag 2, "always point to camera"),
+    // and shrinks and stretches as it fades.
     let warpballs = sim.race.weapons.warpballs().iter().map(|w| Wanted {
         id: w.id,
         model: WARPBALL,
@@ -371,7 +372,7 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
             scale: Vec3::new(w.scale[0] as f32, w.scale[1] as f32, w.scale[2] as f32) / 4096.0,
         },
         animated: true,
-        billboard: false,
+        billboard: true,
         color: Color::WHITE,
         layer: 0,
     });
