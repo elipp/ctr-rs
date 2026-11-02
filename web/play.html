@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Added to the Home Screen, the game opens without Safari's bars. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CTR-RS">
 <title>ctr-rs</title>
 <style>
   @font-face {
@@ -36,6 +41,9 @@
     border: 2px solid; border-color: #7b8ad6 #03050f #03050f #7b8ad6; border-radius: 0;
   }
   .touch button:active { color: #ffd23f; }
+  #touch-full svg { display: block; width: 20px; height: 20px; margin: auto; fill: none; stroke: currentColor; stroke-width: 3; }
+  #touch-full .exit, #touch-full.on .enter { display: none; }
+  #touch-full.on .exit { display: block; }
   #drop {
     position: fixed; inset: 0; display: grid; place-content: center; padding: 16px;
     background: #070a1e; color: #d9ddf2;
@@ -89,6 +97,10 @@
   spellcheck="false" enterkeyhint="send" tabindex="-1" aria-label="Chat or command" disabled>
 <div id="touch-game" class="touch" hidden>
   <button type="button" data-key="Escape">Menu</button>
+  <button id="touch-full" type="button" aria-label="Full screen" hidden>
+    <svg class="enter" viewBox="0 0 20 20" shape-rendering="crispEdges" aria-hidden="true"><path d="M2 7V2H7M13 2H18V7M18 13V18H13M7 18H2V13"/></svg>
+    <svg class="exit" viewBox="0 0 20 20" shape-rendering="crispEdges" aria-hidden="true"><path d="M7 2V7H2M18 7H13V2M13 18V13H18M2 13H7V18"/></svg>
+  </button>
 </div>
 <div id="touch-line" class="touch" hidden>
   <button type="button" data-key="ArrowUp" aria-label="Previous">&#8593;</button>
@@ -223,6 +235,7 @@ window.ctrShowLine = (open, text, menu) => {
     typing.blur();
     typing.disabled = true;
     canvas.focus();
+    if (restoreFullscreen) enterFullscreenAgain();
   }
 };
 window.ctrTakeTyped = () => {
@@ -298,6 +311,43 @@ function refocus() {
 }
 canvas.addEventListener("blur", () => setTimeout(refocus));
 addEventListener("focus", refocus);
+
+// The whole page, for the buttons and the text field to stay. (Safari on iOS 16.3 or older only
+// has the prefixed names, and an iPhone has none.)
+const fullButton = document.getElementById("touch-full");
+const root = document.documentElement;
+const enterFullscreen = root.requestFullscreen ?? root.webkitRequestFullscreen;
+const exitFullscreen = document.exitFullscreen ?? document.webkitExitFullscreen;
+const isFullscreen = () => (document.fullscreenElement ?? document.webkitFullscreenElement) != null;
+const isHomeScreenApp =
+  navigator.standalone === true || matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches;
+// Safari leaves full screen for the on-screen keyboard, so it is asked for again when the line
+// closes. It needs a recent tap or key for that: failing that, the next tap brings it back.
+let restoreFullscreen = false;
+function enterFullscreenAgain() {
+  enterFullscreen.call(root)?.then(() => (restoreFullscreen = false)).catch(() => {});
+}
+fullButton.hidden = !enterFullscreen || isHomeScreenApp;
+fullButton.addEventListener("click", () => {
+  restoreFullscreen = false;
+  const asked = isFullscreen() ? exitFullscreen.call(document) : enterFullscreen.call(root);
+  asked?.catch((e) => console.warn(`could not change to full screen: ${e}`));
+});
+addEventListener("touchend", (e) => {
+  if (!restoreFullscreen || lineOpen || fullButton.contains(e.target)) return;
+  const touch = e.changedTouches[0];
+  if (e.target === canvas && inConsole(touch.clientX, touch.clientY)) return;
+  enterFullscreenAgain();
+}, true);
+for (const name of ["fullscreenchange", "webkitfullscreenchange"]) {
+  document.addEventListener(name, () => {
+    fullButton.classList.toggle("on", isFullscreen());
+    fullButton.setAttribute("aria-label", isFullscreen() ? "Exit full screen" : "Full screen");
+    if (isFullscreen()) restoreFullscreen = false;
+    else if (lineOpen) restoreFullscreen = true;
+    if (!lineOpen) canvas.focus();
+  });
+}
 
 const CONFIG = "ctr-rs.config";
 window.ctrLoadConfig = () => {
