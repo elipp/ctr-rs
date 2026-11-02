@@ -63,7 +63,7 @@ pub(crate) fn name_to_add(line: &str, name: &str) -> Option<String> {
 
 /// `name` as what `line` takes to have it after its last word, with a space if it needs one.
 fn after_the_line(line: &str, name: &str) -> String {
-    if line.ends_with(char::is_whitespace) {
+    if line.ends_with(|c: char| c.is_whitespace() || c == ',') {
         name.to_string()
     } else {
         format!(" {name}")
@@ -77,6 +77,8 @@ pub(crate) enum OfferPicture {
     Portrait(usize),
     /// The picture of a track, a `LevelId`.
     Track(u32),
+    /// A cup whose first track is gone.
+    Nothing,
 }
 
 /// A name the command line offers in grey.
@@ -103,8 +105,19 @@ pub(crate) fn typed_after<'l>(line: &'l str, command: &str) -> Option<&'l str> {
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim_start())
 }
 
+/// What `line` has typed of the track it is on, if it is a `/cup create` past the cup's name.
+pub(crate) fn cup_track_typed(line: &str) -> Option<&str> {
+    let (_name, tracks) = typed_after(line, "/cup create")?.split_once(char::is_whitespace)?;
+    tracks.rsplit(',').next().map(str::trim_start)
+}
+
+/// What `line` has typed of the name of a cup it starts or deletes.
+pub(crate) fn cup_name_typed(line: &str) -> Option<&str> {
+    typed_after(line, "/cup start").or_else(|| typed_after(line, "/cup delete"))
+}
+
 /// Whether `name` starts with `typed`, in any ASCII case (as `Lobby::player_named` reads names).
-fn starts_with(name: &str, typed: &str) -> bool {
+pub(crate) fn starts_with(name: &str, typed: &str) -> bool {
     name.as_bytes()
         .get(..typed.len())
         .is_some_and(|start| start.eq_ignore_ascii_case(typed.as_bytes()))
@@ -112,8 +125,12 @@ fn starts_with(name: &str, typed: &str) -> bool {
 
 /// The offers that what is typed can still come to, each name once.
 pub(crate) fn matching<'a>(typed: &str, offers: impl Iterator<Item = Offer<'a>>) -> Vec<Offer<'a>> {
+    each_name_once(offers.filter(|o| starts_with(o.name, typed)))
+}
+
+pub(crate) fn each_name_once<'a>(offers: impl Iterator<Item = Offer<'a>>) -> Vec<Offer<'a>> {
     let mut found: Vec<Offer> = Vec::new();
-    for offer in offers.filter(|o| starts_with(o.name, typed)) {
+    for offer in offers {
         if found.iter().all(|o| o.name != offer.name) {
             found.push(offer);
         }
@@ -229,10 +246,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[
             takes(
                 "create",
-                "Make a cup",
+                "Make and keep a cup",
                 "<name> <tracks> <laps>",
             ),
             takes("start", "Count down to a cup's first race", "<name>"),
+            takes("delete", "Forget a cup", "<name>"),
         ],
     ),
     takes(
@@ -643,6 +661,15 @@ mod tests {
         assert_eq!(rest_of_name("/character ", "", "Penta").unwrap(), "Penta");
         assert_eq!(rest_of_name("/character pe", "pe", "Penta").unwrap(), "nta");
         assert_eq!(rest_of_name("/character penta", "penta", "Penta"), None);
+        assert_eq!(rest_of_name("/cup create a b,", "", "Penta").unwrap(), "Penta");
+
+        assert_eq!(cup_track_typed("/cup create"), None);
+        assert_eq!(cup_track_typed("/cup create fast"), None);
+        assert_eq!(cup_track_typed("/cup create fast "), Some(""));
+        assert_eq!(cup_track_typed("/cup create fast Crash Cove"), Some("Crash Cove"));
+        assert_eq!(cup_track_typed("/cup create fast Crash Cove,"), Some(""));
+        assert_eq!(cup_track_typed("/cup create fast Crash Cove, Pa"), Some("Pa"));
+        assert_eq!(cup_track_typed("/cup start fast "), None);
     }
 
     #[test]

@@ -1,13 +1,13 @@
 //! Cups: a list of tracks the lobby drives one after another, and the points that add up over them
-//! (`/cup create`, `/cup start`). A single `/race start` is the same thing with one track and
-//! no points.
+//! (`/cup create`, `/cup start`, `/cup delete`). The cups are kept in the config. A single
+//! `/race start` is the same thing with one track and no points.
 //!
 //! The host runs the series: it starts each race, scores it when it is over and starts the next
 //! after [`BETWEEN_RACES_SECONDS`]. The guests only see the races and what the host announces, so
 //! nothing of a series travels in the protocol but the laps of each race.
 
-use bevy::prelude::*;
 use net::EndpointId;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// The longest name a cup can have.
@@ -26,16 +26,45 @@ pub const SCORED_PLACES: usize = 4;
 /// The pause between the end of a race of a cup and the start of the next.
 pub const BETWEEN_RACES_SECONDS: u32 = 10;
 
+/// Whether a cup can be called that: `/cup start` reads its name as one word.
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_NAME
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+}
+
 /// A cup as `/cup create` made it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CupDef {
     pub name: String,
-    pub tracks: Vec<u32>,
+    /// What a command calls each track (`maps::stable_name`), found when the cup starts: a custom
+    /// track may have gone by then, and the config is read before the tracks are.
+    pub tracks: Vec<String>,
     pub laps: u8,
 }
 
-/// The cups made in this session.
-#[derive(Resource, Default)]
+impl CupDef {
+    /// Whether `/cup create` could have made it (the config can be edited by hand).
+    fn is_valid(&self) -> bool {
+        valid_name(&self.name)
+            && (1..=MAX_TRACKS).contains(&self.tracks.len())
+            && (1..=MAX_LAPS).contains(&self.laps)
+    }
+
+    /// The tracks as they are now, or what is wrong with one.
+    pub fn resolve(&self) -> Result<Vec<u32>, String> {
+        self.tracks
+            .iter()
+            .map(|track| crate::maps::resolve(track))
+            .collect()
+    }
+}
+
+/// The cups made.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Cups(Vec<CupDef>);
 
 impl Cups {
@@ -53,8 +82,32 @@ impl Cups {
         }
     }
 
+    /// The cup of that name, or else of that name in another case: the command line completes a
+    /// name in the case it was begun in.
     pub fn get(&self, name: &str) -> Option<&CupDef> {
-        self.0.iter().find(|c| c.name == name)
+        let cup = self.0.iter().find(|c| c.name == name);
+        cup.or_else(|| self.0.iter().find(|c| c.name.eq_ignore_ascii_case(name)))
+    }
+
+    /// In the order they were first made.
+    pub fn all(&self) -> &[CupDef] {
+        &self.0
+    }
+
+    /// Takes out the cup [`get`](Self::get) finds by that name.
+    pub fn remove(&mut self, name: &str) -> Option<CupDef> {
+        let name = self.get(name)?.name.clone();
+        let at = self.0.iter().position(|c| c.name == name)?;
+        Some(self.0.remove(at))
+    }
+
+    /// Takes out those `/cup create` could not have made, and returns them.
+    pub fn take_invalid(&mut self) -> Vec<CupDef> {
+        let (valid, invalid) = std::mem::take(&mut self.0)
+            .into_iter()
+            .partition(CupDef::is_valid);
+        self.0 = valid;
+        invalid
     }
 }
 
@@ -110,10 +163,11 @@ impl Series {
         }
     }
 
-    pub fn cup(def: &CupDef) -> Series {
+    /// The cup, on the tracks it resolved to.
+    pub fn cup(def: &CupDef, tracks: Vec<u32>) -> Series {
         Series {
             name: Some(def.name.clone()),
-            tracks: def.tracks.clone(),
+            tracks,
             laps: def.laps,
             race: 0,
             scored: true,
@@ -221,11 +275,14 @@ mod tests {
 
     #[test]
     fn points_add_up_over_the_races() {
-        let mut series = Series::cup(&CupDef {
-            name: "c".into(),
-            tracks: vec![1, 2],
-            laps: 3,
-        });
+        let mut series = Series::cup(
+            &CupDef {
+                name: "c".into(),
+                tracks: vec!["1".into(), "2".into()],
+                laps: 3,
+            },
+            vec![1, 2],
+        );
         let mut order = finishers(3);
         series.score(3, &order);
         order.swap(0, 2);
@@ -257,11 +314,45 @@ mod tests {
         let mut cups = Cups::default();
         let cup = |laps| CupDef {
             name: "x".into(),
-            tracks: vec![1],
+            tracks: vec!["dingo_canyon".into()],
             laps,
         };
         assert!(!cups.set(cup(3)));
         assert!(cups.set(cup(5)));
         assert_eq!(cups.get("x").unwrap().laps, 5);
+        assert_eq!(cups.get("X").unwrap().laps, 5);
+        assert!(cups.get("y").is_none());
+        assert!(cups.remove("y").is_none());
+        assert_eq!(cups.remove("X").unwrap().name, "x");
+        assert!(cups.all().is_empty());
+    }
+
+    #[test]
+    fn a_cups_tracks_are_found_when_it_starts() {
+        let cup = |tracks: &[&str]| CupDef {
+            name: "c".into(),
+            tracks: tracks.iter().map(|t| t.to_string()).collect(),
+            laps: 3,
+        };
+        assert_eq!(cup(&["dingo_canyon", "papu_pyramid"]).resolve(), Ok(vec![0, 5]));
+        let missing = cup(&["dingo_canyon", "gone_track"]).resolve().unwrap_err();
+        assert!(missing.contains("gone_track"), "{missing}");
+    }
+
+    /// The config can be edited by hand.
+    #[test]
+    fn what_could_not_have_been_made_is_taken_out() {
+        let text = r#"[
+            {"name": "good", "tracks": ["dingo_canyon"], "laps": 3},
+            {"name": "two words", "tracks": ["dingo_canyon"], "laps": 3},
+            {"name": "", "tracks": ["dingo_canyon"], "laps": 3},
+            {"name": "no_tracks", "tracks": [], "laps": 3},
+            {"name": "no_laps", "tracks": ["dingo_canyon"], "laps": 0},
+            {"name": "many_laps", "tracks": ["dingo_canyon"], "laps": 21}
+        ]"#;
+        let mut cups: Cups = serde_json::from_str(text).unwrap();
+        assert_eq!(cups.take_invalid().len(), 5);
+        assert_eq!(cups.all().len(), 1);
+        assert_eq!(cups.all()[0].name, "good");
     }
 }

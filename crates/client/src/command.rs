@@ -11,6 +11,12 @@
 //! the players and the tracks the same way, with a portrait after the name or the track's picture
 //! over the line; typing narrows them down to the names that start with what is typed.
 //!
+//! `/cup create <name> ` offers the tracks too, by name, and puts in the short name of the one
+//! taken: Tab or Right at the end of the line takes it and goes on to the next, Return takes it as
+//! the last, and Space after a comma ends the list without it. The laps are typed after that.
+//! `/cup start` and `/cup delete` list the cups made, offering them the same way, the latest at
+//! first. Return on a name offered sends `/cup start` but only fills in `/cup delete`.
+//!
 //! The line is edited as in a shell: the arrows, Home and End move the cursor, and Ctrl A, E, B, F
 //! (Alt B, F by a word), Ctrl W, U, K, D, H and Alt D delete. Page
 //! Up and Down scroll the console (`console.rs`), which the line is the bottom row of.
@@ -73,6 +79,8 @@ pub enum Action {
     },
     /// Drive the cup of that name in the lobby (the host only).
     CupStart(String),
+    /// Forget the cup of that name.
+    CupDelete(String),
     /// End the race in progress for everyone, with no winner (the host only).
     StopRace,
     /// (Debug) Roll that item into our hand: one of `vehicle::item::ENABLED`.
@@ -143,7 +151,7 @@ const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name>\nA track is its short name (dingo_canyon), or its number (/track list)";
+const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
@@ -310,24 +318,25 @@ impl Action {
     }
 
     fn cup(line: &str) -> Result<Action, String> {
-        use crate::lobby::cup::{MAX_LAPS, MAX_NAME, MAX_TRACKS};
+        use crate::lobby::cup::{MAX_LAPS, MAX_NAME, MAX_TRACKS, valid_name};
         let (sub, rest) = word(line);
         match sub {
             "create" => {
-                let parts: Vec<&str> = rest.split_whitespace().collect();
-                let [name, tracks, laps] = parts[..] else {
+                // (A track's name can have spaces in it, so the laps are found from the end.)
+                let (name, rest) = word(rest);
+                let Some((tracks, laps)) = rest.trim_end().rsplit_once(char::is_whitespace) else {
                     return Err(CUP_USAGE.into());
                 };
-                if name.chars().count() > MAX_NAME
-                    || !name
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-                {
+                if !valid_name(name) {
                     return Err(format!(
                         "A cup's name is letters, digits, - and _, up to {MAX_NAME}"
                     ));
                 }
+                // (The comma left by taking a track, if the laps were typed over the next.)
                 let tracks = tracks
+                    .trim_end()
+                    .strip_suffix(',')
+                    .unwrap_or(tracks)
                     .split(',')
                     .map(crate::maps::resolve)
                     .collect::<Result<Vec<u32>, String>>()?;
@@ -346,8 +355,8 @@ impl Action {
                 })
             }
             "start" if rest.split_whitespace().count() == 1 => Ok(Action::CupStart(rest.into())),
-            "" => Err(CUP_USAGE.into()),
-            "start" => Err(CUP_USAGE.into()),
+            "delete" if rest.split_whitespace().count() == 1 => Ok(Action::CupDelete(rest.into())),
+            "" | "start" | "delete" => Err(CUP_USAGE.into()),
             _ => Err(format!("Unknown command: /cup {sub}\n{CUP_USAGE}")),
         }
     }
@@ -497,6 +506,24 @@ enum Offering {
     Character,
     Player,
     Track,
+    Cup,
+}
+
+/// A track the line offers.
+struct OfferedTrack {
+    name: String,
+    /// What a cup's line puts in for it (`maps::stable_name`).
+    command_name: String,
+    id: u32,
+}
+
+/// A cup the line offers.
+struct OfferedCup {
+    name: String,
+    /// The `LevelId` it starts on, none if that track is gone.
+    first_track: Option<u32>,
+    /// What its row says of it (`cup_about`).
+    about: String,
 }
 
 /// What has been typed so far, if the line is open.
@@ -520,14 +547,25 @@ pub(crate) struct CommandLine {
     /// opens.
     lobby_name_index: u64,
     /// The name to offer if the line can come to it (`suggest::pick`), of each [`Offering`]: at
-    /// first, the character we drive and the track we are on.
-    wanted: [String; 3],
+    /// first, the character we drive, the track we are on and the cup made last.
+    wanted: [String; 4],
     /// Who `/promote` offers: each one's name and character.
     players: Vec<(String, usize)>,
-    /// What `/track` offers: each one's name and `LevelId`.
-    tracks: Vec<(String, u32)>,
+    /// What `/track` and `/cup create` offer.
+    tracks: Vec<OfferedTrack>,
+    /// What `/cup start` and `/cup delete` offer.
+    cups: Vec<OfferedCup>,
     /// Where the cursor is in the text: a byte offset, always at a character.
     cursor: usize,
+}
+
+impl OfferedTrack {
+    fn offer(&self) -> Offer<'_> {
+        Offer {
+            name: &self.name,
+            picture: OfferPicture::Track(self.id),
+        }
+    }
 }
 
 impl CommandLine {
@@ -578,6 +616,9 @@ impl CommandLine {
 
     /// Types at the cursor.
     fn insert(&mut self, typed: &str) {
+        if typed == " " && self.end_cup_tracks() {
+            return;
+        }
         self.touch();
         self.text.insert_str(self.cursor, typed);
         self.cursor += typed.len();
@@ -733,11 +774,26 @@ impl CommandLine {
             });
             return Some((Offering::Player, typed, suggest::matching(typed, players)));
         }
+        if let Some(typed) = suggest::cup_name_typed(&self.text) {
+            // (Its picture is of the race it starts with.)
+            let cups = self.cups.iter().map(|cup| Offer {
+                name: &cup.name,
+                picture: cup.first_track.map_or(OfferPicture::Nothing, OfferPicture::Track),
+            });
+            return Some((Offering::Cup, typed, suggest::matching(typed, cups)));
+        }
+        if let Some(typed) = suggest::cup_track_typed(&self.text) {
+            let tracks = self
+                .tracks
+                .iter()
+                .filter(|t| {
+                    suggest::starts_with(&t.name, typed) || suggest::starts_with(&t.command_name, typed)
+                })
+                .map(OfferedTrack::offer);
+            return Some((Offering::Track, typed, suggest::each_name_once(tracks)));
+        }
         let typed = suggest::typed_after(&self.text, "/track")?;
-        let tracks = self.tracks.iter().map(|(name, id)| Offer {
-            name,
-            picture: OfferPicture::Track(*id),
-        });
+        let tracks = self.tracks.iter().map(OfferedTrack::offer);
         Some((Offering::Track, typed, suggest::matching(typed, tracks)))
     }
 
@@ -752,7 +808,12 @@ impl CommandLine {
         self.lobby_ghost().or_else(|| {
             let offer = self.offer()?;
             let (_, typed, _) = self.offers()?;
-            suggest::rest_of_name(&self.text, typed, offer.name)
+            let spelled = if suggest::starts_with(offer.name, typed) {
+                offer.name
+            } else {
+                &self.offered_track(offer)?.command_name
+            };
+            suggest::rest_of_name(&self.text, typed, spelled)
         })
     }
 
@@ -784,10 +845,72 @@ impl CommandLine {
         true
     }
 
+    /// Whether the line is choosing a track of a cup, with one offered or named.
+    fn on_cup_track(&self) -> bool {
+        self.browsing.is_none()
+            && suggest::cup_track_typed(&self.text).is_some()
+            && self.offer().is_some()
+    }
+
+    fn offered_track(&self, offer: Offer) -> Option<&OfferedTrack> {
+        let OfferPicture::Track(id) = offer.picture else {
+            return None;
+        };
+        self.tracks.iter().find(|t| t.id == id)
+    }
+
+    /// Replaces what is typed of the track of a cup with the command name of the one offered, and
+    /// `end` after it. Returns where that track is in the list: none if the line is not choosing
+    /// one.
+    fn take_cup_track(&mut self, end: &str) -> Option<usize> {
+        if !self.on_cup_track() {
+            return None;
+        }
+        let track = self.offered_track(self.offer()?)?;
+        let id = track.id;
+        let command_name = track.command_name.clone();
+        let typed = suggest::cup_track_typed(&self.text)?.len();
+        let kept = self.text.len() - typed;
+        self.set_text(format!("{}{command_name}{end}", &self.text[..kept]));
+        self.tracks.iter().position(|t| t.id == id)
+    }
+
+    /// Takes the track of a cup that is offered and goes on to the next, offering the one after it
+    /// in the list: false if the line is not choosing one.
+    fn next_cup_track(&mut self) -> bool {
+        let Some(at) = self.take_cup_track(",") else {
+            return false;
+        };
+        let next = (at + 1) % self.tracks.len();
+        self.wanted[Offering::Track as usize] = self.tracks[next].name.clone();
+        true
+    }
+
+    /// Space after the comma of a cup's list, at the end of the line: the list ends without the
+    /// track offered, and the laps come next. False if the line is not there.
+    fn end_cup_tracks(&mut self) -> bool {
+        let at_next_track = self.browsing.is_none()
+            && self.cursor == self.text.len()
+            && self.text.ends_with(',')
+            && suggest::cup_track_typed(&self.text) == Some("");
+        if at_next_track {
+            let text = format!("{} ", self.text.trim_end_matches(','));
+            self.set_text(text);
+        }
+        at_next_track
+    }
+
     /// Return. A line that is a whole command is sent as it is (`/lobby create`, which an option
     /// could follow but does not have to), unless Up or Down picked an option; otherwise a
     /// suggestion picked goes in first, and the line is sent if that ends it.
     fn enter(&mut self) {
+        if self.take_cup_track(" ").is_some() {
+            return;
+        }
+        // Deleting cannot be undone: Return shows the whole name, and a second one sends it.
+        if suggest::typed_after(&self.text, "/cup delete").is_some() && self.accept_ghost() {
+            return;
+        }
         if self.ghost_goes_first() {
             self.accept_ghost();
             self.entered = true;
@@ -915,7 +1038,8 @@ pub(crate) fn capture(
     #[cfg(target_arch = "wasm32")]
     if let Some(text) = crate::web::take_typed() {
         let text = text.replace(|c: char| c.is_control(), "");
-        if text != line.text {
+        let space_typed = text.strip_prefix(line.text.as_str()) == Some(" ");
+        if text != line.text && !(space_typed && line.end_cup_tracks()) {
             line.set_text(text);
         }
     }
@@ -927,7 +1051,7 @@ pub(crate) fn capture(
         match &event.logical_key {
             Key::Enter => line.enter(),
             Key::Tab => {
-                if !line.accept_ghost() {
+                if !line.next_cup_track() && !line.accept_ghost() {
                     line.complete();
                 }
             }
@@ -966,6 +1090,9 @@ pub(crate) fn capture(
                 }
             }
             Key::ArrowRight => {
+                if line.cursor == line.text.len() && line.next_cup_track() {
+                    continue;
+                }
                 line.cursor = if sup {
                     line.text.len()
                 } else if ctrl || alt {
@@ -1022,6 +1149,7 @@ fn open(
     options: Res<crate::Options>,
     level: Res<crate::LevelNumber>,
     lobby: Res<crate::lobby::Lobby>,
+    config: Res<crate::config::Config>,
     mut line: ResMut<CommandLine>,
 ) {
     if line.open || keys.just_pressed(KeyCode::Enter) {
@@ -1038,8 +1166,24 @@ fn open(
         line.wanted[Offering::Track as usize] = crate::maps::name(level.0);
         line.tracks = crate::maps::cycle()
             .into_iter()
-            .map(|id| (crate::maps::name(id), id))
+            .map(|id| OfferedTrack {
+                name: crate::maps::name(id),
+                command_name: crate::maps::stable_name(id),
+                id,
+            })
             .collect();
+        line.cups = config
+            .cups
+            .all()
+            .iter()
+            .map(|cup| OfferedCup {
+                name: cup.name.clone(),
+                first_track: cup.tracks.first().and_then(|t| crate::maps::resolve(t).ok()),
+                about: cup_about(cup.tracks.len(), cup.laps),
+            })
+            .collect();
+        line.wanted[Offering::Cup as usize] =
+            line.cups.last().map(|cup| cup.name.clone()).unwrap_or_default();
         // (A browser's std hasher has fixed keys: the time is what differs there.)
         let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
         line.lobby_name_index = seed % suggest::LOBBY_NAME_COUNT;
@@ -1212,8 +1356,8 @@ fn show(
         &mut TextSpan,
         (With<GhostSpan>, Without<CursorSpan>, Without<AfterSpan>),
     >,
-    // What the suggestions were made for: the text and the one picked.
-    mut shown: Local<Option<(String, usize)>>,
+    // What the suggestions were made for: the text, the one picked and the name offered.
+    mut shown: Local<Option<(String, usize, Option<String>)>>,
 ) {
     for mut row in &mut rows {
         let want = if line.open {
@@ -1271,7 +1415,8 @@ fn show(
     let Ok((list, mut node)) = suggestions.single_mut() else {
         return;
     };
-    let key = (line.text.clone(), line.selected);
+    let offered = line.offer().map(|offer| offer.name.to_string());
+    let key = (line.text.clone(), line.selected, offered);
     if shown.as_ref() == Some(&key) {
         return;
     }
@@ -1356,9 +1501,42 @@ fn show_offer_picture(
     }
 }
 
+/// What a row of `/cup start` says of a cup.
+fn cup_about(tracks: usize, laps: u8) -> String {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    format!("{tracks} track{}, {laps} lap{}", plural(tracks), plural(laps as usize))
+}
+
 /// The rows of suggestions for the line: each option, the picked one in its own colour, and
 /// what else can be typed there; and what they do.
 fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
+    let row = |name: &str, about: &str, color| (name.to_string(), about.to_string(), color);
+    if line.on_cup_track() {
+        return vec![row("<tracks>", "Up/Down, Tab/Right adds, Space: laps", ABOUT)];
+    }
+    if line.browsing.is_none() && suggest::cup_track_typed(&line.text).is_some() {
+        return vec![row("<laps>", "The laps of each race", ABOUT)];
+    }
+    if line.browsing.is_none() && suggest::cup_name_typed(&line.text).is_some() {
+        if line.cups.is_empty() {
+            return vec![row("<name>", "No cups yet: /cup create", ABOUT)];
+        }
+        if let Some((_, _, offers)) = line.offers().filter(|(_, _, offers)| !offers.is_empty()) {
+            let offered = line.offer().map(|offer| offer.name);
+            return offers
+                .iter()
+                .filter_map(|offer| line.cups.iter().find(|cup| cup.name == offer.name))
+                .map(|cup| {
+                    let color = if offered == Some(cup.name.as_str()) {
+                        PICKED
+                    } else {
+                        OPTION
+                    };
+                    row(&cup.name, &cup.about, color)
+                })
+                .collect();
+        }
+    }
     let Some(menu) = line.menu() else {
         return Vec::new();
     };
@@ -1366,7 +1544,6 @@ fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
         .selection()
         .filter(|_| !line.ghost_goes_first())
         .map(|(_, index)| index);
-    let row = |name: &str, about: &str, color| (name.to_string(), about.to_string(), color);
     let mut rows: Vec<_> = menu
         .options
         .iter()
@@ -1734,17 +1911,28 @@ mod tests {
         assert_eq!(typed("/promote ").ghost(), None);
     }
 
+    fn offered_tracks(tracks: &[(&str, &str, u32)]) -> Vec<OfferedTrack> {
+        tracks
+            .iter()
+            .map(|&(name, command_name, id)| OfferedTrack {
+                name: name.into(),
+                command_name: command_name.into(),
+                id,
+            })
+            .collect()
+    }
+
     #[test]
     fn a_track_is_offered() {
         let tracks = |text: &str| {
             let mut line = typed(text);
             line.wanted[Offering::Track as usize] = "Crash Cove".into();
             line.wanted[Offering::Character as usize] = "Penta".into();
-            line.tracks = vec![
-                ("Dingo Canyon".into(), 0),
-                ("Crash Cove".into(), 3),
-                ("Papu's Pyramid".into(), 5),
-            ];
+            line.tracks = offered_tracks(&[
+                ("Dingo Canyon", "dingo_canyon", 0),
+                ("Crash Cove", "crash_cove", 3),
+                ("Papu's Pyramid", "papu_pyramid", 5),
+            ]);
             line
         };
         // The one we are on first, whatever was picked of the others.
@@ -1785,6 +1973,199 @@ mod tests {
         assert!(matches!(Action::parse("track n. gin labs"), Ok(Action::Track(11))));
         assert!(Action::parse("track nowhere").unwrap_err().contains("Unknown track"));
         assert!(Action::parse("track").unwrap_err().starts_with("Usage"));
+    }
+
+    #[test]
+    fn a_cups_tracks_are_offered_one_after_another() {
+        let mut line = typed("/cup create fast");
+        line.wanted[Offering::Track as usize] = "Crash Cove".into();
+        line.tracks = offered_tracks(&[
+            ("Dingo Canyon", "dingo_canyon", 0),
+            ("Crash Cove", "crash_cove", 3),
+            ("Odd, Name", "odd__name", 4),
+            ("Papu's Pyramid", "papu_pyramid", 5),
+        ]);
+        // Still typing the cup's name.
+        assert_eq!(line.offer(), None);
+        line.insert(" ");
+        assert_eq!(line.ghost().as_deref(), Some("Crash Cove"));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Track(3)));
+        assert!(line.cycle_offer(false));
+        assert_eq!(line.ghost().as_deref(), Some("Dingo Canyon"));
+
+        // The full name is shown, the short one goes in, and the one after it is offered.
+        assert!(line.next_cup_track());
+        assert_eq!(line.text, "/cup create fast dingo_canyon,");
+        assert_eq!(line.ghost().as_deref(), Some("Crash Cove"));
+        assert!(line.cycle_offer(true));
+        assert_eq!(line.ghost().as_deref(), Some("Odd, Name"));
+        assert!(line.next_cup_track());
+        assert_eq!(line.text, "/cup create fast dingo_canyon,odd__name,");
+
+        // Typing narrows them down, by either name; each goes in as the short one.
+        line.insert("Pa");
+        assert_eq!(line.ghost().as_deref(), Some("pu's Pyramid"));
+        assert!(line.next_cup_track());
+        assert_eq!(line.text, "/cup create fast dingo_canyon,odd__name,papu_pyramid,");
+        line.insert("crash_");
+        assert_eq!(line.ghost().as_deref(), Some("cove"));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Track(3)));
+        line.insert("cove");
+        assert_eq!(line.ghost(), None);
+        assert!(line.next_cup_track());
+        let list = "/cup create fast dingo_canyon,odd__name,papu_pyramid,crash_cove";
+        assert_eq!(line.text, format!("{list},"));
+        line.insert("crash cove");
+        assert_eq!(line.ghost(), None);
+        assert!(line.next_cup_track());
+        assert_eq!(line.text, format!("{list},crash_cove,"));
+
+        // Return takes the last and leaves the laps to type, then sends the line.
+        line.enter();
+        assert_eq!(line.text, format!("{list},crash_cove,odd__name "));
+        assert!(!line.entered);
+        assert_eq!(line.offer(), None);
+        assert_eq!(suggestion_rows(&line)[0].0, "<laps>");
+        assert!(!line.next_cup_track());
+        line.insert("3");
+        line.enter();
+        assert!(line.entered);
+    }
+
+    /// A line with two cups to offer, `slow` the one made last.
+    fn typed_with_cups(text: &str) -> CommandLine {
+        let cup = |name: &str, first_track, tracks, laps| OfferedCup {
+            name: name.into(),
+            first_track,
+            about: cup_about(tracks, laps),
+        };
+        let mut line = typed(text);
+        line.cups = vec![cup("fast", Some(3), 2, 3), cup("slow", Some(7), 1, 1)];
+        line.wanted[Offering::Cup as usize] = "slow".into();
+        line
+    }
+
+    #[test]
+    fn return_only_fills_in_the_cup_to_delete() {
+        let mut line = typed_with_cups("/cup delete");
+        line.enter();
+        assert_eq!(line.text, "/cup delete slow");
+        assert!(!line.entered);
+        line.enter();
+        assert!(line.entered);
+        assert!(matches!(Action::parse("cup delete slow"), Ok(Action::CupDelete(name)) if name == "slow"));
+        assert!(Action::parse("cup delete").is_err());
+
+        let mut line = typed_with_cups("/cup delete ");
+        assert!(line.cycle_offer(true));
+        line.enter();
+        assert_eq!(line.text, "/cup delete fast");
+        assert!(!line.entered);
+        assert_eq!(suggestion_rows(&line)[0].0, "fast");
+        // With nothing to offer it goes as it was typed, to say so.
+        let mut line = typed_with_cups("/cup delete nope");
+        line.enter();
+        assert!(line.entered);
+    }
+
+    #[test]
+    fn a_cup_whose_first_track_is_gone_is_still_offered() {
+        let mut line = typed("/cup start ");
+        line.cups = vec![OfferedCup {
+            name: "old".into(),
+            first_track: None,
+            about: cup_about(1, 1),
+        }];
+        assert_eq!(line.ghost().as_deref(), Some("old"));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Nothing));
+    }
+
+    #[test]
+    fn the_cups_are_offered_to_start() {
+        // The latest first, and all of them listed with the one offered picked.
+        let mut line = typed_with_cups("/cup start ");
+        assert_eq!(line.ghost().as_deref(), Some("slow"));
+        assert_eq!(line.offer().map(|o| o.picture), Some(OfferPicture::Track(7)));
+        let rows = suggestion_rows(&line);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("fast", "2 tracks, 3 laps"));
+        assert_eq!((rows[1].0.as_str(), rows[1].1.as_str()), ("slow", "1 track, 1 lap"));
+        assert_eq!((rows[0].2, rows[1].2), (OPTION, PICKED));
+        assert!(line.cycle_offer(true));
+        assert_eq!(line.ghost().as_deref(), Some("fast"));
+        assert_eq!(suggestion_rows(&line)[0].2, PICKED);
+        line.enter();
+        assert_eq!(line.text, "/cup start fast");
+        assert!(line.entered);
+        assert!(matches!(Action::parse("cup start fast"), Ok(Action::CupStart(name)) if name == "fast"));
+
+        // Typing narrows them down, in any case.
+        let mut line = typed_with_cups("/cup start F");
+        assert_eq!(line.ghost().as_deref(), Some("ast"));
+        assert_eq!(suggestion_rows(&line).len(), 1);
+        line.enter();
+        assert_eq!(line.text, "/cup start Fast");
+        assert!(line.entered);
+
+        // Nothing to offer: the name is still what can go there.
+        let line = typed_with_cups("/cup start nope");
+        assert_eq!(line.ghost(), None);
+        assert_eq!(suggestion_rows(&line)[0].0, "<name>");
+        let line = typed("/cup start ");
+        assert_eq!(line.ghost(), None);
+        assert!(suggestion_rows(&line)[0].1.contains("/cup create"));
+    }
+
+    #[test]
+    fn space_ends_a_cups_tracks() {
+        let mut line = typed("/cup create fast dingo_canyon,");
+        line.wanted[Offering::Track as usize] = "Crash Cove".into();
+        line.tracks = offered_tracks(&[
+            ("Dingo Canyon", "dingo_canyon", 0),
+            ("Crash Cove", "crash_cove", 3),
+        ]);
+        line.insert(" ");
+        assert_eq!(line.text, "/cup create fast dingo_canyon ");
+        assert_eq!(line.cursor, line.text.len());
+        assert_eq!(line.offer(), None);
+        assert_eq!(suggestion_rows(&line)[0].0, "<laps>");
+        line.insert("3");
+        assert!(matches!(
+            Action::parse(&line.text[1..]),
+            Ok(Action::CupCreate { laps: 3, .. })
+        ));
+
+        // A space inside a name, or before any track was taken, is only a space.
+        let mut line = typed("/cup create fast Crash");
+        line.insert(" ");
+        assert_eq!(line.text, "/cup create fast Crash ");
+        let mut line = typed("/cup create fast ");
+        line.insert(" ");
+        assert_eq!(line.text, "/cup create fast  ");
+        // As is one in the middle of the line.
+        let mut line = typed("/cup create fast a,");
+        line.cursor = 5;
+        line.insert(" ");
+        assert_eq!(line.text, "/cup  create fast a,");
+    }
+
+    #[test]
+    fn a_cups_tracks_can_be_named_with_spaces() {
+        let cup = |text| match Action::parse(text) {
+            Ok(Action::CupCreate { name, tracks, laps }) => (name, tracks, laps),
+            other => panic!("{text}: {other:?}"),
+        };
+        let wanted = ("fast".to_string(), vec![5, 11], 3);
+        for text in [
+            "cup create fast Papu's Pyramid,N. Gin Labs 3",
+            "cup create fast Papu's Pyramid, N. Gin Labs 3",
+            "cup create fast papu_pyramid,N. Gin Labs,  3",
+        ] {
+            assert_eq!(cup(text), wanted, "{text}");
+        }
+        assert!(Action::parse("cup create fast").is_err());
+        assert!(Action::parse("cup create fast 3").is_err());
+        assert!(Action::parse("cup create fast Papu's Pyramid").is_err());
     }
 
     #[test]

@@ -31,6 +31,9 @@
 //! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`), and whether
 //! the race shows its development text (`/debug hud`, off at first).
 //!
+//! The cups made with `/cup create` are kept here too, with the tracks by their short names, and
+//! can be written by hand (`lobby/cup.rs`).
+//!
 //! To add a setting: a field of [`Config`], a variant of [`Setting`] with its parse, its arm in
 //! [`apply`], its line in [`USAGE`], and its entry in the command line's suggestions
 //! (`suggest.rs`, which does not read the parser: nothing but the reader notices a miss).
@@ -44,6 +47,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::{Action, word};
 use crate::controls::Controls;
 use crate::lobby::Lobby;
+use crate::lobby::cup::Cups;
 use crate::toast::Toast;
 
 #[derive(Resource, Serialize, Deserialize, Clone, Debug)]
@@ -77,6 +81,8 @@ pub struct Config {
     /// The part of the screen's resolution a browser draws at (`/config set render-scale`), which
     /// the page reads by this name.
     pub render_scale: f32,
+    /// The cups made (`/cup create`).
+    pub cups: Cups,
 }
 
 /// The most relays that can be added; every one is probed when an endpoint starts.
@@ -99,6 +105,7 @@ impl Default for Config {
             controls: Controls::default(),
             debug_hud: false,
             render_scale: 1.0,
+            cups: Cups::default(),
         }
     }
 }
@@ -196,6 +203,9 @@ impl Config {
                     }
                 }
                 config.relays = relays;
+                for cup in config.cups.take_invalid() {
+                    eprintln!("{}: dropped the cup {cup:?}", place());
+                }
                 config
             }
             Err(e) => {
@@ -535,5 +545,23 @@ mod tests {
         for wrong in ["0.2", "1.5", "0", "NaN", "half", ""] {
             assert_eq!(render_scale(wrong), None, "{wrong}");
         }
+    }
+
+    #[test]
+    fn the_cups_are_kept() {
+        use crate::lobby::cup::CupDef;
+        let mut config = Config::default();
+        config.cups.set(CupDef {
+            name: "fast".into(),
+            tracks: vec!["dingo_canyon".into(), "crash_cove".into()],
+            laps: 3,
+        });
+        let text = serde_json::to_string(&config).unwrap();
+        let read: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(read.cups.all(), config.cups.all());
+        // A config from before there were any is still read.
+        let old: Config = serde_json::from_str(r#"{"nickname": "Bob"}"#).unwrap();
+        assert_eq!(old.nickname, "Bob");
+        assert!(old.cups.all().is_empty());
     }
 }
