@@ -316,6 +316,7 @@ fn show(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &GlobalTransform), With<ChaseCamera>>,
     karts: Query<&Transform, (With<Kart>, Without<ChaseCamera>)>,
     mut parts: Query<&mut Visibility, With<Part>>,
@@ -363,9 +364,12 @@ fn show(
         let window = windows.single().ok()?;
         let (camera, camera_transform) = cameras.single().ok()?;
         let kart = karts.single().ok()?;
-        let at = camera
-            .world_to_viewport(camera_transform, kart.translation)
-            .ok()?;
+        // (The camera draws into the picture of the scene, which may be smaller than the window.)
+        let at = screen.to_window(
+            camera
+                .world_to_viewport(camera_transform, kart.translation)
+                .ok()?,
+        );
         Some((frame, window, at))
     })();
     let Some((frame, window, at)) = anchor else {

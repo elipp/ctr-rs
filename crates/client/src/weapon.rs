@@ -225,6 +225,7 @@ fn shine(
         Option<&UiTargetCamera>,
     )>,
     cameras: Query<(Entity, &Camera), With<Camera3d>>,
+    presenting: Query<(Entity, &Camera), With<crate::pixel::Present>>,
 ) {
     // The weapon's own system makes the pictures, on its first frame.
     let Some(icons) = icons else {
@@ -290,8 +291,14 @@ fn shine(
     let pulse = shine_pulse(theta as u32) / 2.0;
     // The UI is drawn by the camera of the highest order, which is the fruit's own: the glows
     // would be drawn over the fruit and blend with it. They are drawn by the main camera instead,
-    // under the cameras that draw the fruit (and the kart).
-    let main = cameras.iter().find(|(_, c)| c.order == 0).map(|(e, _)| e);
+    // under the cameras that draw the fruit (and the kart). With the pixel scale on, the main
+    // camera draws into the picture of the scene: the one that puts that on the window draws them,
+    // which is under the fruit's too.
+    let main = presenting
+        .iter()
+        .find(|(_, c)| c.is_active)
+        .or_else(|| cameras.iter().find(|(_, c)| c.order == 0))
+        .map(|(e, _)| e);
     for (entity, shine, mut image, mut visibility, target) in &mut glows {
         if let Some(main) = main
             && target.is_none_or(|t| t.0 != main)

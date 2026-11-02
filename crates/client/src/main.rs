@@ -35,6 +35,7 @@ mod flame;
 mod flash;
 mod fly;
 mod font;
+mod pixel;
 mod frame;
 mod fx;
 mod heat;
@@ -206,6 +207,7 @@ fn main() {
         .insert_resource(projectile::ProjectileModels::new(projectiles))
         .insert_resource(fonts)
         .add_plugins(font::FontPlugin)
+        .add_plugins(pixel::PixelPlugin)
         .insert_resource(options)
         .init_resource::<MeshOptions>()
         .init_resource::<CrateBias>()
