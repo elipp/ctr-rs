@@ -440,6 +440,11 @@ impl Sfx<'_> {
                         play_3d(&mut sounds, ear, &sound, echo);
                         continue;
                     }
+                    // Heard the same by everyone, from whoever it was.
+                    Effect::SoundForAll { id } => {
+                        sounds.play(id as u16, AntiSpam::CutRecent, howl::Sfx::FULL);
+                        continue;
+                    }
                     Effect::Voiceline {
                         id,
                         driver_id,

@@ -651,6 +651,8 @@ pub(crate) fn setup(
                 projection,
                 Transform::default(),
                 RenderLayers::layer(KART_LAYER),
+                // The clock's trail is over the world and our kart, which this camera draws last.
+                crate::clock::ClockTrail::default(),
             ))
 ;
         // The HUD's figures (the fruit and the tracker) share one camera, over all the others'

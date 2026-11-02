@@ -187,6 +187,10 @@ pub struct Race {
     pub weapons: Weapons,
     /// What they did in the last tick: the explosions, for the outside to show.
     pub last_weapons: weapon::Tick,
+    /// How each kart's screen was drawn over for a clock in the last tick, by slot
+    /// (`DISPLAY_Blur_Main`'s strength, see `vehicle::item::clock_frame`): white below 0, a trail
+    /// above, nothing at 0.
+    pub last_blurs: Vec<i32>,
     /// When the last bump was heard.
     pub feedback: Feedback,
     /// The ticks played: `gGT->timer`.
@@ -241,6 +245,7 @@ impl Race {
             last: instance::Tick::default(),
             weapons: Weapons::default(),
             last_weapons: weapon::Tick::default(),
+            last_blurs: Vec::new(),
             feedback: Feedback::default(),
             tick: 0,
             kart_collisions,
@@ -375,6 +380,12 @@ impl Race {
     /// the slots, each stage over all of them. The result is by slot.
     pub fn tick(&mut self, level: &Level, pads: &[Pad]) -> Vec<KartTick> {
         assert_eq!(pads.len(), self.karts.len(), "one pad for each kart");
+        // The clocks' timers on the screens, before anything ticks.
+        self.last_blurs = self
+            .karts
+            .iter_mut()
+            .map(|k| vehicle::item::clock_frame(&mut k.driver))
+            .collect();
         // The objects tick with the karts and before them, so that the contacts they give are
         // this tick's.
         let blockers: Vec<instance::Blocker> = self
@@ -434,17 +445,22 @@ impl Race {
             .iter()
             .map(|k| weapon::Body::of(&k.driver))
             .collect();
-        for (slot, ((kart, input), effects)) in self
-            .karts
-            .iter_mut()
-            .zip(&inputs)
-            .zip(&mut effects)
-            .enumerate()
-        {
-            if let Some(launch) = vehicle::item::shoot_on_circle_press(&mut kart.driver, effects) {
+        for slot in 0..self.karts.len() {
+            let launch =
+                vehicle::item::shoot_on_circle_press(&mut self.karts[slot].driver, &mut effects[slot]);
+            // The clock reaches every driver at once, the ones after it in this loop too.
+            if launch == Some(vehicle::item::Launch::Clock) {
+                let mut drivers: Vec<&mut Driver> =
+                    self.karts.iter_mut().map(|k| &mut k.driver).collect();
+                vehicle::item::clock(slot, &mut drivers, &mut effects);
+                continue;
+            }
+            let (kart, input, effects) = (&mut self.karts[slot], &inputs[slot], &mut effects[slot]);
+            if let Some(launch) = launch {
                 let p = kart.driver.pos_curr;
                 let kart_at = [p.x >> 8, p.y >> 8, p.z >> 8];
                 let kind = match launch {
+                    vehicle::item::Launch::Clock => unreachable!("used above"),
                     vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
                     vehicle::item::Launch::Missile => weapon::Kind::Missile,
                     vehicle::item::Launch::Mine | vehicle::item::Launch::Potion => {

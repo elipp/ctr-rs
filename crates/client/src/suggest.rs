@@ -405,6 +405,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                             leaf("4", "Potion"),
                             leaf("6", "Shield"),
                             leaf("7", "Mask"),
+                            leaf("8", "Clock"),
                             leaf("10", "Three bombs"),
                             leaf("11", "Three missiles"),
                         ],

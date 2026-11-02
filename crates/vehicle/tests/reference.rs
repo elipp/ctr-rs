@@ -150,7 +150,7 @@ fn effect_line(e: &Effect) -> String {
         // Nor does it run the emitter or the turbo fire, which keep the loops going.
         Effect::Recycle { .. } => String::new(),
         // The weapons are not the oracle's.
-        Effect::Sound3D(..) => String::new(),
+        Effect::Sound3D(..) | Effect::SoundForAll { .. } => String::new(),
     }
 }
 

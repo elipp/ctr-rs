@@ -37,6 +37,7 @@ mod fly;
 mod font;
 mod frame;
 mod fx;
+mod clock;
 mod heat;
 mod hud;
 mod kart;
@@ -309,6 +310,7 @@ fn main() {
             wumpa_icon::WumpaIconPlugin,
             minimap::MinimapPlugin,
             heat::HeatPlugin,
+            clock::ClockPlugin,
             slide_meter::SlideMeterPlugin,
             toast::ToastPlugin,
             wrong_way::WrongWayPlugin,

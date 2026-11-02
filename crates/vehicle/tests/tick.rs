@@ -322,6 +322,7 @@ fn effect_line(e: &Effect, characters: &[usize]) -> String {
         // `VehFire_Audio` is patched to report the boost without its cooldown, which is the
         // listener's here.
         Effect::FireAudio { fire_level } => format!(" B {fire_level}"),
+        Effect::SoundForAll { id } => format!(" S {id} 0"),
         // The fire's roar; the oracle does not run the emitter, which keeps the other loops going.
         Effect::Recycle {
             slot: audio_slot::TURBO,

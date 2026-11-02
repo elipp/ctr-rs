@@ -110,3 +110,9 @@ This file is for the places where the port _intentionally_ differs from the orig
 - Each loop takes a voice of the SPU's 24 while it plays, up to two for every other kart. A race with many players can run the voices out, and the loops that start later are silent. (No cap yet.)
 - The loops are not in the sim and are kept by the listener; a rollback that replays ticks starts them over (`Kept` is reset when the tick goes back).
 
+
+**Clock trail and flash (2026-11-02, visually verified 2026-11-02):** `vehicle::item::clock` and `clock_frame` follow retail; the screen effect (`client::clock`, `clock.wgsl`) is a look-alike of `DISPLAY_Blur_Main`, not a port of its tiled `POLY_FT4`s. Known differences:
+- The HUD is not in it: retail draws the blur and the white flash after the UI's OT, so its HUD ghosts and goes white too. Ours covers the world and our kart (the pass is on the kart camera). The juiced glows behind the weapon and the fruit are drawn by the main camera, so they do ghost.
+- Retail blends once a frame at 30 frames a second; ours blends once a rendered frame, with the blend and the zoom raised to the power of retail frames per rendered frame, so the trail lasts as long at any frame rate.
+- A paused race is told by no tick for 0.1 s (retail draws nothing while the game logic does not run), so a stall online also drops the trail for a moment.
+- The blend is done as sRGB, which assumes the main texture is sRGB (it is with HDR off).
