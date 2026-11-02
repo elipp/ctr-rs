@@ -9,9 +9,10 @@
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (the `.cache/custom-tracks` folder, see `paths.rs`)
 //! * `/race start`: start the race, once the others have joined (the host only)
-//! * `/cup create <name> <tracks> <laps>`: define a cup (`cup.rs`), and `/cup start <name>` to
-//!   drive it: its races one after another, points for the first four to finish, and
-//!   [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a cup of one race with no points.
+//! * `/cup create <name> <tracks> <laps>`: define a cup (`cup.rs`), kept in the config until
+//!   `/cup delete <name>`, and `/cup start <name>` to drive it: its races one after another, points
+//!   for the first four to finish, and [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a
+//!   cup of one race with no points.
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/promote <player>`: hand the lobby over to a player, between races (the host only): they host it
 //!   from then on, a public lobby stays listed, and we are a guest of theirs
@@ -35,7 +36,6 @@ use crate::maps;
 
 use commands::run;
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
-pub use cup::Cups;
 use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
 use hud::waiting;
@@ -435,7 +435,6 @@ pub struct LobbyPlugin;
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lobby>()
-            .init_resource::<Cups>()
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()
             .add_systems(Startup, spawn_waiting)

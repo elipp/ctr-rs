@@ -1,7 +1,7 @@
-//! The picture of a track for `/track` to show: the game's own for its racing tracks. A map has
+//! The picture of a track for the command line to show: the game's own for its racing tracks. A map has
 //! none, so we take one, which is kept by the map's hash, in one of two ways:
 //!
-//! - When `/track` has offered a map for a moment, its level alone (no objects, no karts) is built
+//! - When the command line has offered a map for a moment, its level alone (no objects, no karts) is built
 //!   away from the scene, on layers no other camera draws, for one picture. This is the preview.
 //! - The first time a map is driven on, cameras of our own take a picture of the scene from the
 //!   chase camera, which replaces a preview.
@@ -60,7 +60,7 @@ const HIDDEN_LAYER: usize = 31;
 const PREVIEW_LAYER: usize = 30;
 const PREVIEW_SKY_LAYER: usize = 29;
 
-/// How long `/track` has to offer a map before its preview is built, in seconds: the arrows go
+/// How long the command line has to offer a map before its preview is built, in seconds: the arrows go
 /// through the others without building each.
 const PREVIEW_DELAY: f32 = 0.3;
 
@@ -103,7 +103,7 @@ pub(crate) struct TrackPictures {
     minimaps: HashMap<u32, Option<Picture>>,
     /// Those we took, by the map's hash: none if there is none yet.
     captured: HashMap<u64, Option<CapturedPicture>>,
-    /// The map `/track` offers and we have no picture of, and since when.
+    /// The map the command line offers and we have no picture of, and since when.
     awaiting_preview: Option<(u32, f32)>,
     /// The maps whose preview has been tried.
     previewed: HashSet<u64>,
@@ -143,7 +143,7 @@ impl TrackPictures {
         })
     }
 
-    /// What `/track` offers now, for the preview of a map we have no picture of.
+    /// What the command line offers now, for the preview of a map we have no picture of.
     pub fn set_offered(&mut self, id: Option<u32>, now: f32, images: &mut Assets<Image>) {
         let id = id
             .filter(|&id| map::is_map_id(id))
@@ -457,7 +457,7 @@ struct BuiltLevel {
     mesh: LevelMesh,
 }
 
-/// Starts to build the level of a map that `/track` has offered for a moment. (Not in an online
+/// Starts to build the level of a map that the command line has offered for a moment. (Not in an online
 /// race, which a hitch would cost more than the minimap does.)
 fn start_building(
     time: Res<Time<Real>>,

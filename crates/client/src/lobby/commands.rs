@@ -1,7 +1,7 @@
 //! The lobby's commands (`/lobby`, `/race`, `/net`, `/cache`) and what they answer.
 
 use super::countdown::Then;
-use super::cup::{CupDef, Cups, Finisher, Series};
+use super::cup::{CupDef, Finisher, Series};
 use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, Lobby};
 use crate::command::Action;
@@ -109,8 +109,7 @@ pub(super) fn run(
     time: Res<Time<Real>>,
     mut smoothing: ResMut<crate::kart::Smoothing>,
     mut rollbacks: ResMut<RollbackToasts>,
-    config: Res<crate::config::Config>,
-    mut cups: ResMut<Cups>,
+    mut config: ResMut<crate::config::Config>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -171,14 +170,18 @@ pub(super) fn run(
             Action::CupCreate { name, tracks, laps } => {
                 let cup = CupDef {
                     name: name.clone(),
-                    tracks: tracks.clone(),
+                    tracks: tracks.iter().map(|&id| maps::stable_name(id)).collect(),
                     laps: *laps,
                 };
                 console!(
                     "Cup {name} {}: {} tracks, {laps} laps each",
-                    if cups.set(cup) { "replaced" } else { "created" },
+                    if config.cups.set(cup) { "replaced" } else { "created" },
                     tracks.len()
                 );
+                // (It holds for this session even if the file cannot be written.)
+                if let Err(why) = config.save() {
+                    logs.write(Log::error(why));
+                }
                 for (n, &id) in tracks.iter().enumerate() {
                     console!("  {}. {} ({})", n + 1, maps::name(id), maps::slug(id));
                 }
@@ -186,11 +189,27 @@ pub(super) fn run(
                 continue;
             }
             Action::CupStart(name) => {
-                let Some(def) = cups.get(name) else {
+                let Some(def) = config.cups.get(name) else {
                     logs.write(Log::error(format!("No cup is called {name} (/cup create)")));
                     continue;
                 };
-                lobby.start_series(Series::cup(def), now);
+                match def.resolve() {
+                    Ok(tracks) => lobby.start_series(Series::cup(def, tracks), now),
+                    Err(why) => {
+                        logs.write(Log::error(format!("Cup {}: {why}", def.name)));
+                    }
+                }
+                continue;
+            }
+            Action::CupDelete(name) => {
+                let Some(cup) = config.cups.remove(name) else {
+                    logs.write(Log::error(format!("No cup is called {name}")));
+                    continue;
+                };
+                console!("Cup {} deleted", cup.name);
+                if let Err(why) = config.save() {
+                    logs.write(Log::error(why));
+                }
                 continue;
             }
             Action::ListTracks => {

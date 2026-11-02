@@ -443,6 +443,17 @@ pub fn resolve(text: &str) -> Result<u32, String> {
     }
 }
 
+/// What a command can call the level `id` to find that one again: its short name, or its long
+/// number if that name is another track's too.
+pub fn stable_name(id: u32) -> String {
+    let slug = slug(id);
+    if resolve(&slug) == Ok(id) {
+        slug
+    } else {
+        format!("{id:08x}")
+    }
+}
+
 /// The number a custom track goes by in commands: the game's racing tracks have theirs (0 to 17),
 /// and the custom tracks carry on from there, in the order of the list of them (by name), so the
 /// numbers change as tracks are added or deleted.
