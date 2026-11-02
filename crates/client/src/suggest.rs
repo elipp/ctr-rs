@@ -5,6 +5,8 @@
 //!
 //! [`Action::parse`]: crate::command::Action
 
+use crate::CHARACTERS;
+
 /// A public lobby's offered name is one of these and one of [`LOBBY_NOUNS`]. Neither list has a
 /// place: a name like a track's would read as the track the lobby races on.
 const LOBBY_ADJECTIVES: &[&str] = &[
@@ -56,11 +58,86 @@ pub(crate) fn name_to_add(line: &str, name: &str) -> Option<String> {
     if !line.split_whitespace().eq(["/lobby", "create", "public"]) {
         return None;
     }
-    Some(if line.ends_with(char::is_whitespace) {
+    Some(after_the_line(line, name))
+}
+
+/// `name` as what `line` takes to have it after its last word, with a space if it needs one.
+fn after_the_line(line: &str, name: &str) -> String {
+    if line.ends_with(char::is_whitespace) {
         name.to_string()
     } else {
         format!(" {name}")
-    })
+    }
+}
+
+/// What goes with a name the command line offers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum OfferPicture {
+    /// The portrait of a character (`CHARACTERS` order).
+    Portrait(usize),
+    /// The picture of a track, a `LevelId`.
+    Track(u32),
+}
+
+/// A name the command line offers in grey.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Offer<'a> {
+    pub name: &'a str,
+    pub picture: OfferPicture,
+}
+
+/// The characters, as what `/character` offers.
+pub(crate) fn characters() -> impl Iterator<Item = Offer<'static>> {
+    CHARACTERS
+        .iter()
+        .enumerate()
+        .map(|(character, name)| Offer {
+            name,
+            picture: OfferPicture::Portrait(character),
+        })
+}
+
+/// What `line` has typed after `command`, if it is that command.
+pub(crate) fn typed_after<'l>(line: &'l str, command: &str) -> Option<&'l str> {
+    let rest = line.strip_prefix(command)?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim_start())
+}
+
+/// Whether `name` starts with `typed`, in any ASCII case (as `Lobby::player_named` reads names).
+fn starts_with(name: &str, typed: &str) -> bool {
+    name.as_bytes()
+        .get(..typed.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(typed.as_bytes()))
+}
+
+/// The offers that what is typed can still come to, each name once.
+pub(crate) fn matching<'a>(typed: &str, offers: impl Iterator<Item = Offer<'a>>) -> Vec<Offer<'a>> {
+    let mut found: Vec<Offer> = Vec::new();
+    for offer in offers.filter(|o| starts_with(o.name, typed)) {
+        if found.iter().all(|o| o.name != offer.name) {
+            found.push(offer);
+        }
+    }
+    found
+}
+
+/// Of the offers [`matching`] what is typed: the one called `wanted`, or else the one it names
+/// whole, so that a longer name does not take its place, or else the first.
+pub(crate) fn pick<'a>(offers: &[Offer<'a>], wanted: &str, typed: &str) -> Option<Offer<'a>> {
+    let find = |test: &dyn Fn(&Offer) -> bool| offers.iter().find(|o| test(o)).copied();
+    find(&|o| o.name == wanted)
+        .or_else(|| find(&|o| o.name.eq_ignore_ascii_case(typed)))
+        .or_else(|| offers.first().copied())
+}
+
+/// What `line`, which has `typed` of it, takes to name `name`: none if it does.
+pub(crate) fn rest_of_name(line: &str, typed: &str, name: &str) -> Option<String> {
+    if typed.is_empty() {
+        return Some(after_the_line(line, name));
+    }
+    name.get(typed.len()..)
+        .filter(|rest| !rest.is_empty())
+        .map(str::to_string)
 }
 
 /// A command, subcommand or value, and what can follow it.
@@ -119,49 +196,60 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[
                     leaf(
                         "private",
-                        "Only those with the address can join (the default)",
+                        "Join by address only (the default)",
                     ),
                     takes(
                         "public",
-                        "Listed for anyone to find: type a name, or keep the grey one (Up, Down: another)",
-                        "[type a name]",
+                        "Listed for anyone to find",
+                        "[name, Up/Down]",
                     ),
                 ],
             ),
             takes("join", "Join a lobby", "<address>"),
             takes(
                 "spectate",
-                "Watch the races of a lobby (no address: switch in this one)",
+                "Watch a lobby's races",
                 "[address]",
             ),
-            leaf("close", "Leave the lobby, or close it if it is ours"),
+            leaf("close", "Leave the lobby, or close it if ours"),
         ],
     ),
     node(
         "race",
-        "The lobby's race (the host only)",
+        "The lobby's race (host only)",
         &[
-            leaf("start", "Count down to a race on this track"),
+            leaf("start", "Count down to a race here"),
             leaf("restart", "Count down to the race again"),
-            leaf("stop", "End the race for everyone, with no winner"),
+            leaf("stop", "End the race for everyone"),
         ],
     ),
     node(
         "cup",
-        "A series of races with points (the host starts it)",
+        "A series of races with points",
         &[
             takes(
                 "create",
-                "Make a cup: its tracks (short names or numbers) and the laps of each race",
-                "<name> <track,track,...> <laps>",
+                "Make a cup",
+                "<name> <tracks> <laps>",
             ),
-            takes("start", "Count down to the first race of a cup", "<name>"),
+            takes("start", "Count down to a cup's first race", "<name>"),
         ],
     ),
     takes(
         "promote",
-        "Make a player the host of the lobby (the host only)",
+        "Make a player the host (host only)",
         "<player>",
+    ),
+    Spec {
+        name: "track",
+        about: "Go to a track",
+        options: &[leaf("list", "Print the tracks")],
+        arg: Some("[name, Up/Down]"),
+    },
+    takes(
+        "character",
+        "Who to drive",
+        "[name, Up/Down]",
     ),
     node(
         "config",
@@ -172,7 +260,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             &[
                 takes(
                     "nickname",
-                    "The name the others see, up to 12 characters",
+                    "The name others see (12 at most)",
                     "<name>",
                 ),
                 // (A browser has none of these three: see `config.rs`.)
@@ -188,13 +276,13 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 #[cfg(not(target_arch = "wasm32"))]
                 takes(
                     "fps-max",
-                    "The most frames to draw a second, 0 for no limit",
+                    "Frame limit, 0 for none",
                     "<frames a second>",
                 ),
                 #[cfg(target_arch = "wasm32")]
                 takes(
                     "render-scale",
-                    "The part of the screen's resolution to draw at",
+                    "How much of the resolution to draw",
                     "<0.25 to 1>",
                 ),
                 node(
@@ -208,21 +296,21 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ),
                 node(
                     "volume",
-                    "How loud the music, the effects and the voices are",
+                    "Music, effects and voices",
                     &[
                         takes(
                             "music",
-                            "The music's volume, 100 being the game's",
+                            "Music volume, 100 is the game's",
                             "<0-100>",
                         ),
                         takes(
                             "sfx",
-                            "The effects' volume, 100 being the game's",
+                            "Effects volume, 100 is the game's",
                             "<0-100>",
                         ),
                         takes(
                             "voice",
-                            "The voices' volume, 100 being the game's",
+                            "Voice volume, 100 is the game's",
                             "<0-100>",
                         ),
                     ],
@@ -231,6 +319,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
         )],
     ),
     leaf("version", "Show the version of this build"),
+    leaf("clear", "Empty the console"),
     node(
         "net",
         "The connection to the others",
@@ -238,12 +327,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("info", "How each peer is connected"),
             Spec {
                 name: "smoothing",
-                about: "How the others' karts ease after a rollback",
+                about: "How karts ease after a rollback",
                 options: &[
                     leaf("ping", "By the round trip to each player"),
                     leaf("replay", "By how far the rollbacks replay"),
                 ],
-                arg: Some("<duration, like 120ms>"),
+                arg: Some("<like 120ms>"),
             },
             node(
                 "rollbacks",
@@ -256,14 +345,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[
                     takes(
                         "add",
-                        "Use this relay too (from the next lobby on)",
+                        "Use this relay too, from the next lobby",
                         "<url>",
                     ),
-                    leaf("clear", "Drop the added relays (from the next lobby on)"),
+                    leaf("clear", "Drop added relays, from the next lobby"),
                     #[cfg(not(target_arch = "wasm32"))]
                     node(
                         "only",
-                        "Reach the others through the relay only, hiding your address",
+                        "Hide your address behind the relay",
                         &[
                             leaf("on", "Never connect straight (slower, private)"),
                             leaf("off", "Connect straight when possible"),
@@ -272,11 +361,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ],
             ),
         ],
-    ),
-    node(
-        "track",
-        "The tracks there are",
-        &[leaf("list", "Print them with their numbers")],
     ),
     node(
         "cache",
@@ -328,7 +412,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                     node(
                         "crate-fixup",
-                        "Move the crates the level puts in the ground",
+                        "Move crates out of the ground",
                         &[
                             leaf("on", "Move them"),
                             leaf("off", "Draw them where the level has them"),
@@ -343,11 +427,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
             ),
             leaf(
                 "viewer",
-                "Switch between the race and the fly-through viewer",
+                "Race or fly-through viewer",
             ),
             node(
                 "hud",
-                "The development text of the race (the frame rate stays); alone: toggle",
+                "The race's dev text (alone: toggle)",
                 &[leaf("on", "Show it"), leaf("off", "Hide it")],
             ),
             takes("toast", "Show a text as a toast", "<text>"),
@@ -356,11 +440,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "Crates",
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
-            leaf("ranking", "End the race with a random ranking (host)"),
+            leaf("ranking", "Random ranking (host)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             node(
                 "fx",
-                "Try a visual effect (alone: the panel, F3)",
+                "Try a visual effect (alone: the panel)",
                 &[
                     node(
                         "confetti",
@@ -483,7 +567,18 @@ mod tests {
         assert_eq!(
             names("/"),
             [
-                "lobby", "race", "cup", "promote", "config", "version", "net", "track", "cache", "debug"
+                "lobby",
+                "race",
+                "cup",
+                "promote",
+                "track",
+                "character",
+                "config",
+                "version",
+                "clear",
+                "net",
+                "cache",
+                "debug"
             ]
         );
         assert_eq!(names("/r"), ["race"]);
@@ -528,6 +623,88 @@ mod tests {
         let menu = Menu::of(line).unwrap();
         assert_eq!(menu.pick(line, 0), Some(("/lobby join ".into(), false)));
         assert_eq!(menu.pick(line, 1), None);
+    }
+
+    #[test]
+    fn offers_narrow_down_to_what_is_typed() {
+        let named = |typed| -> Vec<&str> {
+            matching(typed, characters()).iter().map(|o| o.name).collect()
+        };
+        assert_eq!(named("").len(), CHARACTERS.len());
+        assert_eq!(named("n. t"), ["N. Tropy"]);
+        assert_eq!(named("PE"), ["Penta"]);
+        assert_eq!(named("fake "), ["Fake Crash"]);
+        assert!(named("nobody").is_empty());
+        assert_eq!(typed_after("/character", "/character"), Some(""));
+        assert_eq!(typed_after("/character  Pe", "/character"), Some("Pe"));
+        assert_eq!(typed_after("/characters", "/character"), None);
+
+        assert_eq!(rest_of_name("/character", "", "Penta").unwrap(), " Penta");
+        assert_eq!(rest_of_name("/character ", "", "Penta").unwrap(), "Penta");
+        assert_eq!(rest_of_name("/character pe", "pe", "Penta").unwrap(), "nta");
+        assert_eq!(rest_of_name("/character penta", "penta", "Penta"), None);
+    }
+
+    #[test]
+    fn a_players_name_is_any_text() {
+        let offer = |name| Offer {
+            name,
+            picture: OfferPicture::Portrait(0),
+        };
+        let players = [offer("Äijä"), offer("Bobby"), offer("Bob"), offer("Bob")];
+        let found = |typed| matching(typed, players.iter().copied());
+        // (Part of a character of more than a byte is no prefix.)
+        assert_eq!(found("Äi"), [players[0]]);
+        assert_eq!(rest_of_name("/promote Äi", "Äi", "Äijä").unwrap(), "jä");
+        assert!(found("ä").is_empty());
+        // Each name once, and a name typed whole goes before a longer one.
+        assert_eq!(found("bob").len(), 2);
+        assert_eq!(pick(&found("bob"), "", "bob").unwrap().name, "Bob");
+        assert_eq!(pick(&found("bob"), "Bobby", "bob").unwrap().name, "Bobby");
+        assert_eq!(pick(&found("b"), "", "b").unwrap().name, "Bobby");
+    }
+
+    /// How many lines `text` takes in a column of `width` characters.
+    fn lines(text: &str, width: usize) -> usize {
+        let (mut lines, mut used) = (1, 0);
+        for word in text.split(' ') {
+            let length = word.chars().count();
+            if used > 0 && used + 1 + length > width {
+                lines += 1;
+                used = 0;
+            }
+            if used > 0 {
+                used += 1;
+            }
+            used += length;
+            lines += used.saturating_sub(1) / width.max(1);
+            used = (used.saturating_sub(1) % width.max(1)) + 1;
+        }
+        lines
+    }
+
+    /// What a command does fits two lines of the suggestions, in the narrowest console.
+    #[test]
+    fn the_descriptions_are_short() {
+        /// `console::spawn`'s least width, less the padding, in the line's characters of 12 pixels;
+        /// and the gap between the columns.
+        const COLUMNS: usize = 37;
+        const GAP: usize = 2;
+        fn walk(about: &str, specs: &[Spec], arg: Option<&str>) {
+            let names = specs.iter().map(|s| s.name).chain(arg);
+            let name = names.map(|n| n.chars().count()).max().unwrap_or(0);
+            let width = COLUMNS - name - GAP;
+            let rows = specs.iter().map(|s| s.about).chain(arg.map(|_| about));
+            for row in rows {
+                assert!(lines(row, width) <= 2, "{row} in {width} columns");
+            }
+            for spec in specs {
+                walk(spec.about, spec.options, spec.arg);
+            }
+        }
+        assert_eq!(lines("one two", 7), 1);
+        assert_eq!(lines("one two", 6), 2);
+        walk("", COMMANDS, None);
     }
 
     /// Every word of the tree is a command `Action::parse` knows: a leaf parses, and one that

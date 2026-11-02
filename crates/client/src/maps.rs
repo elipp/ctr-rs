@@ -296,6 +296,9 @@ pub fn purge() -> Result<usize, String> {
     });
     #[cfg(target_arch = "wasm32")]
     crate::web::purge_maps();
+    // (They are taken again; they would only go stale here.)
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = std::fs::remove_dir_all(crate::paths::track_pictures());
     #[cfg(not(target_arch = "wasm32"))]
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
@@ -398,12 +401,12 @@ fn slugify(name: &str) -> String {
     slug.trim_matches('_').to_string()
 }
 
-/// The level a command means by `text`: a short name (see [`slug`]), or the level's number
+/// The level a command means by `text`: its name, a short name (see [`slug`]), or the level's number
 /// (`4`, a custom track's number as `/track list` prints it, or its long one, `80001234`).
 pub fn resolve(text: &str) -> Result<u32, String> {
     let text = text.trim();
     let slug = text.to_ascii_lowercase();
-    if let Some(id) = builtin::id_of_slug(&slug) {
+    if let Some(id) = builtin::id_of_slug(&slug).or_else(|| builtin::id_of_display_name(text)) {
         return Ok(id);
     }
     // A custom track's number as `/track list` prints it: eight hex digits (the game's numbers
@@ -429,7 +432,7 @@ pub fn resolve(text: &str) -> Result<u32, String> {
     }
     let found: Vec<u32> = ids()
         .into_iter()
-        .filter(|&id| slug_matches(id, &slug))
+        .filter(|&id| slug_matches(id, &slug) || name(id).eq_ignore_ascii_case(text))
         .collect();
     match found[..] {
         [id] => Ok(id),

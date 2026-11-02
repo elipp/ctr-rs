@@ -43,6 +43,12 @@ pub fn cached_maps() -> PathBuf {
     root().join(".cache").join("custom-tracks")
 }
 
+/// The pictures we took of the maps (`track_picture.rs`): everything in it may go.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn track_pictures() -> PathBuf {
+    root().join(".cache").join("track_pictures")
+}
+
 fn cache() -> PathBuf {
     if cfg!(debug_assertions) {
         root().join(".cache")

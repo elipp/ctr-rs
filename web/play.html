@@ -432,6 +432,10 @@ async function start(stream, size, copy = null) {
   if (drop.classList.contains("busy")) return;
   drop.classList.add("busy");
   disc = await read(stream, size);
+  trackPictures = await stored("trackPictures", "readonly", (s) => s.getAll()).catch((e) => {
+    console.warn(`could not read the pictures of the tracks: ${e}`);
+    return [];
+  });
   maps = await stored("maps", "readonly", (s) => s.getAll()).catch((e) => {
     console.warn(`could not read the maps: ${e}`);
     return [];
@@ -485,9 +489,9 @@ addEventListener("unhandledrejection", (e) => trap(e.reason));
 
 function stored(name, mode, use) {
   return new Promise((resolve, reject) => {
-    const open = indexedDB.open("ctr-rs", 2);
+    const open = indexedDB.open("ctr-rs", 3);
     open.onupgradeneeded = () => {
-      for (const store of ["handles", "maps"]) {
+      for (const store of ["handles", "maps", "trackPictures"]) {
         if (!open.result.objectStoreNames.contains(store)) open.result.createObjectStore(store);
       }
     };
@@ -505,6 +509,19 @@ const forget = () => stored("handles", "readwrite", (s) => s.delete("disc")).cat
 const recall = () => stored("handles", "readonly", (s) => s.get("disc")).catch(() => undefined);
 
 let maps = [];
+let trackPictures = [];
+window.ctrTakeTrackPictures = () => {
+  const taken = trackPictures;
+  trackPictures = [];
+  return taken;
+};
+window.ctrSaveTrackPicture = (key, bytes) => {
+  // `bytes` views wasm memory, which can move.
+  const copy = bytes.slice();
+  stored("trackPictures", "readwrite", (s) => s.put(copy, key)).catch((e) =>
+    console.warn(`could not keep the picture of the track: ${e}`),
+  );
+};
 window.ctrTakeMaps = () => {
   const taken = maps;
   maps = [];
@@ -517,10 +534,13 @@ window.ctrSaveMap = (key, bytes) => {
     console.warn(`could not keep the map: ${e}`),
   );
 };
-window.ctrPurgeMaps = () =>
-  stored("maps", "readwrite", (s) => s.clear()).catch((e) =>
-    console.warn(`could not delete the maps: ${e}`),
-  );
+window.ctrPurgeMaps = () => {
+  for (const store of ["maps", "trackPictures"]) {
+    stored(store, "readwrite", (s) => s.clear()).catch((e) =>
+      console.warn(`could not delete the ${store}: ${e}`),
+    );
+  }
+};
 
 let choices = [];
 let on = 0;

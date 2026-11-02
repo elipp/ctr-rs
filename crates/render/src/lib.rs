@@ -18,6 +18,7 @@ pub mod rain;
 pub mod shadow;
 pub mod shield;
 pub mod submerge;
+pub mod track_thumbnails;
 pub mod tracker;
 pub mod weapons;
 pub mod weather;

@@ -74,6 +74,7 @@ mod submerge;
 mod subtract;
 mod suggest;
 mod toast;
+mod track_picture;
 mod tracker;
 mod version;
 mod weapon;
@@ -316,8 +317,10 @@ fn main() {
         config::ConfigPlugin,
         probe::ProbePlugin,
     ));
+    app.add_plugins(track_picture::TrackPicturePlugin);
     app.add_systems(Update, fly.run_if(not(drive::driving)))
-        .add_systems(Update, switch_mode);
+        .init_resource::<scene::Picked>()
+        .add_systems(Update, (switch_mode, scene::keep_picks));
     app.insert_resource(scene_systems);
     // The multi-threaded executor spawns and wakes a task per system; for a frame this light
     // those hand-offs cost more than the systems. `CTR_EXECUTOR=multi` brings it back.

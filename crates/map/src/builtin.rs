@@ -43,6 +43,14 @@ const TRACKS: [(&str, &str, LevelId); 18] = [
     ("turbo_track", "Turbo Track", LevelId::TURBO_TRACK),
 ];
 
+/// The game's track that is called `name` (see [`display_name`]), in any case.
+pub fn id_of_display_name(name: &str) -> Option<u32> {
+    TRACKS
+        .iter()
+        .find(|t| t.1.eq_ignore_ascii_case(name))
+        .map(|t| t.2.0)
+}
+
 /// Whether a map's name claims to be a track of the game.
 pub fn is_builtin_name(name: &str) -> bool {
     name.starts_with(PREFIX)

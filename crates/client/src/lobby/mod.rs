@@ -44,7 +44,7 @@ use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
 use report::report;
 
-mod commands;
+pub(crate) mod commands;
 mod countdown;
 pub(crate) mod cup;
 mod hud;
@@ -128,6 +128,18 @@ impl Lobby {
         self.roster
             .iter()
             .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
+    }
+
+    /// Who the lobby could be handed to, the character and the name of each: the others, if we
+    /// are its host.
+    pub fn promotable(&self) -> impl Iterator<Item = (u8, &str)> {
+        let hosting = self.is_open() && !self.joined;
+        // (As in `player_named`: the first is us.)
+        self.roster
+            .iter()
+            .skip(1)
+            .filter(move |_| hosting)
+            .map(|m| (m.character, m.label.as_str()))
     }
 
     /// The guests that only watch: the name and the short key of each.
