@@ -190,6 +190,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                         "Use this relay too (from the next lobby on)",
                         "<url>",
                     ),
+                    leaf("clear", "Drop the added relays (from the next lobby on)"),
                     #[cfg(not(target_arch = "wasm32"))]
                     node(
                         "only",

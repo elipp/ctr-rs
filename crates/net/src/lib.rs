@@ -62,11 +62,20 @@ pub fn set_relay_only(relay_only: bool) {
 
 static RELAYS: Mutex<Vec<RelayUrl>> = Mutex::new(Vec::new());
 
-/// A relay's URL, as `https://host`, in the form that is kept.
+/// A relay's URL, as `https://host`, in the form that is kept. The scheme may be left out: it is
+/// `https` then.
 pub fn parse_relay(text: &str) -> Result<String, String> {
-    text.parse::<RelayUrl>()
-        .map(|url| url.to_string())
-        .map_err(|e| format!("Not a relay URL: {e}"))
+    relay_url(text).map(|url| url.to_string())
+}
+
+fn relay_url(text: &str) -> Result<RelayUrl, String> {
+    let text = text.trim();
+    let url = if text.contains("://") {
+        text.parse()
+    } else {
+        format!("https://{text}").parse()
+    };
+    url.map_err(|e| format!("Not a relay URL: {e}"))
 }
 
 /// The relays to use besides iroh's public ones (and those in `CTR_RELAYS`), once each, for the sessions and
@@ -86,7 +95,7 @@ pub fn set_relays(urls: &[String]) {
 pub fn extra_relays() -> Vec<RelayUrl> {
     let from_env = std::env::var("CTR_RELAYS").unwrap_or_default();
     let from_env = from_env.split([',', ' ']).filter(|url| !url.is_empty()).filter_map(|url| {
-        url.parse::<RelayUrl>()
+        relay_url(url)
             .inspect_err(|e| eprintln!("CTR_RELAYS: {url}: {e}"))
             .ok()
     });
@@ -599,5 +608,17 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
         stop: Some(stop),
         #[cfg(not(target_arch = "wasm32"))]
         thread: Some(thread),
+    }
+}
+
+#[cfg(test)]
+mod relay_url_tests {
+    use super::parse_relay;
+
+    #[test]
+    fn the_scheme_is_https_unless_given() {
+        assert_eq!(parse_relay("relay.example.com").unwrap(), parse_relay("https://relay.example.com").unwrap());
+        assert!(parse_relay("http://relay.example.com").unwrap().starts_with("http://"));
+        assert!(parse_relay("relay.example.com:8443").unwrap().contains(":8443"));
     }
 }

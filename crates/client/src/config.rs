@@ -19,7 +19,7 @@
 //!   straight, so that they do not learn our address (off at first; it costs latency, and holds
 //!   from the next lobby we create or join)
 //! * `/net relay add <url>`: another relay to use besides the public ones (each once, at most
-//!   [`MAX_RELAYS`]; it holds from the next lobby)
+//!   [`MAX_RELAYS`]; it holds from the next lobby), and `/net relay clear` to drop them all
 //!
 //! A browser has no vsync or fps-max, and no relay-only: it paces the frames to the display
 //! itself, and reaches the others through the relay only.
@@ -228,6 +228,8 @@ pub enum Setting {
     RelayOnly(bool),
     /// A relay's URL, as `net::parse_relay` keeps it.
     AddRelay(String),
+    /// Back to the public relays only.
+    ClearRelays,
     /// 0 to 100.
     VolumeSfx(u8),
     VolumeMusic(u8),
@@ -441,6 +443,18 @@ fn apply(
                         toasts.write(refuse(why));
                     }
                     format!("Relay added: {url} (it takes hold in the next lobby)")
+                };
+                toasts.write(Toast::new(text, 3000));
+            }
+            Setting::ClearRelays => {
+                let text = if config.relays.is_empty() {
+                    "No relays added".to_string()
+                } else {
+                    config.relays.clear();
+                    if let Err(why) = config.save() {
+                        toasts.write(refuse(why));
+                    }
+                    "Relays cleared (it takes hold in the next lobby)".to_string()
                 };
                 toasts.write(Toast::new(text, 3000));
             }
