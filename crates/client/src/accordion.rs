@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 use bevy::ecs::component::Mutable;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
-use bevy::picking::events::{PointerClick, PointerOver};
-use bevy::picking::pointer::PointerButton;
+use bevy::picking::events::{PointerClick, PointerOver, PointerRelease};
+use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 
 use crate::sound::{MENU_TAKE_SFX, Sounds};
@@ -287,20 +287,34 @@ pub fn spawn<R: HasAccordion>(
                 move |click: On<PointerClick>,
                       mut owner: ResMut<R>,
                       sounds: Option<Res<Sounds>>| {
-                    if click.button != PointerButton::Primary {
-                        return;
+                    if click.button == PointerButton::Primary {
+                        take(&mut *owner, slot, sounds.as_deref());
                     }
-                    if let Some(list) = owner.accordion() {
-                        list.point(slot);
-                        list.toggle();
-                        if let Some(sounds) = sounds {
-                            sounds.menu(MENU_TAKE_SFX);
-                        }
+                },
+            )
+            // A touch has no click: see the rows of `pause.rs`.
+            .observe(
+                move |release: On<PointerRelease>,
+                      mut owner: ResMut<R>,
+                      sounds: Option<Res<Sounds>>| {
+                    if matches!(release.pointer.id, PointerId::Touch(_)) {
+                        take(&mut *owner, slot, sounds.as_deref());
                     }
                 },
             );
     }
     lines
+}
+
+/// Opens or closes what is at `slot`.
+fn take<R: HasAccordion>(owner: &mut R, slot: usize, sounds: Option<&Sounds>) {
+    if let Some(list) = owner.accordion() {
+        list.point(slot);
+        list.toggle();
+        if let Some(sounds) = sounds {
+            sounds.menu(MENU_TAKE_SFX);
+        }
+    }
 }
 
 pub fn update<R: HasAccordion>(list: &Accordion, lines: &mut Lines<R>) {

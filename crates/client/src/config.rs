@@ -13,6 +13,9 @@
 //!   voices are, in percent of the game's own volumes (100 at first). The pause menu's Options
 //!   set them too
 //!
+//! * `/config set render-scale <0.25-1>`: in a browser, the part of the screen's resolution to
+//!   draw at, across and down (`web/play.html`)
+//!
 //! Two network settings are kept here too, and set with `/net`:
 //!
 //! * `/net relay only on|off`: whether to reach the other players through the relay only, never
@@ -71,6 +74,9 @@ pub struct Config {
     /// Whether the race shows the frame rate, the kart's state, the build and the boost reserves
     /// (`/debug hud`).
     pub debug_hud: bool,
+    /// The part of the screen's resolution a browser draws at (`/config set render-scale`), which
+    /// the page reads by this name.
+    pub render_scale: f32,
 }
 
 /// The most relays that can be added; every one is probed when an endpoint starts.
@@ -92,6 +98,7 @@ impl Default for Config {
             volume_voice: 100,
             controls: Controls::default(),
             debug_hud: false,
+            render_scale: 1.0,
         }
     }
 }
@@ -234,6 +241,18 @@ pub enum Setting {
     VolumeSfx(u8),
     VolumeMusic(u8),
     VolumeVoice(u8),
+    /// 0.25 to 1.
+    RenderScale(f32),
+}
+
+const RENDER_SCALE_USAGE: &str = "Usage: /config set render-scale <0.25 to 1>";
+
+/// The render scale that `value` says, if it is one.
+fn render_scale(value: &str) -> Option<f32> {
+    value
+        .parse()
+        .ok()
+        .filter(|scale| (0.25..=1.0).contains(scale))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -245,6 +264,7 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set msaa off|2|4\n\
+    /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>";
 
 impl Setting {
@@ -259,7 +279,13 @@ impl Setting {
                 _ => {}
             }
         }
+        if cfg!(not(target_arch = "wasm32")) && key == "render-scale" {
+            return Err("Render scale is only for the browser build".into());
+        }
         match key {
+            "render-scale" => render_scale(value)
+                .map(Setting::RenderScale)
+                .ok_or_else(|| RENDER_SCALE_USAGE.to_string()),
             "nickname" => {
                 if value.chars().count() > net::NICK_MAX {
                     return Err(format!("A nickname is up to {} characters", net::NICK_MAX));
@@ -432,6 +458,15 @@ fn apply(
                 };
                 toasts.write(Toast::new(text, 2000));
             }
+            Setting::RenderScale(scale) => {
+                config.render_scale = *scale;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                #[cfg(target_arch = "wasm32")]
+                crate::web::set_render_scale(*scale);
+                toasts.write(Toast::new(format!("Render scale {scale}"), 2000));
+            }
             Setting::AddRelay(url) => {
                 let text = if config.relays.contains(url) {
                     format!("Relay already added: {url}")
@@ -484,6 +519,21 @@ fn apply(
                 }
                 toasts.write(Toast::new(format!("{name} volume: {percent}"), 2000));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_render_scale_is_a_part_of_the_resolution() {
+        assert_eq!(render_scale("0.5"), Some(0.5));
+        assert_eq!(render_scale("1"), Some(1.0));
+        assert_eq!(render_scale("0.25"), Some(0.25));
+        for wrong in ["0.2", "1.5", "0", "NaN", "half", ""] {
+            assert_eq!(render_scale(wrong), None, "{wrong}");
         }
     }
 }

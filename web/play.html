@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Added to the Home Screen, the game opens without Safari's bars. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CTR-RS">
 <title>ctr-rs</title>
 <style>
   @font-face {
@@ -11,7 +16,34 @@
     font-display: swap;
   }
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  #ctr { display: block; width: 100%; height: 100%; outline: none; }
+  #ctr { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+  /* A focused field under 16px makes iOS zoom the page. At the top, so that iOS has no reason to
+     scroll to it. */
+  #typing {
+    position: fixed; left: 0; top: 0; width: 1px; height: 1px; padding: 0; border: 0;
+    font-size: 16px; opacity: 0; pointer-events: none;
+  }
+  .touch {
+    position: fixed; display: flex; gap: 8px; z-index: 1;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  .touch[hidden] { display: none; }
+  #touch-game { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+  /* Lined up with the console (`console.rs`) on the left. */
+  #touch-line {
+    left: 0; right: 0; flex-wrap: wrap; box-sizing: border-box;
+    padding: 4px max(8px, env(safe-area-inset-right)) 4px max(20px, env(safe-area-inset-left));
+  }
+  #touch-map { margin-left: auto; }
+  .touch button {
+    min-width: 44px; height: 44px; padding: 0 10px; touch-action: manipulation;
+    font: 10px "Press Start 2P", monospace; color: #fff; background: rgb(16 23 63 / 0.75);
+    border: 2px solid; border-color: #7b8ad6 #03050f #03050f #7b8ad6; border-radius: 0;
+  }
+  .touch button:active { color: #ffd23f; }
+  #touch-full svg { display: block; width: 20px; height: 20px; margin: auto; fill: none; stroke: currentColor; stroke-width: 3; }
+  #touch-full .exit, #touch-full.on .enter { display: none; }
+  #touch-full.on .exit { display: block; }
   #drop {
     position: fixed; inset: 0; display: grid; place-content: center; padding: 16px;
     background: #070a1e; color: #d9ddf2;
@@ -61,17 +93,70 @@
 </head>
 <body>
 <canvas id="ctr" tabindex="0"></canvas>
+<input id="typing" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+  spellcheck="false" enterkeyhint="send" tabindex="-1" aria-label="Chat or command" disabled>
+<div id="touch-game" class="touch" hidden>
+  <button type="button" data-key="Escape">Menu</button>
+  <button id="touch-full" type="button" aria-label="Full screen" hidden>
+    <svg class="enter" viewBox="0 0 20 20" shape-rendering="crispEdges" aria-hidden="true"><path d="M2 7V2H7M13 2H18V7M18 13V18H13M7 18H2V13"/></svg>
+    <svg class="exit" viewBox="0 0 20 20" shape-rendering="crispEdges" aria-hidden="true"><path d="M7 2V7H2M18 7H13V2M13 18V13H18M2 13H7V18"/></svg>
+  </button>
+</div>
+<div id="touch-line" class="touch" hidden>
+  <button type="button" data-key="ArrowUp" aria-label="Previous">&#8593;</button>
+  <button type="button" data-key="ArrowDown" aria-label="Next">&#8595;</button>
+  <button type="button" data-key="Tab">Tab</button>
+  <button id="touch-paste" type="button">Paste</button>
+  <button type="button" data-key="Escape">Close</button>
+  <!-- Until there are pickers for these. -->
+  <button id="touch-map" type="button" aria-label="Next map">Map</button>
+  <button id="touch-racer" type="button" aria-label="Next racer">Racer</button>
+</div>
 <div id="drop">
   <h1><a href="../">CTR-RS</a></h1>
   <div class="panel">
     <p id="status">Drop Crash Team Racing (USA) .bin</p>
     <pre id="detail" hidden></pre>
     <ul id="menu" role="menu"></ul>
-    <small id="note">It stays on this computer.</small>
+    <small id="note">It stays on this device.</small>
     <input type="file" accept=".bin">
   </div>
 </div>
 <script>
+// `/config set render-scale`: the game sizes its picture by this ratio, and the page stretches it
+// to the canvas. Without the exact size that the browser can report, it has to go by the ratio. A
+// change is told as the browser tells of a moved window's, on the query the game listens to.
+let renderScale = 1;
+try {
+  const scale = JSON.parse(localStorage.getItem("ctr-rs.config"))?.render_scale;
+  if (scale >= 0.25 && scale <= 1) renderScale = scale;
+} catch (e) {
+  console.warn(`could not read the render scale: ${e}`);
+}
+const screenRatio = Object.getOwnPropertyDescriptor(window, "devicePixelRatio").get.bind(window);
+Object.defineProperty(window, "devicePixelRatio", { get: () => screenRatio() * renderScale });
+delete ResizeObserverEntry.prototype.devicePixelContentBoxSize;
+let ratioQuery = null;
+const matchMedia = window.matchMedia.bind(window);
+window.matchMedia = (query) => {
+  const list = matchMedia(query);
+  const ratio = /resolution:\s*([\d.]+)dppx/.exec(query);
+  if (ratio === null) return list;
+  ratioQuery = list;
+  // (The real one goes by the screen, which the scale does not change.)
+  return new Proxy(list, {
+    get(target, name) {
+      if (name === "matches") return Math.abs(Number(ratio[1]) - devicePixelRatio) < 0.001;
+      const value = target[name];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+};
+window.ctrSetRenderScale = (scale) => {
+  renderScale = scale;
+  ratioQuery?.dispatchEvent(new Event("change"));
+};
+
 // Sound only starts after a key or click, so the game's audio contexts are resumed on one.
 // Must run before client.js is imported.
 const audio = [];
@@ -82,14 +167,27 @@ window.AudioContext = new Proxy(window.AudioContext, {
     return context;
   },
 });
-const gestures = ["keydown", "pointerdown", "touchend"];
+// iOS would have its Silent Mode mute the game.
+if (navigator.audioSession) navigator.audioSession.type = "playback";
+// (iOS only counts a touch as a gesture when it ends, and it can interrupt a context that was
+// running at any time, as when the page is left: this keeps listening.)
+const unlocked = new WeakSet();
 function resume() {
-  audio.forEach((context) => context.state === "suspended" && context.resume());
-  if (audio.length > 0 && audio.every((context) => context.state === "running")) {
-    gestures.forEach((name) => removeEventListener(name, resume, true));
+  for (const context of audio) {
+    if (context.state === "running" || context.state === "closed") continue;
+    context.resume();
+    if (!unlocked.has(context)) {
+      unlocked.add(context);
+      const silence = context.createBufferSource();
+      silence.buffer = context.createBuffer(1, 1, context.sampleRate);
+      silence.connect(context.destination);
+      silence.start();
+    }
   }
 }
-gestures.forEach((name) => addEventListener(name, resume, true));
+for (const name of ["keydown", "pointerdown", "pointerup", "touchend", "click"]) {
+  addEventListener(name, resume, true);
+}
 </script>
 <script type="module">
 import init from "./client.js";
@@ -113,6 +211,177 @@ window.ctrTakePasted = () => {
   pasted = null;
   return text;
 };
+
+// A touch screen has no keys, so the buttons press them on the canvas, where the game listens. An
+// on-screen keyboard only opens for a field focused during the tap itself, and what it types does
+// not come as reliable key presses: the line is the hidden field's, which the game reads whole.
+const canvas = document.getElementById("ctr");
+const typing = document.getElementById("typing");
+const touchGame = document.getElementById("touch-game");
+const touchLine = document.getElementById("touch-line");
+const hasTouch = navigator.maxTouchPoints > 0 || matchMedia("(any-pointer: coarse)").matches;
+let lineOpen = false;
+let menuOpen = false;
+let typed = null;
+let consoleArea = null;
+// (The line takes all key presses while it is open, so these are not keys.)
+let levelStep = 0;
+let racerStep = 0;
+
+const KEY_CODES = { Enter: 13, Escape: 27, Tab: 9, ArrowUp: 38, ArrowDown: 40, PageUp: 33, PageDown: 34 };
+function pressKey(code) {
+  for (const type of ["keydown", "keyup"]) {
+    canvas.dispatchEvent(
+      new KeyboardEvent(type, { code, key: code, keyCode: KEY_CODES[code], bubbles: true, cancelable: true }),
+    );
+  }
+}
+
+function placeTouchLine() {
+  const view = visualViewport;
+  touchLine.style.top = `${view.offsetTop + view.height - touchLine.offsetHeight}px`;
+}
+visualViewport.addEventListener("resize", placeTouchLine);
+visualViewport.addEventListener("scroll", placeTouchLine);
+
+function showTouchLine() {
+  touchLine.hidden = !(hasTouch && lineOpen);
+  if (!touchLine.hidden) placeTouchLine();
+}
+
+function openLine() {
+  lineOpen = true;
+  showTouchLine();
+  typing.value = "";
+  typed = null;
+  typing.disabled = false;
+  typing.focus();
+  pressKey("Enter");
+}
+
+window.ctrShowLine = (open, text, menu) => {
+  menuOpen = menu;
+  if (typing.value !== text) typing.value = text;
+  if (open === lineOpen) return;
+  lineOpen = open;
+  showTouchLine();
+  if (!open) {
+    typing.blur();
+    typing.disabled = true;
+    canvas.focus();
+    if (restoreFullscreen) enterFullscreenAgain();
+  }
+};
+window.ctrTakeTyped = () => {
+  const text = typed;
+  typed = null;
+  return text;
+};
+window.ctrTakeLevelStep = () => {
+  const step = levelStep;
+  levelStep = 0;
+  return step;
+};
+window.ctrTakeRacerStep = () => {
+  const step = racerStep;
+  racerStep = 0;
+  return step;
+};
+// How far up from the page's bottom the game has to keep clear of the keyboard and the buttons.
+window.ctrKeyboardInset = () =>
+  lineOpen && hasTouch ? innerHeight - touchLine.getBoundingClientRect().top + 4 : 0;
+window.ctrConsoleArea = (left, top, right, bottom) => (consoleArea = { left, top, right, bottom });
+
+// (Kept from taking the focus, which would close the keyboard.)
+for (const button of document.querySelectorAll(".touch button")) {
+  button.tabIndex = -1;
+  button.addEventListener("mousedown", (e) => e.preventDefault());
+  if (button.dataset.key) button.addEventListener("click", () => pressKey(button.dataset.key));
+}
+document.getElementById("touch-map").addEventListener("click", () => levelStep++);
+document.getElementById("touch-racer").addEventListener("click", () => racerStep++);
+document.getElementById("touch-paste").addEventListener("click", () => window.ctrPaste());
+
+typing.addEventListener("input", () => (typed = typing.value));
+typing.addEventListener("keydown", (e) => {
+  if (e.isComposing || !(e.code in KEY_CODES || e.key === "Enter")) return;
+  e.preventDefault();
+  pressKey(e.key === "Enter" ? "Enter" : e.code);
+});
+// The keyboard was dismissed, or the game was tapped.
+typing.addEventListener("blur", () => lineOpen && pressKey("Escape"));
+
+const inConsole = (x, y) =>
+  consoleArea !== null &&
+  x >= consoleArea.left && x <= consoleArea.right && y >= consoleArea.top && y <= consoleArea.bottom;
+
+// The console opens the line when it is tapped, in the touch's end as that is when the keyboard is
+// allowed to open. (The game has to wait for its next frame, which is too late for that.)
+const TAP_SLOP = 10;
+let tapStart = null;
+canvas.addEventListener("touchstart", (e) => {
+  const touch = e.touches[0];
+  tapStart = e.touches.length === 1 && inConsole(touch.clientX, touch.clientY) ? touch : null;
+});
+canvas.addEventListener("touchend", (e) => {
+  const start = tapStart;
+  tapStart = null;
+  if (start === null || lineOpen || menuOpen) return;
+  const end = e.changedTouches[0];
+  if (Math.hypot(end.clientX - start.clientX, end.clientY - start.clientY) > TAP_SLOP) return;
+  e.preventDefault();
+  openLine();
+});
+// A tap on the open console is not one on the game, which would take the focus and close the line.
+addEventListener("pointerdown", (e) => {
+  if (e.target === canvas && lineOpen && inConsole(e.clientX, e.clientY)) e.stopPropagation();
+}, true);
+
+// The game reads no pad without the focus (`Pads`), and a controller can move the browser's focus
+// around, or to its own bars. Only a tap on the console is for the text field, which stays
+// disabled until then.
+function refocus() {
+  if (drop.classList.contains("hidden") && !lineOpen && document.hasFocus()) canvas.focus();
+}
+canvas.addEventListener("blur", () => setTimeout(refocus));
+addEventListener("focus", refocus);
+
+// The whole page, for the buttons and the text field to stay. (Safari on iOS 16.3 or older only
+// has the prefixed names, and an iPhone has none.)
+const fullButton = document.getElementById("touch-full");
+const root = document.documentElement;
+const enterFullscreen = root.requestFullscreen ?? root.webkitRequestFullscreen;
+const exitFullscreen = document.exitFullscreen ?? document.webkitExitFullscreen;
+const isFullscreen = () => (document.fullscreenElement ?? document.webkitFullscreenElement) != null;
+const isHomeScreenApp =
+  navigator.standalone === true || matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches;
+// Safari leaves full screen for the on-screen keyboard, so it is asked for again when the line
+// closes. It needs a recent tap or key for that: failing that, the next tap brings it back.
+let restoreFullscreen = false;
+function enterFullscreenAgain() {
+  enterFullscreen.call(root)?.then(() => (restoreFullscreen = false)).catch(() => {});
+}
+fullButton.hidden = !enterFullscreen || isHomeScreenApp;
+fullButton.addEventListener("click", () => {
+  restoreFullscreen = false;
+  const asked = isFullscreen() ? exitFullscreen.call(document) : enterFullscreen.call(root);
+  asked?.catch((e) => console.warn(`could not change to full screen: ${e}`));
+});
+addEventListener("touchend", (e) => {
+  if (!restoreFullscreen || lineOpen || fullButton.contains(e.target)) return;
+  const touch = e.changedTouches[0];
+  if (e.target === canvas && inConsole(touch.clientX, touch.clientY)) return;
+  enterFullscreenAgain();
+}, true);
+for (const name of ["fullscreenchange", "webkitfullscreenchange"]) {
+  document.addEventListener(name, () => {
+    fullButton.classList.toggle("on", isFullscreen());
+    fullButton.setAttribute("aria-label", isFullscreen() ? "Exit full screen" : "Full screen");
+    if (isFullscreen()) restoreFullscreen = false;
+    else if (lineOpen) restoreFullscreen = true;
+    if (!lineOpen) canvas.focus();
+  });
+}
 
 const CONFIG = "ctr-rs.config";
 window.ctrLoadConfig = () => {
@@ -157,7 +426,9 @@ async function read(stream, size) {
   return bytes;
 }
 
-async function start(stream, size) {
+// `copy` is the file to keep a copy of, where the browser cannot remember a file's place
+// (`showOpenFilePicker`). Once the game has started on it, so as not to keep a wrong one.
+async function start(stream, size, copy = null) {
   if (drop.classList.contains("busy")) return;
   drop.classList.add("busy");
   disc = await read(stream, size);
@@ -178,7 +449,9 @@ async function start(stream, size) {
   }
   if (crash !== null) return;
   drop.classList.add("hidden");
-  document.getElementById("ctr").focus();
+  canvas.focus();
+  touchGame.hidden = !hasTouch;
+  if (copy !== null) remember(copy).then(() => navigator.storage?.persist?.());
 }
 
 let crash = null;
@@ -188,6 +461,7 @@ function crashed(message) {
   const starting = !drop.classList.contains("hidden");
   audio.forEach((context) => context.close().catch(() => {}));
   document.activeElement?.blur();
+  touchGame.hidden = touchLine.hidden = true;
   drop.classList.remove("hidden", "busy", "over");
   document.getElementById("detail").textContent = message;
   document.getElementById("detail").hidden = false;
@@ -304,6 +578,15 @@ async function pick() {
   openHandle(handle);
 }
 
+function startKept(kept) {
+  start(kept.stream(), kept.size).catch(async (e) => {
+    console.warn(`could not read the kept disc image: ${e}`);
+    await forget();
+    drop.classList.remove("busy");
+    offer(`${kept.name} could not be read`, [["Pick it again", pick]]);
+  });
+}
+
 async function allow(handle) {
   if ((await handle.requestPermission({ mode: "read" })) === "granted") return openHandle(handle);
   await forget();
@@ -336,21 +619,26 @@ drop.addEventListener("drop", (e) => {
   if (!item) return;
   const file = item.getAsFile();
   item.getAsFileSystemHandle?.().then((handle) => handle?.kind === "file" && remember(handle));
-  start(file.stream(), file.size);
+  start(file.stream(), file.size, item.getAsFileSystemHandle ? null : file);
 });
 input.addEventListener("change", () => {
   const file = input.files[0];
-  if (file) start(file.stream(), file.size);
+  if (file) start(file.stream(), file.size, file);
 });
 
 fresh();
-const handle = await recall();
-if (handle) {
-  if ((await handle.queryPermission({ mode: "read" })) === "granted") {
-    openHandle(handle);
+const saved = await recall();
+if (saved instanceof Blob) {
+  offer(`${saved.name} was kept from last time`, [
+    ["Continue with it", () => startKept(saved)],
+    ["Pick another .bin", pick],
+  ]);
+} else if (saved) {
+  if ((await saved.queryPermission({ mode: "read" })) === "granted") {
+    openHandle(saved);
   } else {
-    offer(`${handle.name} was used last time`, [
-      ["Continue with it", () => allow(handle)],
+    offer(`${saved.name} was used last time`, [
+      ["Continue with it", () => allow(saved)],
       ["Pick another .bin", pick],
     ]);
   }

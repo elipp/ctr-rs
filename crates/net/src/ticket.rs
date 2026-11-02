@@ -25,7 +25,7 @@ impl Ticket {
     pub(crate) fn addr(&self) -> EndpointAddr {
         let addr = EndpointAddr::new(self.id);
         match &self.relay {
-            Some(relay) => addr.with_relay_url(relay.clone()),
+            Some(relay) => addr.with_relay_url(crate::dotless::without_dot(relay)),
             None => addr,
         }
     }

@@ -2,7 +2,8 @@
 //! (`web/play.html`): the page holds it until `main` runs, which takes it into memory as the
 //! image at [`DISC`] (`loader::disc::keep_in_memory`) for `disc.rs` to find. The clipboard is
 //! the page's as well, and so are the settings (`config.rs`) and the maps other players sent
-//! (`maps.rs`), which it keeps in its storage, and a panic is told to it (`crash.rs`).
+//! (`maps.rs`), which it keeps in its storage, and a panic is told to it (`crash.rs`). On a touch
+//! screen its buttons and text field stand in for the keyboard (`command.rs`).
 
 use std::path::PathBuf;
 
@@ -30,6 +31,36 @@ extern "C" {
     /// The text [`request_paste`] asked for, once.
     #[wasm_bindgen(js_namespace = window, js_name = ctrTakePasted)]
     pub fn take_pasted() -> Option<String>;
+
+    /// What the page's text field holds, once each time it changes: the on-screen keyboard's way
+    /// of typing in the command line.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeTyped)]
+    pub fn take_typed() -> Option<String>;
+
+    /// Tells the page the state of the command line and the menu, for its touch buttons and text
+    /// field.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrShowLine)]
+    pub fn show_line(open: bool, text: &str, menu_open: bool);
+
+    /// How far up from the bottom of the page its on-screen keyboard and buttons reach.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrKeyboardInset)]
+    pub fn keyboard_inset() -> f32;
+
+    /// Where the console is on the page, for a tap on it to open the command line.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrConsoleArea)]
+    pub fn console_area(left: f32, top: f32, right: f32, bottom: f32);
+
+    /// How many levels on the page's button has asked for, once.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeLevelStep)]
+    pub fn take_level_step() -> i32;
+
+    /// How many racers on the page's button has asked for, once.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeRacerStep)]
+    pub fn take_racer_step() -> i32;
+
+    /// Draws at that part of the screen's resolution from now on.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSetRenderScale)]
+    pub fn set_render_scale(scale: f32);
 
     /// The settings the page keeps, none if it has none or cannot read them.
     #[wasm_bindgen(js_namespace = window, js_name = ctrLoadConfig)]
