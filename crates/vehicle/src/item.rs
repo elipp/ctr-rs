@@ -193,7 +193,17 @@ pub fn fireable(item: u8) -> bool {
     )
 }
 
-/// A weapon that flies, which `VehPickupItem_ShootNow` has the caller launch.
+/// What firing left for the caller, which `VehPickupItem_ShootNow` does with more than the
+/// driver that fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fired {
+    /// A weapon to fly or drop (the `weapon` crate's).
+    Weapon(Launch),
+    /// The clock, which reaches every driver at once ([`clock`]).
+    Clock,
+}
+
+/// A weapon that flies or is dropped, which `VehPickupItem_ShootNow` has the caller launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Launch {
     Bomb,
@@ -203,8 +213,6 @@ pub enum Launch {
     /// A green beaker, or a red one for a driver with 10 wumpa fruit: dropped, or thrown with
     /// Up or Down held.
     Potion,
-    /// The clock, which the caller has every driver feel ([`clock`]).
-    Clock,
 }
 
 /// `SOUND_BOMB_LAUNCH`, `SOUND_MISSILE_LAUNCH`, `VOICELINE_BOMB_LAUNCH`, `VOICELINE_MISSILE_LAUNCH`,
@@ -240,8 +248,6 @@ pub fn launch_effects(d: &Driver, launch: Launch, at: [i32; 3], effects: &mut Ve
         Launch::Bomb => (BOMB_SOUND, BOMB_VOICELINE),
         Launch::Missile => (MISSILE_SOUND, MISSILE_VOICELINE),
         Launch::Mine | Launch::Potion => (MINE_SOUND, MINE_VOICELINE),
-        // Its own, in [`clock`].
-        Launch::Clock => return,
     };
     effects.push(Effect::Sound3D(Sound3D { id, pos: at }));
     effects.push(Effect::Voiceline {
@@ -321,8 +327,8 @@ pub fn count_cooldown(d: &mut Driver) {
 }
 
 /// `VehPickupItem_ShootOnCirclePress`: the driver that asked to fire fires. A weapon that flies
-/// is for the caller to launch.
-pub fn shoot_on_circle_press(d: &mut Driver, effects: &mut Vec<Effect>) -> Option<Launch> {
+/// and the clock are for the caller ([`Fired`]).
+pub fn shoot_on_circle_press(d: &mut Driver, effects: &mut Vec<Effect>) -> Option<Fired> {
     if d.actions_flag_set & actions::WEAPON_FIRE_REQUEST == 0 {
         return None;
     }
@@ -332,14 +338,17 @@ pub fn shoot_on_circle_press(d: &mut Driver, effects: &mut Vec<Effect>) -> Optio
 
 /// `VehPickupItem_ShootNow`, for the weapons that are ported. (Retail turns the triple and the
 /// single bomb and missile into one case, then looks at what the driver holds again.)
-fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<Launch> {
-    match weapon {
-        held::BOMB_1X | held::BOMB_3X => return Some(Launch::Bomb),
-        held::MISSILE_1X | held::MISSILE_3X => return Some(Launch::Missile),
-        held::TNT => return Some(Launch::Mine),
-        held::POTION => return Some(Launch::Potion),
-        held::CLOCK => return Some(Launch::Clock),
-        _ => {}
+fn shoot_now(d: &mut Driver, weapon: u8, effects: &mut Vec<Effect>) -> Option<Fired> {
+    let launch = match weapon {
+        held::BOMB_1X | held::BOMB_3X => Some(Launch::Bomb),
+        held::MISSILE_1X | held::MISSILE_3X => Some(Launch::Missile),
+        held::TNT => Some(Launch::Mine),
+        held::POTION => Some(Launch::Potion),
+        held::CLOCK => return Some(Fired::Clock),
+        _ => None,
+    };
+    if let Some(launch) = launch {
+        return Some(Fired::Weapon(launch));
     }
     match weapon {
         held::TURBO => {
@@ -543,7 +552,7 @@ mod tests {
         karts[0].actions_flag_set = request_fire(&mut karts[0], true, 0);
         let mut effects = vec![Vec::new(); 3];
         let launch = shoot_on_circle_press(&mut karts[0], &mut effects[0]);
-        assert_eq!(launch, Some(Launch::Clock));
+        assert_eq!(launch, Some(Fired::Clock));
         let mut drivers: Vec<&mut Driver> = karts.iter_mut().collect();
         clock(0, &mut drivers, &mut effects);
 
@@ -608,7 +617,7 @@ mod tests {
             );
             assert_eq!(
                 shoot_on_circle_press(&mut d, &mut effects),
-                Some(Launch::Missile)
+                Some(Fired::Weapon(Launch::Missile))
             );
             for _ in 0..COOLDOWN_STACK_TICKS {
                 count_cooldown(&mut d);
