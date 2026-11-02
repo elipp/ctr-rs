@@ -137,15 +137,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
                         leaf("4", "4 samples"),
                     ],
                 ),
-                #[cfg(not(target_arch = "wasm32"))]
-                node(
-                    "relay-only",
-                    "Reach the others through the relay only, hiding your address",
-                    &[
-                        leaf("on", "Never connect straight (slower, private)"),
-                        leaf("off", "Connect straight when possible"),
-                    ],
-                ),
                 node(
                     "volume",
                     "How loud the music, the effects and the voices are",
@@ -193,11 +184,22 @@ pub(crate) const COMMANDS: &[Spec] = &[
             node(
                 "relay",
                 "Relays besides the public ones",
-                &[takes(
-                    "add",
-                    "Use this relay too (from the next lobby on)",
-                    "<url>",
-                )],
+                &[
+                    takes(
+                        "add",
+                        "Use this relay too (from the next lobby on)",
+                        "<url>",
+                    ),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    node(
+                        "only",
+                        "Reach the others through the relay only, hiding your address",
+                        &[
+                            leaf("on", "Never connect straight (slower, private)"),
+                            leaf("off", "Connect straight when possible"),
+                        ],
+                    ),
+                ],
             ),
         ],
     ),

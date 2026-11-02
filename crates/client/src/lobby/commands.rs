@@ -274,11 +274,17 @@ pub(super) fn run(
 /// What `/net info` shows: a line per peer with the way our data goes to it (direct or by
 /// relay), the round trip time and the packets lost, and a line per other path that is open.
 pub(super) fn net_info_text(peers: &[net::PeerInfo]) -> String {
+    let mut lines = Vec::new();
+    let relays = net::extra_relays();
+    if !relays.is_empty() {
+        lines.push("Extra relays:".to_string());
+        lines.extend(relays.iter().map(|url| format!("  {url}")));
+    }
     if peers.is_empty() {
-        return "No peers connected".into();
+        lines.push("No peers connected".into());
+        return lines.join("\n");
     }
     let ms = |d: std::time::Duration| d.as_secs_f32() * 1000.0;
-    let mut lines = Vec::new();
     for peer in peers {
         let loss = if peer.sent_packets == 0 {
             0.0

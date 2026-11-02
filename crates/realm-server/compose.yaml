@@ -1,6 +1,7 @@
 services:
   realm:
-    image: ${REGISTRY_HOST:-registry.lautasliina.fi}/ctr-realm
+    # The registry comes from a .env file next to this one (not committed).
+    image: ${REGISTRY_HOST:?set REGISTRY_HOST in .env}/ctr-realm
     platform: linux/amd64
     build:
       context: ../..

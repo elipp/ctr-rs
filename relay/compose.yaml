@@ -1,6 +1,6 @@
 services:
   relay:
-    image: ${REGISTRY_HOST:-registry.lautasliina.fi}/ctr-relay
+    image: ${REGISTRY_HOST:?set REGISTRY_HOST in .env}/ctr-relay
     platform: linux/amd64
     build:
       context: .
@@ -9,8 +9,8 @@ services:
     # sees the real addresses of the players.
     network_mode: host
     restart: unless-stopped
-    # Set in a .env file next to this one (not committed): the relay's public name, and the
-    # address Let's Encrypt writes to.
+    # Set in a .env file next to this one (not committed): the registry to pull
+    # from and push to, the relay's public name, and the address Let's Encrypt writes to.
     environment:
       RELAY_HOSTNAME: ${RELAY_HOSTNAME:?set RELAY_HOSTNAME in .env}
       RELAY_CONTACT: ${RELAY_CONTACT:?set RELAY_CONTACT in .env}
