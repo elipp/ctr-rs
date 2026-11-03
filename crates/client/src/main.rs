@@ -71,6 +71,7 @@ mod skid;
 mod sky;
 mod slide_meter;
 mod sound;
+mod speedometer;
 mod spider;
 mod submerge;
 mod subtract;
@@ -302,24 +303,7 @@ fn main() {
         command::CommandPlugin,
         pause::PausePlugin,
         fx::FxPlugin,
-        // The race's HUD. (A tuple of plugins holds 15 at most.)
-        (
-            leaderboard::LeaderboardPlugin,
-            lobby_list::LobbyListPlugin,
-            lights::LightsPlugin,
-            place::PlacePlugin,
-            laps::LapsPlugin,
-            weapon::WeaponPlugin,
-            tracker::TrackerPlugin,
-            wumpa_icon::WumpaIconPlugin,
-            minimap::MinimapPlugin,
-            heat::HeatPlugin,
-            clock::ClockPlugin,
-            slide_meter::SlideMeterPlugin,
-            toast::ToastPlugin,
-            wrong_way::WrongWayPlugin,
-            version::VersionPlugin,
-        ),
+        hud::HudPlugins,
         config::ConfigPlugin,
         probe::ProbePlugin,
     ));

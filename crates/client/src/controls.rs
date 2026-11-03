@@ -28,10 +28,12 @@ pub enum Control {
     Item,
     /// Up: a potion is thrown forward. (Down, to throw a bomb or a potion back, is the brake.)
     AimUp,
+    /// Triangle: swaps the minimap and the speedometer (`speedometer.rs`).
+    Speedometer,
 }
 
 impl Control {
-    pub const ALL: [Control; 8] = [
+    pub const ALL: [Control; 9] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -40,6 +42,7 @@ impl Control {
         Control::Hop2,
         Control::Item,
         Control::AimUp,
+        Control::Speedometer,
     ];
 
     /// Its name in the config.
@@ -53,6 +56,7 @@ impl Control {
             Control::Hop2 => "hop2",
             Control::Item => "item",
             Control::AimUp => "aim-up",
+            Control::Speedometer => "speedometer",
         }
     }
 
@@ -67,6 +71,7 @@ impl Control {
             Control::Hop2 => "Hop 2",
             Control::Item => "Item",
             Control::AimUp => "Aim up",
+            Control::Speedometer => "Speedometer",
         }
     }
 
@@ -80,6 +85,7 @@ impl Control {
             Control::Hop2 => &[KeyCode::KeyQ, KeyCode::ControlLeft],
             Control::Item => &[KeyCode::KeyD],
             Control::AimUp => &[KeyCode::KeyE],
+            Control::Speedometer => &[KeyCode::KeyH],
         }
     }
 
