@@ -95,6 +95,12 @@ impl Drive {
         &self.confetti
     }
 
+    /// Our kart is of `character` now, with a model whose animations have `anim_num_frames`.
+    pub(crate) fn set_character(&mut self, character: usize, anim_num_frames: [u16; 8]) {
+        self.character = character;
+        self.anim_num_frames = anim_num_frames;
+    }
+
     /// Our kart, as a race takes it.
     pub fn spec(&self) -> KartSpec {
         KartSpec {

@@ -19,16 +19,41 @@ use render::mesh::{self, PARTS, Part};
 
 /// A drive-mode state for `track`: the kart on its first starting slot.
 pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive::Drive {
-    let mut anim_num_frames = [0; 8];
-    for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
-        *n = anim.num_frames;
-    }
+    let anim_num_frames = anim_num_frames(model);
     let spec = race::KartSpec {
         character,
         anim_num_frames,
     };
     let kart = race::Kart::birth(&track.0, 0, &spec);
     drive::Drive::new(track, &kart.driver, character, anim_num_frames)
+}
+
+/// The frames of the first eight animations of a kart `model` (`Driver::animNumFrames`).
+pub(crate) fn anim_num_frames(model: &Model) -> [u16; 8] {
+    let mut frames = [0; 8];
+    for (n, anim) in frames.iter_mut().zip(&model.headers[0].animations) {
+        *n = anim.num_frames;
+    }
+    frames
+}
+
+/// Makes our kart in the race of `character`, where it is and as it goes: its engine class
+/// (the stats and the engine's sound), its voice and its model's animations. The race and the
+/// music go on. Only offline: the change is not in the rollback's snapshots.
+fn swap_character(world: &mut World, character: usize) {
+    let frames = anim_num_frames(&world.resource::<Racer>().0);
+    world
+        .resource_mut::<drive::Drive>()
+        .set_character(character, frames);
+    let mut sim = world.resource_mut::<props::Sim>();
+    let own = sim.own;
+    let driver = &mut sim.race.state_mut().karts[own].driver;
+    driver.character = character as u8;
+    driver.stats = vehicle::stats::Stats::for_class(vehicle::stats::CHARACTER_ENGINES[character]);
+    driver.anim_num_frames = frames;
+    // The new model's animation may be shorter than the frame the old one was on.
+    let last = (vehicle::frame::num_anim_frames(driver, driver.anim_index) - 1).max(0);
+    driver.anim_frame = driver.anim_frame.clamp(0, last as i16);
 }
 
 /// The level that was shown when an online race moved the viewer to its own.
@@ -63,8 +88,9 @@ pub(crate) fn keep_picks(
 
 /// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
 /// the previous racer. A new level loads right here (the window stands still meanwhile) and
-/// builds the scene from scratch; a new racer only replaces the kart, and starts the race again
-/// on the same level. On a touch screen the page's buttons step to the next (`web/play.html`).
+/// builds the scene from scratch; a new racer only replaces the kart, which drives on from where
+/// it was (the race and its music go on). On a touch screen the page's buttons step to the next
+/// (`web/play.html`).
 pub(crate) fn switch_level(world: &mut World) {
     // A scene that was just built is still settling (`loading.rs`): another change would despawn
     // what its commands are about to touch.
@@ -173,18 +199,16 @@ pub(crate) fn switch_level(world: &mut World) {
             2500,
         ));
     } else if let Some(character) = character {
-        // Only the kart goes: the level stays, and the race starts again with the new racer.
+        // Only the kart goes: the level and the race stay, and the new racer drives on from
+        // where the old one was. (Online the racers are the race's, and do not change here.)
         let kart = world
             .query_filtered::<Entity, With<KartScene>>()
             .iter(world)
             .collect();
         despawn(world, kart);
         character.insert(world);
-        restart_drive(world, options);
-        if options.driving {
-            world
-                .run_system_cached(restart_sim)
-                .expect("restart system runs");
+        if world.contains_resource::<drive::Drive>() {
+            swap_character(world, options.racer as usize);
         }
         spawn_kart(world);
     }
@@ -322,23 +346,6 @@ pub(crate) fn restart_drive(world: &mut World, options: Options) {
         world.insert_resource(exhaust::Particles::new());
     } else {
         world.remove_resource::<drive::Drive>();
-    }
-}
-
-/// A new `Sim` of the level shown, with the karts on the grid. Its objects start again, and the
-/// sparks of the fireballs that were left are gone.
-pub(crate) fn restart_sim(
-    mut commands: Commands,
-    track: Res<Track>,
-    textures: Res<Textures>,
-    driving: Option<Res<drive::Drive>>,
-    fire: Option<ResMut<fire::Fire>>,
-) {
-    let objects = instance::Objects::new(&track.0, &textures.dram);
-    let specs: Vec<race::KartSpec> = driving.iter().map(|d| d.spec()).collect();
-    commands.insert_resource(props::Sim::new(&track.0, objects, &specs));
-    if let Some(mut fire) = fire {
-        fire.clear();
     }
 }
 
