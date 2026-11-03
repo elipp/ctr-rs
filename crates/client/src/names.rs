@@ -16,45 +16,51 @@ pub(crate) struct OverheadName(usize);
 #[derive(Component)]
 pub(crate) struct WatchingLabel;
 
-/// How far above the kart's position the name floats, in the game's units.
-const LIFT: f32 = 25.0;
+/// How far above the kart's position the name floats, in the game's units, clear of the kart and
+/// its driver (retail's 25 is down on the driver's head). The box's bottom edge is a further
+/// [`GAP`] pixels over that.
+const LIFT: f32 = 60.0;
+const GAP: f32 = 4.0;
 
-const FONT_SIZE: f32 = 18.0;
+/// How tall a name is in the world, in the game's units: it is drawn as tall as that comes to on
+/// the screen at the kart's depth, between [`MIN_SIZE`] and [`MAX_SIZE`] pixels. Text is laid out
+/// at whole pixel sizes only, so a name is laid out at the biggest, and the node scaled down to its
+/// size: smaller than it was laid out keeps it sharp, where bigger would blur it.
+const NAME_HEIGHT: f32 = 13.0;
+const MIN_SIZE: f32 = 14.0;
+const MAX_SIZE: f32 = 30.0;
 
-/// What the name is on, so that it reads over any track.
-const BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
+/// The padding of the box around a name, across and down, in pixels.
+const PADDING: Vec2 = Vec2::new(9.0, 0.0);
 
-/// The depth (the GTE's, in game units) a name shows in full up to, and the depths past which it
-/// is cut to the length given, and beyond the last of which it is not shown. Retail cuts it from
-/// 190 (6 letters) down to 2 letters at 906; ours are longer, and read from further.
-const FULL_UNTIL: f32 = 1200.0;
-const CUTS: [(f32, usize); 3] = [(1800.0, 8), (2400.0, 6), (3200.0, 4)];
+/// The box's corners: square. `BorderRadius::MAX` makes it a capsule, with round ends whatever
+/// its size.
+const CORNERS: BorderRadius = BorderRadius::ZERO;
 
-/// Closer than this the name is not shown: the kart is in the camera's face.
+/// The green of a name, and the box it is on, so that it reads over any track.
+const COLOR: Color = Color::srgb(0.45, 1.0, 0.35);
+const BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
+
+/// Closer than this (the GTE's depth, in game units) the name is not shown: the kart is in the
+/// camera's face. Further than [`TOO_FAR`], it is not shown either.
 const TOO_CLOSE: f32 = 150.0;
-
-/// How much of a name shows at a depth of `z` game units from the camera: all of it near, fewer
-/// letters the further it is, and none too close or too far.
-fn shown(name: &str, z: f32) -> String {
-    if z < TOO_CLOSE {
-        return String::new();
-    }
-    if z < FULL_UNTIL {
-        return name.to_string();
-    }
-    match CUTS.iter().find(|&&(until, _)| z < until) {
-        Some(&(_, len)) => name.chars().take(len).collect(),
-        None => String::new(),
-    }
-}
+const TOO_FAR: f32 = 3200.0;
 
 pub(crate) fn overhead(
     mut commands: Commands,
     lobby: Res<Lobby>,
+    screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &Transform), With<ChaseCamera>>,
     karts: Query<(&KartSlot, &Transform), Without<ChaseCamera>>,
     mut labels: Query<
-        (Entity, &OverheadName, &mut Text, &mut Node, &mut Visibility),
+        (
+            Entity,
+            &OverheadName,
+            &mut Text,
+            &mut UiTransform,
+            &mut Node,
+            &mut Visibility,
+        ),
         Without<WatchingLabel>,
     >,
     mut watching: Query<(Entity, &mut Text, &mut Visibility), With<WatchingLabel>>,
@@ -74,19 +80,19 @@ pub(crate) fn overhead(
             commands.spawn((
                 OverheadName(slot),
                 Text::new(""),
-                TextFont {
-                    font_size: FONT_SIZE.into(),
-                    ..default()
-                },
+                crate::font::bold(TextFont::from_font_size(MAX_SIZE)),
+                TextColor(COLOR),
                 BackgroundColor(BACKGROUND),
                 // Centered over the point, with its bottom edge on it.
                 UiTransform::from_translation(Val2::percent(-50.0, -100.0)),
                 Visibility::Hidden,
                 Node {
                     position_type: PositionType::Absolute,
-                    padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                    padding: UiRect::axes(Val::Px(PADDING.x), Val::Px(PADDING.y)),
+                    border_radius: CORNERS,
                     ..default()
                 },
+                Pickable::IGNORE,
             ));
         }
     }
@@ -132,7 +138,16 @@ pub(crate) fn overhead(
     };
     let global = GlobalTransform::from(*camera_transform);
     let forward = camera_transform.forward();
-    for (_, label, mut text, mut node, mut visibility) in &mut labels {
+    let up = camera_transform.up();
+    // Where a point of the scene is on the window (the camera draws into the picture of the
+    // scene, which may be smaller than the window).
+    let on_window = |at: Vec3| {
+        camera
+            .world_to_viewport(&global, at)
+            .ok()
+            .map(|at| screen.to_window(at))
+    };
+    for (_, label, mut text, mut transform, mut node, mut visibility) in &mut labels {
         let slot = label.0;
         let name = net.labels.get(slot).map_or("", String::as_str);
         let at = karts
@@ -145,20 +160,25 @@ pub(crate) fn overhead(
             }
             let at = at?;
             let depth = forward.dot(at - camera_transform.translation) / SCALE;
-            let line = shown(name, depth);
-            if line.is_empty() {
+            if name.is_empty() || !(TOO_CLOSE..TOO_FAR).contains(&depth) {
                 return None;
             }
-            let screen = camera.world_to_viewport(&global, at).ok()?;
-            Some((line, screen))
+            let top = on_window(at + *up * NAME_HEIGHT * SCALE)?;
+            let at = on_window(at)?;
+            Some((at, at.distance(top).clamp(MIN_SIZE, MAX_SIZE)))
         })();
         match drawn {
-            Some((line, screen)) => {
-                if text.0 != line {
-                    text.0 = line;
+            Some((at, size)) => {
+                if text.0 != name {
+                    text.0 = name.to_string();
                 }
-                node.left = Val::Px(screen.x);
-                node.top = Val::Px(screen.y);
+                // The node is scaled about its middle: the bottom edge is kept on the point by
+                // moving it down by the half of its height it lost.
+                let scale = size / MAX_SIZE;
+                transform.scale = Vec2::splat(scale);
+                transform.translation = Val2::percent(-50.0, -100.0 + (1.0 - scale) * 50.0);
+                node.left = Val::Px(at.x);
+                node.top = Val::Px(at.y - GAP);
                 *visibility = Visibility::Inherited;
             }
             None => *visibility = Visibility::Hidden,

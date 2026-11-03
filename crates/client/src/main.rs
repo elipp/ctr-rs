@@ -198,6 +198,7 @@ fn main() {
             Font::from_bytes(include_bytes!("../fonts/Inconsolata-Regular.ttf").to_vec()),
         )
         .expect("the default font can be replaced");
+    font::register_bold(&mut app.world_mut().resource_mut());
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
     app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))

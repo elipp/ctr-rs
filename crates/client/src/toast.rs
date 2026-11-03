@@ -44,6 +44,8 @@ pub struct Toast {
     pub size: f32,
     /// Extra space above the toast in pixels, which moves the ones under it as well.
     pub lower: f32,
+    /// In bold: the game's font's ([`CtrText::bold`]), or Inconsolata Bold.
+    pub bold: bool,
 }
 
 impl Toast {
@@ -54,7 +56,14 @@ impl Toast {
             color: DEFAULT_COLOR,
             size: DEFAULT_SIZE,
             lower: 0.0,
+            bold: false,
         }
+    }
+
+    #[expect(dead_code, reason = "no toast is bold yet")]
+    pub fn bold(mut self) -> Toast {
+        self.bold = true;
+        self
     }
 
     pub fn color(mut self, color: Color) -> Toast {
@@ -190,19 +199,19 @@ fn show(
             .id();
         if in_game_font(&toast.text) {
             for line in toast.text.lines().filter(|line| !line.trim().is_empty()) {
-                commands.spawn((
-                    CtrText::new(line.to_string(), Font::Middle, gradient(toast.color))
-                        .fixed(texel_size(toast.size)),
-                    ChildOf(shown),
-                ));
+                let text = CtrText::new(line.to_string(), Font::Middle, gradient(toast.color))
+                    .fixed(texel_size(toast.size));
+                let text = if toast.bold { text.bold() } else { text };
+                commands.spawn((text, ChildOf(shown)));
             }
         } else {
+            let font = TextFont {
+                font_size: toast.size.into(),
+                ..default()
+            };
             commands.spawn((
                 Text::new(toast.text.clone()),
-                TextFont {
-                    font_size: toast.size.into(),
-                    ..default()
-                },
+                if toast.bold { crate::font::bold(font) } else { font },
                 TextColor(toast.color),
                 ChildOf(shown),
             ));

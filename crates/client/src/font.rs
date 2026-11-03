@@ -4,7 +4,11 @@
 //! than wide, as retail's are.
 //!
 //! The fonts have capitals, digits and a little punctuation only: a name or a chat line, which
-//! may have anything in it, is for Bevy's `Text`.
+//! may have anything in it, is for Bevy's `Text`, in Inconsolata (the default font, see
+//! `main.rs`), or in its bold cut with [`bold`].
+//!
+//! Both have a bold style: [`CtrText::bold`] for the game's fonts, which have no bold cut and are
+//! drawn twice a texel apart, and [`bold`] for Bevy's text.
 
 use std::collections::HashMap;
 
@@ -13,6 +17,27 @@ use bevy::ui::UiSystems;
 use bevy::ui::widget::NodeImageMode;
 use bevy::window::PrimaryWindow;
 use render::font::{Font, FontAtlas, Gradient};
+
+/// Inconsolata Bold, which [`register_bold`] puts in.
+pub const BOLD: Handle<bevy::text::Font> = bevy::asset::uuid_handle!("3b6f1c52-8e0d-4a8f-9a4e-6c1d2f7b9e10");
+
+/// Puts [`BOLD`] in the font assets.
+pub fn register_bold(fonts: &mut Assets<bevy::text::Font>) {
+    fonts
+        .insert(
+            BOLD.id(),
+            bevy::text::Font::from_bytes(include_bytes!("../fonts/Inconsolata-Bold.ttf").to_vec()),
+        )
+        .expect("the bold font's handle is free");
+}
+
+/// The text's font in bold: Inconsolata Bold, at the same size and the rest as they were.
+pub fn bold(font: TextFont) -> TextFont {
+    TextFont {
+        font: BOLD.into(),
+        ..font
+    }
+}
 
 /// The lines of the PS1's picture: the 2D art is drawn as tall against the window as it was
 /// against them.
@@ -93,6 +118,9 @@ pub struct CtrText {
     /// The size of a texel in logical pixels, across and down, for a text that has to keep to
     /// fixed sizes (the HUD's). None follows the window ([`TexelSize`]).
     pub texel_size: Option<Vec2>,
+    /// Each glyph drawn twice, the second a texel to the right, which the line is a texel per
+    /// glyph wider for.
+    pub bold: bool,
 }
 
 impl CtrText {
@@ -102,7 +130,14 @@ impl CtrText {
             font,
             gradient,
             texel_size: None,
+            bold: false,
         }
+    }
+
+    /// The text in bold.
+    pub fn bold(mut self) -> CtrText {
+        self.bold = true;
+        self
     }
 
     /// The text with texels of `pixels` (across and down), whatever the window's size.
@@ -151,35 +186,40 @@ fn lay_out(
         let size = TexelSize(text.texel_size.unwrap_or(window.0));
         let line = fonts.atlas(text.font).layout(&text.text);
         let image = fonts.image(text.font, text.gradient, &mut images);
-        node.width = size.x(line.width);
+        // Bold: a texel more for each glyph, its copy to the right.
+        let thick = usize::from(text.bold);
+        node.width = size.x(line.width + thick * line.glyphs.len());
         node.height = size.y(line.height);
         commands.entity(entity).despawn_related::<Children>();
-        for placed in &line.glyphs {
+        for (i, placed) in line.glyphs.iter().enumerate() {
             let glyph = placed.glyph;
             let left = (glyph.x + glyph.ink.0) as f32;
-            commands.spawn((
-                ChildOf(entity),
-                ImageNode {
-                    rect: Some(Rect::new(
-                        left,
-                        0.0,
-                        left + glyph.ink_width() as f32,
-                        glyph.height as f32,
-                    )),
-                    // Stretch: `Auto` would keep the glyph's own shape, with square texels, and
-                    // fit it into the node (see `hud.rs`).
-                    image_mode: NodeImageMode::Stretch,
-                    ..ImageNode::new(image.clone())
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: size.x(placed.x),
-                    top: Val::ZERO,
-                    width: size.x(glyph.ink_width()),
-                    height: size.y(glyph.height),
-                    ..default()
-                },
-            ));
+            // The copy first, so that the glyph's own left edge is over it.
+            for shift in (0..=thick).rev() {
+                commands.spawn((
+                    ChildOf(entity),
+                    ImageNode {
+                        rect: Some(Rect::new(
+                            left,
+                            0.0,
+                            left + glyph.ink_width() as f32,
+                            glyph.height as f32,
+                        )),
+                        // Stretch: `Auto` would keep the glyph's own shape, with square texels, and
+                        // fit it into the node (see `hud.rs`).
+                        image_mode: NodeImageMode::Stretch,
+                        ..ImageNode::new(image.clone())
+                    },
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: size.x(placed.x + thick * i + shift),
+                        top: Val::ZERO,
+                        width: size.x(glyph.ink_width()),
+                        height: size.y(glyph.height),
+                        ..default()
+                    },
+                ));
+            }
         }
     }
 }
