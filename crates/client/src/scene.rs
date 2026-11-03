@@ -86,8 +86,28 @@ pub(crate) fn keep_picks(
     }
 }
 
-/// `]` / Page Up and `[` / Page Down: shows the next or the previous level; `.` and `,`: the next or
-/// the previous racer. A new level loads right here (the window stands still meanwhile) and
+/// `.` and `,`: the next or the previous racer, as `/character` would pick it (and is refused
+/// alike: in a race, or a cup). On a touch screen the page's buttons step too
+/// (`web/play.html`).
+pub(crate) fn racer_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    options: Res<Options>,
+    mut actions: MessageWriter<command::Action>,
+) {
+    #[allow(unused_mut)]
+    let mut step = keys.just_pressed(KeyCode::Period) as i32 - keys.just_pressed(KeyCode::Comma) as i32;
+    #[cfg(target_arch = "wasm32")]
+    {
+        step += crate::web::take_racer_step();
+    }
+    if step != 0 {
+        let racer = (options.racer as i32 + step).rem_euclid(CHARACTERS.len() as i32) as u32;
+        actions.write(command::Action::Character(racer));
+    }
+}
+
+/// `]` / Page Up and `[` / Page Down: shows the next or the previous level; and the racer
+/// `/character` (or [`racer_keys`]) picked. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, which drives on from where
 /// it was (the race and its music go on). On a touch screen the page's buttons step to the next
 /// (`web/play.html`).
@@ -105,11 +125,9 @@ pub(crate) fn switch_level(world: &mut World) {
         &[KeyCode::BracketRight, KeyCode::PageUp],
         &[KeyCode::BracketLeft, KeyCode::PageDown],
     );
-    let mut racer_step = step(&[KeyCode::Period], &[KeyCode::Comma]);
     #[cfg(target_arch = "wasm32")]
     {
         level_step += crate::web::take_level_step();
-        racer_step += crate::web::take_racer_step();
     }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
@@ -151,21 +169,13 @@ pub(crate) fn switch_level(world: &mut World) {
     }
     world.insert_resource(before);
     if race_track.is_some() {
-        (level_step, racer_step) = (0, 0);
-    }
-    // (`/character` is refused by the lobby, which says so.)
-    if racer_step != 0
-        && world
-            .get_resource::<lobby::Lobby>()
-            .is_some_and(|l| l.characters_locked())
-    {
-        racer_step = 0;
-        world.write_message(toast::Toast::new(lobby::commands::CHARACTERS_LOCKED, 2500));
+        level_step = 0;
     }
     let mut options = *world.resource::<Options>();
-    if let Some(racer) = picked.racer.filter(|_| race_track.is_none()) {
-        racer_step = racer as i32 - options.racer as i32;
-    }
+    let racer_step = picked
+        .racer
+        .filter(|_| race_track.is_none())
+        .map_or(0, |racer| racer as i32 - options.racer as i32);
     let current = world.resource::<LevelNumber>().0;
     let wanted = race_track
         .filter(|&track| track != current && !missing)
