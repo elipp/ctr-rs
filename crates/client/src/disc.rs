@@ -43,8 +43,8 @@ pub fn prepare() {
     // go of the image (`web::release_disc`).
     if cfg!(target_arch = "wasm32") {
         match source.hold() {
-            Ok(size) => eprintln!("Took {} MiB from the disc", size >> 20),
-            Err(e) => eprintln!("Could not take the files of the disc: {e}"),
+            Ok(size) => tell!("Took {} MiB from the disc", size >> 20),
+            Err(e) => tell!("Could not take the files of the disc: {e}"),
         }
         return;
     }
@@ -54,18 +54,18 @@ pub fn prepare() {
         Check::Stale(why) => format!("making the files of the disc again: {why}"),
         Check::Missing(needs) => format!("making {} more files of the disc", needs.len()),
     };
-    eprintln!("{}...", why);
+    tell!("{}...", why);
     let mut told = 0;
     let made = source.prepare(|done, of| {
         let tenth = if of == 0 { 10 } else { done * 10 / of };
         if tenth > told {
             told = tenth;
-            eprintln!("  {}%", tenth * 10);
+            tell!("  {}%", tenth * 10);
         }
     });
     match made {
-        Ok(made) => eprintln!("Made {made} files in {}", paths::disc().display()),
-        Err(e) => eprintln!("Could not make the files of the disc: {e}"),
+        Ok(made) => tell!("Made {made} files in {}", paths::disc().display()),
+        Err(e) => tell!("Could not make the files of the disc: {e}"),
     }
 }
 
@@ -84,12 +84,12 @@ pub fn locate(config: &mut Config) {
         let picked = ask()?;
         config.iso = Some(picked.clone());
         if let Err(why) = config.save() {
-            eprintln!("{why}");
+            tell!("{why}");
         }
         Some(picked)
     });
     let Some(path) = found else {
-        eprintln!(
+        tell!(
             "No Crash Team Racing (USA) disc image. Set CTR_BIN to its path, or \"iso\" in {}\n\
              (it is read once, to make the files of the game in {})",
             crate::paths::config_file().display(),

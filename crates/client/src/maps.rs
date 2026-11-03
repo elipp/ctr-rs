@@ -68,7 +68,7 @@ pub fn load() {
                 let (mut id, hash, map) = match read {
                     Ok(read) => read,
                     Err(e) => {
-                        eprintln!("{}: {e}", path.display());
+                        tell!("{}: {e}", path.display());
                         continue;
                     }
                 };
@@ -78,14 +78,14 @@ pub fn load() {
                     } else {
                         "a custom track cannot be named for one of the game's tracks"
                     };
-                    eprintln!("{}: {why}", path.display());
+                    tell!("{}: {why}", path.display());
                     continue;
                 }
                 if builtins {
                     match builtin::level_of(&map.name) {
                         Some(level) => id = level.0,
                         None => {
-                            eprintln!("{}: not one of the game's tracks", path.display());
+                            tell!("{}: not one of the game's tracks", path.display());
                             continue;
                         }
                     }
@@ -103,7 +103,7 @@ pub fn load() {
         for bytes in crate::web::take_maps() {
             match Map::from_bytes(&bytes).and_then(|m| Ok((m.id()?, m.hash()?, m))) {
                 Ok((_, _, map)) if builtin::is_builtin_name(&map.name) => {
-                    eprintln!(
+                    tell!(
                         "{}: a custom track cannot be named for one of the game's tracks",
                         map.name
                     );
@@ -114,7 +114,7 @@ pub fn load() {
                     file: File::Held(bytes),
                     map: Box::leak(Box::new(map)),
                 }),
-                Err(e) => eprintln!("A kept track: {e}"),
+                Err(e) => tell!("A kept track: {e}"),
             }
         }
         maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));
@@ -321,15 +321,13 @@ pub fn make_builtins() {
         return;
     }
     let Some(image) = crate::disc::image() else {
-        eprintln!(
-            "The game's own tracks are missing, and there is no disc image to make them from"
-        );
+        tell!("The game's own tracks are missing, and there is no disc image to make them from");
         return;
     };
-    eprintln!("Making the game's own tracks from the disc (this is done once)...");
+    tell!("Making the game's own tracks from the disc (this is done once)...");
     match map::builtin::export(&image, &dir) {
-        Ok(made) => eprintln!("Made {made} tracks in {}", dir.display()),
-        Err(e) => eprintln!("Could not make the game's own tracks: {e}"),
+        Ok(made) => tell!("Made {made} tracks in {}", dir.display()),
+        Err(e) => tell!("Could not make the game's own tracks: {e}"),
     }
 }
 
@@ -343,7 +341,7 @@ pub fn make_builtins() {
     let made = match builtin::make_all(&image) {
         Ok(made) => made,
         Err(e) => {
-            eprintln!("Could not make the game's own tracks: {e}");
+            tell!("Could not make the game's own tracks: {e}");
             return;
         }
     };

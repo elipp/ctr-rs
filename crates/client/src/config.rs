@@ -219,7 +219,7 @@ impl Config {
             Ok(Some(text)) => text,
             Ok(None) => return Config::default(),
             Err(why) => {
-                eprintln!("{why}");
+                tell!("{why}");
                 return Config::default();
             }
         };
@@ -235,15 +235,15 @@ impl Config {
                 }
                 config.relays = relays;
                 for cup in config.cups.take_invalid() {
-                    eprintln!("{}: dropped the cup {cup:?}", place());
+                    tell!("{}: dropped the cup {cup:?}", place());
                 }
                 config
             }
             Err(e) => {
-                eprintln!("{}: {e}", place());
+                tell!("{}: {e}", place());
                 match set_aside() {
-                    Ok(to) => eprintln!("The defaults are used: what could not be read is in {to}"),
-                    Err(why) => eprintln!("{why}"),
+                    Ok(to) => tell!("The defaults are used: what could not be read is in {to}"),
+                    Err(why) => tell!("{why}"),
                 }
                 Config::default()
             }
@@ -261,7 +261,7 @@ impl Config {
         if self.character != Some(character) {
             self.character = Some(character);
             if let Err(why) = self.save() {
-                eprintln!("{why}");
+                tell!("{why}");
             }
         }
     }
