@@ -20,9 +20,12 @@ struct HeatWarp {
 @if(MULTISAMPLED)
 @group(0) @binding(3) var depth_texture: texture_depth_multisampled_2d;
 // A float texture rather than a depth one (its depth in `r`), as WebGL2 cannot `textureLoad` a
-// depth texture.
+// depth texture. It is read through a sampler: WebGL2 reads a depth texture as 0 when its own
+// filtering is linear, which it is (wgpu cannot set it), and the sampler's nearest overrides that.
 @if(!MULTISAMPLED)
 @group(0) @binding(3) var depth_texture: texture_2d<f32>;
+@if(!MULTISAMPLED)
+@group(0) @binding(4) var depth_sampler: sampler;
 
 struct Input {
     @builtin(position) position: vec4<f32>,
@@ -49,21 +52,16 @@ fn lens_depth(lens: u32) -> f32 {
     return heat.points[lens * PER_LENS + 1u].w;
 }
 
-// The depth at the texel `at`: the float texture has it in `r`.
-@if(MULTISAMPLED)
-fn load_depth(at: vec2<i32>) -> f32 {
-    return textureLoad(depth_texture, at, 0);
-}
-@if(!MULTISAMPLED)
-fn load_depth(at: vec2<i32>) -> f32 {
-    return textureLoad(depth_texture, at, 0).r;
-}
-
 // The scene's depth at uv (the first sample, if it is multisampled).
+@if(MULTISAMPLED)
 fn depth_at(uv: vec2<f32>) -> f32 {
     let size = vec2<i32>(textureDimensions(depth_texture));
     let at = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - 1);
-    return load_depth(at);
+    return textureLoad(depth_texture, at, 0);
+}
+@if(!MULTISAMPLED)
+fn depth_at(uv: vec2<f32>) -> f32 {
+    return textureSampleLevel(depth_texture, depth_sampler, uv, 0.0).r;
 }
 
 // Whether what is drawn at uv is in front of the lens, drawn after it in retail.

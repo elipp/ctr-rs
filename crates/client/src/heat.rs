@@ -130,7 +130,8 @@ impl Plugin for HeatPlugin {
     }
 }
 
-/// The pass reads the depth buffer of the camera that has it.
+/// The pass reads the depth buffer of the camera that has it. (WebGL2 could not read a
+/// multisampled one: a browser has no msaa, see `config.rs`.)
 fn readable_depth(add: On<Add<HeatWarp>>, mut cameras: Query<&mut Camera3d>) {
     if let Ok(mut camera) = cameras.get_mut(add.entity) {
         let usages = TextureUsages::from(camera.depth_texture_usages);
@@ -290,6 +291,8 @@ struct HeatPipeline {
     /// With the depth buffer as it is without multisampling, and as it is with.
     layouts: [BindGroupLayoutDescriptor; 2],
     sampler: Sampler,
+    /// Nearest, for the depth buffer without multisampling (see `heat.wesl`).
+    depth_sampler: Sampler,
     shader: Handle<Shader>,
     vertex: FullscreenShader,
     /// By the format of the picture and its samples.
@@ -312,6 +315,7 @@ fn init_pipeline(
                     sampler(SamplerBindingType::Filtering),
                     uniform_buffer::<HeatWarp>(true),
                     depth,
+                    sampler(SamplerBindingType::NonFiltering),
                 ),
             ),
         )
@@ -330,6 +334,10 @@ fn init_pipeline(
             ),
         ],
         sampler: render_device.create_sampler(&SamplerDescriptor::default()),
+        depth_sampler: render_device.create_sampler(&SamplerDescriptor {
+            label: Some("heat_warp_depth_sampler"),
+            ..default()
+        }),
         shader: asset_server.load(concat!("embedded://", env!("CARGO_PKG_NAME"), "/heat.wesl")),
         vertex: fullscreen_shader.clone(),
         pipelines: HashMap::new(),
@@ -430,6 +438,7 @@ fn pass(
             &pipeline.sampler,
             binding,
             depth_view,
+            &pipeline.depth_sampler,
         )),
     );
     let mut render_pass = ctx
