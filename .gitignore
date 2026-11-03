@@ -5,3 +5,4 @@ target/
 /Justfile
 .DS_Store
 **/.env
+CLAUDE.local.md
