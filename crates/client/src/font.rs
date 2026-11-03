@@ -77,7 +77,7 @@ impl Fonts {
             Font::Middle => middle,
         };
         made.entry((font, gradient))
-            .or_insert_with(|| crate::leaderboard::atlas_image(atlas.tinted(gradient), images))
+            .or_insert_with(|| crate::hud::atlas_image(atlas.tinted(gradient), images))
             .clone()
     }
 }

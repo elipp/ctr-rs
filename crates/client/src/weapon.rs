@@ -17,7 +17,7 @@ use vehicle::item::held;
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::leaderboard::{atlas_image, pack_icons};
+use crate::hud::{atlas_image, pack_icons};
 
 /// The pictures of the weapons and of the glow, loaded when the first race needs them.
 #[derive(Resource)]

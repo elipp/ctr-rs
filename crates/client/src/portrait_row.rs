@@ -10,7 +10,8 @@ use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::leaderboard::{ICON_X, atlas_image, pack_icons};
+use crate::hud::{atlas_image, pack_icons};
+use crate::leaderboard::ICON_X;
 use crate::lobby::Lobby;
 
 /// The portraits as a picture, loaded when the first list or chat line needs it.
@@ -90,21 +91,6 @@ pub(crate) fn portrait_rect(character: usize) -> Rect {
         WIDTH as f32,
         ((character + 1) * HEIGHT) as f32,
     )
-}
-
-/// The node the rows hang from, at the screen's left edge and `top` down.
-pub(crate) fn spawn_column(commands: &mut Commands, top: Val) -> Entity {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::ZERO,
-                top,
-                ..default()
-            },
-            Pickable::IGNORE,
-        ))
-        .id()
 }
 
 /// Puts `character`'s portrait in `column`, at [`ICON_X`] and `y` lines of retail's screen down.

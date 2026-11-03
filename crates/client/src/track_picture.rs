@@ -30,7 +30,7 @@ use render::track_thumbnails::{self, HEIGHT, ICON_IDS, WIDTH};
 use crate::assets::upload_shared;
 use crate::drive::{ChaseCamera, Kart};
 use crate::kart::KartSlot;
-use crate::leaderboard::atlas_image;
+use crate::hud::atlas_image;
 use crate::loading::Loading;
 use crate::lobby::Lobby;
 use crate::scene::{spawn_layers, spawn_parts};

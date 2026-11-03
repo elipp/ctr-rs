@@ -305,9 +305,11 @@ fn main() {
         fx::FxPlugin,
         // The race's HUD. (A tuple of plugins holds 15 at most.)
         (
-            leaderboard::LeaderboardPlugin,
-            lobby_list::LobbyListPlugin,
-            portrait_row::PortraitRowPlugin,
+            (
+                leaderboard::LeaderboardPlugin,
+                lobby_list::LobbyListPlugin,
+                portrait_row::PortraitRowPlugin,
+            ),
             lights::LightsPlugin,
             place::PlacePlugin,
             laps::LapsPlugin,

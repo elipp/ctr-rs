@@ -13,7 +13,7 @@ use crate::hud;
 use crate::leaderboard::ICON_X;
 use crate::lobby::Lobby;
 use crate::portrait_row::{
-    BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_column, spawn_host_badge,
+    BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_host_badge,
     spawn_portrait, spawn_tags,
 };
 
@@ -97,7 +97,17 @@ fn build(
         &textures.vram,
         &mut images,
     );
-    let column = spawn_column(&mut commands, hud::y(TABLE_Y));
+    let column = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::ZERO,
+                top: hud::y(TABLE_Y),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
+        .id();
     commands.spawn((
         CtrText::new(TITLE, Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
         Node {
