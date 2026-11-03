@@ -195,6 +195,23 @@ fn write(text: &str) -> Result<(), String> {
     }
 }
 
+/// Moves the settings to where they are no longer read, nor overwritten by the next ones saved,
+/// and says where.
+#[cfg(not(target_arch = "wasm32"))]
+fn set_aside() -> Result<String, String> {
+    let to = path().with_extension("json.broken");
+    std::fs::rename(path(), &to).map_err(|e| format!("Could not move {}: {e}", place()))?;
+    Ok(to.display().to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_aside() -> Result<String, String> {
+    match crate::web::set_config_aside() {
+        None => Ok("ctr-rs.config.broken in the browser's storage".to_string()),
+        Some(e) => Err(format!("Could not move the settings: {e}")),
+    }
+}
+
 impl Config {
     /// What is kept; the defaults if there is nothing or it cannot be read (it is told of).
     pub fn load() -> Config {
@@ -224,6 +241,10 @@ impl Config {
             }
             Err(e) => {
                 eprintln!("{}: {e}", place());
+                match set_aside() {
+                    Ok(to) => eprintln!("The defaults are used: what could not be read is in {to}"),
+                    Err(why) => eprintln!("{why}"),
+                }
                 Config::default()
             }
         }

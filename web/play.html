@@ -400,6 +400,21 @@ window.ctrSaveConfig = (text) => {
     return String(e);
   }
 };
+// Moves the settings to where the game no longer reads them (and the next ones do not overwrite
+// them): a game they make crash, or cannot read, starts again with the defaults.
+const CONFIG_ASIDE = `${CONFIG}.broken`;
+function setConfigAside() {
+  try {
+    const text = localStorage.getItem(CONFIG);
+    if (text === null) return null;
+    localStorage.setItem(CONFIG_ASIDE, text);
+    localStorage.removeItem(CONFIG);
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+window.ctrSetConfigAside = setConfigAside;
 
 // The game reads the image from here (a wasm program's memory never shrinks, so it is not copied
 // in), and lets go of it once it has taken what it needs.
@@ -472,8 +487,17 @@ function crashed(message) {
   document.getElementById("detail").textContent = message;
   document.getElementById("detail").hidden = false;
   document.getElementById("note").hidden = true;
+  let kept = false;
+  try {
+    kept = localStorage.getItem(CONFIG) !== null;
+  } catch {}
   offer(starting ? "The game could not start" : "The game crashed", [
     ["Restart", () => location.reload()],
+    ...(kept ? [["Restart with default settings", () => {
+      const e = setConfigAside();
+      if (e !== null) console.warn(`could not set the settings aside: ${e}`);
+      location.reload();
+    }]] : []),
     ...(starting ? [["Pick another .bin", () => forget().then(() => location.reload())]] : []),
     ["Copy the error", copyCrash],
   ]);
