@@ -27,7 +27,9 @@
 //!   [`MAX_RELAYS`]; it holds from the next lobby), and `/net relay clear` to drop them all
 //!
 //! A browser has no vsync or fps-max, and no relay-only: it paces the frames to the display
-//! itself, and reaches the others through the relay only.
+//! itself, and reaches the others through the relay only. Nor has it msaa: the heat shimmer and
+//! the warpball's glow (`heat.rs`) read the depth buffer, which WebGL2 cannot when it is
+//! multisampled.
 //!
 //! The last character driven is kept too, and is the one the client starts with, and the
 //! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`), and whether
@@ -122,6 +124,9 @@ impl Default for Config {
 impl Config {
     /// The multisampling of the cameras.
     pub fn msaa(&self) -> Msaa {
+        if cfg!(target_arch = "wasm32") {
+            return Msaa::Off;
+        }
         match self.msaa {
             2 => Msaa::Sample2,
             4 => Msaa::Sample4,
@@ -289,7 +294,6 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
-    /config set msaa off|2|4\n\
     /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>";
@@ -302,6 +306,9 @@ impl Setting {
             match key {
                 "vsync" | "fps-max" => {
                     return Err("In a browser, the browser sets the frame rate".into());
+                }
+                "msaa" => {
+                    return Err("In a browser, anti-aliasing is off for the heat shimmer".into());
                 }
                 _ => {}
             }
