@@ -80,6 +80,14 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrSaveConfig)]
     pub fn save_config(text: &str) -> Option<String>;
 
+    /// `console.warn`, for what a native build prints (`tell!`).
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    pub fn console_warn(text: &str);
+
+    /// Moves the settings to where they are no longer read; what went wrong if the page could not.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSetConfigAside)]
+    pub fn set_config_aside() -> Option<String>;
+
     /// The maps the page keeps, as the bytes of their files (`Uint8Array`s), once.
     #[wasm_bindgen(js_namespace = window, js_name = ctrTakeMaps)]
     fn take_saved_maps() -> js_sys::Array;

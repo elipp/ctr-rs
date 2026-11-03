@@ -27,7 +27,9 @@
 //!   [`MAX_RELAYS`]; it holds from the next lobby), and `/net relay clear` to drop them all
 //!
 //! A browser has no vsync or fps-max, and no relay-only: it paces the frames to the display
-//! itself, and reaches the others through the relay only.
+//! itself, and reaches the others through the relay only. Nor has it msaa: the heat shimmer and
+//! the warpball's glow (`heat.rs`) read the depth buffer, which WebGL2 cannot when it is
+//! multisampled.
 //!
 //! The last character driven is kept too, and is the one the client starts with, and the
 //! keyboard's driving keys, which the pause menu's Controls change (`controls.rs`), and whether
@@ -122,6 +124,9 @@ impl Default for Config {
 impl Config {
     /// The multisampling of the cameras.
     pub fn msaa(&self) -> Msaa {
+        if cfg!(target_arch = "wasm32") {
+            return Msaa::Off;
+        }
         match self.msaa {
             2 => Msaa::Sample2,
             4 => Msaa::Sample4,
@@ -190,6 +195,23 @@ fn write(text: &str) -> Result<(), String> {
     }
 }
 
+/// Moves the settings to where they are no longer read, nor overwritten by the next ones saved,
+/// and says where.
+#[cfg(not(target_arch = "wasm32"))]
+fn set_aside() -> Result<String, String> {
+    let to = path().with_extension("json.broken");
+    std::fs::rename(path(), &to).map_err(|e| format!("Could not move {}: {e}", place()))?;
+    Ok(to.display().to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_aside() -> Result<String, String> {
+    match crate::web::set_config_aside() {
+        None => Ok("ctr-rs.config.broken in the browser's storage".to_string()),
+        Some(e) => Err(format!("Could not move the settings: {e}")),
+    }
+}
+
 impl Config {
     /// What is kept; the defaults if there is nothing or it cannot be read (it is told of).
     pub fn load() -> Config {
@@ -197,7 +219,7 @@ impl Config {
             Ok(Some(text)) => text,
             Ok(None) => return Config::default(),
             Err(why) => {
-                eprintln!("{why}");
+                tell!("{why}");
                 return Config::default();
             }
         };
@@ -213,12 +235,16 @@ impl Config {
                 }
                 config.relays = relays;
                 for cup in config.cups.take_invalid() {
-                    eprintln!("{}: dropped the cup {cup:?}", place());
+                    tell!("{}: dropped the cup {cup:?}", place());
                 }
                 config
             }
             Err(e) => {
-                eprintln!("{}: {e}", place());
+                tell!("{}: {e}", place());
+                match set_aside() {
+                    Ok(to) => tell!("The defaults are used: what could not be read is in {to}"),
+                    Err(why) => tell!("{why}"),
+                }
                 Config::default()
             }
         }
@@ -235,7 +261,7 @@ impl Config {
         if self.character != Some(character) {
             self.character = Some(character);
             if let Err(why) = self.save() {
-                eprintln!("{why}");
+                tell!("{why}");
             }
         }
     }
@@ -289,7 +315,6 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
-    /config set msaa off|2|4\n\
     /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>";
@@ -302,6 +327,9 @@ impl Setting {
             match key {
                 "vsync" | "fps-max" => {
                     return Err("In a browser, the browser sets the frame rate".into());
+                }
+                "msaa" => {
+                    return Err("In a browser, anti-aliasing is off for the heat shimmer".into());
                 }
                 _ => {}
             }

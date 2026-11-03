@@ -14,6 +14,16 @@
 // Bevy systems take their parameters and `Query` filters as types, so both lints fire on them.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+/// Like `eprintln!`, which in a browser goes nowhere: there it goes to the console.
+macro_rules! tell {
+    ($($arg:tt)*) => {{
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!($($arg)*);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::console_warn(&format!($($arg)*));
+    }};
+}
+
 mod about;
 mod accordion;
 mod animation;
@@ -80,6 +90,7 @@ mod suggest;
 mod toast;
 mod track_picture;
 mod tracker;
+mod unlit;
 mod version;
 mod weapon;
 mod weather;
@@ -247,6 +258,7 @@ fn main() {
         .add_plugins(sky::SkyPlugin)
         .add_plugins(drop_map::DropMapPlugin)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
+        .add_plugins(unlit::UnlitPlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(
             FixedUpdate,

@@ -309,6 +309,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "How much of the resolution to draw",
                     "<0.25 to 1>",
                 ),
+                // (A browser has no msaa either, see `config.rs`.)
+                #[cfg(not(target_arch = "wasm32"))]
                 node(
                     "msaa",
                     "Anti-aliasing samples of the cameras",

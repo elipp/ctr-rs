@@ -20,12 +20,14 @@ dev) dir=debug ;;
 *) dir="$profile" ;;
 esac
 
-cargo build -p client --target wasm32-unknown-unknown --profile "$profile"
 if [ "$profile" = dist ]; then
+    features=--no-default-features
     names=--remove-name-section
 else
+    features=
     names=
 fi
+cargo build -p client --target wasm32-unknown-unknown --profile "$profile" $features
 wasm-bindgen --target web --no-typescript $names --out-dir target/web/play --out-name client \
     "target/wasm32-unknown-unknown/$dir/client.wasm"
 if [ "$profile" = dist ]; then
