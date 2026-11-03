@@ -222,16 +222,6 @@ fn wheel_image(icons: &[Icon], vram: &Vram) -> (Image, Vec<Wheel>) {
     (image, wheels)
 }
 
-impl Fire {
-    /// Puts the sparks out, for a race that starts again.
-    pub fn clear(&mut self) {
-        self.sparks.clear();
-        self.tires.clear();
-        self.shards.clear();
-        self.heat.clear();
-    }
-}
-
 /// One game tick, after the hazards': the sparks they left start, then every spark moves. A
 /// tick of the sim is taken once, however many steps of the clock pass while it waits.
 pub fn tick(fire: Option<ResMut<Fire>>, sim: Res<crate::props::Sim>, mut seen: Local<Option<u32>>) {

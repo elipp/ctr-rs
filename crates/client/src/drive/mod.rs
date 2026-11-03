@@ -11,14 +11,11 @@
 //!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
 //! * `/debug set wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
 //! * `/debug set weapon <N>`: (debug) drop what is in hand and roll item N (0 to 4, 6 to 8, 10 or 11), as the
-//!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online, not in
-//!   a demo
+//!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online
 //! * Left mouse button held and mouse moves: turn the camera around the kart; scroll wheel:
 //!   closer or farther; double click or Home: back to the default view
 //! * R: back to the starting grid
 //! * Escape, P or Start: the pause menu (`pause.rs`)
-//! * F5 / 1: start recording a demo from the grid, again to save it to `demo.ctr`
-//! * F6 / 2: play `demo.ctr` back from the grid (any F5 or R ends it, the kart stays where it is)
 //!
 //! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the
 //! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
@@ -33,7 +30,6 @@ mod tick;
 use bevy::prelude::*;
 use race::KartSpec;
 use vehicle::Driver;
-use vehicle::demo::Demo;
 
 use crate::Track;
 use follow::{View, chase, view_of};
@@ -49,13 +45,12 @@ pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 #[derive(Component)]
 pub struct Kart;
 
-/// What the viewer keeps of driving: the camera, the poses to draw between ticks, the demo. The
+/// What the viewer keeps of driving: the camera, the poses to draw between ticks. The
 /// race itself, our kart in it included, is [`crate::props::Sim`].
 #[derive(Resource)]
 pub struct Drive {
     pub(crate) character: usize,
     anim_num_frames: [u16; 8],
-    demo: DemoMode,
     camera: camera::CameraDc,
     weather: crate::weather::WeatherView,
     confetti: crate::confetti::ConfettiView,
@@ -89,7 +84,6 @@ impl Drive {
             current_view: view,
             character,
             anim_num_frames,
-            demo: DemoMode::Off,
         }
     }
 
@@ -101,6 +95,12 @@ impl Drive {
         &self.confetti
     }
 
+    /// Our kart is of `character` now, with a model whose animations have `anim_num_frames`.
+    pub(crate) fn set_character(&mut self, character: usize, anim_num_frames: [u16; 8]) {
+        self.character = character;
+        self.anim_num_frames = anim_num_frames;
+    }
+
     /// Our kart, as a race takes it.
     pub fn spec(&self) -> KartSpec {
         KartSpec {
@@ -109,15 +109,6 @@ impl Drive {
         }
     }
 }
-
-/// Where the sim gets its input from.
-enum DemoMode {
-    Off,
-    Recording(Demo),
-    Playing(Demo),
-}
-
-const DEMO_FILE: &str = "demo.ctr";
 
 /// Whether the race is on, and not the viewer (`/debug viewer`): the systems of the race run
 /// only then.

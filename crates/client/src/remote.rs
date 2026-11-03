@@ -60,13 +60,9 @@ pub fn build(
         let (model, wheel_icons) = models
             .entry(character)
             .or_insert_with(|| crate::load_racer(character));
-        let mut anim_num_frames = [0; 8];
-        for (n, anim) in anim_num_frames.iter_mut().zip(&model.headers[0].animations) {
-            *n = anim.num_frames;
-        }
         let spec = KartSpec {
             character,
-            anim_num_frames,
+            anim_num_frames: crate::scene::anim_num_frames(model),
         };
         online.specs.push(spec);
         // (Ours is on the grid already.)

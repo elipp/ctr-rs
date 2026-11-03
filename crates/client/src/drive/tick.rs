@@ -1,17 +1,16 @@
-//! One game tick of the race: demos, the pads of the others, rollback, and what follows from it.
+//! One game tick of the race: the pads of the others, rollback, and what follows from it.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use race::Pad;
 use race::rollback::Step;
-use vehicle::demo::Demo;
 use vehicle::{Effect, buttons};
 
 use super::follow::view_of;
 use super::input::{Controller, pad_of};
-use super::overlay::DemoHud;
+use super::overlay::NetHud;
 use super::pose::{Pose, pose_of};
-use super::{DEMO_FILE, DemoMode, Drive, Kart};
+use super::{Drive, Kart};
 use crate::Track;
 use crate::command::Action;
 use crate::kart::{KartMotion, KartSlot};
@@ -49,7 +48,7 @@ pub(super) struct Shown<'w, 's> {
     particles: ResMut<'w, crate::exhaust::Particles>,
     motions: Query<'w, 's, (&'static mut KartMotion, &'static mut KartSlot, Has<Kart>)>,
     smoothing: Res<'w, crate::kart::Smoothing>,
-    demo_label: Query<'w, 's, &'static mut Text, With<DemoHud>>,
+    net_label: Query<'w, 's, &'static mut Text, With<NetHud>>,
     toasts: MessageWriter<'w, Toast>,
     sfx: crate::sound::Sfx<'w>,
 }
@@ -58,8 +57,8 @@ pub(super) struct Shown<'w, 's> {
 #[derive(Default)]
 pub(super) struct Memory {
     was_paused: bool,
-    /// F5, F6, F7 and F8 (or 1 and 2 for the first two), for their edges.
-    keys_held: [bool; 4],
+    /// F7 and F8, for their edges.
+    keys_held: [bool; 2],
     /// The ticks waited for a late player, and the buttons a spectator held last tick.
     waits: (u32, u32),
 }
@@ -80,7 +79,7 @@ pub(super) fn drive_tick(
         mut particles,
         mut motions,
         smoothing,
-        mut demo_label,
+        mut net_label,
         mut toasts,
         mut sfx,
     } = shown;
@@ -91,7 +90,7 @@ pub(super) fn drive_tick(
     } = &mut *memory;
     let drive = &mut *drive;
     let keys = &controller.keys;
-    // In an online race the sim is everyone's: no pause, no restarts, no demos.
+    // In an online race the sim is everyone's: no pause, no restarts.
     let online = lobby.online.is_some();
     // The level of the race is not up yet, nor the karts of the others.
     if lobby
@@ -119,46 +118,10 @@ pub(super) fn drive_tick(
         return;
     }
 
-    // F5 records a demo from the grid (and saves it when pressed again), F6 plays the saved
-    // one. R (or the menu's RESTART) is the grid without either. A demo is the inputs alone, so
-    // every start puts everything, the objects too, back as it was at tick 0.
+    // R (or the menu's RESTART) is the grid: every start puts everything, the objects too, back
+    // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = (keys.pressed(KeyCode::KeyR) || picked) && !online;
-    // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
-    // a frame can pass without a tick.
-    let demo_down = [
-        !online && keys.any_pressed([KeyCode::F5]) || !online && keys.pressed(KeyCode::Digit1),
-        !online && keys.any_pressed([KeyCode::F6]) || !online && keys.pressed(KeyCode::Digit2),
-    ];
-    let [record_pressed, play_pressed] = std::array::from_fn(|i| demo_down[i] && !keys_held[i]);
-    keys_held[..2].copy_from_slice(&demo_down);
-    if record_pressed {
-        if let DemoMode::Recording(demo) = &drive.demo {
-            match std::fs::write(DEMO_FILE, demo.to_text()) {
-                Ok(()) => info!("saved {} ticks to {DEMO_FILE}", demo.length),
-                Err(e) => error!("could not save {DEMO_FILE}: {e}"),
-            }
-            drive.demo = DemoMode::Off;
-        } else {
-            drive.demo = DemoMode::Recording(Demo::new(drive.character));
-            restart = true;
-        }
-    } else if play_pressed {
-        match std::fs::read_to_string(DEMO_FILE)
-            .map_err(|e| e.to_string())
-            .and_then(|text| Demo::from_text(&text))
-        {
-            Ok(demo) => {
-                // The demo was driven by this character.
-                drive.character = demo.character;
-                drive.demo = DemoMode::Playing(demo);
-                restart = true;
-            }
-            Err(e) => error!("could not play {DEMO_FILE}: {e}"),
-        }
-    } else if restart {
-        drive.demo = DemoMode::Off;
-    }
     // The lobby closed, or the race failed: back to the grid with our kart alone.
     if !online && sim.race.karts.len() != 1 {
         restart = true;
@@ -166,7 +129,6 @@ pub(super) fn drive_tick(
     // The race starts: tick 0 for everyone.
     if let Some(net) = lobby.online.as_mut().filter(|net| net.fresh) {
         net.fresh = false;
-        drive.demo = DemoMode::Off;
         restart = true;
     }
     if restart {
@@ -190,18 +152,20 @@ pub(super) fn drive_tick(
 
     // F7 and F8 freeze this client for a moment, to see the race put right after a hitch: the
     // clock does not catch up (the frame is cut short), so the others run ahead and we wait.
+    // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
+    // a frame can pass without a tick.
     let stall_down = [KeyCode::F7, KeyCode::F8].map(|key| online && keys.pressed(key));
     for (i, millis) in STALLS_MS.into_iter().enumerate() {
-        if stall_down[i] && !keys_held[2 + i] {
+        if stall_down[i] && !keys_held[i] {
             debug!("(debug) stalling for {millis} ms");
             stall(std::time::Duration::from_millis(millis));
         }
     }
-    keys_held[2..].copy_from_slice(&stall_down);
+    *keys_held = stall_down;
 
     // Tick 0 has to come first: the others must be ready as well.
     if lobby.online.as_ref().is_some_and(|net| !net.go) {
-        for mut text in &mut demo_label {
+        for mut text in &mut net_label {
             text.0 = match &lobby.online {
                 Some(net) if config.debug_hud => net.summary(0, 0),
                 _ => String::new(),
@@ -329,22 +293,7 @@ pub(super) fn drive_tick(
         } else if online {
             Pad::of_input(&controller.read(held))
         } else {
-            let mut input = match &drive.demo {
-                DemoMode::Playing(demo) => demo.input(tick, held),
-                _ => None,
-            };
-            if input.is_none() {
-                if matches!(drive.demo, DemoMode::Playing(_)) {
-                    info!("demo over after {tick} ticks");
-                    drive.demo = DemoMode::Off;
-                }
-                input = Some(controller.read(held));
-            }
-            let input = input.unwrap();
-            if let DemoMode::Recording(demo) = &mut drive.demo {
-                demo.record(tick, &input);
-            }
-            Pad::of_input(&input)
+            Pad::of_input(&controller.read(held))
         };
         let taps = pad.held & !held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
@@ -360,16 +309,10 @@ pub(super) fn drive_tick(
             });
         }
     }
-    for mut text in &mut demo_label {
-        text.0 = match &drive.demo {
-            _ if online && !config.debug_hud => String::new(),
-            _ if online => lobby
-                .online
-                .as_ref()
-                .map_or_else(String::new, |net| net.summary(tick, sim.race.unsettled())),
-            DemoMode::Off => String::new(),
-            DemoMode::Recording(_) => format!("REC {tick}"),
-            DemoMode::Playing(demo) => format!("DEMO {tick}/{}", demo.length),
+    for mut text in &mut net_label {
+        text.0 = match &lobby.online {
+            Some(net) if config.debug_hud => net.summary(tick, sim.race.unsettled()),
+            _ => String::new(),
         };
     }
 
@@ -527,11 +470,10 @@ pub(super) fn drive_tick(
 
 /// The debug commands that change our kart: `/debug set weapon <N>` drops what we hold and rolls
 /// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug set wumpa <N>`
-/// sets the wumpa count. Not online, and not in a demo, which is the inputs alone.
+/// sets the wumpa count. Not online.
 pub(super) fn debug_actions(
     mut actions: MessageReader<Action>,
     mut sim: ResMut<crate::props::Sim>,
-    drive: Res<Drive>,
     lobby: Res<crate::lobby::Lobby>,
     mut toasts: MessageWriter<Toast>,
 ) {
@@ -554,10 +496,8 @@ pub(super) fn debug_actions(
         ) {
             continue;
         }
-        if lobby.online.is_some() || !matches!(drive.demo, DemoMode::Off) {
-            toasts.write(
-                Toast::new("Not online or in a demo", 2500).color(Color::srgb(1.0, 0.4, 0.4)),
-            );
+        if lobby.online.is_some() {
+            toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
         let own = sim.own;

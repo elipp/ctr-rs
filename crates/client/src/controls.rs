@@ -173,8 +173,6 @@ pub fn taken(key: KeyCode) -> Option<&'static str> {
         KeyCode::Escape | KeyCode::KeyP => "opens the menu",
         KeyCode::Enter | KeyCode::NumpadEnter => "opens the command line",
         KeyCode::KeyR => "restarts the race",
-        KeyCode::F5 | KeyCode::Digit1 => "records a demo",
-        KeyCode::F6 | KeyCode::Digit2 => "plays the demo",
         KeyCode::F3 => "opens the effects panel",
         KeyCode::F7 | KeyCode::F8 => "stalls the client",
         KeyCode::Home => "resets the camera",

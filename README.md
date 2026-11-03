@@ -49,6 +49,8 @@ Some tests need files that are not in the repository, and without them they skip
 
 Filters match anywhere in the name, so `cargo test --workspace -- --skip needs_disc` skips every test that needs the disc (those that need both as well), and `--skip needs_reference` every test that needs ctr-native.
 
+A new test that needs either must start with its prefix, `needs_disc_` before `needs_reference_` when it needs both, and no other test or module may have either word in its name. CI relies on the names: it skips the `needs_disc` tests, and runs the rest with ctr-native checked out. A test that reads the disc without the prefix skips there and passes without checking anything, and one that reads ctr-native without it still runs, but is not skipped by `--skip needs_reference` where there is no ctr-native.
+
 ```
 git clone https://github.com/CTR-Tools/ctr-native reference/ctr-native
 git -C reference/ctr-native checkout "$(cat docs/ctr-native.rev)"
