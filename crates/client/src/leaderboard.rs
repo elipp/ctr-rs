@@ -14,16 +14,13 @@ use loader::dram::DramFile;
 use loader::icons::{parse_groups, parse_icons};
 use loader::source::Need;
 use render::font::{Font, Gradient};
-use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 
 use crate::font::CtrText;
 use crate::hud;
 use crate::lobby::Lobby;
-use crate::lobby_list::{spawn_host_badge, spawn_tags};
-
-/// The portraits as a picture, loaded when the first race needs it.
-#[derive(Resource)]
-pub(crate) struct Portraits(pub(crate) Handle<Image>);
+use crate::portrait_row::{
+    HIGHLIGHT, Portraits, portraits, spawn_column, spawn_host_badge, spawn_portrait, spawn_tags,
+};
 
 /// The column of rows, with the race it was built for.
 #[derive(Component)]
@@ -47,12 +44,6 @@ struct Row {
 /// The name on a portrait, which follows the nicknames.
 #[derive(Component)]
 struct NameTag(usize);
-
-/// The colour of the outline around the portrait of the kart the view follows, and of its name:
-/// with every character open to everyone, the same face can be in the column more than once
-/// (which retail never allows), and this tells which one is ours. Not retail. The lobby's list
-/// (`lobby_list`) colours our name with it too.
-pub(crate) const HIGHLIGHT: Color = Color::srgb(1.0, 0.9, 0.2);
 
 /// The number of a place, from 0.
 #[derive(Component)]
@@ -124,13 +115,6 @@ pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>
     images.add(image)
 }
 
-pub(crate) fn load_portraits(
-    vram: &loader::vram::Vram,
-    images: &mut Assets<Image>,
-) -> Handle<Image> {
-    atlas_image(portrait_atlas(&pack_icons(), vram), images)
-}
-
 /// Puts the column up when a race has been built, and takes it down when there is none. (A level
 /// switch takes every node away, and a race on the new level builds it again.)
 fn build(
@@ -138,7 +122,7 @@ fn build(
     lobby: Res<Lobby>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
-    portraits: Option<Res<Portraits>>,
+    loaded: Option<Res<Portraits>>,
     boards: Query<(Entity, &Board)>,
 ) {
     let online = lobby.online.as_ref().filter(|online| online.built);
@@ -152,55 +136,19 @@ fn build(
     let Some(online) = online else {
         return;
     };
-    let portraits = match portraits {
-        Some(portraits) => portraits.0.clone(),
-        None => {
-            let handle = load_portraits(&textures.vram, &mut images);
-            commands.insert_resource(Portraits(handle.clone()));
-            handle
-        }
-    };
+    let image = portraits(
+        &mut commands,
+        loaded.as_deref(),
+        &textures.vram,
+        &mut images,
+    );
     let players = online.characters.len();
-    let column = commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::ZERO,
-                top: Val::ZERO,
-                ..default()
-            },
-            Pickable::IGNORE,
-        ))
-        .id();
+    let column = spawn_column(&mut commands, Val::ZERO);
     for slot in 0..players {
-        let character = (online.characters[slot] as usize).min(ICON_IDS.len() - 1);
         let y = slot as f32 * SLOT;
-        let portrait = commands
-            .spawn((
-                Row { slot, y, pop: 0.0 },
-                // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
-                ImageNode::new(portraits.clone())
-                    .with_rect(Rect::new(
-                        0.0,
-                        (character * HEIGHT) as f32,
-                        WIDTH as f32,
-                        ((character + 1) * HEIGHT) as f32,
-                    ))
-                    .with_mode(NodeImageMode::Stretch),
-                // Coloured by `highlight` for the kart the view follows.
-                Outline::new(hud::x(1.0), Val::ZERO, Color::NONE),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: hud::x(ICON_X),
-                    top: hud::y(ICON_Y + y),
-                    width: hud::x(WIDTH as f32),
-                    height: hud::y(HEIGHT as f32),
-                    ..default()
-                },
-                Pickable::IGNORE,
-                ChildOf(column),
-            ))
-            .id();
+        let portrait =
+            spawn_portrait(&mut commands, column, &image, online.characters[slot], ICON_Y + y);
+        commands.entity(portrait).insert(Row { slot, y, pop: 0.0 });
         let label = online.labels.get(slot).map_or("", String::as_str);
         let key = online.names.get(slot).map_or("", String::as_str);
         // The host is slot 0 (`net::Event::Start`).
@@ -342,27 +290,13 @@ fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
     }
 }
 
-/// Outlines the portrait of the kart the view follows (ours, or the one a spectator watches), and
-/// colours its name.
-fn highlight(
-    lobby: Res<Lobby>,
-    mut rows: Query<(&Row, &mut Outline)>,
-    mut tags: Query<(&NameTag, &mut TextColor)>,
-) {
+/// Colours the name of the kart the view follows (ours, or the one a spectator watches) in
+/// [`HIGHLIGHT`].
+fn highlight(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut TextColor)>) {
     let Some(online) = &lobby.online else {
         return;
     };
     let viewed = online.viewed();
-    for (row, mut outline) in &mut rows {
-        let color = if row.slot == viewed {
-            HIGHLIGHT
-        } else {
-            Color::NONE
-        };
-        if outline.color != color {
-            outline.color = color;
-        }
-    }
     for (NameTag(slot), mut text) in &mut tags {
         let color = if *slot == viewed {
             HIGHLIGHT

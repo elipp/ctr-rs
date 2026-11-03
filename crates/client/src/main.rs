@@ -55,6 +55,7 @@ mod names;
 mod paths;
 mod pause;
 mod place;
+mod portrait_row;
 mod probe;
 mod projectile;
 
@@ -306,6 +307,7 @@ fn main() {
         (
             leaderboard::LeaderboardPlugin,
             lobby_list::LobbyListPlugin,
+            portrait_row::PortraitRowPlugin,
             lights::LightsPlugin,
             place::PlacePlugin,
             laps::LapsPlugin,

@@ -28,8 +28,7 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
 use crate::command::{self, Action, CommandLine};
-use crate::leaderboard::{Portraits, load_portraits};
-use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
+use crate::portrait_row::{Portraits, load_portraits, portrait_rect};
 
 /// The target of what `console!` logs.
 pub const TARGET: &str = "console";
@@ -422,14 +421,8 @@ fn draw_small_portraits(
             node.display = Display::None;
             continue;
         };
-        let character = character.min(ICON_IDS.len() - 1);
         node.display = Display::Flex;
-        image.rect = Some(Rect::new(
-            0.0,
-            (character * HEIGHT) as f32,
-            WIDTH as f32,
-            ((character + 1) * HEIGHT) as f32,
-        ));
+        image.rect = Some(portrait_rect(character));
         image.image = atlas
             .get_or_insert_with(|| {
                 let handle = load_portraits(&textures.vram, &mut images);
