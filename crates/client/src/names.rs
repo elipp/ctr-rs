@@ -8,9 +8,19 @@ use crate::drive::ChaseCamera;
 use crate::kart::KartSlot;
 use crate::lobby::Lobby;
 
-/// The name over the kart in a slot.
+/// The box of the name over the kart in a slot. Its children are the name's text: the
+/// [`NameOutline`]s first, under the [`NameText`].
 #[derive(Component)]
 pub(crate) struct OverheadName(usize);
+
+/// The name itself, in its green.
+#[derive(Component)]
+pub(crate) struct NameText;
+
+/// A copy of the name in the outline's colour, behind it and moved [`OUTLINE_WIDTH`] that way:
+/// together, the copies outline its letters. (Bevy's text has no outline of its own.)
+#[derive(Component)]
+pub(crate) struct NameOutline(Vec2);
 
 /// Who the camera follows, once we have finished.
 #[derive(Component)]
@@ -33,13 +43,26 @@ const MAX_SIZE: f32 = 30.0;
 /// The padding of the box around a name, across and down, in pixels.
 const PADDING: Vec2 = Vec2::new(9.0, 0.0);
 
-/// The box's corners: square. `BorderRadius::MAX` makes it a capsule, with round ends whatever
-/// its size.
-const CORNERS: BorderRadius = BorderRadius::ZERO;
-
-/// The green of a name, and the box it is on, so that it reads over any track.
+/// The green of a name.
 const COLOR: Color = Color::srgb(0.45, 1.0, 0.35);
-const BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
+
+/// The outline of a name's letters, so that it reads over any track: how thick, in the window's pixels whatever the name's size, and
+/// its colour. It is made of copies of the name moved that far each way.
+const OUTLINE_WIDTH: f32 = 2.0;
+const OUTLINE_COLOR: Color = Color::BLACK;
+const OUTLINE_DIRECTIONS: [Vec2; 8] = {
+    let d = std::f32::consts::FRAC_1_SQRT_2;
+    [
+        Vec2::new(1.0, 0.0),
+        Vec2::new(-1.0, 0.0),
+        Vec2::new(0.0, 1.0),
+        Vec2::new(0.0, -1.0),
+        Vec2::new(d, d),
+        Vec2::new(d, -d),
+        Vec2::new(-d, d),
+        Vec2::new(-d, -d),
+    ]
+};
 
 /// Closer than this (the GTE's depth, in game units) the name is not shown: the kart is in the
 /// camera's face. Further than [`TOO_FAR`], it is not shown either.
@@ -56,12 +79,16 @@ pub(crate) fn overhead(
         (
             Entity,
             &OverheadName,
-            &mut Text,
+            Option<&Children>,
             &mut UiTransform,
             &mut Node,
             &mut Visibility,
         ),
         Without<WatchingLabel>,
+    >,
+    mut texts: Query<
+        (&mut Text, Option<&NameOutline>, &mut Node),
+        (Without<OverheadName>, Without<WatchingLabel>),
     >,
     mut watching: Query<(Entity, &mut Text, &mut Visibility), With<WatchingLabel>>,
 ) {
@@ -77,23 +104,44 @@ pub(crate) fn overhead(
     // A label for each player, and the one for the kart we watch.
     for slot in 0..net.names.len() {
         if labels.iter().all(|(_, label, ..)| label.0 != slot) {
-            commands.spawn((
-                OverheadName(slot),
-                Text::new(""),
-                crate::font::bold(TextFont::from_font_size(MAX_SIZE)),
-                TextColor(COLOR),
-                BackgroundColor(BACKGROUND),
-                // Centered over the point, with its bottom edge on it.
-                UiTransform::from_translation(Val2::percent(-50.0, -100.0)),
-                Visibility::Hidden,
-                Node {
-                    position_type: PositionType::Absolute,
-                    padding: UiRect::axes(Val::Px(PADDING.x), Val::Px(PADDING.y)),
-                    border_radius: CORNERS,
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
+            let font = crate::font::bold(TextFont::from_font_size(MAX_SIZE));
+            commands
+                .spawn((
+                    OverheadName(slot),
+                    // Centered over the point, with its bottom edge on it.
+                    UiTransform::from_translation(Val2::percent(-50.0, -100.0)),
+                    Visibility::Hidden,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        padding: UiRect::axes(Val::Px(PADDING.x), Val::Px(PADDING.y)),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_children(|label| {
+                    // (Drawn in this order: the outline under the name.)
+                    for direction in OUTLINE_DIRECTIONS {
+                        label.spawn((
+                            NameOutline(direction),
+                            Text::new(""),
+                            font.clone(),
+                            TextColor(OUTLINE_COLOR),
+                            // Over the name, out of the layout: the name sizes the box.
+                            Node {
+                                position_type: PositionType::Absolute,
+                                ..default()
+                            },
+                            Pickable::IGNORE,
+                        ));
+                    }
+                    label.spawn((
+                        NameText,
+                        Text::new(""),
+                        font,
+                        TextColor(COLOR),
+                        Pickable::IGNORE,
+                    ));
+                });
         }
     }
     if watching.is_empty() {
@@ -147,7 +195,7 @@ pub(crate) fn overhead(
             .ok()
             .map(|at| screen.to_window(at))
     };
-    for (_, label, mut text, mut transform, mut node, mut visibility) in &mut labels {
+    for (_, label, children, mut transform, mut node, mut visibility) in &mut labels {
         let slot = label.0;
         let name = net.labels.get(slot).map_or("", String::as_str);
         let at = karts
@@ -169,12 +217,24 @@ pub(crate) fn overhead(
         })();
         match drawn {
             Some((at, size)) => {
-                if text.0 != name {
-                    text.0 = name.to_string();
-                }
-                // The node is scaled about its middle: the bottom edge is kept on the point by
-                // moving it down by the half of its height it lost.
                 let scale = size / MAX_SIZE;
+                for &child in children.into_iter().flatten() {
+                    let Ok((mut text, outline, mut node)) = texts.get_mut(child) else {
+                        continue;
+                    };
+                    if text.0 != name {
+                        text.0 = name.to_string();
+                    }
+                    // On the name, where the box's padding puts it, moved the outline's width
+                    // (in the window's pixels: undone by the box's scale) its way.
+                    if let Some(NameOutline(direction)) = outline {
+                        let offset = PADDING + *direction * OUTLINE_WIDTH / scale;
+                        node.left = Val::Px(offset.x);
+                        node.top = Val::Px(offset.y);
+                    }
+                }
+                // The box is scaled about its middle: the bottom edge is kept on the point by
+                // moving it down by the half of its height it lost.
                 transform.scale = Vec2::splat(scale);
                 transform.translation = Val2::percent(-50.0, -100.0 + (1.0 - scale) * 50.0);
                 node.left = Val::Px(at.x);
