@@ -5,7 +5,8 @@ use loader::lev::PosRot;
 
 use crate::{Contact, Context, Damage, Instance, Tick};
 
-/// What `RB_Hazard_CollideWithDrivers` takes as the radius: a squared distance, 400 units.
+/// What `RB_Hazard_CollideWithDrivers` takes as the radius: a squared flat distance, 320 units
+/// (and 640 up and down, [`crate::Shape::Column`]).
 const HIT_RADIUS: u32 = 0x19000;
 
 /// The barrel is drawn a little off its path: added to `matrix.t`'s x, and taken from its z.
@@ -45,7 +46,7 @@ impl Instance for Drum {
         let at = Drum::frame(path, self.point).pos;
         let pos = [at.x as i32, at.y as i32, at.z as i32];
         out.contacts
-            .push(Contact::sphere(pos, Damage::Squish, HIT_RADIUS, 0));
+            .push(Contact::column(pos, Damage::Squish, HIT_RADIUS));
     }
 }
 

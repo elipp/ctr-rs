@@ -139,13 +139,14 @@ const RAIN_WIDTH: f32 = 2.0;
 /// Sets the width of the lines, before `draw` takes the gizmos (which read the config).
 pub fn set_width(
     drive: Res<crate::drive::Drive>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    screen: Res<crate::pixel::RenderSize>,
     mut store: ResMut<GizmoConfigStore>,
 ) {
     let snow = drive.weather().weather.blend() == Blend::Add;
-    store.config_mut::<WeatherGizmos>().0.line.width = match windows.single() {
-        Ok(window) if snow => (window.height() / RETAIL_ROWS).max(RAIN_WIDTH),
-        _ => RAIN_WIDTH,
+    store.config_mut::<WeatherGizmos>().0.line.width = if snow {
+        (screen.height() / RETAIL_ROWS).max(RAIN_WIDTH)
+    } else {
+        RAIN_WIDTH
     };
 }
 

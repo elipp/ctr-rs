@@ -297,6 +297,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "Frame limit, 0 for none",
                     "<frames a second>",
                 ),
+                #[cfg(not(target_arch = "wasm32"))]
+                takes(
+                    "pixel-scale",
+                    "Draw at 1/N of the window's resolution",
+                    "<1 to 8>",
+                ),
                 #[cfg(target_arch = "wasm32")]
                 takes(
                     "render-scale",
