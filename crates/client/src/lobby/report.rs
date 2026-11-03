@@ -18,6 +18,9 @@ pub(super) fn report(
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
+    if !lobby.joined {
+        lobby.tell_lock();
+    }
     let Some(session) = &lobby.session else {
         return;
     };
@@ -59,7 +62,8 @@ pub(super) fn report(
                 players,
                 spectators,
                 you,
-            } => roster = Some((players, spectators, you)),
+                locked,
+            } => roster = Some((players, spectators, you, locked)),
             Event::Announce(text) => {
                 // (A cup's results are several lines, which take longer to read.)
                 let ms = 3000 + 1500 * text.lines().count().saturating_sub(1) as u64;
@@ -287,7 +291,8 @@ pub(super) fn report(
         lobby.close();
         return;
     }
-    if let Some((players, spectators, you)) = roster {
+    if let Some((players, spectators, you, locked)) = roster {
+        lobby.characters_locked = locked;
         // The names are told apart among everyone in the lobby, those who only watch too.
         let mut labels = net::display_names(
             &players
