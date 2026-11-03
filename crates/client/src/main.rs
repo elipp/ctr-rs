@@ -127,6 +127,8 @@ fn main() {
     disc::prepare();
     maps::make_builtins();
     maps::load();
+    #[cfg(target_arch = "wasm32")]
+    web::release_disc();
     // The character driven last time.
     let racer = config
         .character

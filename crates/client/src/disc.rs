@@ -1,4 +1,4 @@
-//! Finding the disc image. In order: the image in memory (in a browser, see `web.rs`), `CTR_BIN`,
+//! Finding the disc image. In order: the image the page holds (in a browser, see `web.rs`), `CTR_BIN`,
 //! the `iso` of the config, and, in a debug build, `assets/ctr-u.bin`. If there is none, and
 //! everything the client reads from the disc has been made already (`prepare`,
 //! `maps::make_builtins`), it runs without one. Otherwise a file dialog asks for it and the
@@ -38,11 +38,16 @@ fn made() -> bool {
 /// wrong is printed; the files that are missing are then made as they are asked for.
 pub fn prepare() {
     use loader::source::Check;
-    // A browser has nowhere to keep them: there everything is read from the image.
+    let source = source();
+    // A browser has nowhere to keep them: there they are held in memory, so that the page can let
+    // go of the image (`web::release_disc`).
     if cfg!(target_arch = "wasm32") {
+        match source.hold() {
+            Ok(size) => eprintln!("Took {} MiB from the disc", size >> 20),
+            Err(e) => eprintln!("Could not take the files of the disc: {e}"),
+        }
         return;
     }
-    let source = source();
     let why = match source.check() {
         Check::Ready => return,
         Check::NotPrepared => "making the files of the disc (this is done once)".to_string(),
@@ -67,7 +72,7 @@ pub fn prepare() {
 /// Finds the disc and keeps the answer for `image`, or exits the program if it is needed and
 /// there is none.
 pub fn locate(config: &mut Config) {
-    let found = loader::disc::in_memory()
+    let found = loader::disc::external()
         .or_else(|| std::env::var_os("CTR_BIN").map(PathBuf::from))
         .or_else(|| config.iso.clone().filter(|p| is_disc(p)))
         .or_else(dev_default);

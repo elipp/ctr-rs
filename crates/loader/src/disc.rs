@@ -1,8 +1,9 @@
 use std::fs::File;
 use std::io::Write;
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Size of a raw CD-ROM sector in a `.bin` image.
 pub const RAW_SECTOR_SIZE: u64 = 2352;
@@ -90,34 +91,58 @@ mod tests {
 /// A `.bin` disc image opened for reading `BIGFILE.BIG`.
 pub type Disc = RawSectorReader<FileDisc>;
 
-/// A disc image held in memory, which [`open_file`] opens in place of the file at its path. A
-/// browser has no files: the page hands over the image the player dropped on it.
-static IN_MEMORY: OnceLock<(PathBuf, &'static [u8])> = OnceLock::new();
+/// Reads `buf.len()` bytes of a disc image from byte `at` on: how [`keep_external`] reads it.
+pub type ReadAt = fn(at: u64, buf: &mut [u8]) -> io::Result<()>;
 
-/// Holds `bytes` as the disc image at `path` for as long as the program runs. Once only.
-pub fn keep_in_memory(path: PathBuf, bytes: Vec<u8>) {
-    let bytes: &'static [u8] = bytes.leak();
-    if IN_MEMORY.set((path, bytes)).is_err() {
-        panic!("a disc image is kept in memory once");
+/// A disc image that the program does not hold itself, which [`open_file`] opens in place of the
+/// file at its path: its size, and how it is read. A browser has no files: the page holds the
+/// image the player dropped on it, and the program reads the parts of it that it needs (a wasm
+/// program's memory never shrinks, so the image is not copied into it).
+static EXTERNAL: OnceLock<(PathBuf, u64, ReadAt)> = OnceLock::new();
+
+/// Whether [`release_external`] has been called: the image is gone, and reading it fails.
+static RELEASED: AtomicBool = AtomicBool::new(false);
+
+/// Reads the disc image at `path`, of `len` bytes, by `read`, for as long as the program runs or
+/// until [`release_external`]. Once only.
+pub fn keep_external(path: PathBuf, len: u64, read: ReadAt) {
+    if EXTERNAL.set((path, len, read)).is_err() {
+        panic!("an external disc image is kept once");
     }
 }
 
-/// The path of the disc image that is [kept in memory](keep_in_memory), if one is.
-pub fn in_memory() -> Option<PathBuf> {
-    IN_MEMORY.get().map(|(path, _)| path.clone())
+/// The path of the disc image that is [read externally](keep_external), if one is.
+pub fn external() -> Option<PathBuf> {
+    EXTERNAL.get().map(|(path, ..)| path.clone())
 }
 
-/// A disc image opened: the file, or the image [kept in memory](keep_in_memory) at its path.
+/// Says that the [external](keep_external) image is gone: a read of it fails from then on.
+pub fn release_external() {
+    RELEASED.store(true, Ordering::Relaxed);
+}
+
+/// A disc image opened: the file, or the image [read externally](keep_external) at its path.
 pub enum FileDisc {
     File(BufReader<File>),
-    Memory(Cursor<&'static [u8]>),
+    External { pos: u64, len: u64, read: ReadAt },
 }
 
 impl Read for FileDisc {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             FileDisc::File(file) => file.read(buf),
-            FileDisc::Memory(memory) => memory.read(buf),
+            FileDisc::External { pos, len, read } => {
+                if RELEASED.load(Ordering::Relaxed) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "the disc image was let go of once everything was taken from it",
+                    ));
+                }
+                let n = (buf.len() as u64).min(len.saturating_sub(*pos)) as usize;
+                read(*pos, &mut buf[..n])?;
+                *pos += n as u64;
+                Ok(n)
+            }
         }
     }
 }
@@ -126,14 +151,23 @@ impl Seek for FileDisc {
     fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
         match self {
             FileDisc::File(file) => file.seek(from),
-            FileDisc::Memory(memory) => memory.seek(from),
+            FileDisc::External { pos, len, .. } => {
+                let new = match from {
+                    SeekFrom::Start(p) => Some(p),
+                    SeekFrom::End(d) => len.checked_add_signed(d),
+                    SeekFrom::Current(d) => pos.checked_add_signed(d),
+                }
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
+                *pos = new;
+                Ok(new)
+            }
         }
     }
 }
 
 pub fn open_file(path: &Path) -> io::Result<FileDisc> {
-    match IN_MEMORY.get() {
-        Some((at, bytes)) if at == path => Ok(FileDisc::Memory(Cursor::new(bytes))),
+    match EXTERNAL.get() {
+        Some(&(ref at, len, read)) if at == path => Ok(FileDisc::External { pos: 0, len, read }),
         _ => File::open(path).map(|file| FileDisc::File(BufReader::new(file))),
     }
 }
