@@ -192,6 +192,15 @@ for (const name of ["keydown", "pointerdown", "pointerup", "touchend", "click"])
 <script type="module">
 import init from "./client.js";
 
+// The game's code is fetched and compiled from the start, while the player picks the disc and it is
+// read; `init` falls back to fetching it itself if that fails.
+const compiled = WebAssembly.compileStreaming(fetch(new URL("client_bg.wasm", import.meta.url))).catch(
+  (e) => {
+    console.warn(`could not compile the game ahead: ${e}`);
+    return null;
+  },
+);
+
 const drop = document.getElementById("drop");
 const status = document.getElementById("status");
 const menu = document.getElementById("menu");
@@ -459,7 +468,8 @@ async function start(stream, size, copy = null) {
   });
   status.textContent = "Starting";
   try {
-    await init();
+    const module = await compiled;
+    await init(module === null ? undefined : { module_or_path: module });
   } catch (e) {
     // winit hands the event loop to the browser by throwing.
     if (!String(e).includes("Using exceptions for control flow")) {
