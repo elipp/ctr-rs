@@ -7,7 +7,7 @@ use loader::source::Source;
 
 /// `CTR_DISC_DIR` overrides the default of `<repo>/assets/disc`.
 #[test]
-fn the_sounds_load_without_the_disc() {
+fn needs_disc_the_sounds_load_without_the_disc() {
     let dir = std::env::var_os("CTR_DISC_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/disc"));

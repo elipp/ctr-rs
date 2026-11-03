@@ -11,7 +11,7 @@ fn source() -> Option<String> {
     let path = support::reference_dir().join("game/zGlobal_DATA.c");
     let text = std::fs::read_to_string(&path).ok();
     if text.is_none() {
-        eprintln!("skipping: {} not found", path.display());
+        support::missing_reference(&path);
     }
     text
 }
@@ -43,7 +43,7 @@ fn split_top_level(s: &str) -> Vec<&str> {
 }
 
 #[test]
-fn meta_phys_matches_reference_source() {
+fn needs_reference_meta_phys_matches_reference_source() {
     let Some(text) = source() else { return };
     let table = text
         .split(".metaPhys =")
@@ -68,7 +68,7 @@ fn meta_phys_matches_reference_source() {
 }
 
 #[test]
-fn terrain_table_matches_reference_source() {
+fn needs_reference_terrain_table_matches_reference_source() {
     let Some(text) = source() else { return };
     let table = text
         .split(".MetaDataTerrain =")

@@ -63,6 +63,10 @@ fn trig_initialiser(source: &str) -> String {
 fn build_reference_driver() -> Option<PathBuf> {
     let reference = reference_dir();
     if !reference.exists() {
+        // CI sets it, where a skip would pass without checking anything.
+        if std::env::var_os("CTR_REQUIRE_REFERENCE").is_some() {
+            panic!("{} not found, and CTR_REQUIRE_REFERENCE is set", reference.display());
+        }
         eprintln!("skipping: {} not found", reference.display());
         return None;
     }
@@ -204,7 +208,7 @@ fn cases(trials: u64) -> Vec<Case> {
 }
 
 #[test]
-fn matches_reference_math() {
+fn needs_reference_matches_reference_math() {
     let Some(exe) = build_reference_driver() else {
         return;
     };

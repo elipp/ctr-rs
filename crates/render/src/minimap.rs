@@ -181,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn every_track_has_a_map() {
+    fn needs_disc_every_track_has_a_map() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin");
         let Ok((mut disc, big)) = open_bigfile(&path) else {
             return;

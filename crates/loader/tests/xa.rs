@@ -4,7 +4,7 @@ use loader::disc::open_xa;
 use loader::xa::{Category, RATE_FULL, RATE_HALF, decode};
 
 #[test]
-fn the_xa_of_the_disc() {
+fn needs_disc_the_xa_of_the_disc() {
     let path = common::disc_path();
     if !path.exists() {
         eprintln!(

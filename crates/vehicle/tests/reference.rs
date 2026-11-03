@@ -361,7 +361,7 @@ fn trials() -> u64 {
 }
 
 #[test]
-fn matches_reference_on_tracks() {
+fn needs_disc_needs_reference_matches_reference_on_tracks() {
     let driver_c = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c");
     let Some(exe) = build_driver(
         &driver_c,
@@ -458,10 +458,10 @@ fn matches_reference_on_tracks() {
 
 /// `SCRUBS` against the `MetaDataScrub` initialiser in the reference source.
 #[test]
-fn scrub_table_matches_reference_source() {
+fn needs_reference_scrub_table_matches_reference_source() {
     let source = support::reference_dir().join("game/zGlobal_DATA.c");
     let Ok(text) = std::fs::read_to_string(&source) else {
-        eprintln!("skipping: {} not found", source.display());
+        support::missing_reference(&source);
         return;
     };
     let table = text

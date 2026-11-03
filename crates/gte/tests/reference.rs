@@ -109,6 +109,10 @@ fn reference_dir() -> PathBuf {
 fn build_reference_driver() -> Option<PathBuf> {
     let r = reference_dir();
     if !r.join("platform/native_gte_core.c").exists() {
+        // CI sets it, where a skip would pass without checking anything.
+        if std::env::var_os("CTR_REQUIRE_REFERENCE").is_some() {
+            panic!("{} not found, and CTR_REQUIRE_REFERENCE is set", r.display());
+        }
         eprintln!("skipping: reference/ctr-native not found");
         return None;
     }
@@ -139,7 +143,7 @@ fn dump(g: &Gte, ret: bool) -> String {
 }
 
 #[test]
-fn matches_reference_gte() {
+fn needs_reference_matches_reference_gte() {
     let Some(exe) = build_reference_driver() else {
         return;
     };

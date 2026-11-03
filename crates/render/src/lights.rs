@@ -46,7 +46,7 @@ mod tests {
     }
 
     #[test]
-    fn lights_decode_from_the_disc() {
+    fn needs_disc_lights_decode_from_the_disc() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin");
         let Ok((mut disc, big)) = open_bigfile(&path) else {
             return;

@@ -28,7 +28,7 @@ fn swing(camera: &CameraDc, d: &Driver) -> i32 {
 }
 
 #[test]
-fn swings_out_in_a_powerslide() {
+fn needs_disc_swings_out_in_a_powerslide() {
     let Some(level) = level(LevelId::DINGO_CANYON) else {
         return;
     };
@@ -89,7 +89,7 @@ fn swings_out_in_a_powerslide() {
 /// go. The camera must not blend from that distance once the kart revs its engine again: retail
 /// starts the height rules over in `KS_ENGINE_REVVING`.
 #[test]
-fn does_not_swoop_down_from_the_grab_after_it() {
+fn needs_disc_does_not_swoop_down_from_the_grab_after_it() {
     let Some(level) = level(LevelId::DINGO_CANYON) else {
         return;
     };

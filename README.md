@@ -41,14 +41,20 @@ The client has no command line options. `]` and `[` switch the level, `.` and `,
 cargo test --workspace --no-fail-fast
 ```
 
-The tests that compare the port with the C reference (every test with `reference` in its name, and `vehicle/tests/tick.rs`) need two things, and without them they skip and pass without checking anything: the disc image (`assets/ctr-u.bin`, or `CTR_BIN`), and [ctr-native](https://github.com/CTR-tools/ctr-native) at the commit in [`docs/ctr-native.rev`](docs/ctr-native.rev), checked out at `reference/ctr-native` (git-ignored). They also build the C side with `gcc -m32`, which on Debian and Ubuntu is the `gcc-multilib` package.
+Some tests need files that are not in the repository, and without them they skip and pass without checking anything. Their names say which:
+
+- `needs_disc_…`: the disc image (`assets/ctr-u.bin`, or `CTR_BIN`), or the folder prepared from it (`assets/disc`, or `CTR_DISC_DIR`).
+- `needs_reference_…`: [ctr-native](https://github.com/CTR-tools/ctr-native) at the commit in [`docs/ctr-native.rev`](docs/ctr-native.rev), checked out at `reference/ctr-native` (git-ignored). Most of them also build the C side with `gcc -m32`, which on Debian and Ubuntu is the `gcc-multilib` package.
+- `needs_disc_needs_reference_…`: both.
+
+Filters match anywhere in the name, so `cargo test --workspace -- --skip needs_disc` skips every test that needs the disc (those that need both as well), and `--skip needs_reference` every test that needs ctr-native.
 
 ```
 git clone https://github.com/CTR-Tools/ctr-native reference/ctr-native
 git -C reference/ctr-native checkout "$(cat docs/ctr-native.rev)"
 ```
 
-Another commit of ctr-native may not match what the tests expect (they fail to link, or differ by a field), so bump `docs/ctr-native.rev` together with the tests that need it. Run `cargo test --workspace -- --nocapture 2>&1 | grep -i skipping` to see which tests skipped. CI skips the reference tests altogether (`--skip reference`).
+Another commit of ctr-native may not match what the tests expect (they fail to link, or differ by a field), so bump `docs/ctr-native.rev` together with the tests that need it. Run `cargo test --workspace -- --nocapture 2>&1 | grep -i skipping` to see which tests skipped. CI has no disc, so it skips those tests (`--skip needs_disc`); it checks out ctr-native and sets `CTR_REQUIRE_REFERENCE`, which makes a test that finds no reference fail instead of skipping.
 
 ## Prior work
 

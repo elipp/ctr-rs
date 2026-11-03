@@ -144,7 +144,7 @@ fn summary(d: &Driver) -> String {
 }
 
 #[test]
-fn matches_reference() {
+fn needs_reference_matches_reference() {
     let driver_c = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/collide.c");
     let Some(exe) = build_driver(
         &driver_c,

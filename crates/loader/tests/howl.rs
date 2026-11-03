@@ -8,7 +8,7 @@ const RED_LIGHT: usize = 0x45;
 const GREEN_LIGHT: usize = 0x46;
 
 #[test]
-fn kart_hwl_sounds() {
+fn needs_disc_kart_hwl_sounds() {
     let path = common::disc_path();
     if !path.exists() {
         eprintln!(
@@ -66,7 +66,7 @@ fn kart_hwl_sounds() {
 }
 
 #[test]
-fn kart_hwl_songs() {
+fn needs_disc_kart_hwl_songs() {
     let path = common::disc_path();
     if !path.exists() {
         eprintln!(

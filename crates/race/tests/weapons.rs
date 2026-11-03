@@ -113,7 +113,7 @@ fn pads(tick: u32, players: usize, presses: &[u32]) -> Vec<Pad> {
 }
 
 #[test]
-fn a_bomb_is_fired_and_set_off_by_a_second_press() {
+fn needs_disc_a_bomb_is_fired_and_set_off_by_a_second_press() {
     let Some((level, mut race)) = race(2) else {
         return;
     };
@@ -146,7 +146,7 @@ fn a_bomb_is_fired_and_set_off_by_a_second_press() {
 }
 
 #[test]
-fn a_missile_flies_on_without_a_target_and_goes_off_at_the_end_of_the_track() {
+fn needs_disc_a_missile_flies_on_without_a_target_and_goes_off_at_the_end_of_the_track() {
     let Some((level, mut race)) = race(1) else {
         return;
     };
@@ -169,7 +169,7 @@ fn a_missile_flies_on_without_a_target_and_goes_off_at_the_end_of_the_track() {
 }
 
 #[test]
-fn a_kart_the_bomb_lands_on_is_blasted_and_tumbles_back_to_driving() {
+fn needs_disc_a_kart_the_bomb_lands_on_is_blasted_and_tumbles_back_to_driving() {
     let Some((level, mut race)) = race(2) else {
         return;
     };
@@ -208,7 +208,7 @@ fn a_kart_the_bomb_lands_on_is_blasted_and_tumbles_back_to_driving() {
 }
 
 #[test]
-fn weapons_are_part_of_the_snapshot() {
+fn needs_disc_weapons_are_part_of_the_snapshot() {
     let Some((level, mut race)) = race(2) else {
         return;
     };
@@ -228,7 +228,7 @@ fn weapons_are_part_of_the_snapshot() {
 }
 
 #[test]
-fn a_potion_thrown_forward_lands_ahead_and_spins_out_the_kart_that_touches_it() {
+fn needs_disc_a_potion_thrown_forward_lands_ahead_and_spins_out_the_kart_that_touches_it() {
     use weapon::mine::{MineKind, State};
 
     let Some((level, mut race)) = race(2) else {
@@ -296,7 +296,7 @@ fn a_potion_thrown_forward_lands_ahead_and_spins_out_the_kart_that_touches_it() 
 }
 
 #[test]
-fn a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
+fn needs_disc_a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
     use weapon::mine::{MineKind, State};
 
     let Some((level, mut race)) = race(2) else {
@@ -360,7 +360,7 @@ fn a_red_beaker_that_spins_out_a_kart_makes_it_rain_on_it() {
 }
 
 #[test]
-fn a_bomb_breaks_the_weapon_crate_it_flies_through_and_the_kart_is_paid() {
+fn needs_disc_a_bomb_breaks_the_weapon_crate_it_flies_through_and_the_kart_is_paid() {
     let mut crate_at = 0;
     let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 1, |level| {
         crate_at = add_crate(level, 8, [957, 1, -10664]);
@@ -403,7 +403,7 @@ fn a_bomb_breaks_the_weapon_crate_it_flies_through_and_the_kart_is_paid() {
 /// flies through a wumpa crate on its way to the green bottle that lies beyond it, and goes off
 /// on the bottle.
 #[test]
-fn a_bomb_breaks_a_wumpa_crate_on_its_way_and_sets_off_the_bottle_it_reaches() {
+fn needs_disc_a_bomb_breaks_a_wumpa_crate_on_its_way_and_sets_off_the_bottle_it_reaches() {
     use weapon::mine::{MineKind, State};
 
     let mut crate_at = 0;
@@ -538,7 +538,7 @@ fn fire_pads(players: usize, fire: bool) -> Vec<Pad> {
 /// goes off at the first, and its burst sets off the ones inside it. Nitro crates do not chain
 /// (a crate that is hit gets a plain explosion with no blast), so the far one lies on.
 #[test]
-fn a_missile_sets_off_the_nitro_crates_within_its_burst_and_no_others() {
+fn needs_disc_a_missile_sets_off_the_nitro_crates_within_its_burst_and_no_others() {
     use weapon::mine::MineKind;
 
     let Some((level, mut race, row, far)) = nitro_row(1) else {
@@ -589,7 +589,7 @@ fn a_missile_sets_off_the_nitro_crates_within_its_burst_and_no_others() {
 /// A second kart stands beside the row, inside the missile's burst but out of reach of every
 /// crate itself (120 units), so it is the missile's burst that blasts it and not a crate it touched.
 #[test]
-fn a_kart_beside_the_nitro_crates_is_blasted_by_the_missile_that_sets_them_off() {
+fn needs_disc_a_kart_beside_the_nitro_crates_is_blasted_by_the_missile_that_sets_them_off() {
     use weapon::{Hit, Reason};
 
     // Once to see when and where the missile goes off.
@@ -642,7 +642,7 @@ fn a_kart_beside_the_nitro_crates_is_blasted_by_the_missile_that_sets_them_off()
 /// 150 to the side (inside the aiming cone, and past the missile's 96-unit reach if it flew
 /// straight), and the missile turns to it and hits it directly.
 #[test]
-fn a_missile_homes_in_on_a_kart_off_its_line_and_hits_it() {
+fn needs_disc_a_missile_homes_in_on_a_kart_off_its_line_and_hits_it() {
     use weapon::{Body, Hit, Reason};
 
     let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 2, |_| {}) else {
@@ -699,7 +699,7 @@ fn a_missile_homes_in_on_a_kart_off_its_line_and_hits_it() {
 /// A kart that holds a shield takes the missile that hits it: the shield absorbs the hit and pops,
 /// the kart is not blasted, and it is invincible for a moment after.
 #[test]
-fn a_shield_absorbs_the_missile_that_hits_its_kart_and_pops() {
+fn needs_disc_a_shield_absorbs_the_missile_that_hits_its_kart_and_pops() {
     use weapon::{Hit, Reason};
 
     let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 2, |_| {}) else {
@@ -750,7 +750,7 @@ fn a_shield_absorbs_the_missile_that_hits_its_kart_and_pops() {
 /// A shield is shot with the fire button: it flies straight ahead (it chases no one, and does not
 /// roll), goes off on the kart in its way as an ordinary bomb, and that kart is blasted.
 #[test]
-fn a_shot_shield_flies_straight_and_blasts_the_kart_in_its_way() {
+fn needs_disc_a_shot_shield_flies_straight_and_blasts_the_kart_in_its_way() {
     use weapon::{Hit, Kind, Reason};
 
     let Some((level, mut race)) = race_on(LevelId::SLIDE_COLISEUM, 2, |_| {}) else {
@@ -812,7 +812,7 @@ fn seal_race() -> Option<(Level, Race, instance::Contact)> {
 /// A Nitro crate in a seal's way goes off when the seal reaches it, with a plain explosion and
 /// nobody hurt (`RB_CheckHazardCollisions`' mine bucket).
 #[test]
-fn a_seal_sets_off_the_mine_in_its_way() {
+fn needs_disc_a_seal_sets_off_the_mine_in_its_way() {
     use weapon::mine::MineKind;
 
     let Some((level, mut race, seal)) = seal_race() else {
@@ -832,7 +832,7 @@ fn a_seal_sets_off_the_mine_in_its_way() {
 
 /// A kart in the seal's reach is what it hits: the mine there lies on.
 #[test]
-fn a_seal_with_a_kart_in_reach_leaves_the_mine_be() {
+fn needs_disc_a_seal_with_a_kart_in_reach_leaves_the_mine_be() {
     use weapon::mine::MineKind;
 
     let Some((level, mut race, seal)) = seal_race() else {
@@ -856,7 +856,7 @@ fn a_seal_with_a_kart_in_reach_leaves_the_mine_be() {
 }
 
 #[test]
-fn a_warpball_chases_the_leader_hurts_it_and_fades_away() {
+fn needs_disc_a_warpball_chases_the_leader_hurts_it_and_fades_away() {
     let Some((level, mut race)) = race(2) else {
         return;
     };
@@ -917,7 +917,7 @@ fn a_warpball_chases_the_leader_hurts_it_and_fades_away() {
 /// first corner, and hits it in due time: it follows the track round the corner, not a straight
 /// line into the wall.
 #[test]
-fn a_warpball_follows_the_track_round_a_corner_to_the_leader() {
+fn needs_disc_a_warpball_follows_the_track_round_a_corner_to_the_leader() {
     let Some((level, mut race)) = race_on(LevelId::CORTEX_CASTLE, 2, |_| {}) else {
         return;
     };

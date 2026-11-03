@@ -10,7 +10,7 @@ use loader::level::LevelId;
 use loader::vram::parse_vram_file;
 
 #[test]
-fn racer_models_mesh_with_valid_atlas() {
+fn needs_disc_racer_models_mesh_with_valid_atlas() {
     use loader::model::Model;
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin");
@@ -71,7 +71,7 @@ fn racer_models_mesh_with_valid_atlas() {
 }
 
 #[test]
-fn real_tracks_mesh_with_valid_atlas() {
+fn needs_disc_real_tracks_mesh_with_valid_atlas() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin");
     let Ok((mut disc, big)) = open_bigfile(&path) else {
         return;

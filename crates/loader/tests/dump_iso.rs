@@ -47,7 +47,7 @@ fn walk<R: Read + Seek>(
 }
 
 #[test]
-fn dump_all_files() {
+fn needs_disc_dump_all_files() {
     let path = disc_path();
     if !path.exists() {
         eprintln!(

@@ -66,7 +66,7 @@ fn fingerprint(race: &Race) -> String {
 }
 
 #[test]
-fn a_snapshot_plays_on_as_the_original_did() {
+fn needs_disc_a_snapshot_plays_on_as_the_original_did() {
     for id in [LevelId::DINGO_CANYON, LevelId::MYSTERY_CAVES] {
         let Some((level, objects)) = level(id) else {
             return;
@@ -94,7 +94,7 @@ fn a_snapshot_plays_on_as_the_original_did() {
 }
 
 #[test]
-fn a_race_given_the_same_pads_plays_the_same() {
+fn needs_disc_a_race_given_the_same_pads_plays_the_same() {
     let Some((level, objects)) = level(LevelId::DINGO_CANYON) else {
         return;
     };
@@ -110,7 +110,7 @@ fn a_race_given_the_same_pads_plays_the_same() {
 }
 
 #[test]
-fn different_pads_make_a_different_race() {
+fn needs_disc_different_pads_make_a_different_race() {
     let Some((level, objects)) = level(LevelId::DINGO_CANYON) else {
         return;
     };
@@ -130,7 +130,7 @@ fn different_pads_make_a_different_race() {
 /// Every client builds the race from the same roster and differs only in which slot is its own,
 /// so the race must not depend on that: each plays the same ticks from the same pads.
 #[test]
-fn the_race_is_the_same_whichever_slot_is_ours() {
+fn needs_disc_the_race_is_the_same_whichever_slot_is_ours() {
     use race::rollback::Rollback;
 
     let Some((level, objects)) = level(LevelId::DINGO_CANYON) else {
@@ -160,7 +160,7 @@ fn the_race_is_the_same_whichever_slot_is_ours() {
 /// The checkpoint times are in the order of the race, a kart's count follows them, and the
 /// first kart to pass one is the one the others are behind.
 #[test]
-fn checkpoint_times_follow_the_race() {
+fn needs_disc_checkpoint_times_follow_the_race() {
     let Some((level, objects)) = level(LevelId::DINGO_CANYON) else {
         return;
     };
