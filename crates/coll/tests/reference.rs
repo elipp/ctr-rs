@@ -455,7 +455,7 @@ fn trials() -> u64 {
 }
 
 #[test]
-fn matches_reference_on_random_triangles() {
+fn needs_reference_matches_reference_on_random_triangles() {
     let Some(exe) = build_driver(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"),
         "coll_reference",
@@ -497,7 +497,7 @@ fn matches_reference_on_random_triangles() {
 }
 
 #[test]
-fn matches_reference_on_tracks() {
+fn needs_disc_needs_reference_matches_reference_on_tracks() {
     let Some(exe) = build_driver(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/reference.c"),
         "coll_reference",

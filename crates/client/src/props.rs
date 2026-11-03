@@ -471,6 +471,30 @@ pub(crate) fn rest_pose(header: &ModelHeader) -> Option<&loader::model::Frame> {
 }
 
 /// The entity a hazard's model hangs off, which the systems below move; `marker` says which.
+/// A placed model whose header points it to the camera (`ModelHeader::POINT_TO_CAMERA`).
+#[derive(Component)]
+pub struct FacesCamera;
+
+/// Turns the models that point to the camera to it, after whatever else turned them this frame
+/// (a fruit's spin, a hazard's pose) and before a reflection copies them.
+pub fn face_camera(
+    cameras: Query<
+        &Transform,
+        (
+            Or<(With<crate::drive::ChaseCamera>, With<crate::FlyCamera>)>,
+            Without<FacesCamera>,
+        ),
+    >,
+    mut bodies: Query<&mut Transform, With<FacesCamera>>,
+) {
+    let Some(camera) = cameras.iter().next().map(|c| c.rotation) else {
+        return;
+    };
+    for mut transform in &mut bodies {
+        transform.rotation = camera;
+    }
+}
+
 fn body(commands: &mut Commands, transform: Transform, marker: impl Bundle) -> Entity {
     commands
         .spawn((marker, transform, Visibility::default()))
@@ -640,6 +664,9 @@ pub fn spawn(
             // What the sim moves or animates hangs off a body that is placed each tick.
             Some(&slot) if objects.pose(slot).is_some() => {
                 let parent = body(commands, transform, HazardBody(hazards.0.len()));
+                if header.points_to_camera() {
+                    commands.entity(parent).insert(FacesCamera);
+                }
                 let mut s = shown(slot);
                 s.parts = spawn_parts(
                     data.parts,
@@ -686,6 +713,18 @@ pub fn spawn(
                 continue;
             }
             _ => (transform, None),
+        };
+        // A model that points to the camera hangs off a body that is turned to it each frame.
+        let (transform, parent) = match parent {
+            _ if !header.points_to_camera() => (transform, parent),
+            Some(parent) => {
+                commands.entity(parent).insert(FacesCamera);
+                (transform, Some(parent))
+            }
+            None => (
+                Transform::default(),
+                Some(body(commands, transform, FacesCamera)),
+            ),
         };
         // The level places crates at whatever height, so they sink into the ground; pull them
         // toward the camera so the ground does not cut them.

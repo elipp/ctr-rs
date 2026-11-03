@@ -152,7 +152,7 @@ const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4, 6, 7, 10 or 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -445,7 +445,7 @@ impl Action {
                         .filter(|n| vehicle::item::ENABLED.contains(n))
                         .map(Action::DebugAddWeapon)
                         .ok_or_else(|| {
-                            "Usage: /debug set weapon <0 to 4, 6, 7, 10 or 11>".to_string()
+                            "Usage: /debug set weapon <0 to 4 or 6 to 11>".to_string()
                         }),
                     "" => Err(DEBUG_USAGE.into()),
                     _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
@@ -2236,7 +2236,7 @@ mod tests {
         assert!(error("debug").starts_with("Usage: /debug"));
         assert!(error("debug set").starts_with("Usage: /debug"));
         assert!(error("debug set teapot 3").contains("/debug set teapot"));
-        assert!(error("debug set weapon 12").contains("0 to 4, 6, 7, 10 or 11"));
+        assert!(error("debug set weapon 12").contains("0 to 4 or 6 to 11"));
         assert!(error("debug set wumpa x").contains("<number>"));
         assert!(error("join-lobby abc").contains("Unknown command: /join-lobby"));
         assert!(error("lobby join nonsense").starts_with("Not a lobby address"));

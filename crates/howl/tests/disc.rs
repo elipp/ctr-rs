@@ -23,7 +23,7 @@ fn howl() -> Option<Howl> {
 const RED_LIGHT: u16 = 0x45;
 
 #[test]
-fn a_red_light_beeps_for_as_long_as_its_voice_is_held() {
+fn needs_disc_a_red_light_beeps_for_as_long_as_its_voice_is_held() {
     let Some(mut howl) = howl() else {
         return;
     };
@@ -51,7 +51,7 @@ fn a_red_light_beeps_for_as_long_as_its_voice_is_held() {
 }
 
 #[test]
-fn the_sounds_the_karts_send_once_do_not_loop() {
+fn needs_disc_the_sounds_the_karts_send_once_do_not_loop() {
     let Some(howl) = howl() else {
         return;
     };
@@ -75,7 +75,7 @@ fn the_sounds_the_karts_send_once_do_not_loop() {
 }
 
 #[test]
-fn the_loops_loop() {
+fn needs_disc_the_loops_loop() {
     let Some(howl) = howl() else {
         return;
     };
@@ -90,7 +90,7 @@ fn the_loops_loop() {
 }
 
 #[test]
-fn every_tracks_song_plays() {
+fn needs_disc_every_tracks_song_plays() {
     let Some(mut howl) = howl() else {
         return;
     };

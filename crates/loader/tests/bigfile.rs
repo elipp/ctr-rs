@@ -4,7 +4,7 @@ use loader::bigindex::BigIndex;
 use loader::disc::USER_DATA_SIZE;
 
 #[test]
-fn bigfile_index() {
+fn needs_disc_bigfile_index() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };

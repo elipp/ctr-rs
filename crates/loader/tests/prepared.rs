@@ -11,7 +11,7 @@ use loader::vram::parse_vram_file;
 use loader::xa::decode;
 
 #[test]
-fn every_need_loads_without_the_disc() {
+fn needs_disc_every_need_loads_without_the_disc() {
     let Some(dir) = common::prepared_dir() else {
         return;
     };
@@ -57,7 +57,7 @@ fn every_need_loads_without_the_disc() {
 }
 
 #[test]
-fn a_need_that_was_not_made_is_an_error_naming_it() {
+fn needs_disc_a_need_that_was_not_made_is_an_error_naming_it() {
     let Some(dir) = common::prepared_dir() else {
         return;
     };

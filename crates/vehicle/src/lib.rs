@@ -307,6 +307,9 @@ pub enum Effect {
     FireAudio { fire_level: i32 },
     /// `PlaySound3D(id, weaponInst)`: a sound of what the kart sent off, heard from it.
     Sound3D(Sound3D),
+    /// `OtherFX_Play(id, 1)` from something every player hears the same, wherever its kart is
+    /// (the clock).
+    SoundForAll { id: u8 },
     /// `OtherFX_RecycleNew(&driverAudioPtrs[slot], id, flags)`: the kart's loop `slot`
     /// ([`audio_slot`]) plays sound `id` at `volume`, `distort` (0x80 its own pitch) and `pan`
     /// (0x80 the middle), the same sound changed as it plays; `None` stops it.
@@ -461,7 +464,14 @@ pub struct Driver {
     pub turn_const: i8,
     pub turbo_const: i8,
 
+    /// `clockReceive`: milliseconds left of a clock someone else used (see [`item::clock`]).
     pub clock_receive: i16,
+    /// `clockSend`: ticks left of the faint trail on the screen of the driver that used a clock.
+    pub clock_send: u8,
+    /// `clockFlash`: ticks left of the white flash of a clock on the driver's screen.
+    pub clock_flash: u8,
+    /// `numTimesClockWeaponUsed`
+    pub num_times_clock_weapon_used: u8,
     /// `heldItemID`: `item::held::*`. A new driver holds nothing ([`item::held::NONE`]).
     pub held_item_id: u8,
     /// `numHeldItems`: how many shots the weapon has (3 for triple bombs and missiles).

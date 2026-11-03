@@ -319,6 +319,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ],
                 ),
                 node(
+                    "shader-effects",
+                    "Heat shimmer and the clock's trail",
+                    &[
+                        leaf("on", "Draw them"),
+                        leaf("off", "Skip them (faster)"),
+                    ],
+                ),
+                node(
                     "volume",
                     "Music, effects and voices",
                     &[
@@ -411,6 +419,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
                             leaf("4", "Potion"),
                             leaf("6", "Shield"),
                             leaf("7", "Mask"),
+                            leaf("8", "Clock"),
+                            leaf("9", "Warpball"),
                             leaf("10", "Three bombs"),
                             leaf("11", "Three missiles"),
                         ],

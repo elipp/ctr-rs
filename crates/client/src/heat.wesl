@@ -6,18 +6,21 @@
 @group(0) @binding(1) var texture_sampler: sampler;
 
 const LENSES: u32 = 12u;
-// Per lens: the box round it (min x, min y, max x, max y), its centre, and the 8 points of each of
-// its 3 rings: top, top right, right, bottom right, bottom, bottom left, left, top left.
+// Per lens: the box round it (min x, min y, max x, max y), its centre (xy) and strength (z), and
+// the 8 points of each of its 3 rings: top, top right, right, bottom right, bottom, bottom left,
+// left, top left.
 const PER_LENS: u32 = 26u;
-// How much further than retail the picture is taken from: 1 is `Torch_Main`'s own, more makes the
-// air wobble harder (the shift is 0 at a lens's rim, so it still blends in).
-const STRENGTH: f32 = 2.9;
 
 struct HeatWarp {
     count: u32,
     points: array<vec4<f32>, 312>,
 }
 @group(0) @binding(2) var<uniform> heat: HeatWarp;
+// The scene's depth (1 near, 0 at infinity): what is nearer than a lens is not warped by it.
+@if(MULTISAMPLED)
+@group(0) @binding(3) var depth_texture: texture_depth_multisampled_2d;
+@if(!MULTISAMPLED)
+@group(0) @binding(3) var depth_texture: texture_depth_2d;
 
 struct Input {
     @builtin(position) position: vec4<f32>,
@@ -30,6 +33,30 @@ fn point(lens: u32, ring: u32, i: u32) -> vec2<f32> {
 
 fn centre(lens: u32) -> vec2<f32> {
     return heat.points[lens * PER_LENS + 1u].xy;
+}
+
+// How much further than retail the lens takes the picture from: 1 is `Torch_Main`'s own, more
+// makes the air wobble harder (the shift is 0 at a lens's rim, so it still blends in). Set per
+// lens in `heat.rs`: the flame jets' is an intentional override of retail.
+fn strength(lens: u32) -> f32 {
+    return heat.points[lens * PER_LENS + 1u].z;
+}
+
+// Where retail's ordering table has the lens, as the depth buffer has it.
+fn lens_depth(lens: u32) -> f32 {
+    return heat.points[lens * PER_LENS + 1u].w;
+}
+
+// The scene's depth at uv (the first sample, if it is multisampled).
+fn depth_at(uv: vec2<f32>) -> f32 {
+    let size = vec2<i32>(textureDimensions(depth_texture));
+    let at = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - 1);
+    return textureLoad(depth_texture, at, 0);
+}
+
+// Whether what is drawn at uv is in front of the lens, drawn after it in retail.
+fn in_front(uv: vec2<f32>, lens: u32) -> bool {
+    return depth_at(uv) > lens_depth(lens);
 }
 
 // Where in the triangle (a, b, c) the point p is, if it is in it: its barycentric coordinates,
@@ -126,7 +153,17 @@ fn fragment(in: Input) -> @location(0) vec4<f32> {
             break;
         }
         let lens = heat.count - 1u - i;
-        uv += (warp_lens(uv, lens) - uv) * STRENGTH;
+        // What is in front of the lens is drawn over it, so it is left as it is; and so is a
+        // pixel the lens would show something in front of it at, as retail's picture would not
+        // have it yet when the lens is drawn.
+        let warped = warp_lens(uv, lens);
+        if all(warped == uv) || in_front(uv, lens) {
+            continue;
+        }
+        let source = uv + (warped - uv) * strength(lens);
+        if !in_front(source, lens) {
+            uv = source;
+        }
     }
     return textureSample(screen_texture, texture_sampler, uv);
 }

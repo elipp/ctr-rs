@@ -71,6 +71,16 @@ pub struct ModelHeader {
     pub animations: Vec<Animation>,
 }
 
+impl ModelHeader {
+    /// [`flags`](Self::flags): the model is drawn turned to the camera, whatever its instance's
+    /// rotation ("always point to camera": the warp pad numbers, the warpball).
+    pub const POINT_TO_CAMERA: u16 = 0x2;
+
+    pub fn points_to_camera(&self) -> bool {
+        self.flags & Self::POINT_TO_CAMERA != 0
+    }
+}
+
 /// `struct ModelAnim`, decompressed.
 #[derive(Debug, Clone)]
 pub struct Animation {

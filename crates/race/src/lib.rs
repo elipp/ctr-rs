@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 2;
+pub const SIM_VERSION: u32 = 3;
 
 const UNSORTED: i16 = -1;
 
@@ -174,6 +174,15 @@ pub const CHECKPOINTS_PER_LAP: usize = 2;
 /// The laps of a free drive, which has no end: more than anyone drives.
 pub const FREE_DRIVE_LAPS: u8 = u8::MAX;
 
+/// Where the weapons fired this tick go: the level, the karts as they were before any of them
+/// fired, the temple doors, and the tick's milliseconds.
+struct Aim<'a> {
+    level: &'a Level,
+    bodies: &'a [weapon::Body],
+    doors: &'a coll::doors::Doors,
+    elapsed_time_ms: i32,
+}
+
 /// A race at some tick.
 #[derive(Clone)]
 pub struct Race {
@@ -183,10 +192,14 @@ pub struct Race {
     /// What the objects did in the last tick: where the hazards look for drivers, and the sparks
     /// of the fireballs.
     pub last: instance::Tick,
-    /// The bombs and missiles in flight.
+    /// The bombs, missiles, warpballs and mines in play.
     pub weapons: Weapons,
     /// What they did in the last tick: the explosions, for the outside to show.
     pub last_weapons: weapon::Tick,
+    /// How each kart's screen was drawn over for a clock in the last tick, by slot
+    /// (`DISPLAY_Blur_Main`'s strength, see `vehicle::item::clock_frame`): white below 0, a trail
+    /// above, nothing at 0.
+    pub last_blurs: Vec<i32>,
     /// When the last bump was heard.
     pub feedback: Feedback,
     /// The ticks played: `gGT->timer`.
@@ -241,6 +254,7 @@ impl Race {
             last: instance::Tick::default(),
             weapons: Weapons::default(),
             last_weapons: weapon::Tick::default(),
+            last_blurs: Vec::new(),
             feedback: Feedback::default(),
             tick: 0,
             kart_collisions,
@@ -355,6 +369,81 @@ impl Race {
         }
     }
 
+    /// What the kart in `slot` fired this tick (`VehPickupItem_ShootNow`'s part beyond the
+    /// driver): a weapon flies or is dropped, a clock reaches every driver, the ones after it in
+    /// this tick's order too. `effects` are by slot.
+    fn fire(
+        &mut self,
+        slot: usize,
+        fired: vehicle::item::Fired,
+        input: &Input,
+        aim: &Aim,
+        effects: &mut [Vec<Effect>],
+    ) {
+        use vehicle::item::{Fired, Launch};
+        let launch = match fired {
+            Fired::Clock => {
+                let mut drivers: Vec<&mut Driver> =
+                    self.karts.iter_mut().map(|k| &mut k.driver).collect();
+                vehicle::item::clock(slot, &mut drivers, effects);
+                return;
+            }
+            Fired::Weapon(launch) => launch,
+        };
+        let (kart, effects) = (&mut self.karts[slot], &mut effects[slot]);
+        let p = kart.driver.pos_curr;
+        let kart_at = [p.x >> 8, p.y >> 8, p.z >> 8];
+        let kind = match launch {
+            Launch::Bomb => weapon::Kind::Bomb,
+            Launch::Missile => weapon::Kind::Missile,
+            Launch::Warpball => {
+                self.weapons
+                    .launch_warpball(slot, &kart.driver, aim.bodies, aim.level);
+                let at = self.weapons.warpballs().last().map_or(kart_at, |w| w.pos);
+                vehicle::item::launch_effects(&kart.driver, launch, at, effects);
+                return;
+            }
+            Launch::Mine | Launch::Potion => {
+                // A potion goes forward with Up held, backward with Down held (Up wins), and is
+                // dropped otherwise.
+                let held = input.buttons_held;
+                let potion = (launch == Launch::Potion).then_some(if held & vehicle::buttons::UP != 0 {
+                    weapon::mine::Throw::Forward
+                } else if held & vehicle::buttons::DOWN != 0 {
+                    weapon::mine::Throw::Backward
+                } else {
+                    weapon::mine::Throw::Drop
+                });
+                self.weapons.drop_mine(
+                    weapon::mine::Release {
+                        shooter: slot,
+                        driver: &kart.driver,
+                        gte: &mut kart.coll.gte,
+                        potion,
+                        doors: aim.doors,
+                    },
+                    aim.level,
+                    aim.bodies,
+                    aim.elapsed_time_ms,
+                );
+                // Heard from the crate or beaker, or the kart if it went off at once.
+                let at = self.weapons.mines().last().map_or(kart_at, |m| m.pos);
+                vehicle::item::launch_effects(&kart.driver, launch, at, effects);
+                return;
+            }
+        };
+        let backward = input.buttons_held & vehicle::buttons::DOWN != 0;
+        let gte = &mut kart.coll.gte;
+        if self
+            .weapons
+            .launch(kind, slot, &kart.driver, aim.bodies, gte, backward)
+        {
+            let at = self.weapons.projectiles().last().map_or(kart_at, |p| p.pos);
+            vehicle::item::launch_effects(&kart.driver, launch, at, effects);
+            kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
+        }
+    }
+
     /// The checkpoint `kart` passed last, as (its number, the time it passed it at, and how
     /// far behind the first kart to pass it that is: 0 if it was the first). None before the
     /// first checkpoint.
@@ -375,6 +464,12 @@ impl Race {
     /// the slots, each stage over all of them. The result is by slot.
     pub fn tick(&mut self, level: &Level, pads: &[Pad]) -> Vec<KartTick> {
         assert_eq!(pads.len(), self.karts.len(), "one pad for each kart");
+        // The clocks' timers on the screens, before anything ticks.
+        self.last_blurs = self
+            .karts
+            .iter_mut()
+            .map(|k| vehicle::item::clock_frame(&mut k.driver))
+            .collect();
         // The objects tick with the karts and before them, so that the contacts they give are
         // this tick's.
         let blockers: Vec<instance::Blocker> = self
@@ -434,60 +529,17 @@ impl Race {
             .iter()
             .map(|k| weapon::Body::of(&k.driver))
             .collect();
-        for (slot, ((kart, input), effects)) in self
-            .karts
-            .iter_mut()
-            .zip(&inputs)
-            .zip(&mut effects)
-            .enumerate()
-        {
-            if let Some(launch) = vehicle::item::shoot_on_circle_press(&mut kart.driver, effects) {
-                let p = kart.driver.pos_curr;
-                let kart_at = [p.x >> 8, p.y >> 8, p.z >> 8];
-                let kind = match launch {
-                    vehicle::item::Launch::Bomb => weapon::Kind::Bomb,
-                    vehicle::item::Launch::Missile => weapon::Kind::Missile,
-                    vehicle::item::Launch::Mine | vehicle::item::Launch::Potion => {
-                        // A potion goes forward with Up held, backward with Down held (Up wins),
-                        // and is dropped otherwise.
-                        let held = input.buttons_held;
-                        let potion = (launch == vehicle::item::Launch::Potion).then_some(
-                            if held & vehicle::buttons::UP != 0 {
-                                weapon::mine::Throw::Forward
-                            } else if held & vehicle::buttons::DOWN != 0 {
-                                weapon::mine::Throw::Backward
-                            } else {
-                                weapon::mine::Throw::Drop
-                            },
-                        );
-                        self.weapons.drop_mine(
-                            weapon::mine::Release {
-                                shooter: slot,
-                                driver: &kart.driver,
-                                gte: &mut kart.coll.gte,
-                                potion,
-                                doors: &doors,
-                            },
-                            level,
-                            &bodies,
-                            env.elapsed_time_ms,
-                        );
-                        // Heard from the crate or beaker, or the kart if it went off at once.
-                        let at = self.weapons.mines().last().map_or(kart_at, |m| m.pos);
-                        vehicle::item::launch_effects(&kart.driver, launch, at, effects);
-                        continue;
-                    }
-                };
-                let backward = input.buttons_held & vehicle::buttons::DOWN != 0;
-                let gte = &mut kart.coll.gte;
-                if self
-                    .weapons
-                    .launch(kind, slot, &kart.driver, &bodies, gte, backward)
-                {
-                    let at = self.weapons.projectiles().last().map_or(kart_at, |p| p.pos);
-                    vehicle::item::launch_effects(&kart.driver, launch, at, effects);
-                    kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
-                }
+        let aim = Aim {
+            level,
+            bodies: &bodies,
+            doors: &doors,
+            elapsed_time_ms: env.elapsed_time_ms,
+        };
+        for slot in 0..self.karts.len() {
+            let fired =
+                vehicle::item::shoot_on_circle_press(&mut self.karts[slot].driver, &mut effects[slot]);
+            if let Some(fired) = fired {
+                self.fire(slot, fired, &inputs[slot], &aim, &mut effects);
             }
         }
         // The objects that hurt a driver go on from there: a plant that ate one chews.
@@ -585,6 +637,7 @@ impl Race {
                 racers,
                 env.elapsed_time_ms,
                 &mut self.objects.random_number,
+                &mut self.weapons.warpball_held,
             );
         }
         for (slot, kart) in self.karts.iter_mut().enumerate() {
@@ -593,7 +646,12 @@ impl Race {
         }
         // The weapon roulettes that crates started run on, and pick.
         for kart in &mut self.karts {
-            vehicle::item::tick(&mut kart.driver, racers, &mut self.objects.random_number);
+            vehicle::item::tick(
+                &mut kart.driver,
+                racers,
+                &mut self.objects.random_number,
+                &mut self.weapons.warpball_held,
+            );
         }
         let mut ticks: Vec<KartTick> = self
             .karts

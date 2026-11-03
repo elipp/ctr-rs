@@ -32,6 +32,15 @@ pub fn reference_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reference/ctr-native")
 }
 
+/// `path` of the reference is missing: the test skips, or fails if `CTR_REQUIRE_REFERENCE` is set
+/// (as in CI, where a skip would pass without checking anything).
+pub fn missing_reference(path: &Path) {
+    if std::env::var_os("CTR_REQUIRE_REFERENCE").is_some() {
+        panic!("{} not found, and CTR_REQUIRE_REFERENCE is set", path.display());
+    }
+    eprintln!("skipping: {} not found", path.display());
+}
+
 /// Builds a C driver against the reference `ctr-native`; `sources` are
 /// extra files of the reference to link, relative to it.
 pub fn build_driver(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<PathBuf> {
@@ -51,7 +60,7 @@ pub fn build_driver(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<P
 fn build_driver_now(driver: &Path, exe_name: &str, sources: &[&str]) -> Option<PathBuf> {
     let reference = reference_dir();
     if !reference.exists() {
-        eprintln!("skipping: {} not found", reference.display());
+        missing_reference(&reference);
         return None;
     }
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(exe_name);

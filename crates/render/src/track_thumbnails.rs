@@ -33,7 +33,7 @@ mod tests {
     use loader::vram::parse_vram_file;
 
     #[test]
-    fn every_track_has_a_picture_on_the_disc() {
+    fn needs_disc_every_track_has_a_picture_on_the_disc() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin");
         let Ok((mut disc, big)) = open_bigfile(&path) else {
             return;

@@ -10,7 +10,7 @@ use loader::vram::{Vram, parse_vram_file};
 /// Every textured face of every race track resolves to a layout whose
 /// corners decode through the level's own VRAM.
 #[test]
-fn track_textures_decode() {
+fn needs_disc_track_textures_decode() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -72,7 +72,7 @@ fn track_textures_decode() {
 /// Water vertices of every track animate to colours inside the environment
 /// map's texture region, and every frame of the table wraps cleanly.
 #[test]
-fn track_water_animates() {
+fn needs_disc_track_water_animates() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };

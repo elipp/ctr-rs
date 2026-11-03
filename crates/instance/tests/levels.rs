@@ -19,7 +19,7 @@ fn objects_of(id: u32) -> Option<(Objects, Level)> {
 }
 
 #[test]
-fn each_level_places_its_hazards() {
+fn needs_disc_each_level_places_its_hazards() {
     // (level, armadillos, fireballs, minecarts, rollers)
     for (id, counts) in [
         (LevelId::DINGO_CANYON.0, [4, 0, 0, 0]),
@@ -48,7 +48,7 @@ fn each_level_places_its_hazards() {
 }
 
 #[test]
-fn the_pyramid_the_castle_and_polar_pass_place_their_hazards() {
+fn needs_disc_the_pyramid_the_castle_and_polar_pass_place_their_hazards() {
     for (id, spiders, seals, plants, model) in [
         (LevelId::CORTEX_CASTLE.0, 5, 0, 0, "spider"),
         (LevelId::POLAR_PASS.0, 0, 4, 0, "seal"),
@@ -83,7 +83,7 @@ fn the_pyramid_the_castle_and_polar_pass_place_their_hazards() {
 }
 
 #[test]
-fn the_new_hazards_run_and_hurt() {
+fn needs_disc_the_new_hazards_run_and_hurt() {
     for id in [
         LevelId::CORTEX_CASTLE.0,
         LevelId::POLAR_PASS.0,
@@ -98,7 +98,7 @@ fn the_new_hazards_run_and_hurt() {
 }
 
 #[test]
-fn the_hazards_run_and_reach_for_drivers() {
+fn needs_disc_the_hazards_run_and_reach_for_drivers() {
     let Some((mut h, _)) = objects_of(LevelId::MYSTERY_CAVES.0) else {
         return;
     };
@@ -115,7 +115,7 @@ fn the_hazards_run_and_reach_for_drivers() {
 }
 
 #[test]
-fn the_state_can_be_copied_and_run_on() {
+fn needs_disc_the_state_can_be_copied_and_run_on() {
     // What the rollback needs: a copy ticks exactly like the original.
     let Some((mut a, _)) = objects_of(LevelId::DINGO_CANYON.0) else {
         return;
@@ -131,7 +131,7 @@ fn the_state_can_be_copied_and_run_on() {
 }
 
 #[test]
-fn a_roller_is_drawn_between_its_frame_and_the_next() {
+fn needs_disc_a_roller_is_drawn_between_its_frame_and_the_next() {
     let Some((mut h, level)) = objects_of(LevelId::BLIZZARD_BLUFF.0) else {
         return;
     };
@@ -142,7 +142,7 @@ fn a_roller_is_drawn_between_its_frame_and_the_next() {
 }
 
 #[test]
-fn a_kart_that_drives_into_a_turtle_is_thrown() {
+fn needs_disc_a_kart_that_drives_into_a_turtle_is_thrown() {
     use coll::Collision;
     use loader::lev::BspKind;
     use vehicle::scrub::IDENTITY_LIGHT_MATRIX;
@@ -212,7 +212,7 @@ fn a_kart_that_drives_into_a_turtle_is_thrown() {
 }
 
 #[test]
-fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
+fn needs_disc_a_kart_that_drives_through_a_fruit_picks_it_up_once() {
     use coll::Collision;
     use loader::lev::BspKind;
     use vehicle::Driver;
@@ -265,7 +265,7 @@ fn a_kart_that_drives_through_a_fruit_picks_it_up_once() {
 }
 
 #[test]
-fn a_kart_that_drives_through_a_crate_breaks_it() {
+fn needs_disc_a_kart_that_drives_through_a_crate_breaks_it() {
     use coll::Collision;
     use loader::lev::BspKind;
     use vehicle::Driver;
@@ -320,7 +320,7 @@ fn a_kart_that_drives_through_a_crate_breaks_it() {
 }
 
 #[test]
-fn tiger_temple_places_its_flame_jets_and_they_burn() {
+fn needs_disc_tiger_temple_places_its_flame_jets_and_they_burn() {
     let Some((mut h, level)) = objects_of(LevelId::TIGER_TEMPLE.0) else {
         return;
     };

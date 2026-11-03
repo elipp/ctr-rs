@@ -62,7 +62,7 @@ impl Drive {
 }
 
 #[test]
-fn accelerates_along_the_track() {
+fn needs_disc_accelerates_along_the_track() {
     let Some(level) = level(LevelId::DINGO_CANYON) else {
         return;
     };
@@ -98,7 +98,7 @@ fn accelerates_along_the_track() {
 }
 
 #[test]
-fn steering_turns_the_kart() {
+fn needs_disc_steering_turns_the_kart() {
     let Some(level) = level(LevelId::DINGO_CANYON) else {
         return;
     };
@@ -143,7 +143,7 @@ fn drop_from(level: &Level, height: i32) -> (i32, i32, u8) {
 }
 
 #[test]
-fn long_hang_time_gives_a_boost() {
+fn needs_disc_long_hang_time_gives_a_boost() {
     let Some(level) = level(LevelId::DINGO_CANYON) else {
         return;
     };
@@ -165,7 +165,7 @@ fn long_hang_time_gives_a_boost() {
 /// Falls off the track at speed: the mask grabs the kart, puts it back on the track at the
 /// respawn point of the last quad block it was on, lowers it, and the player drives again.
 #[test]
-fn a_fall_off_the_track_ends_with_a_respawn_on_the_track() {
+fn needs_disc_a_fall_off_the_track_ends_with_a_respawn_on_the_track() {
     use vehicle::{PhysState, kart_state};
 
     let Some(level) = level(LevelId::DINGO_CANYON) else {

@@ -638,10 +638,9 @@ pub(crate) fn setup(
             Transform::default(),
             drive::ChaseCamera::new(),
         ));
-        // The heat shimmer is a pass over the whole picture: only Tiger Temple's flame jets have it.
-        if track.1 == LevelId::TIGER_TEMPLE {
-            main.insert(crate::heat::HeatWarp::default());
-        }
+        // The heat shimmer, a pass over the whole picture: Tiger Temple's flame jets have it, and
+        // the warpball's glow on every track.
+        main.insert(crate::heat::HeatWarp::default());
         main.with_child((
                 OverlayCamera,
                 Camera3d::default(),
@@ -654,6 +653,8 @@ pub(crate) fn setup(
                 projection,
                 Transform::default(),
                 RenderLayers::layer(KART_LAYER),
+                // The clock's trail is over the world and our kart, which this camera draws last.
+                crate::clock::ClockTrail::default(),
             ))
 ;
         // The HUD's figures (the fruit and the tracker) share one camera, over all the others'

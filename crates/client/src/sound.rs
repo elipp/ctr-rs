@@ -440,6 +440,11 @@ impl Sfx<'_> {
                         play_3d(&mut sounds, ear, &sound, echo);
                         continue;
                     }
+                    // Heard the same by everyone, from whoever it was.
+                    Effect::SoundForAll { id } => {
+                        sounds.play(id as u16, AntiSpam::CutRecent, howl::Sfx::FULL);
+                        continue;
+                    }
                     Effect::Voiceline {
                         id,
                         driver_id,
@@ -689,6 +694,15 @@ fn objects(
         };
         (p.id, Sound3D { id, pos: p.pos })
     });
+    // A warpball's hum stops when it starts to fade.
+    let warpballs = race.weapons.warpballs().iter().filter(|w| !w.fading).map(|w| {
+        let sound = Sound3D {
+            id: weapon::warpball::LOOP_SOUND,
+            pos: w.pos,
+        };
+        (w.id, sound)
+    });
+    let flying = flying.chain(warpballs);
     keep_loops(sounds, &mut kept.weapon_loops, flying, ear, echo);
 }
 

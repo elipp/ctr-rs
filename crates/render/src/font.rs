@@ -462,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn fonts_decode_from_the_disc() {
+    fn needs_disc_fonts_decode_from_the_disc() {
         let Some(fonts) = fonts() else {
             return;
         };
@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn a_line_is_its_glyphs_one_texel_apart() {
+    fn needs_disc_a_line_is_its_glyphs_one_texel_apart() {
         let Some([large, _]) = fonts() else {
             return;
         };
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn digits_are_all_as_wide() {
+    fn needs_disc_digits_are_all_as_wide() {
         let Some(fonts) = fonts() else {
             return;
         };
@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn orange_is_yellower_at_the_top() {
+    fn needs_disc_orange_is_yellower_at_the_top() {
         let Some([large, _]) = fonts() else {
             return;
         };

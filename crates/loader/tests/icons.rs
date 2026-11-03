@@ -5,7 +5,7 @@ use loader::dram::DramFile;
 use loader::icons::parse_groups;
 
 #[test]
-fn packs_have_the_wheel_icons() {
+fn needs_disc_packs_have_the_wheel_icons() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -29,7 +29,7 @@ fn packs_have_the_wheel_icons() {
 }
 
 #[test]
-fn packs_have_the_shadow_icons() {
+fn needs_disc_packs_have_the_shadow_icons() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -49,7 +49,7 @@ fn packs_have_the_shadow_icons() {
 }
 
 #[test]
-fn packs_have_the_tiremark_icon() {
+fn needs_disc_packs_have_the_tiremark_icon() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };

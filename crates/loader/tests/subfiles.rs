@@ -6,7 +6,7 @@ use loader::level::LevelId;
 use loader::vram::{Vram, parse_vram_file};
 
 #[test]
-fn track_vram_files_upload() {
+fn needs_disc_track_vram_files_upload() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -30,7 +30,7 @@ fn track_vram_files_upload() {
 /// Finds which subfiles are laid out as DRAM files (pointer map at the end)
 /// and checks that every one of them is internally consistent.
 #[test]
-fn dram_files_are_consistent() {
+fn needs_disc_dram_files_are_consistent() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -67,7 +67,7 @@ fn dram_files_are_consistent() {
 }
 
 #[test]
-fn track_lev_files_parse() {
+fn needs_disc_track_lev_files_parse() {
     use loader::lev::{BspKind, Level};
 
     let Some(mut b) = common::open_bigfile() else {

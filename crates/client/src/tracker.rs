@@ -6,8 +6,10 @@
 //! interpolated place ([`show`]), by a camera of its own over the picture, an orthographic one
 //! whose world unit is a pixel of the window.
 //!
-//! Not here: the beep (`UI_TRACKER_BEEP_SFX`), and the electric ball (the warpball is not in the
-//! sim), whose brackets are blue.
+//! A warpball that chases us gets the same warning with blue brackets (`UI_TRACKER_TYPE_WARPBALL`),
+//! and the brackets are left out while it is far along the track from us.
+//!
+//! Not here: the beep (`UI_TRACKER_BEEP_SFX`).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
@@ -15,10 +17,13 @@ use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use render::tracker::{lock_image, lock_size};
+use loader::lev::CheckpointNode;
 use weapon::Kind;
+use weapon::warpball::flags::MASK_REPATH;
 
 use crate::drive::{ChaseCamera, Kart};
 use crate::leaderboard::{atlas_image, pack_icons};
+use crate::Track;
 use crate::props::Sim;
 
 /// `data.trackerAnim1`: the size of the figure (x, y; `0x1000` is 1) for each frame of the timer
@@ -66,19 +71,42 @@ const SIDE_TIP_OFFSET: i32 = 12;
 const BG_X_SHIFT: i32 = 7;
 const BG_Y_SCALE: i32 = 0xf;
 const BG_Y_SHIFT: i32 = 0xb;
+const WARPBALL_DISTANCE_SCALE: i32 = 8;
+const WARPBALL_DRAW_DIST_MAX: i32 = 16000;
 
 /// Retail blends both with what is under them; here they are solid (the icon's clear texels are
 /// cut out).
 const ALPHA: f32 = 1.0;
 
 /// The brackets' vertex colours as the game writes them (`0x30BBGGRR`, here as `[r, g, b]`):
-/// the outer corners of the border, then of the fill, for a missile.
-const BORDER_OUTER: [u8; 3] = [0x9c, 0x69, 0x00];
-const BORDER_TIP: [u8; 3] = [0xff, 0xff, 0x00];
+/// the outer corners of the border, then of the fill.
+struct Palette {
+    border_outer: [u8; 3],
+    border_tip: [u8; 3],
+    fill_outer: [u8; 3],
+    fill_center: [u8; 3],
+    fill_tip: [u8; 3],
+}
+
+/// Orange.
+const MISSILE: Palette = Palette {
+    border_outer: [0x9c, 0x69, 0x00],
+    border_tip: [0xff, 0xff, 0x00],
+    fill_outer: [0x32, 0x2b, 0x01],
+    fill_center: [0x5b, 0x5b, 0x00],
+    fill_tip: [0xff, 0xbb, 0x00],
+};
+
+/// Blue.
+const WARPBALL: Palette = Palette {
+    border_outer: [0x00, 0x69, 0x9c],
+    border_tip: [0x00, 0xff, 0xff],
+    fill_outer: [0x01, 0x2b, 0x32],
+    fill_center: [0x00, 0x5b, 0x5b],
+    fill_tip: [0x00, 0xbb, 0xff],
+};
+
 const BORDER_CENTER: [u8; 3] = [0xff, 0xff, 0xff];
-const FILL_OUTER: [u8; 3] = [0x32, 0x2b, 0x01];
-const FILL_CENTER: [u8; 3] = [0x5b, 0x5b, 0x00];
-const FILL_TIP: [u8; 3] = [0xff, 0xbb, 0x00];
 
 /// The render layer of the figure, which only the HUD camera (`scene.rs`) draws. (0 to 4 are taken.)
 pub(crate) const LAYER: usize = 5;
@@ -96,8 +124,13 @@ pub struct Tracker {
     /// The distance that the brackets sit at, kept while the missile is gone.
     distance: i16,
     targeted: bool,
-    /// `thTrackingMe`: the missile that chased on the last tick.
+    /// `thTrackingMe`: the missile or warpball that chased on the last tick.
     chasing: Option<u32>,
+    /// Its `flags`, as they are now if it is still in play, else as they were last seen (retail
+    /// reads them from the thread's memory, which is not cleared).
+    chasing_flags: u16,
+    /// `trackerType` is `UI_TRACKER_TYPE_WARPBALL`: what last chased us was a warpball.
+    warpball: bool,
     /// What to draw: None when nothing is going on.
     frame: Option<Frame>,
 }
@@ -110,18 +143,37 @@ struct Frame {
     distance: i16,
     /// The icon flashes white instead of red, on the beat.
     white: bool,
+    /// The brackets are blue.
+    warpball: bool,
+    /// The brackets are drawn (a warpball far along the track has only the icon).
+    brackets: bool,
+}
+
+/// What chases us (`RB_GetThread_ClosestTracker`'s thread).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Chaser {
+    id: u32,
+    /// `distanceToTarget`
+    squared: u32,
+    flags: u16,
+    /// A warpball: how far it is from us along the track, eight times the nodes' `distToFinish`.
+    along: Option<i32>,
 }
 
 /// `VehCalc_FastSqrt(distanceToTarget)` over `UI_TRACKER_DISTANCE_DISPLAY_DIVISOR`, for the
-/// closest missile `(id, squared distance)` that chases us. `tick` is the game's timer.
-fn step_state(state: &mut Tracker, closest: Option<(u32, u32)>, tick: u32) {
+/// closest missile or warpball that chases us. `tick` is the game's timer.
+fn step_state(state: &mut Tracker, closest: Option<Chaser>, tick: u32) {
     // A missile that is fired at us makes itself the one that chases us (`VehPickupItem`'s
     // `thTrackingMe = RB_GetThread_ClosestTracker`), which is what wakes the HUD.
-    if state.chasing.is_none() {
-        state.chasing = closest.map(|(id, _)| id);
+    if state.chasing.is_none()
+        && let Some(c) = closest
+    {
+        state.chasing = Some(c.id);
+        state.chasing_flags = c.flags;
     }
     if state.timer == 0 && state.chasing.is_none() {
         state.targeted = false;
+        state.warpball = false;
         state.frame = None;
         return;
     }
@@ -131,10 +183,11 @@ fn step_state(state: &mut Tracker, closest: Option<(u32, u32)>, tick: u32) {
         &ANIM_CHASED
     };
     let (x, y) = table[state.timer as usize];
-    let closest_id = closest.map(|(id, _)| id);
+    let closest_id = closest.map(|c| c.id);
     let reset = if state.timer == 0 && closest.is_none() {
-        // It hit.
-        Some(TIMER_HIT_TARGET)
+        // It hit; or it is a warpball that went back to the path when the mask grabbed its
+        // target, and the warning stays.
+        (state.chasing_flags & MASK_REPATH == 0).then_some(TIMER_HIT_TARGET)
     } else if (state.targeted && closest_id == state.chasing) || state.timer != 0 {
         None
     } else {
@@ -145,12 +198,18 @@ fn step_state(state: &mut Tracker, closest: Option<(u32, u32)>, tick: u32) {
         state.timer = timer;
     }
     state.chasing = closest_id;
+    if let Some(c) = closest {
+        state.chasing_flags = c.flags;
+    }
     if state.timer != 0 {
         state.timer -= 1;
     }
     let mut white = false;
-    if let Some((_, squared)) = closest {
-        let distance = math::fast_sqrt(squared, 0) as u32 / DISTANCE_DIVISOR;
+    let mut along = 0;
+    if let Some(c) = closest {
+        state.warpball = c.along.is_some();
+        along = c.along.unwrap_or(0);
+        let distance = math::fast_sqrt(c.squared, 0) as u32 / DISTANCE_DIVISOR;
         state.distance = distance as i16;
         let rate = if distance > BEEP_DIST_MID_MAX {
             BEEP_RATE_FAR
@@ -166,37 +225,87 @@ fn step_state(state: &mut Tracker, closest: Option<(u32, u32)>, tick: u32) {
         y,
         distance: state.distance,
         white,
+        warpball: state.warpball,
+        brackets: along < WARPBALL_DRAW_DIST_MAX,
     });
 }
 
-/// `RB_GetThread_ClosestTracker`: the missile nearest to us of those that chase us, by the
-/// squared flat distance of its place to the kart's (the first of equals), and
-/// `distanceToTarget` of it, which is to the kart's `posCurr`.
-fn closest_missile(sim: &Sim) -> Option<(u32, u32)> {
-    let driver = sim.driver();
-    let body = weapon::Body::of(driver);
-    let mut closest: Option<(i32, (u32, u32))> = None;
-    for p in sim.race.weapons.projectiles() {
-        if p.kind != Kind::Missile || p.target != Some(sim.own) {
-            continue;
-        }
-        let flat = |a: i32, b: i32| (a as u32).wrapping_sub(b as u32);
-        let (dx, dz) = (flat(body.at[0], p.pos[0]), flat(body.at[2], p.pos[2]));
-        let nearness = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as i32;
+/// How far the warpball's node is behind ours along the track (what it has left to go to us),
+/// around the lap if it is further in it than we are.
+fn warpball_along(nodes: &[CheckpointNode], node_curr: usize, ours: usize) -> i32 {
+    let dist = |i: usize| nodes.get(i).map_or(0, |n| n.dist_to_finish as i32);
+    let along = (dist(node_curr) - dist(ours)) * WARPBALL_DISTANCE_SCALE;
+    if along < 0 {
+        along + dist(0) * WARPBALL_DISTANCE_SCALE
+    } else {
+        along
+    }
+}
+
+/// `RB_GetThread_ClosestTracker`: the missile or warpball nearest to us of those that chase us,
+/// by the squared flat distance of its place to the kart's (the first of equals; the missiles
+/// come before the warpballs, as the sim ticks them).
+fn closest_tracker(sim: &Sim, nodes: &[CheckpointNode]) -> Option<Chaser> {
+    let body = weapon::Body::of(sim.driver());
+    let flat = |a: i32, b: i32| (a as u32).wrapping_sub(b as u32);
+    let squared = |at: [i32; 3], pos: [i32; 3]| {
+        let (dx, dz) = (flat(at[0], pos[0]), flat(at[2], pos[2]));
+        dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz))
+    };
+    let pos_curr = body.pos_curr.map(|v| v >> 8);
+    let weapons = &sim.race.weapons;
+    // The missile's `distanceToTarget` is to the kart's `posCurr`; the warpball keeps its own.
+    let missiles = weapons
+        .projectiles()
+        .iter()
+        .filter(|p| p.kind == Kind::Missile && p.target == Some(sim.own))
+        .map(|p| {
+            let chaser = Chaser {
+                id: p.id,
+                squared: squared(pos_curr, p.pos),
+                flags: p.flags,
+                along: None,
+            };
+            (p.pos, chaser)
+        });
+    let warpballs = weapons
+        .warpballs()
+        .iter()
+        .filter(|w| w.target == Some(sim.own))
+        .map(|w| {
+            let chaser = Chaser {
+                id: w.id,
+                squared: w.distance_to_target,
+                flags: w.flags,
+                along: Some(warpball_along(nodes, w.node_curr(), body.checkpoint as usize)),
+            };
+            (w.pos, chaser)
+        });
+    let mut closest: Option<(i32, Chaser)> = None;
+    for (pos, chaser) in missiles.chain(warpballs) {
+        let nearness = squared(body.at, pos) as i32;
         if closest.is_none_or(|(best, _)| nearness < best) {
-            let (dx, dz) = (
-                flat(body.pos_curr[0] >> 8, p.pos[0]),
-                flat(body.pos_curr[2] >> 8, p.pos[2]),
-            );
-            let squared = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz));
-            closest = Some((nearness, (p.id, squared)));
+            closest = Some((nearness, chaser));
         }
     }
     closest.map(|(_, c)| c)
 }
 
+/// The `flags` of what chases us now, if it is still in play.
+fn flags_of(sim: &Sim, id: u32) -> Option<u16> {
+    let weapons = &sim.race.weapons;
+    let missile = weapons.projectiles().iter().find(|p| p.id == id);
+    let warpball = weapons.warpballs().iter().find(|w| w.id == id);
+    missile.map(|p| p.flags).or(warpball.map(|w| w.flags))
+}
+
 /// One game tick of the HUD.
-pub fn step(sim: Res<Sim>, mut state: ResMut<Tracker>, mut last: Local<Option<u32>>) {
+pub fn step(
+    sim: Res<Sim>,
+    track: Res<Track>,
+    mut state: ResMut<Tracker>,
+    mut last: Local<Option<u32>>,
+) {
     let tick = sim.race.tick;
     let previous = last.replace(tick);
     if previous == Some(tick) {
@@ -206,7 +315,10 @@ pub fn step(sim: Res<Sim>, mut state: ResMut<Tracker>, mut last: Local<Option<u3
     if previous.is_some_and(|p| tick < p) {
         *state = Tracker::default();
     }
-    let closest = closest_missile(&sim);
+    if let Some(flags) = state.chasing.and_then(|id| flags_of(&sim, id)) {
+        state.chasing_flags = flags;
+    }
+    let closest = closest_tracker(&sim, &track.0.restart_points);
     step_state(&mut state, closest, tick);
 }
 
@@ -255,6 +367,11 @@ fn gouraud(rgb: [u8; 3]) -> [f32; 4] {
 /// The brackets (`UI_TrackerSelf`'s four triangles), in pixels on the PlayStation's screen from
 /// the kart's.
 fn brackets(frame: Frame) -> Vec<([i32; 2], [f32; 4])> {
+    if !frame.brackets {
+        // One triangle with no area: a mesh with no vertices would lose its render data.
+        return vec![([0, 0], [0.0; 4]); 3];
+    }
+    let p = if frame.warpball { &WARPBALL } else { &MISSILE };
     let (x, y, distance) = (frame.x as i32, frame.y as i32, frame.distance as i32);
     let outer = distance + (x >> 8);
     let height = (y * SIDE_HEIGHT_SCALE) >> SIDE_HEIGHT_SHIFT;
@@ -263,13 +380,13 @@ fn brackets(frame: Frame) -> Vec<([i32; 2], [f32; 4])> {
         let (outer_x, inner_x) = (side * outer, side * distance);
         let tip = -SIDE_TIP_OFFSET;
         // The border: the outer edge, from the top down to the tip's line.
-        out.push(([outer_x, tip - height], gouraud(BORDER_OUTER)));
+        out.push(([outer_x, tip - height], gouraud(p.border_outer)));
         out.push(([inner_x, tip], gouraud(BORDER_CENTER)));
-        out.push(([outer_x, tip], gouraud(BORDER_TIP)));
+        out.push(([outer_x, tip], gouraud(p.border_tip)));
         // The fill, under it.
-        out.push(([outer_x, tip], gouraud(FILL_OUTER)));
-        out.push(([inner_x, tip], gouraud(FILL_CENTER)));
-        out.push(([outer_x, tip + height], gouraud(FILL_TIP)));
+        out.push(([outer_x, tip], gouraud(p.fill_outer)));
+        out.push(([inner_x, tip], gouraud(p.fill_center)));
+        out.push(([outer_x, tip + height], gouraud(p.fill_tip)));
     }
     out
 }
@@ -427,16 +544,37 @@ fn show(
 mod tests {
     use super::*;
 
-    /// Runs ticks with the missile `chasing` for the first `chase` of them.
-    fn run(chase: u32, ticks: u32) -> Vec<Option<(i16, i16)>> {
+    fn missile(id: u32, squared: u32) -> Option<Chaser> {
+        Some(Chaser {
+            id,
+            squared,
+            flags: 0,
+            along: None,
+        })
+    }
+
+    fn warpball(flags: u16, along: i32) -> Option<Chaser> {
+        Some(Chaser {
+            id: 9,
+            squared: 400 * 400 * 2500,
+            flags,
+            along: Some(along),
+        })
+    }
+
+    /// Runs ticks with `chaser` chasing for the first `chase` of them.
+    fn run_with(chaser: Option<Chaser>, chase: u32, ticks: u32) -> Vec<Option<(i16, i16)>> {
         let mut state = Tracker::default();
         (0..ticks)
             .map(|tick| {
-                let missile = (tick < chase).then_some((7, 400 * 400 * 2500));
-                step_state(&mut state, missile, tick);
+                step_state(&mut state, chaser.filter(|_| tick < chase), tick);
                 state.frame.map(|f| (f.x, f.y))
             })
             .collect()
+    }
+
+    fn run(chase: u32, ticks: u32) -> Vec<Option<(i16, i16)>> {
+        run_with(missile(7, 400 * 400 * 2500), chase, ticks)
     }
 
     #[test]
@@ -470,17 +608,17 @@ mod tests {
     #[test]
     fn the_brackets_close_in_with_the_missile_and_beep_faster() {
         let mut state = Tracker::default();
-        step_state(&mut state, Some((1, 5000 * 5000)), 0);
+        step_state(&mut state, missile(1, 5000 * 5000), 0);
         // 5000 / 50 = 100 away: the quick beat, and white on tick 0 and 5.
         assert_eq!(state.frame.unwrap().distance, 100);
         assert!(state.frame.unwrap().white);
-        step_state(&mut state, Some((1, 5000 * 5000)), 3);
+        step_state(&mut state, missile(1, 5000 * 5000), 3);
         assert!(!state.frame.unwrap().white);
-        step_state(&mut state, Some((1, 5000 * 5000)), 5);
+        step_state(&mut state, missile(1, 5000 * 5000), 5);
         assert!(state.frame.unwrap().white);
-        step_state(&mut state, Some((1, 20000 * 20000)), 5);
+        step_state(&mut state, missile(1, 20000 * 20000), 5);
         assert!(!state.frame.unwrap().white);
-        step_state(&mut state, Some((1, 20000 * 20000)), 30);
+        step_state(&mut state, missile(1, 20000 * 20000), 30);
         assert!(state.frame.unwrap().white);
     }
 
@@ -493,6 +631,8 @@ mod tests {
                 y: 0x1000,
                 distance: 0,
                 white: false,
+                warpball: false,
+                brackets: true,
             },
         );
         assert_eq!(quads.len(), 24);
@@ -500,5 +640,43 @@ mod tests {
         // 32 texels each way from -32: centered on the kart at the plain size.
         assert_eq!(xs.clone().min(), Some(-32));
         assert_eq!(xs.max(), Some(31));
+    }
+
+    #[test]
+    fn a_warpball_has_blue_brackets_and_none_when_far_along_the_track() {
+        let mut state = Tracker::default();
+        step_state(&mut state, warpball(0, 100), 0);
+        let frame = state.frame.unwrap();
+        assert!(frame.warpball && frame.brackets);
+        step_state(&mut state, warpball(0, WARPBALL_DRAW_DIST_MAX), 1);
+        assert!(!state.frame.unwrap().brackets);
+        // Blue through the arrival, too.
+        step_state(&mut state, None, 2);
+        assert!(state.frame.unwrap().warpball);
+    }
+
+    #[test]
+    fn a_warpball_that_lost_its_target_to_the_mask_skips_the_arrival() {
+        let frames = run_with(warpball(MASK_REPATH, 100), 10, 14);
+        // The tick it stops chasing us still draws, and then the warning is gone.
+        assert_eq!(frames[10], Some(ANIM_CHASED[0]));
+        assert!(frames[11..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn the_warpball_counts_around_the_lap_when_it_is_further_in_it() {
+        let node = |dist_to_finish| CheckpointNode {
+            pos: loader::lev::SVec3 { x: 0, y: 0, z: 0 },
+            dist_to_finish,
+            next_forward: 0,
+            next_left: 0xff,
+            next_backward: 0,
+            next_right: 0xff,
+        };
+        let nodes = [node(1000), node(750), node(500), node(250)];
+        // Behind us: from 750 to 500.
+        assert_eq!(warpball_along(&nodes, 1, 2), 250 * 8);
+        // Further in the lap than us: it comes around the lap.
+        assert_eq!(warpball_along(&nodes, 3, 2), (250 - 500 + 1000) * 8);
     }
 }

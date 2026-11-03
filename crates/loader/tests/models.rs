@@ -9,7 +9,7 @@ use loader::vram::{Vram, parse_vram_file};
 /// and everything its commands point at exists and is on a populated VRAM
 /// page of the shared texture file.
 #[test]
-fn racer_models_parse_and_have_textures() {
+fn needs_disc_racer_models_parse_and_have_textures() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -72,7 +72,7 @@ fn racer_models_parse_and_have_textures() {
 
 /// The racer pack carries the shared models (the turbo flame among them).
 #[test]
-fn packs_carry_the_turbo_flame_models() {
+fn needs_disc_packs_carry_the_turbo_flame_models() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -99,7 +99,7 @@ fn packs_carry_the_turbo_flame_models() {
 /// Every racer's pack carries the model a crate breaks into (`STATIC_CRATE_EXPLOSION`, 0x26): a
 /// 12-frame animation whose frames all have faces.
 #[test]
-fn every_racer_pack_has_the_crate_explosion() {
+fn needs_disc_every_racer_pack_has_the_crate_explosion() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };
@@ -126,7 +126,7 @@ fn every_racer_pack_has_the_crate_explosion() {
 /// Every racer's pack has the Aku Aku and Uka Uka masks: a head that poses (the first frame of its
 /// animation) and a beam that turns through 24 frames, textured from the shared VRAM.
 #[test]
-fn every_racer_pack_has_the_masks() {
+fn needs_disc_every_racer_pack_has_the_masks() {
     let Some(mut b) = common::open_bigfile() else {
         return;
     };

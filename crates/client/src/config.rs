@@ -9,6 +9,8 @@
 //!   default); the sim has its own clock, see `frame.rs`
 //! * `/config set msaa off|2|4`: how many samples of anti-aliasing the cameras draw with (off at
 //!   first: the picture is pixel art, and each camera's pass pays for it). It holds at once
+//! * `/config set shader-effects on|off`: whether to draw the passes over the whole picture, the
+//!   heat shimmer's (`heat.rs`) and the clock's trail (`clock.rs`) (on at first)
 //! * `/config set volume music|sfx|voice <0-100>`: how loud the music, the effects and the
 //!   voices are, in percent of the game's own volumes (100 at first). The pause menu's Options
 //!   set them too
@@ -65,6 +67,8 @@ pub struct Config {
     pub fps_max: u32,
     /// The samples of multisampling per pixel, 1 (off), 2 or 4 (`/config set msaa`).
     pub msaa: u8,
+    /// Whether the heat shimmer and the clock's trail are drawn (`/config set shader-effects`).
+    pub shader_effects: bool,
     /// Whether to play through the relay only (`/net relay only`).
     pub relay_only: bool,
     /// The relays to use besides the public ones (`/net relay add`).
@@ -100,6 +104,7 @@ impl Default for Config {
             vsync: true,
             fps_max: 0,
             msaa: 1,
+            shader_effects: true,
             relay_only: false,
             relays: Vec::new(),
             volume_fx: 100,
@@ -246,6 +251,7 @@ pub enum Setting {
     FpsMax(u32),
     /// 1 (off), 2 or 4 samples.
     Msaa(u8),
+    ShaderEffects(bool),
     RelayOnly(bool),
     /// A relay's URL, as `net::parse_relay` keeps it.
     AddRelay(String),
@@ -278,11 +284,13 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set msaa off|2|4\n\
+    /config set shader-effects on|off\n\
     /config set pixel-scale <1 to 8>\n\
     /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set msaa off|2|4\n\
+    /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>";
 
@@ -336,6 +344,11 @@ impl Setting {
                 "2" => Ok(Setting::Msaa(2)),
                 "4" => Ok(Setting::Msaa(4)),
                 _ => Err("Usage: /config set msaa off|2|4".into()),
+            },
+            "shader-effects" => match value {
+                "on" => Ok(Setting::ShaderEffects(true)),
+                "off" => Ok(Setting::ShaderEffects(false)),
+                _ => Err("Usage: /config set shader-effects on|off".into()),
             },
             "volume" => {
                 const USAGE: &str = "Usage: /config set volume music|sfx|voice <0-100>";
@@ -485,6 +498,16 @@ fn apply(
                     samples => format!("Multisampling: {samples}x"),
                 };
                 toasts.write(Toast::new(text, 2000));
+            }
+            Setting::ShaderEffects(on) => {
+                config.shader_effects = *on;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                toasts.write(Toast::new(
+                    format!("Shader effects {}", if *on { "on" } else { "off" }),
+                    2000,
+                ));
             }
             Setting::RenderScale(scale) => {
                 config.render_scale = *scale;

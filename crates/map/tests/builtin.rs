@@ -8,7 +8,7 @@ use map::builtin::{level_of, name_of};
 
 /// `CTR_DISC_DIR` overrides the default of `<repo>/assets/disc`.
 #[test]
-fn every_racing_track_has_its_map() {
+fn needs_disc_every_racing_track_has_its_map() {
     let dir = std::env::var_os("CTR_DISC_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/disc"))

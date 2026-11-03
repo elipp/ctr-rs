@@ -1,5 +1,6 @@
 //! One game tick of the race: demos, the pads of the others, rollback, and what follows from it.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use race::Pad;
 use race::rollback::Step;
@@ -41,26 +42,53 @@ fn stall(time: std::time::Duration) {
     }
 }
 
+/// What a tick shows of itself: the particles, the karts' drawn motion, the labels, toasts and
+/// sounds.
+#[derive(SystemParam)]
+pub(super) struct Shown<'w, 's> {
+    particles: ResMut<'w, crate::exhaust::Particles>,
+    motions: Query<'w, 's, (&'static mut KartMotion, &'static mut KartSlot, Has<Kart>)>,
+    smoothing: Res<'w, crate::kart::Smoothing>,
+    demo_label: Query<'w, 's, &'static mut Text, With<DemoHud>>,
+    toasts: MessageWriter<'w, Toast>,
+    sfx: crate::sound::Sfx<'w>,
+}
+
+/// What [`drive_tick`] keeps from one tick to the next.
+#[derive(Default)]
+pub(super) struct Memory {
+    was_paused: bool,
+    /// F5, F6, F7 and F8 (or 1 and 2 for the first two), for their edges.
+    keys_held: [bool; 4],
+    /// The ticks waited for a late player, and the buttons a spectator held last tick.
+    waits: (u32, u32),
+}
+
 /// One game tick of the sim.
 pub(super) fn drive_tick(
-    mut particles: ResMut<crate::exhaust::Particles>,
     controller: Controller,
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
     mut hold: crate::fx::Hold,
-    mut was_paused: Local<bool>,
-    mut keys_held: Local<[bool; 4]>,
-    mut demo_label: Query<&mut Text, With<DemoHud>>,
     mut lobby: ResMut<crate::lobby::Lobby>,
-    mut motions: Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
-    smoothing: Res<crate::kart::Smoothing>,
-    mut toasts: MessageWriter<Toast>,
-    // The ticks waited for a late player, and the buttons a spectator held last tick.
-    mut waits: Local<(u32, u32)>,
-    mut sfx: crate::sound::Sfx,
     config: Res<crate::config::Config>,
+    shown: Shown,
+    mut memory: Local<Memory>,
 ) {
+    let Shown {
+        mut particles,
+        mut motions,
+        smoothing,
+        mut demo_label,
+        mut toasts,
+        mut sfx,
+    } = shown;
+    let Memory {
+        was_paused,
+        keys_held,
+        waits,
+    } = &mut *memory;
     let drive = &mut *drive;
     let keys = &controller.keys;
     // In an online race the sim is everyone's: no pause, no restarts, no demos.

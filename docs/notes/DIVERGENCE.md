@@ -110,3 +110,18 @@ This file is for the places where the port _intentionally_ differs from the orig
 - Each loop takes a voice of the SPU's 24 while it plays, up to two for every other kart. A race with many players can run the voices out, and the loops that start later are silent. (No cap yet.)
 - The loops are not in the sim and are kept by the listener; a rollback that replays ticks starts them over (`Kept` is reset when the tick goes back).
 
+
+**Clock trail and flash (2026-11-02, visually verified 2026-11-02):** `vehicle::item::clock` and `clock_frame` follow retail; the screen effect (`client::clock`, `clock.wgsl`) is a look-alike of `DISPLAY_Blur_Main`, not a port of its tiled `POLY_FT4`s. Known differences:
+- The HUD is not in it: retail draws the blur and the white flash after the UI's OT, so its HUD ghosts and goes white too. Ours covers the world and our kart (the pass is on the kart camera). The juiced glows behind the weapon and the fruit are drawn by the main camera, so they do ghost.
+- Retail blends once a frame at 30 frames a second; ours blends once a rendered frame, with the blend and the zoom raised to the power of retail frames per rendered frame, so the trail lasts as long at any frame rate.
+- A paused race is told by no tick for 0.1 s (retail draws nothing while the game logic does not run), so a stall online also drops the trail for a moment.
+- The blend is done as sRGB, which assumes the main texture is sRGB (it is with HDR off).
+
+**Warpball (2026-11-02, NOT played yet):** `weapon::warpball` ports `RB_Warpball_*` and the warpball's `VehPickupItem_ShootNow`. Known differences:
+- Order in the `TRACKING` bucket: retail ticks the bombs, missiles and warpballs together, newest first. Here the warpballs tick after the bombs and missiles. It matters only when a warpball and another weapon reach the same kart or mine in the same tick (who hurts it first), and when a bomb meets a warpball: retail's bomb stops its tick at the first tracker in reach (it passes through a warpball, and goes off on a missile), while ours looks for a missile first, then a warpball.
+- The searches along the path (`RB_Warpball_SetTargetDriver`, `_SeekDriver`, and the ride from node to node) stop after 256 steps. Retail loops for good on a path that never reaches the finish; no track has one.
+- A node index past the end of `restart_points` (0xff, no node) reads as a node with no way on, at the origin. Retail reads past the array.
+- A powered-up warpball on a track of length 0 does not divide by it.
+- Not drawn: its glow (the `emSet_Warpball` particle) and its reflection (`RB_MakeInstanceReflective`). The model is drawn if the racer pack has it (`DYNAMIC_WARPBALL`).
+- The tracker HUD (`UI_TRACKER_TYPE_WARPBALL`, blue brackets on the kart it chases) is not shown yet.
+- `driverParent->instBombThrow = NULL` at its end becomes `weapon::flags::UNLINKED` on the parent's bombs: they fly on, but the fire button no longer sets them off.

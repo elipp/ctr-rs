@@ -322,6 +322,7 @@ fn effect_line(e: &Effect, characters: &[usize]) -> String {
         // `VehFire_Audio` is patched to report the boost without its cooldown, which is the
         // listener's here.
         Effect::FireAudio { fire_level } => format!(" B {fire_level}"),
+        Effect::SoundForAll { id } => format!(" S {id} 0"),
         // The fire's roar; the oracle does not run the emitter, which keeps the other loops going.
         Effect::Recycle {
             slot: audio_slot::TURBO,
@@ -852,7 +853,10 @@ const MAX_KARTS: usize = 4;
 /// driver; the reference itself is left alone. Returns the copy's path.
 fn patched(source: &str, edits: &[(&str, &str)]) -> Option<std::path::PathBuf> {
     let path = support::reference_dir().join(source);
-    let mut text = std::fs::read_to_string(&path).ok()?;
+    let Ok(mut text) = std::fs::read_to_string(&path) else {
+        support::missing_reference(&path);
+        return None;
+    };
     for (old, new) in edits {
         assert_eq!(
             text.matches(old).count(),
@@ -924,7 +928,7 @@ fn coll_with_identity_light_matrix() -> Option<std::path::PathBuf> {
 }
 
 #[test]
-fn matches_reference_on_tracks() {
+fn needs_disc_needs_reference_matches_reference_on_tracks() {
     let driver_c = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/tick.c");
     let (Some(proc_c), Some(coll_c), Some(fire_c)) = (
         retail_veh_phys_proc(),
