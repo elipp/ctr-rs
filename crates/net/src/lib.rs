@@ -158,7 +158,7 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/11";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/12";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -195,6 +195,9 @@ pub enum Event {
         /// The guests that only watch (their `character` is 0), in the order they joined.
         spectators: Vec<Player>,
         you: Option<usize>,
+        /// The host has fixed what everyone drives (a cup is on, see
+        /// [`Session::lock_characters`]): a change of character is not taken.
+        locked: bool,
     },
     /// We joined the lobby of this host. (Also when the host left and the lobby went on with
     /// another one: we joined that one.)
@@ -376,6 +379,7 @@ enum Command {
     Announce(String),
     Say(String),
     Character(u8),
+    Lock(bool),
     Spectate(bool),
     Nickname(String),
     RaceOver,
@@ -460,6 +464,13 @@ impl Session {
     /// given to [`host`] or [`join`] again and nothing changes.)
     pub fn set_character(&self, character: u8) {
         let _ = self.commands.send(Command::Character(character));
+    }
+
+    /// Fixes what everyone drives (`locked`), or frees it again, if we host the lobby: while it
+    /// is fixed, no change of character is taken, ours or a guest's (a guest that joins keeps the
+    /// one it joined with). Everyone is told in [`Event::Lobby`].
+    pub fn lock_characters(&self, locked: bool) {
+        let _ = self.commands.send(Command::Lock(locked));
     }
 
     /// Changes whether we only watch, for the race that has not started yet (a guest's to do;

@@ -68,6 +68,11 @@ pub struct Lobby {
     /// what the players are told.
     roster: Vec<Member>,
     roster_seen: bool,
+    /// The host has fixed what everyone drives, as the last [`Event::Lobby`] said.
+    characters_locked: bool,
+    /// Whether we, the host, have told the session to fix them (for the cup, see
+    /// [`tell_lock`](Self::tell_lock)).
+    lock_told: bool,
     /// The guests that only watch, as the same said: the name and the short key of each.
     watchers: Vec<(String, String)>,
     /// The nickname of every player the lobby has told of (empty for none).
@@ -291,6 +296,24 @@ impl Lobby {
             session.set_spectator(self.spectator);
         }
         self.spectator
+    }
+
+    /// Whether we cannot drive another character now: in a cup, from its countdown to its last
+    /// race, the players keep the ones they started it with.
+    pub fn characters_locked(&self) -> bool {
+        self.characters_locked || self.series.as_ref().is_some_and(|s| s.scored)
+    }
+
+    /// Has the session fix what everyone drives while our cup is on, and free it after (the host
+    /// only; the guests learn of it in [`Event::Lobby`]).
+    fn tell_lock(&mut self) {
+        let locked = self.series.as_ref().is_some_and(|s| s.scored);
+        if locked != self.lock_told
+            && let Some(session) = &self.session
+        {
+            session.lock_characters(locked);
+            self.lock_told = locked;
+        }
     }
 
     /// We drive another character now, which the others learn before the race starts.

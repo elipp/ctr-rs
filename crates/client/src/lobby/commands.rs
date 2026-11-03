@@ -39,6 +39,9 @@ pub(super) fn copy_to_clipboard(text: String) {
     crate::web::copy(&text);
 }
 
+/// Why another character cannot be driven during a cup.
+pub(crate) const CHARACTERS_LOCKED: &str = "The character can't be changed during a cup";
+
 /// Why `action` cannot be done now, if it cannot.
 pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
     Some(match action {
@@ -61,6 +64,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             net::NOT_NOW
         }
         Action::PurgeCache | Action::Character(_) if lobby.online.is_some() => net::NOT_NOW,
+        Action::Character(_) if lobby.characters_locked() => CHARACTERS_LOCKED,
         // (A host's countdown is to the track it is on.)
         Action::Track(_) if lobby.online.is_some() || lobby.countdown.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",

@@ -153,6 +153,15 @@ pub(crate) fn switch_level(world: &mut World) {
     if race_track.is_some() {
         (level_step, racer_step) = (0, 0);
     }
+    // (`/character` is refused by the lobby, which says so.)
+    if racer_step != 0
+        && world
+            .get_resource::<lobby::Lobby>()
+            .is_some_and(|l| l.characters_locked())
+    {
+        racer_step = 0;
+        world.write_message(toast::Toast::new(lobby::commands::CHARACTERS_LOCKED, 2500));
+    }
     let mut options = *world.resource::<Options>();
     if let Some(racer) = picked.racer.filter(|_| race_track.is_none()) {
         racer_step = racer as i32 - options.racer as i32;
