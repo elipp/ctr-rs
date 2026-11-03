@@ -717,3 +717,68 @@ fn a_handover_is_turned_down_in_a_race() {
         );
     }
 }
+
+#[test]
+fn a_punch_connection_to_the_host_is_held_and_is_no_guest() {
+    let host = net::host(3, "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let ticket = ticket.unwrap();
+
+    // A bare endpoint that only punches, as a peer's `punch` task does: it says how long the
+    // host kept the connection open.
+    let (puncher_id, held) = {
+        let ticket = ticket.clone();
+        let (id_tx, id_rx) = std::sync::mpsc::channel();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+                        .bind()
+                        .await
+                        .unwrap();
+                    let mut addr = iroh::EndpointAddr::new(ticket.id);
+                    if let Some(relay) = ticket.relay {
+                        addr = addr.with_relay_url(relay);
+                    }
+                    let connection = endpoint.connect(addr, net::PUNCH_ALPN).await.unwrap();
+                    id_tx.send(endpoint.id()).unwrap();
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+                    held_tx.send(connection.close_reason().is_none()).unwrap();
+                });
+        });
+        let id = id_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the punch connection to the host");
+        (id, held_rx)
+    };
+
+    // A guest joins as well: it is the only one the host takes in.
+    let guest = net::join(ticket, 7, "", BUILD);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    let mut joined = Vec::new();
+    wait_for(&host, "the guest in the lobby", |e| match e {
+        Event::PeerJoined(id) => {
+            joined.push(id);
+            false
+        }
+        Event::Lobby { players, .. } => players.len() == 2,
+        _ => false,
+    });
+    assert_eq!(joined.len(), 1, "{joined:?}");
+    assert_ne!(joined[0], puncher_id, "the punch connection was taken for a guest");
+    assert!(
+        held.recv_timeout(Duration::from_secs(20)).unwrap(),
+        "the host closed the punch connection"
+    );
+}

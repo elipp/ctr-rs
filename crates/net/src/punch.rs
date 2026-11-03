@@ -132,6 +132,12 @@ async fn punch(endpoint: Endpoint, id: EndpointId) {
 
 #[cfg(test)]
 mod tests {
+    use iroh::{RelayMode, SecretKey};
+    use n0_future::time::Instant;
+    use iroh::address_lookup::MemoryLookup;
+    use iroh::endpoint::presets;
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
     use super::*;
 
     #[test]
@@ -140,5 +146,97 @@ mod tests {
             assert!(patience(attempt) > Duration::from_secs(5));
         }
         assert!(patience(0) < patience(100));
+    }
+
+    /// An endpoint on this machine only: no relay, and the others found in `lookup`.
+    async fn local(lookup: &MemoryLookup) -> Endpoint {
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .address_lookup(lookup.clone())
+            .alpns(vec![PUNCH_ALPN.to_vec()])
+            .bind()
+            .await
+            .expect("a local endpoint");
+        lookup.add_endpoint_info(endpoint.addr());
+        endpoint
+    }
+
+    /// The punch connections that `endpoint` accepts, as they come.
+    fn accepted(endpoint: Endpoint) -> UnboundedReceiver<Connection> {
+        let (tx, rx) = unbounded_channel();
+        n0_future::task::spawn(async move {
+            while let Some(incoming) = endpoint.accept().await {
+                if let Ok(connection) = incoming.await
+                    && tx.send(connection).is_err()
+                {
+                    return;
+                }
+            }
+        });
+        rx
+    }
+
+    #[tokio::test]
+    async fn a_direct_peer_is_held_on_one_connection() {
+        let lookup = MemoryLookup::new();
+        let (ours, theirs) = (local(&lookup).await, local(&lookup).await);
+        let mut incoming = accepted(theirs.clone());
+        let mut puncher = Puncher::new(ours.clone());
+        assert!(puncher.enabled);
+        // Us, and the same peer twice: one task.
+        puncher.set([ours.id(), theirs.id(), theirs.id()]);
+        assert_eq!(puncher.tasks.len(), 1);
+
+        let connection = timeout(Duration::from_secs(5), incoming.recv())
+            .await
+            .expect("the punch connection in time")
+            .unwrap();
+        assert_eq!(connection.alpn(), PUNCH_ALPN);
+        // Past the first try's patience: being direct, it is kept, and no new one is opened,
+        // though the set is given again (the session does that on every turn of its loop).
+        let until = Instant::now() + patience(0) + Duration::from_secs(2);
+        while Instant::now() < until {
+            puncher.set([theirs.id()]);
+            sleep(Duration::from_millis(100)).await;
+        }
+        assert!(is_direct(&connection));
+        assert!(connection.close_reason().is_none());
+        assert!(incoming.try_recv().is_err(), "a second connection was opened");
+    }
+
+    #[tokio::test]
+    async fn a_peer_left_out_of_the_set_is_let_go() {
+        let lookup = MemoryLookup::new();
+        let (ours, theirs) = (local(&lookup).await, local(&lookup).await);
+        let mut incoming = accepted(theirs.clone());
+        let mut puncher = Puncher::new(ours);
+        puncher.set([theirs.id()]);
+        let connection = timeout(Duration::from_secs(5), incoming.recv())
+            .await
+            .expect("the punch connection in time")
+            .unwrap();
+
+        puncher.set([]);
+        assert!(puncher.tasks.is_empty());
+        timeout(Duration::from_secs(5), connection.closed())
+            .await
+            .expect("the connection closed when its task stopped");
+    }
+
+    #[tokio::test]
+    async fn without_sockets_of_our_own_nothing_is_punched() {
+        // The relay only, as `set_relay_only` makes it (a relay that is never reached: binding
+        // does not wait for it).
+        let relay: iroh::RelayUrl = "https://relay.invalid".parse().unwrap();
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Custom(relay.into()))
+            .clear_ip_transports()
+            .bind()
+            .await
+            .expect("an endpoint without sockets");
+        let mut puncher = Puncher::new(endpoint);
+        assert!(!puncher.enabled);
+        puncher.set([SecretKey::generate().public()]);
+        assert!(puncher.tasks.is_empty());
     }
 }
