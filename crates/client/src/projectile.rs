@@ -370,8 +370,10 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
                 layer: if slot == sim.own { KART_LAYER } else { 0 },
             }
         });
-    // A warpball is turned to the camera by its model's header (`ModelHeader::POINT_TO_CAMERA`), and
-    // shrinks and stretches as it fades.
+    // A warpball is turned to the camera ("always point to camera", set here rather than left to
+    // its model's header), and shrinks and stretches as it fades.
+    // TODO: fix properly: find out why the warpball's header lacks `POINT_TO_CAMERA` (or what
+    // retail turns it with instead), and drop this override.
     let warpballs = sim.race.weapons.warpballs().iter().map(|w| Wanted {
         id: w.id,
         model: WARPBALL,
@@ -381,7 +383,7 @@ fn wanted(sim: &Sim) -> Vec<Wanted> {
             scale: Vec3::new(w.scale[0] as f32, w.scale[1] as f32, w.scale[2] as f32) / 4096.0,
         },
         animated: true,
-        billboard: false,
+        billboard: true,
         color: Color::WHITE,
         layer: 0,
     });
