@@ -37,12 +37,33 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 - Not done: the viewer builds crate models once at load (`props.rs`, `CrateBody(i)`), so a runtime crate also needs an entity spawned.
 - the crates' shape in `Objects` (for a `/debug add crate` in free drive, and blasts that need no BSP walk). See "Crates and the BSP" below
 
+- divergence: make sewer speedway rollers pop TNT / beakers etc.?
+
+2026-11-02: WE MATCH RETAIL'S HAZARD->TNT(&co) BREAKAGE
+  Level hazards that set off a TNT, Nitro or beaker in retail:
+  ┌─────────────────────────┬───────────────────────────────────────────────────────────────┬────────────────────────────────────────┬────────────────────┐
+  │         Hazard          │                            Retail                             │                  When                  │        Ours        │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────┤
+  │ Armadillo (Dingo        │ RB_CheckHazardCollisions, r² 0x2400                           │ only when no player or robot is in     │ and_mines() ✔      │
+  │ Canyon)                 │                                                               │ reach                                  │                    │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────┤
+  │ Fireball (Mystery       │ RB_CheckHazardCollisions, r² 0x10000                          │ same                                   │ and_mines() ✔      │
+  │ Caves)                  │                                                               │                                        │                    │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────┤
+  │ Seal (Polar Pass)       │ RB_CheckHazardCollisions, r² 0x4000                           │ same                                   │ and_mines() ✔      │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────┤
+  │ Spider (Cortex Castle)  │ the same checks written out in the spider's own code, r²      │ same                                   │ and_mines() ✔      │
+  │                         │ 0x9000                                                        │                                        │                    │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────┤
+  │ Flame jet (Tiger        │ hitbox check (LinkedCollide_Hitbox_Desc) over the MINE bucket │ when no driver is hit                  │ Mines::IfNoDriver  │
+  │ Temple)                 │                                                               │                                        │ ✔                  │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────┤
+  │ Plant (Papu's Pyramid)  │ hitbox check over the MINE bucket                             │ only during its grab-driver animation  │ Mines::Only ✔      │
+  └─────────────────────────┴───────────────────────────────────────────────────────────────┴────────────────────────────────────────┴────────────────────┘
 
 # Bugs
 
 ## Confirmed
-- sewer speedway rollers / probably the rolling stone doesn't pop beakers/tnt
-- other karts' shield bubbles drawn over their karts (ours has its own camera, `SHIELD_LAYER`)
 
 ## Maybe
 - backing up and turning on N.Gin (some other drivers too?) looks weird (?)

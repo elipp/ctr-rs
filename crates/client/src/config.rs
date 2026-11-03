@@ -87,6 +87,9 @@ pub struct Config {
     pub render_scale: f32,
     /// The cups made (`/cup create`).
     pub cups: Cups,
+    /// How many of the window's pixels make one of the game's, 1 for the window's own resolution
+    /// (`/config set pixel-scale`).
+    pub pixel_scale: u32,
 }
 
 /// The most relays that can be added; every one is probed when an endpoint starts.
@@ -111,6 +114,7 @@ impl Default for Config {
             debug_hud: false,
             render_scale: 1.0,
             cups: Cups::default(),
+            pixel_scale: 1,
         }
     }
 }
@@ -259,7 +263,11 @@ pub enum Setting {
     VolumeVoice(u8),
     /// 0.25 to 1.
     RenderScale(f32),
+    /// 1 to `pixel::MAX_SCALE`.
+    PixelScale(u32),
 }
+
+const PIXEL_SCALE_USAGE: &str = "Usage: /config set pixel-scale <1 to 8>";
 
 const RENDER_SCALE_USAGE: &str = "Usage: /config set render-scale <0.25 to 1>";
 
@@ -277,6 +285,7 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set msaa off|2|4\n\
     /config set shader-effects on|off\n\
+    /config set pixel-scale <1 to 8>\n\
     /config set volume music|sfx|voice <0-100>";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
@@ -300,7 +309,16 @@ impl Setting {
         if cfg!(not(target_arch = "wasm32")) && key == "render-scale" {
             return Err("Render scale is only for the browser build".into());
         }
+        if cfg!(target_arch = "wasm32") && key == "pixel-scale" {
+            return Err("Pixel scale is not for the browser build: use render-scale".into());
+        }
         match key {
+            "pixel-scale" => value
+                .parse()
+                .ok()
+                .filter(|n| (1..=crate::pixel::MAX_SCALE).contains(n))
+                .map(Setting::PixelScale)
+                .ok_or_else(|| PIXEL_SCALE_USAGE.to_string()),
             "render-scale" => render_scale(value)
                 .map(Setting::RenderScale)
                 .ok_or_else(|| RENDER_SCALE_USAGE.to_string()),
@@ -499,6 +517,17 @@ fn apply(
                 #[cfg(target_arch = "wasm32")]
                 crate::web::set_render_scale(*scale);
                 toasts.write(Toast::new(format!("Render scale {scale}"), 2000));
+            }
+            Setting::PixelScale(scale) => {
+                config.pixel_scale = *scale;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let text = match scale {
+                    1 => "Pixel scale off".to_string(),
+                    scale => format!("Pixel scale {scale}"),
+                };
+                toasts.write(Toast::new(text, 2000));
             }
             Setting::AddRelay(url) => {
                 let text = if config.relays.contains(url) {

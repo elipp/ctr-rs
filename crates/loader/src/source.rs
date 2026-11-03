@@ -224,8 +224,12 @@ impl Source {
         let missing: Vec<Need> = Need::all(&xnf)
             .into_iter()
             .filter(|&need| {
+                // A need the manifest does not know (one added since the folder was made) is
+                // missing too, though no file of it is there to differ.
                 let on_disk = std::fs::metadata(self.path(need)).map(|m| m.len());
-                manifest.size_of(&need.key()) != on_disk.ok()
+                manifest
+                    .size_of(&need.key())
+                    .is_none_or(|size| on_disk.ok() != Some(size))
             })
             .collect();
         if missing.is_empty() {
