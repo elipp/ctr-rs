@@ -31,7 +31,7 @@ use bevy::render::extract_component::{
     UniformComponentPlugin,
 };
 use bevy::render::render_resource::binding_types::{
-    sampler, texture_2d, texture_depth_2d, texture_depth_2d_multisampled, uniform_buffer,
+    sampler, texture_2d, texture_depth_2d_multisampled, uniform_buffer,
 };
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedRenderPipelineId,
@@ -318,7 +318,12 @@ fn init_pipeline(
     };
     commands.insert_resource(HeatPipeline {
         layouts: [
-            layout("heat_warp_bind_group_layout", texture_depth_2d()),
+            // As an unfilterable float texture, not a depth one: WebGL2's GLSL cannot
+            // `textureLoad` a depth texture, but can a float one (the same depth, in `r`).
+            layout(
+                "heat_warp_bind_group_layout",
+                texture_2d(TextureSampleType::Float { filterable: false }),
+            ),
             layout(
                 "heat_warp_multisampled_bind_group_layout",
                 texture_depth_2d_multisampled(),

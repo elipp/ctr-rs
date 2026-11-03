@@ -19,8 +19,10 @@ struct HeatWarp {
 // The scene's depth (1 near, 0 at infinity): what is nearer than a lens is not warped by it.
 @if(MULTISAMPLED)
 @group(0) @binding(3) var depth_texture: texture_depth_multisampled_2d;
+// A float texture rather than a depth one (its depth in `r`), as WebGL2 cannot `textureLoad` a
+// depth texture.
 @if(!MULTISAMPLED)
-@group(0) @binding(3) var depth_texture: texture_depth_2d;
+@group(0) @binding(3) var depth_texture: texture_2d<f32>;
 
 struct Input {
     @builtin(position) position: vec4<f32>,
@@ -47,11 +49,21 @@ fn lens_depth(lens: u32) -> f32 {
     return heat.points[lens * PER_LENS + 1u].w;
 }
 
+// The depth at the texel `at`: the float texture has it in `r`.
+@if(MULTISAMPLED)
+fn load_depth(at: vec2<i32>) -> f32 {
+    return textureLoad(depth_texture, at, 0);
+}
+@if(!MULTISAMPLED)
+fn load_depth(at: vec2<i32>) -> f32 {
+    return textureLoad(depth_texture, at, 0).r;
+}
+
 // The scene's depth at uv (the first sample, if it is multisampled).
 fn depth_at(uv: vec2<f32>) -> f32 {
     let size = vec2<i32>(textureDimensions(depth_texture));
     let at = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - 1);
-    return textureLoad(depth_texture, at, 0);
+    return load_depth(at);
 }
 
 // Whether what is drawn at uv is in front of the lens, drawn after it in retail.
