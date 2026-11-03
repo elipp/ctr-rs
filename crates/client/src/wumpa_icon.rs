@@ -235,7 +235,7 @@ fn fly(
         if *missing {
             return;
         }
-        let groups = crate::leaderboard::pack_groups();
+        let groups = crate::hud::pack_groups();
         let Some(atlas) = render::hud_icons::group_icon(&groups, &textures.vram, POSTER_GROUP)
         else {
             *missing = true;
@@ -244,7 +244,7 @@ fn fly(
         let size = Vec2::new(atlas.width as f32, atlas.height as f32) * crate::hud::PIXEL;
         commands.spawn((
             FlyingWumpa { size },
-            ImageNode::new(crate::leaderboard::atlas_image(atlas, &mut images))
+            ImageNode::new(crate::hud::atlas_image(atlas, &mut images))
                 .with_mode(NodeImageMode::Stretch),
             Visibility::Hidden,
             Node {

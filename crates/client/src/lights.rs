@@ -9,7 +9,7 @@ use race::{LIGHTS_FLOOR_MS, START_LIGHTS_MS, lights_on};
 use render::lights::{HEIGHT, LIGHTS, WIDTH, atlas, cell};
 
 use crate::hud;
-use crate::leaderboard::{atlas_image, pack_icons};
+use crate::hud::{atlas_image, pack_icons};
 
 /// Where the lights' tops stop, in lines of retail's screen: under the weapon.
 const TOP: f32 = 40.0;

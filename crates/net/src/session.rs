@@ -125,6 +125,7 @@ pub(crate) async fn tell_lobby(
             .public
             .as_ref()
             .map(|p| (*p.realm.as_bytes(), p.name.clone(), p.track.clone())),
+        locked: host.locked,
     };
     for guest in &guests {
         let _ = send_reliably(&guest.connection, &message).await;
@@ -133,6 +134,7 @@ pub(crate) async fn tell_lobby(
         players,
         spectators,
         you: Some(0),
+        locked: host.locked,
     });
 }
 
@@ -413,6 +415,13 @@ pub(crate) async fn run(
                     }
                     io.event(Event::Announce(text));
                 },
+                Command::Standings(standings) => if let Some(host) = &host {
+                    let message = Message::Standings(standings.clone());
+                    for guest in &host.guests {
+                        let _ = send_reliably(&guest.connection, &message).await;
+                    }
+                    io.event(Event::Standings(standings));
+                },
                 Command::Say(text) => if !text.is_empty() {
                     if let Some(host) = &host {
                         let chat = Message::Chat { from: *me.as_bytes(), text: text.clone() };
@@ -424,7 +433,7 @@ pub(crate) async fn run(
                         let _ = send_reliably(connection, &Message::Say { text }).await;
                     }
                 },
-                Command::Character(c) => if !host.as_ref().is_some_and(|h| h.racing) {
+                Command::Character(c) => if !host.as_ref().is_some_and(|h| h.racing || h.locked) {
                     character = c;
                     if let Some(host) = &host {
                         tell_lobby(me, character, &nick, host, &io).await;
@@ -435,6 +444,12 @@ pub(crate) async fn run(
                         send_reliably(connection, &hello).await?;
                         hellos += 1;
                     }
+                },
+                Command::Lock(locked) => if let Some(host) = &mut host
+                    && host.locked != locked
+                {
+                    host.locked = locked;
+                    tell_lobby(me, character, &nick, host, &io).await;
                 },
                 Command::Spectate(watch) => if watch != spectator && let Some(connection) = &host_connection {
                     spectator = watch;
@@ -562,6 +577,11 @@ pub(crate) async fn run(
                             && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
                             && guest.hello.is_none_or(|(have, _)| seq > have)
                         {
+                            // (While characters are fixed, a guest drives on with the one it has.)
+                            let theirs = match guest.hello {
+                                Some((_, had)) if host.locked => had,
+                                _ => theirs,
+                            };
                             guest.hello = Some((seq, theirs));
                             guest.spectator = watches;
                             if seq >= guest.nick.0 {
@@ -632,7 +652,7 @@ pub(crate) async fn run(
                         (running, game_ready, ready_sent) = (false, false, false);
                         io.event(Event::Announce(format!("{name} is now the lobby host")));
                     }
-                    Message::Lobby { players, watching, public } if from == host_id && host.is_none() => {
+                    Message::Lobby { players, watching, public, locked } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
                             .iter()
                             .map(|(bytes, character, nick)| {
@@ -664,7 +684,7 @@ pub(crate) async fn run(
                         heirs.dead.clear();
                         heirs.heard.clear();
                         heirs.handed_over = false;
-                        io.event(Event::Lobby { players, spectators, you });
+                        io.event(Event::Lobby { players, spectators, you, locked });
                     }
                     Message::Start { epoch: new, slot, characters, track, hash, laps, roster, hard }
                         if from == host_id && host.is_none() =>
@@ -699,6 +719,11 @@ pub(crate) async fn run(
                     Message::Announce { text } => {
                         if from == host_id && host.is_none() {
                             io.event(Event::Announce(text));
+                        }
+                    }
+                    Message::Standings(standings) => {
+                        if from == host_id && host.is_none() {
+                            io.event(Event::Standings(standings));
                         }
                     }
                     // Only a guest of the lobby speaks, and the host says who it was.

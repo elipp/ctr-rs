@@ -1,0 +1,3 @@
+- The physics is the only thing we match to the reference as exactly as possible.
+- Visual effects and rendering only need to be recognisably the same effect as in the original.
+- VFX are built with modern techniques rather than porting the reference; we are not chasing pixel parity.

@@ -68,6 +68,11 @@ pub struct Lobby {
     /// what the players are told.
     roster: Vec<Member>,
     roster_seen: bool,
+    /// The host has fixed what everyone drives, as the last [`Event::Lobby`] said.
+    characters_locked: bool,
+    /// Whether we, the host, have told the session to fix them (for the cup, see
+    /// [`tell_lock`](Self::tell_lock)).
+    lock_told: bool,
     /// The guests that only watch, as the same said: the name and the short key of each.
     watchers: Vec<(String, String)>,
     /// The nickname of every player the lobby has told of (empty for none).
@@ -98,6 +103,8 @@ struct Member {
     label: String,
     nick: String,
     character: u8,
+    /// Whether it is us.
+    you: bool,
 }
 
 impl Lobby {
@@ -128,6 +135,12 @@ impl Lobby {
         self.roster
             .iter()
             .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
+    }
+
+    /// Our place in [`members`](Self::members), if we drive (not if we only watch, or the lobby
+    /// has not told yet).
+    pub fn you(&self) -> Option<usize> {
+        self.roster.iter().position(|m| m.you)
     }
 
     /// Who the lobby could be handed to, the character and the name of each: the others, if we
@@ -214,30 +227,26 @@ impl Lobby {
             return;
         };
         let gained = series.score(players, finishers);
-        let mut text = format!(
-            "{}: race {} of {}\n{}",
-            series.name.as_deref().unwrap_or("Cup"),
-            series.race + 1,
-            series.tracks.len(),
-            cup::results_text(&gained)
-        );
-        let standings = cup::standings_text(&series.standings());
-        if series.has_next() {
+        let race = series.race;
+        let next = series.has_next().then(|| {
             series.race += 1;
-            text += &format!(
-                "\nStandings\n{standings}\nNext: {} in {BETWEEN_RACES_SECONDS} seconds",
-                maps::name(series.track())
-            );
-            let then = Then::Start {
-                track: series.track(),
-                laps: series.laps,
-            };
+            series.track()
+        });
+        let standings = net::Standings {
+            cup: series.name.clone().unwrap_or_else(|| "Cup".into()),
+            race: race as u8,
+            races: series.tracks.len() as u8,
+            gained,
+            totals: series.totals(),
+            next: next.map(|track| (track, maps::name(track))),
+        };
+        if let Some(session) = &self.session {
+            session.standings(standings);
+        }
+        if let Some(track) = next {
+            let laps = series.laps;
             self.series = Some(series);
-            self.announce(text);
-            self.count_down(then, now, BETWEEN_RACES_SECONDS);
-        } else {
-            text += &format!("\nFinal standings\n{standings}");
-            self.announce(text);
+            self.count_down(Then::Start { track, laps }, now, BETWEEN_RACES_SECONDS);
         }
     }
 
@@ -283,6 +292,24 @@ impl Lobby {
             session.set_spectator(self.spectator);
         }
         self.spectator
+    }
+
+    /// Whether we cannot drive another character now: in a cup, from its countdown to its last
+    /// race, the players keep the ones they started it with.
+    pub fn characters_locked(&self) -> bool {
+        self.characters_locked || self.series.as_ref().is_some_and(|s| s.scored)
+    }
+
+    /// Has the session fix what everyone drives while our cup is on, and free it after (the host
+    /// only; the guests learn of it in [`Event::Lobby`]).
+    fn tell_lock(&mut self) {
+        let locked = self.series.as_ref().is_some_and(|s| s.scored);
+        if locked != self.lock_told
+            && let Some(session) = &self.session
+        {
+            session.lock_characters(locked);
+            self.lock_told = locked;
+        }
     }
 
     /// We drive another character now, which the others learn before the race starts.

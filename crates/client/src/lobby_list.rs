@@ -2,28 +2,28 @@
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has an "H" on its portrait's corner.
+//! has an "H" on its portrait's corner. Our name is in [`HIGHLIGHT`], as in the race's
+//! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.)
 
 use bevy::prelude::*;
-use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
-
 use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::leaderboard::{ICON_X, Portraits, atlas_image};
+use crate::leaderboard::ICON_X;
 use crate::lobby::Lobby;
+use crate::portrait_row::{
+    BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_host_badge,
+    spawn_portrait, spawn_tags,
+};
 
-/// The column of rows, with the players it was built for.
+/// The column of rows, with the players it was built for, and which of them is us.
 #[derive(Component)]
-struct List(Vec<(u8, String, String)>, Vec<(String, String)>);
-
-const FONT_SIZE: f32 = 16.0;
-const PING_FONT_SIZE: f32 = 12.0;
-
-/// What the name and the ping are on: the toasts' colour, more opaque so that it reads over the
-/// portrait.
-const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.9);
+struct List(
+    Vec<(u8, String, String)>,
+    Vec<(String, String)>,
+    Option<usize>,
+);
 
 /// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
 /// of retail's screen, to be clear of the toasts and the chat at the top.
@@ -48,21 +48,11 @@ const SLOT: f32 = 28.0;
 const WATCHER_GAP: f32 = 12.0;
 const WATCHER_LINE: f32 = 9.0;
 
-/// The host's badge: a friendly yellow, pale at the top and golden at the bottom.
-const HOST_GRADIENT: Gradient = Gradient {
-    top: [0xff, 0xf4, 0x90],
-    bottom: [0xf0, 0xc0, 0x30],
-};
-
-/// The ping of the player with a short key.
-#[derive(Component)]
-struct PingLabel(String);
-
 pub struct LobbyListPlugin;
 
 impl Plugin for LobbyListPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (build, pings).chain().run_if(crate::drive::driving));
+        app.add_systems(Update, build.run_if(crate::drive::driving));
     }
 }
 
@@ -72,7 +62,7 @@ fn build(
     lobby: Res<Lobby>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
-    portraits: Option<Res<Portraits>>,
+    loaded: Option<Res<Portraits>>,
     lists: Query<(Entity, &List)>,
 ) {
     let players: Vec<(u8, String, String)> = if lobby.is_waiting() {
@@ -91,8 +81,9 @@ fn build(
     } else {
         Vec::new()
     };
+    let you = lobby.you();
     for (entity, list) in &lists {
-        if list.0 == players && list.1 == watchers {
+        if list.0 == players && list.1 == watchers && list.2 == you {
             return;
         }
         commands.entity(entity).despawn();
@@ -100,18 +91,12 @@ fn build(
     if players.is_empty() && watchers.is_empty() {
         return;
     }
-    let portraits = match portraits {
-        Some(portraits) => portraits.0.clone(),
-        None => {
-            let atlas = render::portraits::portrait_atlas(
-                &crate::leaderboard::pack_icons(),
-                &textures.vram,
-            );
-            let handle = atlas_image(atlas, &mut images);
-            commands.insert_resource(Portraits(handle.clone()));
-            handle
-        }
-    };
+    let image = portraits(
+        &mut commands,
+        loaded.as_deref(),
+        &textures.vram,
+        &mut images,
+    );
     let column = commands
         .spawn((
             Node {
@@ -135,34 +120,15 @@ fn build(
         ChildOf(column),
     ));
     for (n, (character, name, key)) in players.iter().enumerate() {
-        let character = (*character as usize).min(ICON_IDS.len() - 1);
-        let y = n as f32 * SLOT;
-        let portrait = commands
-            .spawn((
-                ImageNode::new(portraits.clone())
-                    .with_rect(Rect::new(
-                        0.0,
-                        (character * HEIGHT) as f32,
-                        WIDTH as f32,
-                        ((character + 1) * HEIGHT) as f32,
-                    ))
-                    .with_mode(NodeImageMode::Stretch),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: hud::x(ICON_X),
-                    top: hud::y(FIRST_Y + y),
-                    width: hud::x(WIDTH as f32),
-                    height: hud::y(HEIGHT as f32),
-                    ..default()
-                },
-                Pickable::IGNORE,
-                ChildOf(column),
-            ))
-            .id();
+        let y = FIRST_Y + n as f32 * SLOT;
+        let portrait = spawn_portrait(&mut commands, column, &image, *character, y);
         if n == 0 {
             spawn_host_badge(&mut commands, portrait, true);
         }
-        spawn_tags(&mut commands, portrait, name, key);
+        let tag = spawn_tags(&mut commands, portrait, name, key);
+        if Some(n) == you {
+            commands.entity(tag).insert(TextColor(HIGHLIGHT));
+        }
     }
     // Those who only watch have no portrait: a line each, a little further down.
     let below = FIRST_Y + players.len() as f32 * SLOT + WATCHER_GAP;
@@ -186,121 +152,5 @@ fn build(
             ChildOf(column),
         ));
     }
-    commands.entity(column).insert(List(players, watchers));
-}
-
-/// Puts the host's "H" on a corner of its portrait: the top right, or the top left where the
-/// race's leaderboard has its place there.
-pub(crate) fn spawn_host_badge(commands: &mut Commands, portrait: Entity, right: bool) {
-    let mut node = Node {
-        position_type: PositionType::Absolute,
-        top: Val::ZERO,
-        padding: UiRect::all(Val::Px(2.0)),
-        ..default()
-    };
-    if right {
-        node.right = Val::ZERO;
-    } else {
-        node.left = Val::ZERO;
-    }
-    commands.spawn((
-        CtrText::new("H", Font::Middle, HOST_GRADIENT).fixed(hud::PIXEL / 2.0),
-        BackgroundColor(BACKGROUND),
-        node,
-        Pickable::IGNORE,
-        ChildOf(portrait),
-    ));
-}
-
-/// Puts a player's name on a portrait, at the bottom and centered, and the ping next to it, on its
-/// right (which [`pings`] fills in). Gives the name's entity back.
-pub(crate) fn spawn_tags(
-    commands: &mut Commands,
-    portrait: Entity,
-    name: &str,
-    key: &str,
-) -> Entity {
-    // The name's centered under the portrait, whatever its length, and the ping hangs off its
-    // right end.
-    let wrapper = commands
-        .spawn((
-            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                // A little below the portrait's edge.
-                bottom: Val::Px(-6.0),
-                ..default()
-            },
-            Pickable::IGNORE,
-            ChildOf(portrait),
-        ))
-        .id();
-    let tag = commands
-        .spawn((
-            Text::new(name),
-            TextFont {
-                font_size: FONT_SIZE.into(),
-                ..default()
-            },
-            BackgroundColor(BACKGROUND),
-            Node {
-                padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
-                ..default()
-            },
-            Pickable::IGNORE,
-            ChildOf(wrapper),
-        ))
-        .id();
-    commands.spawn((
-        PingLabel(key.to_string()),
-        Text::new(""),
-        TextFont {
-            font_size: PING_FONT_SIZE.into(),
-            ..default()
-        },
-        TextColor(Color::srgb(0.8, 0.8, 0.8)),
-        BackgroundColor(BACKGROUND),
-        Node {
-            position_type: PositionType::Absolute,
-            // Past the name's right edge, on its line.
-            left: Val::Percent(100.0),
-            bottom: Val::ZERO,
-            padding: UiRect::axes(Val::Px(3.0), Val::Px(1.0)),
-            display: Display::None,
-            ..default()
-        },
-        Pickable::IGNORE,
-        ChildOf(wrapper),
-    ));
-    tag
-}
-
-/// Writes each player's ping, and shows the label once there is one (none for us, nor before
-/// the first pong). With the debug HUD on (`Config::debug_hud`), the way to the player too.
-fn pings(
-    lobby: Res<Lobby>,
-    config: Res<crate::config::Config>,
-    mut labels: Query<(&PingLabel, &mut Text, &mut Node)>,
-) {
-    for (PingLabel(key), mut text, mut node) in &mut labels {
-        let ping = lobby.pings.get(key);
-        // "d" for a direct path, "r" for a relay.
-        let route = match lobby.relayed.get(key).filter(|_| config.debug_hud) {
-            Some(true) => " r",
-            Some(false) => " d",
-            None => "",
-        };
-        let line = ping.map_or(String::new(), |ping| {
-            format!("{} ms{route}", ping.as_millis())
-        });
-        if text.0 != line {
-            text.0 = line;
-        }
-        node.display = if ping.is_some() {
-            Display::DEFAULT
-        } else {
-            Display::None
-        };
-    }
+    commands.entity(column).insert(List(players, watchers, you));
 }

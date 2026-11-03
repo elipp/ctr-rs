@@ -41,6 +41,8 @@ pub(crate) struct HostState {
     pub(crate) ready_from: HashSet<EndpointId>,
     /// A race has been started and the game has not said it is over.
     pub(crate) racing: bool,
+    /// No change of character is taken (`Session::lock_characters`).
+    pub(crate) locked: bool,
     /// The players that left the race, whose pads are still being settled, by slot.
     pub(crate) departures: HashMap<usize, Departure>,
     /// The listing of the lobby in the realm, if it is public.

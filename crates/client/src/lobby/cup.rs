@@ -3,10 +3,11 @@
 //! `/race start` is the same thing with one track and no points.
 //!
 //! The host runs the series: it starts each race, scores it when it is over and starts the next
-//! after [`BETWEEN_RACES_SECONDS`]. The guests only see the races and what the host announces, so
-//! nothing of a series travels in the protocol but the laps of each race.
+//! after [`BETWEEN_RACES_SECONDS`]. Of a series, the guests only get the races and, after each
+//! race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
+//! ([`standings_text`]).
 
-use net::EndpointId;
+use net::{EndpointId, Score};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -188,7 +189,7 @@ impl Series {
 
     /// Adds the points of a race in which `players` drove and `finishers` crossed the line, in
     /// that order. Returns what each of the first got.
-    pub fn score(&mut self, players: usize, finishers: &[Finisher]) -> Vec<(String, u32)> {
+    pub fn score(&mut self, players: usize, finishers: &[Finisher]) -> Vec<Score> {
         let mut gained = Vec::new();
         for (place, finisher) in finishers.iter().enumerate() {
             self.names.insert(finisher.id, finisher.name.clone());
@@ -198,41 +199,55 @@ impl Series {
                 None => self.points.push((finisher.id, won)),
             }
             if place < places_waited_for(players) {
-                gained.push((finisher.name.clone(), won));
+                gained.push(Score {
+                    id: *finisher.id.as_bytes(),
+                    name: finisher.name.clone(),
+                    points: won,
+                });
             }
         }
         gained
     }
 
     /// Everyone with points, the most first (the ones tied keep the order they were scored in).
-    pub fn standings(&self) -> Vec<(String, u32)> {
-        let mut standings: Vec<(String, u32)> = self
+    pub fn totals(&self) -> Vec<Score> {
+        let mut totals: Vec<Score> = self
             .points
             .iter()
-            .map(|(id, total)| (self.names.get(id).cloned().unwrap_or_default(), *total))
+            .map(|(id, total)| Score {
+                id: *id.as_bytes(),
+                name: self.names.get(id).cloned().unwrap_or_default(),
+                points: *total,
+            })
             .collect();
-        standings.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
-        standings
+        totals.sort_by_key(|score| std::cmp::Reverse(score.points));
+        totals
     }
 }
 
-/// `1. Name +3` for each of `gained`.
-pub fn results_text(gained: &[(String, u32)]) -> String {
-    gained
-        .iter()
-        .enumerate()
-        .map(|(place, (name, won))| format!("{}. {name} +{won}", place + 1))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// `Name 9` for each of `standings`, a line each.
-pub fn standings_text(standings: &[(String, u32)]) -> String {
-    standings
-        .iter()
-        .map(|(name, total)| format!("{name}: {total}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// The standings as a toast shows them: the race's results, then the totals and what comes next.
+pub fn standings_text(standings: &net::Standings) -> String {
+    let gained: Vec<String> = (standings.gained.iter().enumerate())
+        .map(|(place, s)| format!("{}. {} +{}", place + 1, s.name, s.points))
+        .collect();
+    let gained = gained.join("\n");
+    let totals: Vec<String> = (standings.totals.iter())
+        .map(|s| format!("{}: {}", s.name, s.points))
+        .collect();
+    let totals = totals.join("\n");
+    let mut text = format!(
+        "{}: race {} of {}\n\n{gained}",
+        standings.cup,
+        standings.race as usize + 1,
+        standings.races
+    );
+    match &standings.next {
+        Some((_, track)) => text += &format!(
+            "\n\nStandings\n{totals}\n\nNext: {track} in {BETWEEN_RACES_SECONDS} seconds"
+        ),
+        None => text += &format!("\n\nFinal standings\n{totals}"),
+    }
+    text
 }
 
 #[cfg(test)]
@@ -283,10 +298,13 @@ mod tests {
             },
             vec![1, 2],
         );
+        let named = |scores: Vec<Score>| -> Vec<(String, u32)> {
+            scores.into_iter().map(|s| (s.name, s.points)).collect()
+        };
         let mut order = finishers(3);
         series.score(3, &order);
         order.swap(0, 2);
-        let gained = series.score(3, &order);
+        let gained = named(series.score(3, &order));
         assert_eq!(
             gained,
             [
@@ -297,7 +315,7 @@ mod tests {
         );
         // 2+0, 1+1 and 0+2: all tied, in the order they were first scored.
         assert_eq!(
-            series.standings(),
+            named(series.totals()),
             [
                 ("p0".to_string(), 2),
                 ("p1".to_string(), 2),
@@ -306,7 +324,7 @@ mod tests {
         );
         // A third race, won by p1, breaks the tie.
         series.score(3, &[order[1].clone(), order[0].clone(), order[2].clone()]);
-        assert_eq!(series.standings()[0], ("p1".to_string(), 4));
+        assert_eq!(named(series.totals())[0], ("p1".to_string(), 4));
     }
 
     #[test]

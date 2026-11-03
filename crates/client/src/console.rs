@@ -28,8 +28,7 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
 use crate::command::{self, Action, CommandLine};
-use crate::leaderboard::{Portraits, load_portraits};
-use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
+use crate::portrait_row::{Portraits, load_portraits, portrait_rect};
 
 /// The target of what `console!` logs.
 pub const TARGET: &str = "console";
@@ -73,6 +72,19 @@ pub const DIM_COLOR: Color = Color::srgb(0.6, 0.6, 0.6);
 pub struct Piece {
     pub text: String,
     pub color: Color,
+    /// In Inconsolata Bold.
+    pub bold: bool,
+}
+
+impl Piece {
+    /// The piece's font: the console's, in bold if it is.
+    fn font(&self, font: &TextFont) -> TextFont {
+        if self.bold {
+            crate::font::bold(font.clone())
+        } else {
+            font.clone()
+        }
+    }
 }
 
 /// Asks for a line to be added to the console.
@@ -117,7 +129,18 @@ impl Log {
         self.pieces.push(Piece {
             text: text.into(),
             color,
+            bold: false,
         });
+        self
+    }
+
+    /// Adds a piece in bold after the others.
+    #[expect(dead_code, reason = "no line has a bold piece yet")]
+    pub fn then_bold(mut self, text: impl Into<String>, color: Color) -> Log {
+        self = self.then(text, color);
+        if let Some(piece) = self.pieces.last_mut() {
+            piece.bold = true;
+        }
         self
     }
 }
@@ -422,14 +445,8 @@ fn draw_small_portraits(
             node.display = Display::None;
             continue;
         };
-        let character = character.min(ICON_IDS.len() - 1);
         node.display = Display::Flex;
-        image.rect = Some(Rect::new(
-            0.0,
-            (character * HEIGHT) as f32,
-            WIDTH as f32,
-            ((character + 1) * HEIGHT) as f32,
-        ));
+        image.rect = Some(portrait_rect(character));
         image.image = atlas
             .get_or_insert_with(|| {
                 let handle = load_portraits(&textures.vram, &mut images);
@@ -582,7 +599,7 @@ fn spawn_line(commands: &mut Commands, area: Entity, line: &Log, alpha: f32) {
             Text::new(first.text.clone()),
             // A word too long for a line is broken, not run out of the window.
             TextLayout::linebreak(LineBreak::WordOrCharacter),
-            font.clone(),
+            first.font(&font),
             TextColor(faded(first.color, alpha)),
             Ink(first.color),
             Born(line.at),
@@ -593,7 +610,7 @@ fn spawn_line(commands: &mut Commands, area: Entity, line: &Log, alpha: f32) {
             for piece in pieces {
                 text.spawn((
                     TextSpan::new(piece.text.clone()),
-                    font.clone(),
+                    piece.font(&font),
                     TextColor(faded(piece.color, alpha)),
                     Ink(piece.color),
                     Born(line.at),

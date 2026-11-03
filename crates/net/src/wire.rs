@@ -60,6 +60,35 @@ pub struct Inputs {
     pub lead: i32,
 }
 
+/// Where a cup stands after one of its races, as the host scored it: the clients show it as they
+/// like (see `Session::standings`).
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct Standings {
+    /// The cup's name.
+    pub cup: String,
+    /// The race just run, from 0, out of `races`.
+    pub race: u8,
+    pub races: u8,
+    /// The places of that race that scored, in order, and what each got.
+    pub gained: Vec<Score>,
+    /// Everyone with points so far, the most first (the ones tied in the order they first
+    /// scored).
+    pub totals: Vec<Score>,
+    /// The next race, if one follows: the track (its level id) and its name, as the host knows
+    /// it (a guest may not have a custom track yet).
+    pub next: Option<(u32, String)>,
+}
+
+/// A player's points in [`Standings`].
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct Score {
+    /// The player's endpoint id.
+    pub id: [u8; 32],
+    /// What the player was called when the race was scored (it may have left since).
+    pub name: String,
+    pub points: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum Message {
     /// Reliable, client to host, right after joining: the character (`GAME_CHARACTER_IDS`
@@ -140,14 +169,19 @@ pub enum Message {
     /// The guests that only watch follow, as the endpoint id and the nickname.
     /// Then how the lobby is listed, if it is public: the realm's endpoint id, the lobby's name
     /// and its track, as the host was given them. A guest keeps them to list the lobby itself
-    /// should it become the host (see `Heirs`).
+    /// should it become the host (see `Heirs`). Last, whether the host takes no change of
+    /// character, from any player (see `Session::lock_characters`).
     Lobby {
         players: Vec<([u8; 32], u8, String)>,
         watching: Vec<([u8; 32], String)>,
         public: Option<([u8; 32], String, String)>,
+        /// The host takes no change of character (a cup is on).
+        locked: bool,
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
+    /// Reliable, host to each client: where the cup stands after one of its races.
+    Standings(Standings),
     /// Reliable, client to host: a line for the lobby to read, said by the client. (See
     /// `clean_chat`; the host cleans it again.)
     Say { text: String },
@@ -410,10 +444,27 @@ mod tests {
                 players: vec![([1; 32], 4, String::new()), ([2; 32], 15, "Ripper".into())],
                 watching: vec![([3; 32], "Eyes".into())],
                 public: Some(([6; 32], "Friday cup".into(), "Coco Park".into())),
+                locked: true,
             },
             Message::Announce {
                 text: "Restarting in 5".into(),
             },
+            Message::Standings(Standings {
+                cup: "Friday".into(),
+                race: 1,
+                races: 4,
+                gained: vec![Score {
+                    id: [2; 32],
+                    name: "Ripper".into(),
+                    points: 3,
+                }],
+                totals: vec![Score {
+                    id: [2; 32],
+                    name: "Ripper".into(),
+                    points: 5,
+                }],
+                next: Some((7, "Coco Park".into())),
+            }),
             Message::Say { text: "gg".into() },
             Message::Chat {
                 from: [5; 32],

@@ -55,6 +55,7 @@ mod names;
 mod paths;
 mod pause;
 mod place;
+mod portrait_row;
 mod probe;
 mod projectile;
 
@@ -197,6 +198,7 @@ fn main() {
             Font::from_bytes(include_bytes!("../fonts/Inconsolata-Regular.ttf").to_vec()),
         )
         .expect("the default font can be replaced");
+    font::register_bold(&mut app.world_mut().resource_mut());
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
     app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
@@ -310,7 +312,11 @@ fn main() {
     app.add_plugins(track_picture::TrackPicturePlugin);
     app.add_systems(Update, fly.run_if(not(drive::driving)))
         .init_resource::<scene::Picked>()
-        .add_systems(Update, (switch_mode, scene::keep_picks));
+        .add_systems(Update, (
+                switch_mode,
+                scene::racer_keys.before(scene::keep_picks),
+                scene::keep_picks,
+            ),);
     app.insert_resource(scene_systems);
     // The multi-threaded executor spawns and wakes a task per system; for a frame this light
     // those hand-offs cost more than the systems. `CTR_EXECUTOR=multi` brings it back.

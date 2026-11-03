@@ -18,6 +18,9 @@ pub(super) fn report(
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
+    if !lobby.joined {
+        lobby.tell_lock();
+    }
     let Some(session) = &lobby.session else {
         return;
     };
@@ -59,11 +62,11 @@ pub(super) fn report(
                 players,
                 spectators,
                 you,
-            } => roster = Some((players, spectators, you)),
-            Event::Announce(text) => {
-                // (A cup's results are several lines, which take longer to read.)
-                let ms = 3000 + 1500 * text.lines().count().saturating_sub(1) as u64;
-                toasts.write(Toast::new(text, ms).color(ANNOUNCE_COLOR));
+                locked,
+            } => roster = Some((players, spectators, you, locked)),
+            Event::Announce(text) => announce(&mut toasts, text),
+            Event::Standings(standings) => {
+                announce(&mut toasts, super::cup::standings_text(&standings))
             }
             Event::Chat { from, text } => chats.push((from, text)),
             Event::Joined(id) => {
@@ -287,7 +290,8 @@ pub(super) fn report(
         lobby.close();
         return;
     }
-    if let Some((players, spectators, you)) = roster {
+    if let Some((players, spectators, you, locked)) = roster {
+        lobby.characters_locked = locked;
         // The names are told apart among everyone in the lobby, those who only watch too.
         let mut labels = net::display_names(
             &players
@@ -305,12 +309,14 @@ pub(super) fn report(
         let members: Vec<Member> = players
             .iter()
             .zip(labels)
-            .map(|(p, label)| Member {
+            .enumerate()
+            .map(|(n, (p, label))| Member {
                 id: p.id,
                 key: p.id.fmt_short().to_string(),
                 label,
                 nick: p.nick.clone(),
                 character: p.character,
+                you: Some(n) == you,
             })
             .collect();
         for p in players.iter().chain(&spectators) {
@@ -433,3 +439,10 @@ pub(super) fn report(
 
 /// How much of a new ping goes into the average that is kept.
 pub(super) const PING_SMOOTHING: f32 = 0.4;
+
+/// Toasts what the host told everyone. (A cup's standings are several lines, which take longer
+/// to read.)
+fn announce(toasts: &mut MessageWriter<Toast>, text: String) {
+    let ms = 3000 + 1500 * text.lines().filter(|l| !l.is_empty()).count().saturating_sub(1) as u64;
+    toasts.write(Toast::new(text, ms).color(ANNOUNCE_COLOR));
+}

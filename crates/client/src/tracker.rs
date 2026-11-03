@@ -22,7 +22,7 @@ use weapon::Kind;
 use weapon::warpball::flags::MASK_REPATH;
 
 use crate::drive::{ChaseCamera, Kart};
-use crate::leaderboard::{atlas_image, pack_icons};
+use crate::hud::{atlas_image, pack_icons};
 use crate::Track;
 use crate::props::Sim;
 

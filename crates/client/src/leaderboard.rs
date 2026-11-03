@@ -6,24 +6,15 @@
 //! ported). As in retail, only the first four places are shown, and a place is red once that
 //! many karts have finished.
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use loader::dram::DramFile;
-use loader::icons::{parse_groups, parse_icons};
-use loader::source::Need;
 use render::font::{Font, Gradient};
-use render::portraits::{HEIGHT, ICON_IDS, WIDTH, portrait_atlas};
 
 use crate::font::CtrText;
 use crate::hud;
 use crate::lobby::Lobby;
-use crate::lobby_list::{spawn_host_badge, spawn_tags};
-
-/// The portraits as a picture, loaded when the first race needs it.
-#[derive(Resource)]
-pub(crate) struct Portraits(pub(crate) Handle<Image>);
+use crate::portrait_row::{
+    HIGHLIGHT, Portraits, portraits, spawn_host_badge, spawn_portrait, spawn_tags,
+};
 
 /// The column of rows, with the race it was built for.
 #[derive(Component)]
@@ -76,53 +67,11 @@ impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (build, order, tint, names)
+            (build, order, tint, names, highlight)
                 .chain()
                 .run_if(crate::drive::driving),
         );
     }
-}
-
-/// The icons of a racer's pack, which have the HUD's pictures. Every racer's pack has the same
-/// ones; character 0's will do.
-pub(crate) fn pack_icons() -> Vec<loader::icons::Icon> {
-    parse_icons(&pack()).expect("parse racer pack icons")
-}
-
-/// The same pack's icon groups.
-pub(crate) fn pack_groups() -> Vec<loader::icons::IconGroup> {
-    parse_groups(&pack()).expect("parse racer pack icons")
-}
-
-fn pack() -> DramFile {
-    let pack = crate::disc::source()
-        .get(Need::Pack(0))
-        .expect("read racer pack");
-    DramFile::parse(&pack).expect("parse racer pack")
-}
-
-/// A picture of the HUD as a texture, for the UI to cut from.
-pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>) -> Handle<Image> {
-    let mut image = Image::new(
-        Extent3d {
-            width: atlas.width as u32,
-            height: atlas.height as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        atlas.rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::nearest();
-    images.add(image)
-}
-
-pub(crate) fn load_portraits(
-    vram: &loader::vram::Vram,
-    images: &mut Assets<Image>,
-) -> Handle<Image> {
-    atlas_image(portrait_atlas(&pack_icons(), vram), images)
 }
 
 /// Puts the column up when a race has been built, and takes it down when there is none. (A level
@@ -132,7 +81,7 @@ fn build(
     lobby: Res<Lobby>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
-    portraits: Option<Res<Portraits>>,
+    loaded: Option<Res<Portraits>>,
     boards: Query<(Entity, &Board)>,
 ) {
     let online = lobby.online.as_ref().filter(|online| online.built);
@@ -146,14 +95,12 @@ fn build(
     let Some(online) = online else {
         return;
     };
-    let portraits = match portraits {
-        Some(portraits) => portraits.0.clone(),
-        None => {
-            let handle = load_portraits(&textures.vram, &mut images);
-            commands.insert_resource(Portraits(handle.clone()));
-            handle
-        }
-    };
+    let image = portraits(
+        &mut commands,
+        loaded.as_deref(),
+        &textures.vram,
+        &mut images,
+    );
     let players = online.characters.len();
     let column = commands
         .spawn((
@@ -167,32 +114,10 @@ fn build(
         ))
         .id();
     for slot in 0..players {
-        let character = (online.characters[slot] as usize).min(ICON_IDS.len() - 1);
         let y = slot as f32 * SLOT;
-        let portrait = commands
-            .spawn((
-                Row { slot, y, pop: 0.0 },
-                // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
-                ImageNode::new(portraits.clone())
-                    .with_rect(Rect::new(
-                        0.0,
-                        (character * HEIGHT) as f32,
-                        WIDTH as f32,
-                        ((character + 1) * HEIGHT) as f32,
-                    ))
-                    .with_mode(NodeImageMode::Stretch),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: hud::x(ICON_X),
-                    top: hud::y(ICON_Y + y),
-                    width: hud::x(WIDTH as f32),
-                    height: hud::y(HEIGHT as f32),
-                    ..default()
-                },
-                Pickable::IGNORE,
-                ChildOf(column),
-            ))
-            .id();
+        let portrait =
+            spawn_portrait(&mut commands, column, &image, online.characters[slot], ICON_Y + y);
+        commands.entity(portrait).insert(Row { slot, y, pop: 0.0 });
         let label = online.labels.get(slot).map_or("", String::as_str);
         let key = online.names.get(slot).map_or("", String::as_str);
         // The host is slot 0 (`net::Event::Start`).
@@ -330,6 +255,25 @@ fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
             && text.0 != *label
         {
             text.0.clone_from(label);
+        }
+    }
+}
+
+/// Colours the name of the kart the view follows (ours, or the one a spectator watches) in
+/// [`HIGHLIGHT`].
+fn highlight(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut TextColor)>) {
+    let Some(online) = &lobby.online else {
+        return;
+    };
+    let viewed = online.viewed();
+    for (NameTag(slot), mut text) in &mut tags {
+        let color = if *slot == viewed {
+            HIGHLIGHT
+        } else {
+            Color::WHITE
+        };
+        if text.0 != color {
+            text.0 = color;
         }
     }
 }

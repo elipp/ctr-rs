@@ -60,7 +60,8 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         {
             net::NOT_NOW
         }
-        Action::PurgeCache | Action::Character(_) if lobby.online.is_some() => net::NOT_NOW,
+        Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
+        Action::Character(_) if lobby.online.is_some() || lobby.characters_locked() => net::NOT_NOW,
         // (A host's countdown is to the track it is on.)
         Action::Track(_) if lobby.online.is_some() || lobby.countdown.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
