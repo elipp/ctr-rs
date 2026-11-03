@@ -55,6 +55,7 @@ mod names;
 mod paths;
 mod pause;
 mod place;
+mod portrait_row;
 mod probe;
 mod projectile;
 
