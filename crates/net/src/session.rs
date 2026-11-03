@@ -415,6 +415,13 @@ pub(crate) async fn run(
                     }
                     io.event(Event::Announce(text));
                 },
+                Command::Standings(standings) => if let Some(host) = &host {
+                    let message = Message::Standings(standings.clone());
+                    for guest in &host.guests {
+                        let _ = send_reliably(&guest.connection, &message).await;
+                    }
+                    io.event(Event::Standings(standings));
+                },
                 Command::Say(text) => if !text.is_empty() {
                     if let Some(host) = &host {
                         let chat = Message::Chat { from: *me.as_bytes(), text: text.clone() };
@@ -712,6 +719,11 @@ pub(crate) async fn run(
                     Message::Announce { text } => {
                         if from == host_id && host.is_none() {
                             io.event(Event::Announce(text));
+                        }
+                    }
+                    Message::Standings(standings) => {
+                        if from == host_id && host.is_none() {
+                            io.event(Event::Standings(standings));
                         }
                     }
                     // Only a guest of the lobby speaks, and the host says who it was.

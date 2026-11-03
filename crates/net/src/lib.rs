@@ -33,7 +33,7 @@ pub use realm::{
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
-pub use wire::{Pad, Tick};
+pub use wire::{Pad, Score, Standings, Tick};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -158,7 +158,7 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/12";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/13";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -252,6 +252,9 @@ pub enum Event {
     Lead { slot: usize, ahead: f32 },
     /// A message the host broadcast (see [`Session::announce`]) for the players to read.
     Announce(String),
+    /// Where the cup stands after one of its races, as the host broadcast it (see
+    /// [`Session::standings`]).
+    Standings(Standings),
     /// `from` said `text` to the lobby (see [`Session::say`]): us too, when we did, in the same
     /// order as everyone reads it. It is cleaned already.
     Chat { from: EndpointId, text: String },
@@ -377,6 +380,7 @@ enum Command {
         hash: u64,
     },
     Announce(String),
+    Standings(Standings),
     Say(String),
     Character(u8),
     Lock(bool),
@@ -452,6 +456,12 @@ impl Session {
     /// it.
     pub fn announce(&self, text: impl Into<String>) {
         let _ = self.commands.send(Command::Announce(text.into()));
+    }
+
+    /// Broadcasts where the cup stands to everyone in the lobby, us included
+    /// ([`Event::Standings`]), if we host it.
+    pub fn standings(&self, standings: Standings) {
+        let _ = self.commands.send(Command::Standings(standings));
     }
 
     /// Says `text` to everyone in the lobby, us included ([`Event::Chat`]): a guest's goes by the

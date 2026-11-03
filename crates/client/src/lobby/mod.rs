@@ -227,30 +227,26 @@ impl Lobby {
             return;
         };
         let gained = series.score(players, finishers);
-        let mut text = format!(
-            "{}: race {} of {}\n{}",
-            series.name.as_deref().unwrap_or("Cup"),
-            series.race + 1,
-            series.tracks.len(),
-            cup::results_text(&gained)
-        );
-        let standings = cup::standings_text(&series.standings());
-        if series.has_next() {
+        let race = series.race;
+        let next = series.has_next().then(|| {
             series.race += 1;
-            text += &format!(
-                "\nStandings\n{standings}\nNext: {} in {BETWEEN_RACES_SECONDS} seconds",
-                maps::name(series.track())
-            );
-            let then = Then::Start {
-                track: series.track(),
-                laps: series.laps,
-            };
+            series.track()
+        });
+        let standings = net::Standings {
+            cup: series.name.clone().unwrap_or_else(|| "Cup".into()),
+            race: race as u8,
+            races: series.tracks.len() as u8,
+            gained,
+            totals: series.totals(),
+            next: next.map(|track| (track, maps::name(track))),
+        };
+        if let Some(session) = &self.session {
+            session.standings(standings);
+        }
+        if let Some(track) = next {
+            let laps = series.laps;
             self.series = Some(series);
-            self.announce(text);
-            self.count_down(then, now, BETWEEN_RACES_SECONDS);
-        } else {
-            text += &format!("\nFinal standings\n{standings}");
-            self.announce(text);
+            self.count_down(Then::Start { track, laps }, now, BETWEEN_RACES_SECONDS);
         }
     }
 
