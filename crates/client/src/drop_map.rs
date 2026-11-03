@@ -4,8 +4,9 @@
 //!
 //! The files come from the window (`FileDragAndDrop`), or in a browser from the page, which
 //! holds what was dropped on it while the game runs (`web::take_dropped`, as for the disc image
-//! before it). The import takes a few seconds: on a thread, but in a browser, which has none
-//! here, it stops the frames meanwhile.
+//! before it). The import takes a few seconds, on a thread. A browser can only take a `.ctrmap`:
+//! a patch is of the whole disc image, which the page lets go of once the game has started
+//! (`web::release_disc`).
 
 use bevy::prelude::*;
 use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
@@ -73,13 +74,25 @@ fn start(
         };
         let bytes = bytes.clone();
         let work: Box<dyn FnOnce() -> Result<map::Map, String> + Send> = match extension.as_str() {
+            "xdelta" if cfg!(target_arch = "wasm32") => {
+                toasts.write(failure(format!(
+                    "{name}: a patch cannot be imported in a browser: drop its .ctrmap \
+                     (`ctr-map import` makes it)"
+                )));
+                continue;
+            }
             "xdelta" => {
                 toasts.write(Toast::new(format!("Importing {name}..."), 3000));
                 Box::new(move || import_patch(stem, bytes))
             }
             "ctrmap" => Box::new(move || map::Map::from_bytes(&bytes).map_err(|e| e.to_string())),
             _ => {
-                toasts.write(failure(format!("{name}: drop an .xdelta patch or a .ctrmap")));
+                let what = if cfg!(target_arch = "wasm32") {
+                    "a .ctrmap"
+                } else {
+                    "an .xdelta patch or a .ctrmap"
+                };
+                toasts.write(failure(format!("{name}: drop {what}")));
                 continue;
             }
         };

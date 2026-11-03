@@ -1,6 +1,8 @@
 //! The browser build. A page has no files, so the disc image is the one the player dropped on it
-//! (`web/play.html`): the page holds it until `main` runs, which takes it into memory as the
-//! image at [`DISC`] (`loader::disc::keep_in_memory`) for `disc.rs` to find. The clipboard is
+//! (`web/play.html`): the page holds it, and the program reads it from there as the image at
+//! [`DISC`] (`loader::disc::keep_external`) for `disc.rs` to find. Once everything the game reads
+//! of it is taken into memory (`disc::prepare`, `maps::make_builtins`), the page lets go of it
+//! ([`release_disc`]): a wasm program's memory never shrinks, so the image is never copied in. The clipboard is
 //! the page's as well, and so are the settings (`config.rs`) and the maps other players sent
 //! (`maps.rs`), which it keeps in its storage, and a panic is told to it (`crash.rs`). On a touch
 //! screen its buttons and text field stand in for the keyboard (`command.rs`).
@@ -15,9 +17,17 @@ const DISC: &str = "dropped.bin";
 
 #[wasm_bindgen]
 extern "C" {
-    /// The image the player dropped, which the page lets go of once it is taken.
-    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeDisc)]
-    fn take_disc() -> js_sys::Uint8Array;
+    /// The size in bytes of the image the player dropped.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrDiscSize)]
+    fn disc_size() -> f64;
+
+    /// Copies `buf.len()` bytes of the image from byte `at` into `buf`.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrReadDisc)]
+    fn read_disc(at: f64, buf: &mut [u8]);
+
+    /// Lets the page let go of the image.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrReleaseDisc)]
+    fn release_disc_bytes();
 
     /// Puts `text` on the clipboard; a failure is only reported on the console.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCopy)]
@@ -114,9 +124,19 @@ pub fn take_track_pictures() -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Copies the dropped image into memory.
+/// Reads the dropped image from the page from now on.
 pub fn take_disc_image() {
-    loader::disc::keep_in_memory(PathBuf::from(DISC), take_disc().to_vec());
+    loader::disc::keep_external(PathBuf::from(DISC), disc_size() as u64, |at, buf| {
+        read_disc(at as f64, buf);
+        Ok(())
+    });
+}
+
+/// Lets go of the dropped image, once everything the game reads of it has been taken: reading it
+/// fails from then on.
+pub fn release_disc() {
+    loader::disc::release_external();
+    release_disc_bytes();
 }
 
 /// The files dropped on the page while the game runs: their names and contents.

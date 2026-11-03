@@ -24,10 +24,15 @@
 //! folder ([`LAYOUT`]), the size of the image, and the size of each file. [`Source::check`] reads
 //! it with the folder, and does not open the image. A folder with no manifest was never finished.
 //!
+//! Where there is no folder to keep the files in (a browser), [`Source::hold`] takes every need
+//! from the image into memory instead, once, so that the image can be let go of.
+//!
 //! The levels are not here: they are maps (`.ctrmap`), made from the disc by the `map` crate.
 
+use std::collections::HashMap;
 use std::io::{self, Cursor, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use hadris_iso::read::IsoImage;
 
@@ -64,8 +69,11 @@ pub enum Check {
 /// How many characters there are (`GAME_CHARACTER_IDS`): the models and packs have a file each.
 pub const CHARACTERS: u32 = 16;
 
+/// The bytes of every need, if [`Source::hold`] has taken them.
+static HELD: OnceLock<HashMap<Need, Vec<u8>>> = OnceLock::new();
+
 /// A file of the disc, or a part of one, that the game reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Need {
     /// The model of a character.
     Racer(u32),
@@ -157,9 +165,12 @@ impl Source {
     /// The bytes of `need`. A file that the folder lacks is taken from the image and kept (if it
     /// cannot be kept, it is still returned: the next read takes it from the image again).
     pub fn get(&self, need: Need) -> io::Result<Vec<u8>> {
+        if let Some(bytes) = HELD.get().and_then(|held| held.get(&need)) {
+            return Ok(bytes.clone());
+        }
         match std::fs::read(self.path(need)) {
             Ok(bytes) => return Ok(bytes),
-            // (A browser has no files: there everything comes from the image.)
+            // (A browser has no files: there everything is held, see `hold`.)
             Err(e)
                 if matches!(
                     e.kind(),
@@ -270,6 +281,22 @@ impl Source {
         let mut file = Cursor::new(bytes);
         let howl = Howl::open(&mut file, 0)?;
         Ok((file, howl))
+    }
+
+    /// Takes every need from the image into memory, where [`Source::get`] answers from then
+    /// on: for where there is no folder to keep them in. Once only. Returns how many bytes it took.
+    pub fn hold(&self) -> io::Result<usize> {
+        let mut image = Image::open(self.image_for(Need::Xnf)?)?;
+        let xnf = Xnf::parse(&image.extract(Need::Xnf, &Xnf::default())?)?;
+        let held: HashMap<Need, Vec<u8>> = Need::all(&xnf)
+            .into_iter()
+            .map(|need| Ok((need, image.extract(need, &xnf)?)))
+            .collect::<io::Result<_>>()?;
+        let size = held.values().map(Vec::len).sum();
+        if HELD.set(held).is_err() {
+            panic!("the needs are held once");
+        }
+        Ok(size)
     }
 
     /// Makes the file of every need that the folder lacks, from the image, and the manifest last.

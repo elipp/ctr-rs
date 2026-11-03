@@ -401,10 +401,12 @@ window.ctrSaveConfig = (text) => {
   }
 };
 
-window.ctrTakeDisc = () => {
-  const taken = disc;
+// The game reads the image from here (a wasm program's memory never shrinks, so it is not copied
+// in), and lets go of it once it has taken what it needs.
+window.ctrDiscSize = () => disc.length;
+window.ctrReadDisc = (at, buf) => buf.set(disc.subarray(at, at + buf.length));
+window.ctrReleaseDisc = () => {
   disc = null;
-  return taken;
 };
 
 async function read(stream, size) {
@@ -580,7 +582,7 @@ addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-// Once the game runs, a file dropped on the page is the game's: a map (`.xdelta`, `.ctrmap`).
+// Once the game runs, a file dropped on the page is the game's: a map (`.ctrmap`).
 let dropped = [];
 window.ctrTakeDropped = () => {
   const taken = dropped;
