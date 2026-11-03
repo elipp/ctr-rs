@@ -15,6 +15,7 @@ mod dotless;
 mod limit;
 mod names;
 mod peers;
+mod punch;
 mod realm;
 mod session;
 mod ticket;
@@ -158,13 +159,16 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/13";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/14";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
 /// one, the host's pair with each guest included, so the host is no different from the others
 /// to the network.
 pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/1";
+
+/// What the connections that only make iroh holepunch to a peer speak: nothing (see `punch`).
+pub const PUNCH_ALPN: &[u8] = b"ctr-rust/punch/1";
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
@@ -629,7 +633,10 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     // Made where it runs: the session is not `Send`.
     let session = move || async move {
         let result: Result<(), Error> = async {
-            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()]).bind().await?;
+            let endpoint = endpoint_builder()
+                .alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec(), PUNCH_ALPN.to_vec()])
+                .bind()
+                .await?;
             let io = Io {
                 events: events_tx.clone(),
                 commands: commands_rx,
