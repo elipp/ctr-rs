@@ -98,6 +98,8 @@ struct Member {
     label: String,
     nick: String,
     character: u8,
+    /// Whether it is us.
+    you: bool,
 }
 
 impl Lobby {
@@ -128,6 +130,12 @@ impl Lobby {
         self.roster
             .iter()
             .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
+    }
+
+    /// Our place in [`members`](Self::members), if we drive (not if we only watch, or the lobby
+    /// has not told yet).
+    pub fn you(&self) -> Option<usize> {
+        self.roster.iter().position(|m| m.you)
     }
 
     /// Who the lobby could be handed to, the character and the name of each: the others, if we

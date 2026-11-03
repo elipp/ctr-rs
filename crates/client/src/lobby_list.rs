@@ -2,7 +2,8 @@
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has an "H" on its portrait's corner.
+//! has an "H" on its portrait's corner. Our name is in [`HIGHLIGHT`], as in the race's
+//! leaderboard (which outlines our portrait too).
 
 use bevy::prelude::*;
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
@@ -11,12 +12,16 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::leaderboard::{ICON_X, Portraits, atlas_image};
+use crate::leaderboard::{HIGHLIGHT, ICON_X, Portraits, atlas_image};
 use crate::lobby::Lobby;
 
-/// The column of rows, with the players it was built for.
+/// The column of rows, with the players it was built for, and which of them is us.
 #[derive(Component)]
-struct List(Vec<(u8, String, String)>, Vec<(String, String)>);
+struct List(
+    Vec<(u8, String, String)>,
+    Vec<(String, String)>,
+    Option<usize>,
+);
 
 const FONT_SIZE: f32 = 16.0;
 const PING_FONT_SIZE: f32 = 12.0;
@@ -58,6 +63,14 @@ const HOST_GRADIENT: Gradient = Gradient {
 #[derive(Component)]
 struct PingLabel(String);
 
+/// The way to the player after its ping, with the debug HUD only: a green "D" for direct, which
+/// is generally the better, and a yellow ([`HIGHLIGHT`]) "R" for a relay.
+#[derive(Component)]
+struct RouteSpan(String);
+
+/// The colour of the "D" of a direct way: the green of the toasts of who joined.
+const DIRECT: Color = Color::srgb(0.4, 1.0, 0.4);
+
 pub struct LobbyListPlugin;
 
 impl Plugin for LobbyListPlugin {
@@ -91,8 +104,9 @@ fn build(
     } else {
         Vec::new()
     };
+    let you = lobby.you();
     for (entity, list) in &lists {
-        if list.0 == players && list.1 == watchers {
+        if list.0 == players && list.1 == watchers && list.2 == you {
             return;
         }
         commands.entity(entity).despawn();
@@ -162,7 +176,10 @@ fn build(
         if n == 0 {
             spawn_host_badge(&mut commands, portrait, true);
         }
-        spawn_tags(&mut commands, portrait, name, key);
+        let tag = spawn_tags(&mut commands, portrait, name, key);
+        if Some(n) == you {
+            commands.entity(tag).insert(TextColor(HIGHLIGHT));
+        }
     }
     // Those who only watch have no portrait: a line each, a little further down.
     let below = FIRST_Y + players.len() as f32 * SLOT + WATCHER_GAP;
@@ -186,7 +203,7 @@ fn build(
             ChildOf(column),
         ));
     }
-    commands.entity(column).insert(List(players, watchers));
+    commands.entity(column).insert(List(players, watchers, you));
 }
 
 /// Puts the host's "H" on a corner of its portrait: the top right, or the top left where the
@@ -212,16 +229,16 @@ pub(crate) fn spawn_host_badge(commands: &mut Commands, portrait: Entity, right:
     ));
 }
 
-/// Puts a player's name on a portrait, at the bottom and centered, and the ping next to it, on its
-/// right (which [`pings`] fills in). Gives the name's entity back.
+/// Puts a player's name on a portrait, at the bottom and centered, and the ping (which [`pings`]
+/// fills in) just right of the portrait, centered on it from top to bottom. Gives the name's
+/// entity back.
 pub(crate) fn spawn_tags(
     commands: &mut Commands,
     portrait: Entity,
     name: &str,
     key: &str,
 ) -> Entity {
-    // The name's centered under the portrait, whatever its length, and the ping hangs off its
-    // right end.
+    // The name's centered under the portrait, whatever its length.
     let wrapper = commands
         .spawn((
             UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
@@ -252,7 +269,8 @@ pub(crate) fn spawn_tags(
             ChildOf(wrapper),
         ))
         .id();
-    commands.spawn((
+    let ping = commands
+        .spawn((
         PingLabel(key.to_string()),
         Text::new(""),
         TextFont {
@@ -261,39 +279,60 @@ pub(crate) fn spawn_tags(
         },
         TextColor(Color::srgb(0.8, 0.8, 0.8)),
         BackgroundColor(BACKGROUND),
+        // Up by half its own height, for its middle to be the portrait's, and a little left, over
+        // the portrait's edge.
+        UiTransform::from_translation(Val2::new(hud::x(-2.0), Val::Percent(-50.0))),
         Node {
             position_type: PositionType::Absolute,
-            // Past the name's right edge, on its line.
+            // From the portrait's right edge, halfway down it.
             left: Val::Percent(100.0),
-            bottom: Val::ZERO,
+            top: Val::Percent(50.0),
             padding: UiRect::axes(Val::Px(3.0), Val::Px(1.0)),
             display: Display::None,
             ..default()
         },
         Pickable::IGNORE,
-        ChildOf(wrapper),
+        ChildOf(portrait),
+    ))
+        .id();
+    commands.spawn((
+        RouteSpan(key.to_string()),
+        TextSpan::new(""),
+        TextFont {
+            font_size: PING_FONT_SIZE.into(),
+            ..default()
+        },
+        TextColor(HIGHLIGHT),
+        ChildOf(ping),
     ));
     tag
 }
 
 /// Writes each player's ping, and shows the label once there is one (none for us, nor before
-/// the first pong). With the debug HUD on (`Config::debug_hud`), the way to the player too.
+/// the first pong). With the debug HUD on (`Config::debug_hud`), the way to the player too (see
+/// [`RouteSpan`]).
 fn pings(
     lobby: Res<Lobby>,
     config: Res<crate::config::Config>,
     mut labels: Query<(&PingLabel, &mut Text, &mut Node)>,
+    mut routes: Query<(&RouteSpan, &mut TextSpan, &mut TextColor)>,
 ) {
+    for (RouteSpan(key), mut span, mut color) in &mut routes {
+        let (route, tint) = match lobby.relayed.get(key).filter(|_| config.debug_hud) {
+            Some(true) => (" R", HIGHLIGHT),
+            Some(false) => (" D", DIRECT),
+            None => ("", HIGHLIGHT),
+        };
+        if span.0 != route {
+            span.0 = route.to_string();
+        }
+        if color.0 != tint {
+            color.0 = tint;
+        }
+    }
     for (PingLabel(key), mut text, mut node) in &mut labels {
         let ping = lobby.pings.get(key);
-        // "d" for a direct path, "r" for a relay.
-        let route = match lobby.relayed.get(key).filter(|_| config.debug_hud) {
-            Some(true) => " r",
-            Some(false) => " d",
-            None => "",
-        };
-        let line = ping.map_or(String::new(), |ping| {
-            format!("{} ms{route}", ping.as_millis())
-        });
+        let line = ping.map_or(String::new(), |ping| format!("{} ms", ping.as_millis()));
         if text.0 != line {
             text.0 = line;
         }

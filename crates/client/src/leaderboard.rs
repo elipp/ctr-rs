@@ -48,6 +48,12 @@ struct Row {
 #[derive(Component)]
 struct NameTag(usize);
 
+/// The colour of the outline around the portrait of the kart the view follows, and of its name:
+/// with every character open to everyone, the same face can be in the column more than once
+/// (which retail never allows), and this tells which one is ours. Not retail. The lobby's list
+/// (`lobby_list`) colours our name with it too.
+pub(crate) const HIGHLIGHT: Color = Color::srgb(1.0, 0.9, 0.2);
+
 /// The number of a place, from 0.
 #[derive(Component)]
 struct PlaceLabel(usize);
@@ -76,7 +82,7 @@ impl Plugin for LeaderboardPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (build, order, tint, names)
+            (build, order, tint, names, highlight)
                 .chain()
                 .run_if(crate::drive::driving),
         );
@@ -181,6 +187,8 @@ fn build(
                         ((character + 1) * HEIGHT) as f32,
                     ))
                     .with_mode(NodeImageMode::Stretch),
+                // Coloured by `highlight` for the kart the view follows.
+                Outline::new(hud::x(1.0), Val::ZERO, Color::NONE),
                 Node {
                     position_type: PositionType::Absolute,
                     left: hud::x(ICON_X),
@@ -330,6 +338,39 @@ fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
             && text.0 != *label
         {
             text.0.clone_from(label);
+        }
+    }
+}
+
+/// Outlines the portrait of the kart the view follows (ours, or the one a spectator watches), and
+/// colours its name.
+fn highlight(
+    lobby: Res<Lobby>,
+    mut rows: Query<(&Row, &mut Outline)>,
+    mut tags: Query<(&NameTag, &mut TextColor)>,
+) {
+    let Some(online) = &lobby.online else {
+        return;
+    };
+    let viewed = online.viewed();
+    for (row, mut outline) in &mut rows {
+        let color = if row.slot == viewed {
+            HIGHLIGHT
+        } else {
+            Color::NONE
+        };
+        if outline.color != color {
+            outline.color = color;
+        }
+    }
+    for (NameTag(slot), mut text) in &mut tags {
+        let color = if *slot == viewed {
+            HIGHLIGHT
+        } else {
+            Color::WHITE
+        };
+        if text.0 != color {
+            text.0 = color;
         }
     }
 }
