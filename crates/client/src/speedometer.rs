@@ -15,7 +15,7 @@ use vehicle::calc::map_to_range;
 use crate::config::Config;
 use crate::controls::Control;
 use crate::hud;
-use crate::leaderboard::{atlas_image, pack_icons};
+use crate::hud::{atlas_image, pack_icons};
 use crate::pause::PauseMenu;
 
 /// Whether the speedometer is showing instead of the minimap (`HudAndDebugFlags & 8`).

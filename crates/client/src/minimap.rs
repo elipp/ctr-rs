@@ -18,7 +18,7 @@ use render::minimap::{
 };
 
 use crate::hud;
-use crate::leaderboard::{atlas_image, pack_groups};
+use crate::hud::{atlas_image, pack_groups};
 use crate::{Textures, Track};
 
 /// The picture's material: its texels as they are, blended premultiplied.
