@@ -27,3 +27,28 @@ pub fn x(n: f32) -> Val {
 pub fn y(n: f32) -> Val {
     Val::Px(n * PIXEL.y)
 }
+
+/// The race's HUD. A group rather than a tuple, which holds 15 plugins at most.
+pub struct HudPlugins;
+
+impl PluginGroup for HudPlugins {
+    fn build(self) -> bevy::app::PluginGroupBuilder {
+        bevy::app::PluginGroupBuilder::start::<Self>()
+            .add(crate::leaderboard::LeaderboardPlugin)
+            .add(crate::lobby_list::LobbyListPlugin)
+            .add(crate::lights::LightsPlugin)
+            .add(crate::place::PlacePlugin)
+            .add(crate::laps::LapsPlugin)
+            .add(crate::weapon::WeaponPlugin)
+            .add(crate::tracker::TrackerPlugin)
+            .add(crate::wumpa_icon::WumpaIconPlugin)
+            .add(crate::minimap::MinimapPlugin)
+            .add(crate::heat::HeatPlugin)
+            .add(crate::clock::ClockPlugin)
+            .add(crate::slide_meter::SlideMeterPlugin)
+            .add(crate::speedometer::SpeedometerPlugin)
+            .add(crate::toast::ToastPlugin)
+            .add(crate::wrong_way::WrongWayPlugin)
+            .add(crate::version::VersionPlugin)
+    }
+}
