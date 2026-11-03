@@ -41,9 +41,9 @@ const RESERVES_WIDTH: f32 = 150.0;
 #[derive(Component)]
 pub(super) struct ReservesHud;
 
-/// "REC" or "DEMO" while a demo is being recorded or played.
+/// The online race's summary at the top right, with `/config set debug_hud`.
 #[derive(Component)]
-pub(super) struct DemoHud;
+pub(super) struct NetHud;
 
 pub(crate) fn spawn_hud(mut commands: Commands) {
     // The counter: a small "x" and the count in the big orange digits, level with the middle of
@@ -97,7 +97,7 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
         },
     ));
     commands.spawn((
-        DemoHud,
+        NetHud,
         Text::new(""),
         TextLayout::justify(Justify::Right),
         Node {
