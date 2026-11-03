@@ -80,6 +80,7 @@ mod suggest;
 mod toast;
 mod track_picture;
 mod tracker;
+mod unlit;
 mod version;
 mod weapon;
 mod weather;
@@ -247,6 +248,7 @@ fn main() {
         .add_plugins(sky::SkyPlugin)
         .add_plugins(drop_map::DropMapPlugin)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
+        .add_plugins(unlit::UnlitPlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(
             FixedUpdate,
