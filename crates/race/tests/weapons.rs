@@ -912,3 +912,78 @@ fn a_warpball_chases_the_leader_hurts_it_and_fades_away() {
     assert!(!race.weapons.warpball_held);
     assert_eq!(race.karts[shooter].driver.kart_state, kart_state::NORMAL);
 }
+
+/// A warpball fired from Cortex Castle's starting line finds the leader, who waits around the
+/// first corner, and hits it in due time: it follows the track round the corner, not a straight
+/// line into the wall.
+#[test]
+fn a_warpball_follows_the_track_round_a_corner_to_the_leader() {
+    let Some((level, mut race)) = race_on(LevelId::CORTEX_CASTLE, 2, |_| {}) else {
+        return;
+    };
+    let place = |race: &mut Race, slot: usize, [x, y, z]: [i32; 3]| {
+        race.karts[slot].driver.pos_curr = math::Vec3 {
+            x: x << 8,
+            y: y << 8,
+            z: z << 8,
+        };
+    };
+    // The shooter on the starting line, the leader around the corner.
+    let (shooter, leader) = (0, 1);
+    place(&mut race, shooter, [3399, 0, 6427]);
+    place(&mut race, leader, [-324, 0, 8947]);
+    // Nobody drives; the shooter fires once both have settled and been ranked.
+    let fire_on = 10;
+    let pads = |tick: u32| -> Vec<Pad> {
+        (0..2)
+            .map(|slot| Pad {
+                held: if slot == shooter && tick == fire_on {
+                    buttons::CIRCLE
+                } else {
+                    0
+                },
+                ..Pad::default()
+            })
+            .collect()
+    };
+    for tick in 0..fire_on {
+        race.tick(&level, &pads(tick));
+    }
+    assert_eq!(
+        (
+            race.karts[leader].driver.driver_rank,
+            race.karts[shooter].driver.driver_rank
+        ),
+        (0, 1),
+        "the kart around the corner leads"
+    );
+    vehicle::item::debug_roll(&mut race.karts[shooter].driver, held::WARPBALL);
+    race.weapons.warpball_held = true;
+
+    // About 110 units a tick, along some 6000 units of track: well under 150 ticks (five
+    // seconds).
+    let due = 150;
+    let mut hit = None;
+    for tick in fire_on..fire_on + due {
+        race.tick(&level, &pads(tick));
+        if tick == fire_on + 1 {
+            let balls = race.weapons.warpballs();
+            assert_eq!(balls.len(), 1, "fires on the next tick");
+            assert_eq!((balls[0].parent, balls[0].target), (shooter, Some(leader)));
+        }
+        let hits_leader = race
+            .last_weapons
+            .hits
+            .iter()
+            .any(|h| h.victim == leader && h.reason == weapon::Reason::Warpball);
+        if hits_leader {
+            hit = Some(tick - fire_on);
+            break;
+        }
+    }
+    let at = race.weapons.warpballs().first().map(|w| w.pos);
+    assert!(
+        hit.is_some(),
+        "the warpball reached the leader within {due} ticks (it is at {at:?})"
+    );
+}

@@ -13,7 +13,9 @@
 //! A beaker that shatters (`RB_Explosion_InitPotion`) is the red or green shockwave, half size.
 //! Each plays its animation a frame a tick and is gone at the end of it.
 //!
-//! Not shown: the missile's exhaust, the warpball's glow and reflection, the afterimage that follows a dropped mine, and (in split screen, which there is none of) the
+//! The warpball's glow is a heat lens, [`crate::heat`]'s.
+//!
+//! Not shown: the missile's exhaust, the warpball's reflection, the afterimage that follows a dropped mine, and (in split screen, which there is none of) the
 //! smaller burst.
 
 use ::weapon::Kind;
@@ -145,6 +147,13 @@ pub struct Body {
     /// Where it was and where it is, at the last two ticks.
     previous: Placed,
     current: Placed,
+}
+
+impl Body {
+    /// The weapon's id (`Projectile::id`, `Warpball::id`).
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
 }
 
 /// Which way an effect faces.

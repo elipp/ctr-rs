@@ -99,6 +99,7 @@ impl Plugin for ClockPlugin {
 /// The strength of our kart's screen this frame, and what it makes of the pass.
 fn update(
     sim: Res<Sim>,
+    config: Res<crate::config::Config>,
     fixed: Res<Time<Fixed>>,
     real: Res<Time<Real>>,
     mut trails: Query<&mut ClockTrail>,
@@ -112,7 +113,8 @@ fn update(
         *seen = Some((tick, now));
     }
     let stale = seen.is_some_and(|(_, at)| now - at > STALE_SECS);
-    let strength = if stale {
+    // Shader effects off: no trail, so no pass (and no picture kept).
+    let strength = if stale || !config.shader_effects {
         0
     } else {
         sim.race.last_blurs.get(sim.own).copied().unwrap_or(0)

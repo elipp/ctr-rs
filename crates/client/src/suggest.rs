@@ -313,6 +313,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ],
                 ),
                 node(
+                    "shader-effects",
+                    "Heat shimmer and the clock's trail",
+                    &[
+                        leaf("on", "Draw them"),
+                        leaf("off", "Skip them (faster)"),
+                    ],
+                ),
+                node(
                     "volume",
                     "Music, effects and voices",
                     &[

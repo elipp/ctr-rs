@@ -157,6 +157,13 @@ pub struct Warpball {
     dead: bool,
 }
 
+impl Warpball {
+    /// `ptrNodeCurr`, as an index into `restart_points` (it may be past the list's end).
+    pub fn node_curr(&self) -> usize {
+        self.node_curr
+    }
+}
+
 /// The node at `index`.
 fn node(nodes: &[CheckpointNode], index: usize) -> CheckpointNode {
     nodes.get(index).copied().unwrap_or(NOWHERE)
