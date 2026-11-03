@@ -305,12 +305,14 @@ pub(super) fn report(
         let members: Vec<Member> = players
             .iter()
             .zip(labels)
-            .map(|(p, label)| Member {
+            .enumerate()
+            .map(|(n, (p, label))| Member {
                 id: p.id,
                 key: p.id.fmt_short().to_string(),
                 label,
                 nick: p.nick.clone(),
                 character: p.character,
+                you: Some(n) == you,
             })
             .collect();
         for p in players.iter().chain(&spectators) {
