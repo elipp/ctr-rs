@@ -52,7 +52,14 @@ jobs:
       # `ring` (under iroh) compiles C for wasm32, which needs clang and llvm-ar.
       - name: clang
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang llvm
-      - run: cargo check -p client --target wasm32-unknown-unknown --locked
+      # Both browser builds, without the dev features, as `web/build.sh dist both` makes them.
+      - name: check (webgl2)
+        run: cargo check -p client --target wasm32-unknown-unknown --locked --no-default-features
+        env:
+          CC_wasm32_unknown_unknown: clang
+          AR_wasm32_unknown_unknown: llvm-ar
+      - name: check (webgpu)
+        run: cargo check -p client --target wasm32-unknown-unknown --locked --no-default-features --features webgpu
         env:
           CC_wasm32_unknown_unknown: clang
           AR_wasm32_unknown_unknown: llvm-ar
