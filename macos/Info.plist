@@ -12,6 +12,8 @@
 	<string>ctr-rs</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.racing-games</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>
