@@ -158,7 +158,7 @@ window.ctrSetRenderScale = (scale) => {
 };
 
 // Sound only starts after a key or click, so the game's audio contexts are resumed on one.
-// Must run before client.js is imported.
+// Must run before the game (`client-*.js`) is imported.
 const audio = [];
 window.AudioContext = new Proxy(window.AudioContext, {
   construct(target, args) {
@@ -190,16 +190,31 @@ for (const name of ["keydown", "pointerdown", "pointerup", "touchend", "click"])
 }
 </script>
 <script type="module">
-import init from "./client.js";
+// The builds of the game here, one for each way of drawing: `web/build.sh` puts the ones it made
+// in this list.
+const BUILT = ["webgl2"];
+// WebGPU where the browser has it (and an adapter to give), WebGL2 elsewhere.
+const backend = (async () => {
+  if (BUILT.includes("webgpu")) {
+    try {
+      if ((await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" })) != null) {
+        return "webgpu";
+      }
+    } catch (e) {
+      console.warn(`could not ask for WebGPU: ${e}`);
+    }
+  }
+  return BUILT.includes("webgl2") ? "webgl2" : BUILT[0];
+})();
 
 // The game's code is fetched and compiled from the start, while the player picks the disc and it is
 // read; `init` falls back to fetching it itself if that fails.
-const compiled = WebAssembly.compileStreaming(fetch(new URL("client_bg.wasm", import.meta.url))).catch(
-  (e) => {
+const compiled = backend
+  .then((b) => WebAssembly.compileStreaming(fetch(new URL(`client-${b}_bg.wasm`, import.meta.url))))
+  .catch((e) => {
     console.warn(`could not compile the game ahead: ${e}`);
     return null;
-  },
-);
+  });
 
 const drop = document.getElementById("drop");
 const status = document.getElementById("status");
@@ -468,6 +483,16 @@ async function start(stream, size, copy = null) {
   });
   status.textContent = "Starting";
   try {
+    const drawsWith = await backend;
+    console.info(`ctr-rs: drawing through ${drawsWith}: client-${drawsWith}.js, of ${BUILT.join(", ")}`);
+    // The fast GPU of a machine with two. Bevy asks WebGPU for it, but wgpu creates the WebGL2
+    // context without asking: this one is made first, and a canvas hands wgpu the context it
+    // already has (with the attributes it was made with, so wgpu's own `antialias: false` too). A
+    // canvas with a WebGL2 context has no WebGPU one, so WebGPU is left to Bevy.
+    if (drawsWith === "webgl2") {
+      canvas.getContext("webgl2", { antialias: false, powerPreference: "high-performance" });
+    }
+    const { default: init } = await import(`./client-${drawsWith}.js`);
     const module = await compiled;
     await init(module === null ? undefined : { module_or_path: module });
   } catch (e) {
@@ -482,13 +507,36 @@ async function start(stream, size, copy = null) {
   drop.classList.add("hidden");
   canvas.focus();
   touchGame.hidden = !hasTouch;
+  keepAwake();
   if (copy !== null) remember(copy).then(() => navigator.storage?.persist?.());
 }
+
+// The screen stays on while the game runs, which a race driven with a pad (no keys or mouse for the
+// system to see) would not. The browser lets go of the lock when the page is hidden, so it is
+// asked for again when the page is back; a crash lets go of it (`crashed`).
+let wakeLock = null;
+let askingWakeLock = false;
+async function keepAwake() {
+  const running = drop.classList.contains("hidden") && crash === null;
+  if (!running || !navigator.wakeLock || document.visibilityState !== "visible") return;
+  if (askingWakeLock || (wakeLock !== null && !wakeLock.released)) return;
+  askingWakeLock = true;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    if (crash !== null) wakeLock.release().catch(() => {});
+  } catch (e) {
+    console.warn(`could not keep the screen on: ${e}`);
+  } finally {
+    askingWakeLock = false;
+  }
+}
+document.addEventListener("visibilitychange", keepAwake);
 
 let crash = null;
 function crashed(message) {
   if (crash !== null) return;
   crash = message;
+  wakeLock?.release().catch(() => {});
   const starting = !drop.classList.contains("hidden");
   audio.forEach((context) => context.close().catch(() => {}));
   document.activeElement?.blur();
