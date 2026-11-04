@@ -32,6 +32,7 @@ use crate::drive::{ChaseCamera, Kart};
 use crate::kart::KartSlot;
 use crate::hud::atlas_image;
 use crate::loading::Loading;
+use crate::pixel::OwnTarget;
 use crate::lobby::Lobby;
 use crate::scene::{spawn_layers, spawn_parts};
 use crate::shadow::Shadow;
@@ -351,6 +352,7 @@ fn capture_target(images: &mut Assets<Image>) -> Handle<Image> {
 fn camera(order: isize, clear_color: ClearColorConfig, target: &Handle<Image>) -> impl Bundle {
     (
         OverlayCamera,
+        OwnTarget,
         Camera3d::default(),
         Camera {
             order,
