@@ -67,6 +67,10 @@ pub struct Present;
 #[derive(Component)]
 pub struct OnWindow;
 
+/// A camera that draws into an image of its own, which is left as it is: a picture of a track's.
+#[derive(Component)]
+pub struct OwnTarget;
+
 /// The order of the camera that puts the picture on the window: after the scene's cameras, which
 /// draw into the picture, and before the HUD's ([`OnWindow`]), which draw over it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -196,7 +200,7 @@ fn follow(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<
         (Entity, &Camera, &mut RenderTarget, &mut Projection, Has<OnWindow>),
-        Without<Present>,
+        (Without<Present>, Without<OwnTarget>),
     >,
     presenting: Query<Entity, (With<Present>, With<Camera>)>,
     present: Query<Entity, With<Present>>,
