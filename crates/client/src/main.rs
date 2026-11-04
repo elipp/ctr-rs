@@ -87,6 +87,8 @@ mod spider;
 mod submerge;
 mod subtract;
 mod suggest;
+#[cfg(any(target_arch = "wasm32", test))]
+mod texture_lets;
 mod toast;
 mod track_picture;
 mod tracker;
@@ -203,6 +205,8 @@ fn main() {
     app.add_plugins(plugins);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(window_icon::WindowIconPlugin);
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugins(texture_lets::TextureLetsPlugin);
     // Bevy's own font has no ä or ö: this one takes its place as the default.
     app.world_mut()
         .resource_mut::<Assets<Font>>()
