@@ -193,16 +193,17 @@ for (const name of ["keydown", "pointerdown", "pointerup", "touchend", "click"])
 // The builds of the game here, one for each way of drawing: `web/build.sh` puts the ones it made
 // in this list.
 const BUILT = ["webgl2"];
-// WebGPU where the browser has it (and an adapter to give), WebGL2 elsewhere.
+// WebGL2, unless `?backend=webgpu` asks for the WebGPU build (or it is the only one made). WebGPU is
+// opt-in for now: it has been the less dependable of the two, and WebKit's WGSL compiler (Safari,
+// and every browser on iOS) holds to the spec where Chrome's and naga's do not, and rejects Bevy's
+// PBR shader for its texture-typed `let`s.
+const asked = new URLSearchParams(location.search).get("backend");
 const backend = (async () => {
-  if (BUILT.includes("webgpu")) {
-    try {
-      if ((await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" })) != null) {
-        return "webgpu";
-      }
-    } catch (e) {
-      console.warn(`could not ask for WebGPU: ${e}`);
+  if (asked != null) {
+    if (BUILT.includes(asked)) {
+      return asked;
     }
+    console.warn(`ctr-rs: backend=${asked} asked for, but the builds here are ${BUILT.join(", ")}`);
   }
   return BUILT.includes("webgl2") ? "webgl2" : BUILT[0];
 })();

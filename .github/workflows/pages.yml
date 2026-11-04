@@ -39,8 +39,9 @@ jobs:
       # `ring` (under iroh) compiles C for wasm32, which needs clang and llvm-ar.
       - name: clang
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang llvm
-      # The WebGL2 build and the WebGPU one: the page picks by what the browser has.
-      - run: ./web/build.sh dist both
+      # WebGL2 only. The WebGPU build (`web/build.sh dist both`, then `?backend=webgpu`) is left out
+      # until it draws dependably.
+      - run: ./web/build.sh dist webgl2
         env:
           LLVM: /usr
       - uses: actions/upload-pages-artifact@v5
