@@ -1,8 +1,8 @@
 #!/bin/sh
 # Usage: web/build.sh [release|dev|dist] [webgl2|webgpu|both], into target/web. Needs
 # wasm-bindgen-cli at Cargo.lock's version, wasm-opt for dist, and an LLVM clang that targets wasm
-# (brew install llvm, or LLVM=<prefix>). The page draws through WebGPU where the browser has it and
-# that build was made, and through WebGL2 elsewhere; with webgpu alone, a browser without WebGPU
+# (brew install llvm, or LLVM=<prefix>). The page draws through WebGL2, and through WebGPU only when
+# asked (`?backend=webgpu`) or when that is the only build made; then a browser without WebGPU
 # shows nothing.
 set -eu
 cd "$(dirname "$0")/.."
