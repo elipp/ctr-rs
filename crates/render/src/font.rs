@@ -43,7 +43,7 @@ impl Font {
     }
 
     /// The glyphs that the disc's font does not have and [`FontAtlas::new`] draws itself, after
-    /// the disc's: `#`, `(`, `)`, `[` and `]` in the middle font, none in the large one.
+    /// the disc's: `#`, `(`, `)`, `[`, `]`, `"` and `;` in the middle font, none in the large one.
     const fn own_glyphs(self) -> &'static [[&'static str; 8]] {
         match self {
             Font::Large => &[],
@@ -74,10 +74,12 @@ const OPEN: usize = OWN + 1;
 const CLOSE: usize = OWN + 2;
 const OPEN_BRACKET: usize = OWN + 3;
 const CLOSE_BRACKET: usize = OWN + 4;
+const QUOTE: usize = OWN + 5;
+const SEMICOLON: usize = OWN + 6;
 
-/// The middle font's own glyphs (`#`, `(`, `)`, `[` and `]`), drawn in the style of its `H`, `=` and `/`:
+/// The middle font's own glyphs (`#`, `(`, `)`, `[`, `]`, `"` and `;`), drawn in the style of its `H`, `=` and `/`:
 /// `.` is transparent, `o` the outline and `#` the fill.
-const OWN_MIDDLE: [[&str; 8]; 5] = [
+const OWN_MIDDLE: [[&str; 8]; 7] = [
     [
         "..ooooooo...",
         "ooo##o##ooo.",
@@ -128,6 +130,26 @@ const OWN_MIDDLE: [[&str; 8]; 5] = [
         "ooooo.",
         "......",
     ],
+    [
+        "ooooo.",
+        "o#o#o.",
+        "o#o#o.",
+        "ooooo.",
+        "......",
+        "......",
+        "......",
+        "......",
+    ],
+    [
+        "......",
+        "......",
+        "ooooo.",
+        "o###o.",
+        "ooooo.",
+        "o###o.",
+        "oo##o.",
+        ".oooo.",
+    ],
 ];
 
 /// The outline and fill texels of the discs' fonts, as RGBA.
@@ -155,6 +177,8 @@ pub fn glyph(c: char) -> Option<usize> {
         ')' => CLOSE,
         '[' => OPEN_BRACKET,
         ']' => CLOSE_BRACKET,
+        '"' => QUOTE,
+        ';' => SEMICOLON,
         '?' => QUESTION,
         '_' => 47,
         '/' => 48,
@@ -164,14 +188,14 @@ pub fn glyph(c: char) -> Option<usize> {
 
 /// Whether text in `font` can show this character: a space, or one that has a glyph, whether from
 /// the disc or one that [`FontAtlas::new`] draws itself (which the large font has none of: it shows
-/// `?` for `#`, `(`, `)`, `[` and `]`). What the in-game text (toasts) is checked against: text with a
+/// `?` for `#`, `(`, `)`, `[`, `]`, `"` and `;`). What the in-game text (toasts) is checked against: text with a
 /// character that fails this is written in Bevy's font.
 pub fn drawable(font: Font, c: char) -> bool {
     c == ' ' || glyph(c).is_some_and(|i| i < OWN + font.own_glyphs().len())
 }
 
 /// Whether the discs' fonts have the character: [`drawable`] in any font, without the glyphs that
-/// [`FontAtlas::new`] draws itself (`#`, `(`, `)`, `[` and `]`). What a lobby name is made of, because the
+/// [`FontAtlas::new`] draws itself (`#`, `(`, `)`, `[`, `]`, `"` and `;`). What a lobby name is made of, because the
 /// realm and the builds that join through it were made before those glyphs: a name with one
 /// would show as `?` there. `realm_proto::is_name_char` is this, which the client's tests check.
 pub fn in_original_fonts(c: char) -> bool {
@@ -425,8 +449,10 @@ mod tests {
         assert_eq!(glyph(')'), Some(CLOSE));
         assert_eq!(glyph('['), Some(OPEN_BRACKET));
         assert_eq!(glyph(']'), Some(CLOSE_BRACKET));
+        assert_eq!(glyph('"'), Some(QUOTE));
+        assert_eq!(glyph(';'), Some(SEMICOLON));
         // The glyphs of its own are drawable but not in the original fonts; a space is both.
-        for c in ['#', '(', ')', '[', ']'] {
+        for c in ['#', '(', ')', '[', ']', '"', ';'] {
             assert!(drawable(Font::Middle, c) && !in_original_fonts(c), "{c:?}");
             assert!(!drawable(Font::Large, c), "{c:?}");
         }
@@ -467,8 +493,8 @@ mod tests {
             return;
         };
         for atlas in &fonts {
-            // The disc's 57, and the middle font's own `#`, `(`, `)`, `[` and `]`.
-            let own = if atlas.font() == Font::Middle { 5 } else { 0 };
+            // The disc's 57, and the middle font's own `#`, `(`, `)`, `[`, `]`, `"` and `;`.
+            let own = if atlas.font() == Font::Middle { 7 } else { 0 };
             assert_eq!(atlas.glyphs().len(), OWN + own, "{:?}", atlas.font());
             // Every digit and letter has texels, and is no wider than its cell.
             for glyph in &atlas.glyphs()[..36] {

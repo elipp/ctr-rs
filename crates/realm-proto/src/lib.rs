@@ -34,8 +34,8 @@ pub const TRANSFER_SECONDS: u64 = 10;
 pub const MAX_LOBBIES: usize = 1000;
 
 /// Whether a lobby's name may have this char: the ones the discs' fonts have, which show a name as
-/// the menus do, and a space. (Letters are capitals there, whatever their case.) Not `#`, `(`, `)`, `[`
-/// and `]`, which the middle font has since been given: older builds could not draw them. The
+/// the menus do, and a space. (Letters are capitals there, whatever their case.) Not `#`, `(`, `)`, `[`,
+/// `]`, `"` and `;`, which the middle font has since been given: older builds could not draw them. The
 /// client's tests keep this equal to `render::font::in_original_fonts`.
 pub fn is_name_char(c: char) -> bool {
     c == ' '
