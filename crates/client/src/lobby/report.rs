@@ -139,6 +139,7 @@ pub(super) fn report(
                     desync: Vec::new(),
                     announced: 0,
                     gone: vec![false; characters_len],
+                    finished: vec![false; characters_len],
                     watching: if slot < characters_len { slot } else { 0 },
                     asked: Vec::new(),
                     frozen: vec![false; characters_len],

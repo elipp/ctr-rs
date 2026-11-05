@@ -512,11 +512,19 @@ impl Race {
             kart_collisions: self.kart_collisions,
             ..Env::default()
         };
+        // A kart that has crossed the line takes no more of its pad: it coasts. So nobody needs
+        // a finished player's pads to play a tick right, and it can watch the others as a
+        // spectator does (see the client's `drive_tick`).
         let inputs: Vec<Input> = self
             .karts
             .iter_mut()
             .zip(pads)
             .map(|(kart, pad)| {
+                let pad = if kart.driver.actions_flag_set & actions::RACE_FINISHED != 0 {
+                    Pad::default()
+                } else {
+                    *pad
+                };
                 let input = pad.input(kart.held);
                 kart.held = pad.held;
                 input

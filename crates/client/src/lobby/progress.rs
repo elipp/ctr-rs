@@ -138,8 +138,8 @@ pub(super) fn finish(
 
 /// Keeps the clock of an online race with the others': it catches up after a hitch, and runs a bit
 /// slow while it is ahead of any of them (the ones behind do not hurry; they play on as they do).
-/// A spectator's clock follows the pads that have come instead: it plays only the ticks that have
-/// all of them, and keeps a few of those in hand.
+/// A spectator's clock, or a finished player's, follows the pads that have come instead: it plays
+/// only the ticks that have all of them, and keeps a few of those in hand.
 /// Offline it runs as fast as the effects panel says (`/debug fx speed`).
 pub(super) fn pace(
     lobby: Res<Lobby>,
@@ -155,16 +155,18 @@ pub(super) fn pace(
     if time.max_delta() != max_delta {
         time.set_max_delta(max_delta);
     }
+    // (A player that has finished is left out: the race does not wait for its pads, so being
+    // ahead of it is no matter.)
     let ahead = running.map_or(0.0, |net| {
         net.ahead
             .iter()
             .enumerate()
-            .filter(|&(slot, _)| slot != net.slot)
+            .filter(|&(slot, _)| slot != net.slot && !net.finished.get(slot).copied().unwrap_or(false))
             .fold(0.0_f32, |most, (_, &a)| most.max(a))
     });
     let speed = match &fx {
         Some(fx) if lobby.online.is_none() => fx.speed,
-        _ if let Some(net) = running.filter(|net| net.spectating()) => (1.0
+        _ if let Some(net) = running.filter(|net| net.watches()) => (1.0
             + SPECTATE_GAIN * (net.buffered - SPECTATE_BUFFER))
             .clamp(SLOWEST, SPECTATE_FASTEST),
         _ => (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST),

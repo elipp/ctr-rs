@@ -57,7 +57,8 @@ pub(super) struct Shown<'w, 's> {
 #[derive(Default)]
 pub(super) struct Memory {
     was_paused: bool,
-    /// The ticks waited for a late player, and the buttons a spectator held last tick.
+    /// The ticks waited for a late player, and the buttons held last tick (a watching client's
+    /// pick the kart to follow).
     waits: (u32, u32),
 }
 
@@ -225,18 +226,44 @@ pub(super) fn drive_tick(
     for (slot, first, pads) in reports {
         lobby.have(slot, first, pads);
     }
+    // Who has crossed the line, as the sim has it now. The sim takes no more of their pads, so
+    // once ours has, we watch the rest of the race as a spectator does (below).
+    let watches = match lobby.online.as_mut() {
+        Some(net) => {
+            net.finished = sim
+                .race
+                .karts
+                .iter()
+                .map(|kart| kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
+                .collect();
+            net.watches()
+        }
+        None => false,
+    };
     // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
     // rollback window) and predict the others further and further. It waits for them instead.
     // A spectator has nothing to show quickly, so it predicts nothing: it plays a tick once
     // everyone's pad for it is in, and its karts are drawn as they really went (a hop that is
     // over before its pad comes would not show otherwise). `pace` keeps a few such ticks in
     // hand, so that it seldom waits.
+    // A player that has finished does the same: its kart takes no pad any more, so there is
+    // nothing to be quick about. When it crosses the line its sim is ahead of the ticks that
+    // have everyone's pad, and it waits for those to catch up: the race stops for about the
+    // others' delay. A watching client does not wait for the karts that have finished: the sim
+    // ignores their pads (and they would wait for each other).
+    let finished_slot = |slot: usize| {
+        lobby
+            .online
+            .as_ref()
+            .is_some_and(|net| net.finished.get(slot).copied().unwrap_or(false))
+    };
     let late: Vec<usize> = if online {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
+            .filter(|&slot| !(watches && finished_slot(slot)))
             .filter(|&slot| {
                 let until = sim.race.confirmed_until(slot);
-                if spectating {
+                if watches {
                     tick >= until
                 } else {
                     tick > until.saturating_add(MAX_LEAD)
@@ -246,9 +273,14 @@ pub(super) fn drive_tick(
     } else {
         Vec::new()
     };
-    if spectating && let Some(net) = lobby.online.as_mut() {
-        // (Once everyone has left, nothing is waited for: as if the buffer were full.)
-        let complete = sim.race.complete();
+    if watches && let Some(net) = lobby.online.as_mut() {
+        // (Once everyone has left or finished, nothing is waited for: as if the buffer were
+        // full.)
+        let complete = (0..sim.race.players())
+            .filter(|&slot| !net.finished[slot])
+            .map(|slot| sim.race.confirmed_until(slot))
+            .min()
+            .unwrap_or(u32::MAX);
         let buffered = if complete == u32::MAX {
             crate::lobby::SPECTATE_BUFFER
         } else {
@@ -258,8 +290,9 @@ pub(super) fn drive_tick(
     }
     if !late.is_empty() {
         // (The host removes a player that stays silent: see `net::KICK_AFTER`.) A spectator
-        // waits a tick now and then; it says so when it is as late as a player would wait.
-        let quiet = if spectating { MAX_LEAD } else { 0 };
+        // (or a finished player) waits a tick now and then; it says so when it is as late as a
+        // player would wait.
+        let quiet = if watches { MAX_LEAD } else { 0 };
         if waits.0 >= quiet
             && (waits.0 - quiet) % WAIT_TOAST_TICKS == 0
             && let Some(net) = lobby.online.as_ref()
@@ -283,18 +316,23 @@ pub(super) fn drive_tick(
     waits.0 = 0;
     // Which way R1 and L1 were tapped this tick, to change the kart the camera follows.
     let mut cycle = 0;
-    // A spectator has no pad to play, but its R1 and L1 pick the kart to follow all the same.
-    if spectating {
+    // A spectator has no pad to play, nor does a finished player that the sim ignores, but their
+    // R1 and L1 pick the kart to follow all the same.
+    if watches {
         let held = controller.read(waits.1).buttons_held;
         let taps = held & !waits.1;
         waits.1 = held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
     }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
-    // others get it as well. (A tick that waits plays the pad it already has.)
+    // others get it as well. (A tick that waits plays the pad it already has.) Once we have
+    // finished it is neutral: the sim ignores it, and the others still wait for it (so that the
+    // host does not take us for gone), and predict it right.
     if !spectating && sim.race.confirmed_until(own) <= tick {
         let held = sim.kart().held;
-        let pad = if online && hold.menu.open {
+        let pad = if watches {
+            Pad::default()
+        } else if online && hold.menu.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if online {
@@ -302,8 +340,12 @@ pub(super) fn drive_tick(
         } else {
             Pad::of_input(&controller.read(held))
         };
-        let taps = pad.held & !held;
-        cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
+        if !watches {
+            let taps = pad.held & !held;
+            cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
+            // (So that an R1 held over the line is not taken for a tap once we watch.)
+            waits.1 = pad.held;
+        }
         sim.race
             .confirm(own, tick, pad)
             .expect("our pads come in order");
