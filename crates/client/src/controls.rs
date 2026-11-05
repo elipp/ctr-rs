@@ -177,10 +177,8 @@ impl Controls {
 pub fn taken(key: KeyCode) -> Option<&'static str> {
     Some(match key {
         KeyCode::Escape | KeyCode::KeyP => "opens the menu",
-        KeyCode::Enter | KeyCode::NumpadEnter => "opens the command line",
-        KeyCode::KeyR => "restarts the race",
+        KeyCode::Enter => "opens the command line",
         KeyCode::F3 => "opens the effects panel",
-        KeyCode::F7 | KeyCode::F8 => "stalls the client",
         KeyCode::Home => "resets the camera",
         KeyCode::BracketLeft | KeyCode::BracketRight | KeyCode::PageUp | KeyCode::PageDown => {
             "changes the level"
@@ -341,7 +339,7 @@ mod tests {
         assert!(text.contains(r#""gas":["KeyW"]"#), "{text}");
         assert_eq!(serde_json::from_str::<Controls>(&text).unwrap(), controls);
 
-        let text = r#"{"left": ["KeyA", "NoSuchKey"], "item": ["KeyR"]}"#;
+        let text = r#"{"left": ["KeyA", "NoSuchKey"], "item": ["KeyP"]}"#;
         let read: Controls = serde_json::from_str(text).unwrap();
         assert_eq!(read.keys(Control::Left), [KeyCode::KeyA]);
         assert!(read.keys(Control::Item).is_empty());

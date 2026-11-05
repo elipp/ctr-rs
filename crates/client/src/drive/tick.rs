@@ -25,10 +25,7 @@ const MAX_LEAD: u32 = 60;
 /// stays that long.
 const WAIT_TOAST_TICKS: u32 = 90;
 
-/// How long F7 and F8 freeze an online client for.
-const STALLS_MS: [u64; 2] = [500, 2000];
-
-/// Freezes this client for `time`. A browser cannot sleep: there it spins.
+/// Freezes this client for `time` (`/debug stall`). A browser cannot sleep: there it spins.
 fn stall(time: std::time::Duration) {
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::sleep(time);
@@ -57,8 +54,6 @@ pub(super) struct Shown<'w, 's> {
 #[derive(Default)]
 pub(super) struct Memory {
     was_paused: bool,
-    /// F7 and F8, for their edges.
-    keys_held: [bool; 2],
     /// The ticks waited for a late player, and the buttons a spectator held last tick.
     waits: (u32, u32),
 }
@@ -85,11 +80,9 @@ pub(super) fn drive_tick(
     } = shown;
     let Memory {
         was_paused,
-        keys_held,
         waits,
     } = &mut *memory;
     let drive = &mut *drive;
-    let keys = &controller.keys;
     // In an online race the sim is everyone's: no pause, no restarts.
     let online = lobby.online.is_some();
     // The level of the race is not up yet, nor the karts of the others.
@@ -118,10 +111,10 @@ pub(super) fn drive_tick(
         return;
     }
 
-    // R (or the menu's RESTART) is the grid: every start puts everything, the objects too, back
+    // The menu's RESTART is the grid: every start puts everything, the objects too, back
     // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
-    let mut restart = (keys.pressed(KeyCode::KeyR) || picked) && !online;
+    let mut restart = picked && !online;
     // The lobby closed, or the race failed: back to the grid with our kart alone.
     if !online && sim.race.karts.len() != 1 {
         restart = true;
@@ -149,19 +142,6 @@ pub(super) fn drive_tick(
         drive.confetti = default();
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
-
-    // F7 and F8 freeze this client for a moment, to see the race put right after a hitch: the
-    // clock does not catch up (the frame is cut short), so the others run ahead and we wait.
-    // Edges are found here, not with `just_pressed`: that is cleared every rendered frame, and
-    // a frame can pass without a tick.
-    let stall_down = [KeyCode::F7, KeyCode::F8].map(|key| online && keys.pressed(key));
-    for (i, millis) in STALLS_MS.into_iter().enumerate() {
-        if stall_down[i] && !keys_held[i] {
-            debug!("(debug) stalling for {millis} ms");
-            stall(std::time::Duration::from_millis(millis));
-        }
-    }
-    *keys_held = stall_down;
 
     // Tick 0 has to come first: the others must be ready as well.
     if lobby.online.as_ref().is_some_and(|net| !net.go) {
@@ -478,7 +458,8 @@ pub(super) fn debug_actions(
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
-        // Like F7 and F8, for as long as asked: the frame is cut short, so the others run ahead.
+        // Freeze for as long as asked, to see the race put right after a hitch: the frame is cut
+        // short, so the others run ahead.
         if let Action::DebugStall(time) = action {
             if lobby.online.is_some() {
                 debug!("(debug) stalling for {time:?}");
