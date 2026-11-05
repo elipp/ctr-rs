@@ -8,6 +8,7 @@ use std::time::Duration;
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId, Watcher};
 use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, timeout};
+use tracing::debug;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::conn::{
@@ -15,7 +16,7 @@ use crate::conn::{
     stamp,
 };
 use crate::peers::{
-    Departure, Guest, Handoff, Heirs, HostState, Link, Plan, Role, dial_links, stalled, start_over,
+    Departure, Guest, Handoff, Heirs, HostState, Link, Plan, Role, dial_links, roster_nats, stalled, start_over,
 };
 use crate::punch::{ACCEPTED_FOR, Puncher};
 use crate::realm::Publisher;
@@ -157,19 +158,33 @@ fn refresh_listing(host: &HostState, build: u32) {
     }
 }
 
-/// The session of a lobby host or of a player who joined one. They differ in the lobby (the
-/// host takes the joins and starts the race) and in the barrier before tick 0 (the host collects
-/// the [`Message::Ready`]s and sends the [`Message::Go`]); the race is the same for both.
 /// Whether our NAT gives another public address for each peer we talk to, as far as iroh has
-/// found out (not, until it has). A player behind one can only be reached by dialing.
-fn hard_nat(endpoint: &Endpoint) -> bool {
+/// found out (none until it has).
+fn nat_report(endpoint: &Endpoint) -> Option<bool> {
     endpoint
         .net_report()
         .get()
         .and_then(|report| report.mapping_varies_by_dest())
-        .unwrap_or(false)
 }
 
+/// Whether our NAT is the hard kind (see [`nat_report`]): not, until iroh has found out. A player
+/// behind one can only be reached by dialing.
+fn hard_nat(endpoint: &Endpoint) -> bool {
+    nat_report(endpoint).unwrap_or(false)
+}
+
+/// What [`nat_report`] says, for the log.
+fn describe_nat(report: Option<bool>) -> &'static str {
+    match report {
+        Some(true) => "hard (its mapping varies by destination)",
+        Some(false) => "easy",
+        None => "not known yet (taken as easy)",
+    }
+}
+
+/// The session of a lobby host or of a player who joined one. They differ in the lobby (the
+/// host takes the joins and starts the race) and in the barrier before tick 0 (the host collects
+/// the [`Message::Ready`]s and sends the [`Message::Go`]); the race is the same for both.
 pub(crate) async fn run(
     endpoint: Endpoint,
     mut io: Io,
@@ -227,6 +242,11 @@ pub(crate) async fn run(
                 },
             )
             .await?;
+            debug!(
+                host = %ticket.id.fmt_short(),
+                "told the host our NAT is {}",
+                describe_nat(nat_report(&endpoint))
+            );
             hellos = 1;
             listen(connection.clone(), ticket.id, heard_tx.clone());
             host_connection = Some(connection);
@@ -247,7 +267,7 @@ pub(crate) async fn run(
     // What our NAT is, as we last told the host. iroh may not have found out yet when we join,
     // so we tell it again when it has: the host needs it right for who dials whom in a race.
     let mut net_report = endpoint.net_report();
-    let mut nat_hard = hard_nat(&endpoint);
+    let mut nat = nat_report(&endpoint);
     let mut race_on = false;
     let (reached_tx, mut reached) = unbounded_channel::<(EndpointId, Option<Connection>)>();
 
@@ -365,6 +385,7 @@ pub(crate) async fn run(
                             let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
                             let _ = send_reliably(&connection, &hello).await;
                             let _ = send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await;
+                            debug!(host = %candidate.fmt_short(), "told the new host our NAT is {}", describe_nat(nat_report(&endpoint)));
                             hellos += 1;
                         }
                         None => {
@@ -616,6 +637,7 @@ pub(crate) async fn run(
                     Message::Nat { hard } => if let Some(host) = &mut host
                         && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
                     {
+                        debug!(guest = %from.fmt_short(), hard, "a guest told us its NAT");
                         guest.hard = hard;
                     },
                     // (It may beat the Hello: the guest is in the lobby once that comes.)
@@ -1010,14 +1032,18 @@ pub(crate) async fn run(
                 }
             },
             Ok(_) = net_report.updated() => {
-                let hard = hard_nat(&endpoint);
-                if hard != nat_hard {
-                    nat_hard = hard;
-                    if host.is_none()
+                let report = nat_report(&endpoint);
+                if report != nat {
+                    debug!("our NAT is {}", describe_nat(report));
+                    let hard = report.unwrap_or(false);
+                    if hard != nat.unwrap_or(false)
+                        && host.is_none()
                         && let Some(connection) = &host_connection
                     {
                         let _ = send_reliably(connection, &Message::Nat { hard }).await;
+                        debug!(host = %host_id.fmt_short(), hard, "told the host our NAT again");
                     }
+                    nat = report;
                 }
             }
             _ = ping_timer.tick() => {
@@ -1236,6 +1262,7 @@ pub(crate) async fn run(
             let hard: Vec<bool> = std::iter::once(hard_nat(&endpoint))
                 .chain(ordered.iter().map(|g| g.hard))
                 .collect();
+            debug!(roster = %roster_nats(&roster, &hard), "starting race {epoch}");
             for (i, guest) in ordered.iter().enumerate() {
                 let start = Message::Start {
                     epoch,

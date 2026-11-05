@@ -11,3 +11,4 @@ iroh = { version = "1.4.1", features = ["unstable-net-report"] }
 n0-future = "0.3.2"
 realm-proto = { path = "../realm-proto" }
 tokio = { version = "1.54", features = ["rt", "sync", "macros", "time"] }
+tracing = "0.1"
