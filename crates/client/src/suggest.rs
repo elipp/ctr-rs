@@ -329,6 +329,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ],
                 ),
                 node(
+                    "global-voices",
+                    "Others' voice lines heard from anywhere",
+                    &[
+                        leaf("on", "Full volume, wherever the kart is"),
+                        leaf("off", "Heard from where the kart is"),
+                    ],
+                ),
+                node(
                     "volume",
                     "Music, effects and voices",
                     &[

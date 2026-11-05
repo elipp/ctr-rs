@@ -402,6 +402,7 @@ struct Kept {
 pub struct Sfx<'w> {
     sounds: Res<'w, Sounds>,
     kept: ResMut<'w, Kept>,
+    config: Res<'w, crate::config::Config>,
 }
 
 impl Sfx<'_> {
@@ -496,6 +497,12 @@ impl Sfx<'_> {
                             .find(|d| d.driver_id == driver_id)
                             .map_or(driver.character, |d| d.character);
                         // A kart's voice is heard from where it is; out of earshot it is not said.
+                        // Unless the config says the voices carry everywhere, as in retail.
+                        let heard = if self.config.global_voices {
+                            Some((u8::MAX, CENTRE))
+                        } else {
+                            heard
+                        };
                         if let Some((volume, pan)) = heard {
                             let sfx = howl::Sfx {
                                 volume,
