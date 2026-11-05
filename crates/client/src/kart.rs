@@ -274,6 +274,14 @@ impl KartMotion {
         };
     }
 
+    /// How far a rollback's offset moves the drawing from where the sim has the kart, `t` of the
+    /// way through the tick: what [`KartMotion::pose`] adds to the translation.
+    pub fn eased_offset(&self, t: f32) -> Vec3 {
+        self.previous_offset
+            .translation
+            .lerp(self.offset.translation, t)
+    }
+
     /// Between the last two ticks, `t` of the way to the latest.
     pub fn pose(&self, t: f32) -> Pose {
         let (from, to) = (&self.previous_offset, &self.offset);
@@ -306,10 +314,7 @@ impl KartMotion {
             Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
         };
         // (The ground does not move with a rollback's offset, but where the kart is drawn does.)
-        let eased = self
-            .previous_offset
-            .translation
-            .lerp(self.offset.translation, t);
+        let eased = self.eased_offset(t);
         Some((
             place(&before).lerp(place(&now), t) + Vec3::new(eased.x, 0.0, eased.z),
             Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
@@ -570,13 +575,15 @@ pub fn show(
 #[derive(Component)]
 pub struct HiddenWithKart;
 
-/// A kart that is not drawn (a plant ate it) takes everything that belongs to it along: its
+/// A kart that is not drawn (a plant ate it, or it is a spectator's own) takes everything that
+/// belongs to it along: its
 /// wheels, shadow, smoke, tire marks, mask and shield. This is the one place that says so; the
 /// parts only decide when they show otherwise. When the kart is back the parts show as they
 /// would (each decides that again on its next update).
 pub fn hide_parts(
     mut commands: Commands,
-    karts: Query<&KartMotion>,
+    // (Not a part's: the parts' visibilities are written below.)
+    karts: Query<(&KartMotion, &Visibility), (Without<Attached>, Without<crate::wheels::Wheels>)>,
     mut attached: Query<
         (Entity, &Attached, &mut Visibility, Has<HiddenWithKart>),
         Without<crate::wheels::Wheels>,
@@ -589,8 +596,12 @@ pub fn hide_parts(
     )>,
 ) {
     let mut hide = |entity: Entity, kart: Entity, visibility: &mut Visibility, hidden: bool| {
-        let Ok(motion) = karts.get(kart) else { return };
-        if motion.is_hidden() {
+        let Ok((motion, shown)) = karts.get(kart) else {
+            return;
+        };
+        // Hidden as `show` hides the body: eaten, or a spectator's own kart, which follows the
+        // kart it watches and would draw its wheels over that kart's (in `KART_LAYER`).
+        if motion.is_hidden() || *shown == Visibility::Hidden {
             *visibility = Visibility::Hidden;
             if !hidden {
                 commands.entity(entity).insert(HiddenWithKart);
