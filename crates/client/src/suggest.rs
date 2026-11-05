@@ -486,6 +486,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
             ),
             leaf("ranking", "Random ranking (host)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
+            Spec {
+                name: "lag",
+                about: "Hold back the others' pads here",
+                options: &[leaf("off", "No lag")],
+                arg: Some("<delay> [jitter], like 75ms 15ms"),
+            },
             node(
                 "fx",
                 "Try a visual effect (alone: the panel)",

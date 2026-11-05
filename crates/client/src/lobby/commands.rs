@@ -110,6 +110,7 @@ pub(super) fn run(
     time: Res<Time<Real>>,
     mut smoothing: ResMut<crate::kart::Smoothing>,
     mut rollbacks: ResMut<RollbackToasts>,
+    mut lag: ResMut<super::lag::FakeLag>,
     mut config: ResMut<crate::config::Config>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
@@ -242,6 +243,16 @@ pub(super) fn run(
                 // Takes hold at the next tick, in a race or out of one.
                 *smoothing = *how;
                 toasts.write(Toast::new(format!("Smoothing: {how}"), 2500));
+                continue;
+            }
+            Action::DebugLag(how) => {
+                // The pads held back now keep their time; with the lag off they all go at once.
+                lag.lag = *how;
+                let text = match how {
+                    Some(how) => format!("Pads of the others held back {how} (here only)"),
+                    None => "No lag on the pads of the others".to_string(),
+                };
+                toasts.write(Toast::new(text, 2500));
                 continue;
             }
             Action::NetRollbacks(on) => {

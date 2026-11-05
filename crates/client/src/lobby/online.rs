@@ -26,6 +26,8 @@ pub struct Online {
     /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
     /// the pads).
     pub inbox: Vec<(usize, u32, Vec<Pad>)>,
+    /// The pads of the others that `/debug lag` holds back before they go in the inbox.
+    pub delayed: super::lag::Delayed,
     /// Set by the start and cleared by `drive_tick`, which puts the sim back to tick 0.
     pub fresh: bool,
     /// Set once `remote::build` has put the other karts on the grid.
