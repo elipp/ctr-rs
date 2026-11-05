@@ -277,8 +277,6 @@ const TRACK: usize = 160;
 const TRACK_HEIGHT: usize = 10;
 const KNOB: usize = 5;
 const KNOB_HEIGHT: usize = 12;
-/// The width of a volume's label.
-const LABEL: usize = 56;
 /// `Options_VolumeSlider_Colors`: the wedge's colour at its point, and at its end.
 const WEDGE_FROM: [u8; 3] = [0, 0, 0x20];
 const WEDGE_TO: [u8; 3] = [0x80, 0x80, 0xff];
@@ -315,7 +313,7 @@ struct Shown {
 #[derive(Component)]
 struct List;
 
-/// An item's text, and its place in the menu.
+/// A cell of an item, and the item's place in the menu.
 #[derive(Component)]
 struct Row(usize);
 
@@ -842,12 +840,15 @@ fn spawn(
     if let Some(list) = about {
         spawn_about(commands, panel, list, size);
     }
+    // Two columns: the labels, and the values and volumes left-aligned beside them. An item
+    // without either spans both.
     let list = commands
         .spawn((
             ChildOf(panel),
             List,
             Node {
-                flex_direction: FlexDirection::Column,
+                display: Display::Grid,
+                grid_template_columns: RepeatedGridTrack::auto(2),
                 align_self: AlignSelf::Stretch,
                 max_height: size.y(LIST_TEXELS),
                 overflow: Overflow::scroll_y(),
@@ -858,67 +859,69 @@ fn spawn(
         .id();
     for (i, item) in items.into_iter().enumerate() {
         let text = CtrText::new(item.label, Font::Middle, gradient(i == selected));
-        // A setting has its label at the left and its value at the right.
-        let justify = if item.value.is_some() {
-            JustifyContent::SpaceBetween
-        } else {
-            JustifyContent::Center
-        };
-        let row = commands
-            .spawn((
-                ChildOf(list),
-                Row(i),
-                Node {
-                    width: Val::Percent(100.0),
-                    justify_content: justify,
-                    align_items: AlignItems::Center,
-                    column_gap: size.x(16),
-                    padding: UiRect::vertical(size.y(2)),
-                    ..default()
-                },
-            ))
-            .id();
+        let paired = item.value.is_some() || matches!(item.item, Item::Volume(_));
+        if !paired {
+            let only = cell(commands, list, i, size, |node| {
+                node.grid_column = GridPlacement::span(2);
+                node.justify_content = JustifyContent::Center;
+            });
+            commands.spawn((ChildOf(only), text));
+            continue;
+        }
+        // (The label's padding is the gap, so that pointing between the two still picks.)
+        let label = cell(commands, list, i, size, |node| {
+            node.padding.right = size.x(16);
+        });
+        commands.spawn((ChildOf(label), text));
+        let value_cell = cell(commands, list, i, size, |_| {});
         if let Some(value) = item.value {
-            commands.spawn((ChildOf(row), text));
             commands.spawn((
-                ChildOf(row),
+                ChildOf(value_cell),
                 CtrText::new(value, Font::Middle, gradient(i == selected)),
             ));
         } else if let Item::Volume(slider) = item.item {
-            commands.spawn((
-                ChildOf(row),
-                text,
-                Node {
-                    width: size.x(LABEL),
-                    ..default()
-                },
-            ));
-            spawn_track(commands, row, slider, size, wedge);
-        } else {
-            commands.spawn((ChildOf(row), text));
+            spawn_track(commands, value_cell, slider, size, wedge);
         }
-        commands
-            .entity(row)
-            .observe(move |_: On<PointerOver>, mut menu: ResMut<PauseMenu>| {
-                menu.selected = i;
-            })
-            .observe(
-                move |click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
-                    if click.button == PointerButton::Primary {
-                        menu.clicked = Some(i);
-                    }
-                },
-            )
-            // A touch's pointer is new in the frame it presses, when it is over nothing yet: Bevy
-            // has no press on the row, and so no click.
-            .observe(
-                move |release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
-                    if matches!(release.pointer.id, PointerId::Touch(_)) {
-                        menu.clicked = Some(i);
-                    }
-                },
-            );
     }
+}
+
+/// A cell of item `i` in `list`, laid out as `style` changes it: pointing at it picks the item,
+/// and clicking or tapping it takes it.
+fn cell(
+    commands: &mut Commands,
+    list: Entity,
+    i: usize,
+    size: &TexelSize,
+    style: impl FnOnce(&mut Node),
+) -> Entity {
+    let mut node = Node {
+        align_items: AlignItems::Center,
+        padding: UiRect::vertical(size.y(2)),
+        ..default()
+    };
+    style(&mut node);
+    commands
+        .spawn((ChildOf(list), Row(i), node))
+        .observe(move |_: On<PointerOver>, mut menu: ResMut<PauseMenu>| {
+            menu.selected = i;
+        })
+        .observe(
+            move |click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
+                if click.button == PointerButton::Primary {
+                    menu.clicked = Some(i);
+                }
+            },
+        )
+        // A touch's pointer is new in the frame it presses, when it is over nothing yet: Bevy has
+        // no press on the cell, and so no click.
+        .observe(
+            move |release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
+                if matches!(release.pointer.id, PointerId::Touch(_)) {
+                    menu.clicked = Some(i);
+                }
+            },
+        )
+        .id()
 }
 
 /// The about page in `panel`: the version, and the list.
