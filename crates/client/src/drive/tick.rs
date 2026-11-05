@@ -60,7 +60,15 @@ pub(super) struct Memory {
     /// The ticks waited for a late player, and the buttons held last tick (a watching client's
     /// pick the kart to follow).
     waits: (u32, u32),
+    /// Our kart had finished last tick, and the played ticks left of the camera's hold at the
+    /// finish line.
+    finish: (bool, u32),
 }
+
+/// How long the camera stays at the finish line watching our kart coast away, in played ticks.
+const FINISH_HOLD_TICKS: u32 = 60;
+/// How far above our kart's position the held camera looks.
+const FINISH_HOLD_LOOK_HEIGHT: i32 = 0x40;
 
 /// One game tick of the sim.
 pub(super) fn drive_tick(
@@ -85,6 +93,7 @@ pub(super) fn drive_tick(
     let Memory {
         was_paused,
         waits,
+        finish,
     } = &mut *memory;
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts.
@@ -442,26 +451,26 @@ pub(super) fn drive_tick(
     if let Some(net) = lobby.online.as_mut() {
         let players = sim.race.players();
         let before = net.watching;
-        if spectating {
-            // Any kart of the race that is still here, whenever.
-            if cycle != 0 || net.gone[net.watching] {
-                let step = if cycle == 0 { 1 } else { cycle };
-                for _ in 0..players {
-                    net.watching = (net.watching as i32 + step).rem_euclid(players as i32) as usize;
-                    if !net.gone[net.watching] {
-                        break;
-                    }
-                }
-            }
-        } else if !finished || net.watching >= players || net.gone[net.watching] {
-            net.watching = own;
-        }
-        if !spectating && finished && cycle != 0 {
+        // The next kart that way that is still here.
+        let step = |net: &mut crate::lobby::Online, step: i32| {
             for _ in 0..players {
-                net.watching = (net.watching as i32 + cycle).rem_euclid(players as i32) as usize;
+                net.watching = (net.watching as i32 + step).rem_euclid(players as i32) as usize;
                 if !net.gone[net.watching] {
                     break;
                 }
+            }
+        };
+        if spectating {
+            // Any kart of the race that is still here, whenever.
+            if cycle != 0 || net.gone[net.watching] {
+                step(net, if cycle == 0 { 1 } else { cycle });
+            }
+        } else {
+            if !finished || net.watching >= players || net.gone[net.watching] {
+                net.watching = own;
+            }
+            if finished && cycle != 0 {
+                step(net, cycle);
             }
         }
         if net.watching != before {
@@ -474,10 +483,36 @@ pub(super) fn drive_tick(
         sim.own = watching;
     }
     let kart = &sim.race.karts[watching];
-    let jumped = drive.camera.flags & camera::flags::DIRECTION_CHANGED != 0;
-    drive
-        .camera
-        .follow_driver(&kart.driver, &track.0, &camera_input);
+    // Past the line the camera stays there a while and turns after our kart as it coasts away,
+    // until R1 or L1 picks a kart to follow (or a rollback takes the finish back).
+    let (was_finished, held) = finish;
+    let ours_finished = !spectating && finished;
+    if ours_finished && !*was_finished {
+        *held = FINISH_HOLD_TICKS;
+    }
+    *was_finished = ours_finished;
+    if !ours_finished || cycle != 0 || watching != own {
+        *held = 0;
+    }
+    let holding = *held > 0;
+    if holding {
+        // (Counted in played ticks only: the wait for the others past the line holds still.)
+        *held -= 1;
+    }
+    let jumped = !holding && drive.camera.flags & camera::flags::DIRECTION_CHANGED != 0;
+    if holding {
+        let mut target = kart.driver.pos_curr;
+        target.x >>= 8;
+        target.y = (target.y >> 8) + FINISH_HOLD_LOOK_HEIGHT;
+        target.z >>= 8;
+        drive.camera.look_at(target);
+        // Once it is over, straight back behind the kart.
+        drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
+    } else {
+        drive
+            .camera
+            .follow_driver(&kart.driver, &track.0, &camera_input);
+    }
     // The start-line fly-in, over the chase camera, for as long as the race says.
     let fly_in_frame = camera::TRANSITION_FRAMES - tick as i32;
     if sim.race.intro_ticks > 0 && fly_in_frame >= 0 {

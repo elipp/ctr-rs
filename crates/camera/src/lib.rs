@@ -277,13 +277,29 @@ impl CameraDc {
         let dx = spot[0].wrapping_sub(plant.pos[0]);
         let dz = spot[2].wrapping_sub(plant.pos[2]);
         let dy = (y as i32).wrapping_sub(plant.pos[1]);
+        // (Only the low byte of the height is used: it is 192 above the plant.)
+        self.aim(dx, dy as u8 as i32, dz);
+    }
+
+    /// Turns the push buffer (heading and pitch, no roll) along `(dx, dy, dz)`, the direction
+    /// from the point looked at to the camera.
+    fn aim(&mut self, dx: i32, dy: i32, dz: i32) {
         self.pb_rot.y = math::ratan2(dx, dz) as i16;
         let dist =
             math::square_root0_stub(mips::add_lo(mips::mul_lo(dx, dx), mips::mul_lo(dz, dz)));
-        // (Only the low byte of the height is used: it is 192 above the plant.)
-        let pitch = math::ratan2(dy as u8 as i32, dist);
-        self.pb_rot.x = (PLANT_CAMERA_PITCH_BASE - pitch) as i16;
+        self.pb_rot.x = (PLANT_CAMERA_PITCH_BASE - math::ratan2(dy, dist)) as i16;
         self.pb_rot.z = 0;
+    }
+
+    /// The camera stays where it is and turns to look at `target` (in world units, as
+    /// [`CameraDc::look_at_pos`]). Not of the reference: the client holds the camera at the
+    /// finish line with it, to watch our kart coast away.
+    pub fn look_at(&mut self, target: Vec3) {
+        let dx = (self.pb_pos.x as i32).wrapping_sub(target.x);
+        let dy = (self.pb_pos.y as i32).wrapping_sub(target.y);
+        let dz = (self.pb_pos.z as i32).wrapping_sub(target.z);
+        self.aim(dx, dy, dz);
+        self.look_at_pos = target;
     }
 
     /// `CAM_FollowDriver_Normal` (followed by what `CAM_ThTick` does after
