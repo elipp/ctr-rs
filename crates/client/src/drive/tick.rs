@@ -21,6 +21,9 @@ use crate::toast::Toast;
 /// `lobby::pace`), so it only matters when one of them stalls for good: 2 seconds.
 const MAX_LEAD: u32 = 60;
 
+/// How fast a spectator's count of the ticks in hand follows the count of each tick.
+const BUFFERED_SMOOTHING: f32 = 0.1;
+
 /// How often the toast "Waiting for ..." is put up again while we wait: every 3 seconds, and it
 /// stays that long.
 const WAIT_TOAST_TICKS: u32 = 90;
@@ -224,17 +227,41 @@ pub(super) fn drive_tick(
     }
     // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
     // rollback window) and predict the others further and further. It waits for them instead.
+    // A spectator has nothing to show quickly, so it predicts nothing: it plays a tick once
+    // everyone's pad for it is in, and its karts are drawn as they really went (a hop that is
+    // over before its pad comes would not show otherwise). `pace` keeps a few such ticks in
+    // hand, so that it seldom waits.
     let late: Vec<usize> = if online {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
-            .filter(|&slot| tick > sim.race.confirmed_until(slot).saturating_add(MAX_LEAD))
+            .filter(|&slot| {
+                let until = sim.race.confirmed_until(slot);
+                if spectating {
+                    tick >= until
+                } else {
+                    tick > until.saturating_add(MAX_LEAD)
+                }
+            })
             .collect()
     } else {
         Vec::new()
     };
+    if spectating && let Some(net) = lobby.online.as_mut() {
+        // (Once everyone has left, nothing is waited for: as if the buffer were full.)
+        let complete = sim.race.complete();
+        let buffered = if complete == u32::MAX {
+            crate::lobby::SPECTATE_BUFFER
+        } else {
+            complete.saturating_sub(tick) as f32
+        };
+        net.buffered += (buffered - net.buffered) * BUFFERED_SMOOTHING;
+    }
     if !late.is_empty() {
-        // (The host removes a player that stays silent: see `net::KICK_AFTER`.)
-        if waits.0 % WAIT_TOAST_TICKS == 0
+        // (The host removes a player that stays silent: see `net::KICK_AFTER`.) A spectator
+        // waits a tick now and then; it says so when it is as late as a player would wait.
+        let quiet = if spectating { MAX_LEAD } else { 0 };
+        if waits.0 >= quiet
+            && (waits.0 - quiet) % WAIT_TOAST_TICKS == 0
             && let Some(net) = lobby.online.as_ref()
         {
             let names: Vec<&str> = late

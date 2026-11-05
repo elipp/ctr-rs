@@ -12,6 +12,13 @@ pub(super) const LEAD_ALLOWED: f32 = 1.0;
 pub(super) const SLOWDOWN_PER_TICK: f32 = 0.03;
 pub(super) const SLOWEST: f32 = 0.9;
 
+/// The ticks a spectator keeps in hand, every pad in and not played yet: what a late packet can
+/// take up before the race stops for it. Its clock runs this much faster (or slower) for each
+/// tick more (or less) than that, and at most this fast.
+pub(crate) const SPECTATE_BUFFER: f32 = 3.0;
+pub(super) const SPECTATE_GAIN: f32 = 0.04;
+pub(super) const SPECTATE_FASTEST: f32 = 1.2;
+
 /// The longest frame the clock takes in during an online race: after a hitch the ticks that were
 /// missed are played at once, instead of being lost (Bevy's own limit is a quarter second).
 pub(super) const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(3);
@@ -131,6 +138,8 @@ pub(super) fn finish(
 
 /// Keeps the clock of an online race with the others': it catches up after a hitch, and runs a bit
 /// slow while it is ahead of any of them (the ones behind do not hurry; they play on as they do).
+/// A spectator's clock follows the pads that have come instead: it plays only the ticks that have
+/// all of them, and keeps a few of those in hand.
 /// Offline it runs as fast as the effects panel says (`/debug fx speed`).
 pub(super) fn pace(
     lobby: Res<Lobby>,
@@ -155,6 +164,9 @@ pub(super) fn pace(
     });
     let speed = match &fx {
         Some(fx) if lobby.online.is_none() => fx.speed,
+        _ if let Some(net) = running.filter(|net| net.spectating()) => (1.0
+            + SPECTATE_GAIN * (net.buffered - SPECTATE_BUFFER))
+            .clamp(SLOWEST, SPECTATE_FASTEST),
         _ => (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST),
     };
     if time.relative_speed() != speed {

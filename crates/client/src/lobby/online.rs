@@ -44,6 +44,9 @@ pub struct Online {
     pub checks: race::desync::Checks,
     /// How many ticks our clock is ahead of each player's (smoothed; ours is 0), from `net`.
     pub ahead: Vec<f32>,
+    /// A spectator's ticks that have everyone's pad and are not played yet (smoothed), which
+    /// `pace` keeps near `SPECTATE_BUFFER`. A spectator plays only those (see `drive_tick`).
+    pub buffered: f32,
     /// The players whose sim differs from ours, with the first tick it was seen at.
     pub desync: Vec<Desync>,
     /// How many of the finishers (by place) have been announced.

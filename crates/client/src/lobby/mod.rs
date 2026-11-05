@@ -40,6 +40,7 @@ use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
 use hud::waiting;
 pub use online::Online;
+pub(crate) use progress::SPECTATE_BUFFER;
 use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
 use report::report;

@@ -134,6 +134,7 @@ pub(super) fn report(
                     corrections: 0,
                     replayed: 0,
                     ahead: vec![0.0; characters_len],
+                    buffered: 0.0,
                     checks: race::desync::Checks::new(characters_len, slot),
                     desync: Vec::new(),
                     announced: 0,
