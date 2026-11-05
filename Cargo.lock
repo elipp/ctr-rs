@@ -5584,6 +5584,7 @@ dependencies = [
  "realm-proto",
  "score",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

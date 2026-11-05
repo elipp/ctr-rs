@@ -19,6 +19,7 @@ use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use n0_future::task::AbortOnDropHandle;
 use n0_future::time::{sleep, timeout};
+use tracing::debug;
 
 use crate::PUNCH_ALPN;
 
@@ -53,6 +54,16 @@ pub(crate) fn is_direct(connection: &Connection) -> bool {
         .any(|path| path.is_selected() && !path.is_relay())
 }
 
+/// The path our data to the peer of `connection` takes, for the log: an `ip:port`, a relay's URL,
+/// or `none`.
+fn selected_path(connection: &Connection) -> String {
+    connection
+        .paths()
+        .iter()
+        .find(|path| path.is_selected())
+        .map_or("none".into(), |path| path.remote_addr().to_string())
+}
+
 /// The peers being punched through to, each with its task.
 pub(crate) struct Puncher {
     endpoint: Endpoint,
@@ -67,6 +78,9 @@ impl Puncher {
         let enabled = !endpoint.bound_sockets().is_empty();
         #[cfg(target_arch = "wasm32")]
         let enabled = false;
+        if !enabled {
+            debug!("no sockets of our own (the relay only, or a browser): not holepunching");
+        }
         Puncher {
             endpoint,
             enabled,
@@ -82,9 +96,16 @@ impl Puncher {
         }
         let me = self.endpoint.id();
         let wanted: HashSet<EndpointId> = peers.into_iter().filter(|&id| id != me).collect();
-        self.tasks.retain(|id, _| wanted.contains(id));
+        self.tasks.retain(|id, _| {
+            let keep = wanted.contains(id);
+            if !keep {
+                debug!(peer = %id.fmt_short(), "no longer holepunching");
+            }
+            keep
+        });
         for id in wanted {
             self.tasks.entry(id).or_insert_with(|| {
+                debug!(peer = %id.fmt_short(), "holepunching");
                 let endpoint = self.endpoint.clone();
                 AbortOnDropHandle::new(n0_future::task::spawn(punch(endpoint, id)))
             });
@@ -95,6 +116,7 @@ impl Puncher {
 /// Keeps a connection to `id` and starts rounds of holepunching on it until the path is direct;
 /// and again if it goes back to the relay.
 async fn punch(endpoint: Endpoint, id: EndpointId) {
+    let peer = id.fmt_short();
     let mut attempt = 0;
     loop {
         let connection = timeout(
@@ -102,11 +124,19 @@ async fn punch(endpoint: Endpoint, id: EndpointId) {
             endpoint.connect(EndpointAddr::new(id), PUNCH_ALPN),
         )
         .await;
-        let Ok(Ok(connection)) = connection else {
-            // Not reachable for now (or an older build, which does not take these): no round.
-            sleep(patience(attempt)).await;
-            attempt += 1;
-            continue;
+        let connection = match connection {
+            Ok(Ok(connection)) => connection,
+            failed => {
+                // Not reachable for now (or an older build, which does not take these): no round.
+                let why = match failed {
+                    Ok(Err(e)) => e.to_string(),
+                    _ => format!("no connection in {CONNECT_TIMEOUT:?}"),
+                };
+                debug!(%peer, attempt, "punch connection failed, trying again in {:?}: {why}", patience(attempt));
+                sleep(patience(attempt)).await;
+                attempt += 1;
+                continue;
+            }
         };
         // The new connection started a round: give it the time to find a path.
         let mut waited = Duration::ZERO;
@@ -118,12 +148,24 @@ async fn punch(endpoint: Endpoint, id: EndpointId) {
             waited += CHECK;
         }
         if is_direct(&connection) {
+            debug!(%peer, attempt, path = %selected_path(&connection), "direct after {waited:?}");
             // Held as long as it is direct; if it falls back, we try from the start.
             while is_direct(&connection) && connection.close_reason().is_none() {
                 sleep(CHECK).await;
             }
+            match connection.close_reason() {
+                Some(why) => debug!(%peer, "punch connection closed ({why}), opening another"),
+                None => debug!(%peer, path = %selected_path(&connection), "no longer direct: holepunching again"),
+            }
             attempt = 0;
         } else {
+            debug!(
+                %peer,
+                attempt,
+                path = %selected_path(&connection),
+                closed = ?connection.close_reason(),
+                "still not direct after {waited:?}: starting another round"
+            );
             attempt += 1;
         }
         connection.close(0u32.into(), b"punched");
