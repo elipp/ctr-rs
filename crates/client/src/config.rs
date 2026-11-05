@@ -14,6 +14,9 @@
 //! * `/config set volume music|sfx|voice <0-100>`: how loud the music, the effects and the
 //!   voices are, in percent of the game's own volumes (100 at first). The pause menu's Options
 //!   set them too
+//! * `/config set global-voices on|off`: whether the other karts' voice lines are heard from
+//!   anywhere, in the middle at full volume as retail plays them, rather than from where the kart
+//!   is (on at first; see `sound.rs`)
 //!
 //! * `/config set render-scale <0.25-1>`: in a browser, the part of the screen's resolution to
 //!   draw at, across and down (`web/play.html`)
@@ -79,6 +82,9 @@ pub struct Config {
     pub volume_fx: u8,
     pub volume_music: u8,
     pub volume_voice: u8,
+    /// Whether the other karts' voice lines are heard wherever they are (`/config set
+    /// global-voices`).
+    pub global_voices: bool,
     /// The keyboard's driving keys.
     pub controls: Controls,
     /// Whether the race shows the frame rate, the kart's state, the build and the boost reserves
@@ -112,6 +118,7 @@ impl Default for Config {
             volume_fx: 100,
             volume_music: 100,
             volume_voice: 100,
+            global_voices: true,
             controls: Controls::default(),
             debug_hud: false,
             render_scale: 1.0,
@@ -287,6 +294,7 @@ pub enum Setting {
     VolumeSfx(u8),
     VolumeMusic(u8),
     VolumeVoice(u8),
+    GlobalVoices(bool),
     /// 0.25 to 1.
     RenderScale(f32),
     /// 1 to `pixel::MAX_SCALE`.
@@ -312,12 +320,14 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set msaa off|2|4\n\
     /config set shader-effects on|off\n\
     /config set pixel-scale <1 to 8>\n\
-    /config set volume music|sfx|voice <0-100>";
+    /config set volume music|sfx|voice <0-100>\n\
+    /config set global-voices on|off";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
-    /config set volume music|sfx|voice <0-100>";
+    /config set volume music|sfx|voice <0-100>\n\
+    /config set global-voices on|off";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
@@ -377,6 +387,11 @@ impl Setting {
                 "on" => Ok(Setting::ShaderEffects(true)),
                 "off" => Ok(Setting::ShaderEffects(false)),
                 _ => Err("Usage: /config set shader-effects on|off".into()),
+            },
+            "global-voices" => match value {
+                "on" => Ok(Setting::GlobalVoices(true)),
+                "off" => Ok(Setting::GlobalVoices(false)),
+                _ => Err("Usage: /config set global-voices on|off".into()),
             },
             "volume" => {
                 const USAGE: &str = "Usage: /config set volume music|sfx|voice <0-100>";
@@ -608,6 +623,18 @@ fn apply(
                     toasts.write(refuse(why));
                 }
                 toasts.write(Toast::new(format!("{name} volume: {percent}"), 2000));
+            }
+            Setting::GlobalVoices(on) => {
+                config.global_voices = *on;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let text = if *on {
+                    "Voice lines: heard from anywhere"
+                } else {
+                    "Voice lines: heard from where the kart is"
+                };
+                toasts.write(Toast::new(text, 2000));
             }
         }
     }
