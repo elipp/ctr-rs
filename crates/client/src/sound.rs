@@ -23,6 +23,10 @@
 //! its tick keeps going ([`Effect::Recycle`]); retail gives the AIs none. The other karts' skid
 //! and turbo's roar are kept going too, heard from where they are, and not from far (see
 //! `docs/notes/DIVERGENCE.md`).
+//!
+//! [`Control::MuteMusic`] (M at first) mutes the music and [`Control::MuteSound`] (S) every sound,
+//! and the same again unmutes them ([`Mute`]). Neither touches the config's volumes, so unmuting
+//! plays at them again, and neither is kept past the session.
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -46,6 +50,7 @@ use vehicle::{Driver, Effect, Sound3D, actions, audio_slot, fire};
 use weapon::mine::MineKind;
 
 use crate::Track;
+use crate::controls::Control;
 
 /// `DotLights_AudioAndVideo`: a red light comes on, and the green.
 const RED_LIGHT_SFX: u16 = 0x45;
@@ -105,12 +110,13 @@ impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<Mixer>()
             .init_resource::<Kept>()
+            .init_resource::<Mute>()
             .add_systems(Startup, start_mixer)
             .add_systems(
                 Update,
                 (level_audio, stream_xa).run_if(crate::drive::driving),
             )
-            .add_systems(Update, volumes);
+            .add_systems(Update, (mute, volumes).chain());
     }
 }
 
@@ -234,14 +240,49 @@ fn level_audio(
     sounds.set_level_audio(audio.level, pack, audio.reverb, samples);
 }
 
-/// The volumes the config asks for, when it changes (and once the sounds are there).
-fn volumes(config: Res<crate::config::Config>, sounds: Option<Res<Sounds>>) {
+/// What [`Control::MuteMusic`] and [`Control::MuteSound`] have muted, over the config's volumes.
+#[derive(Resource, Default)]
+pub struct Mute {
+    pub music: bool,
+    pub all: bool,
+}
+
+/// The mute keys mute or unmute the music, and every sound. (The command line keeps the keys
+/// from the game while it is open, and the menu while it waits for a key to bind.)
+fn mute(
+    keys: Res<ButtonInput<KeyCode>>,
+    config: Res<crate::config::Config>,
+    menu: Res<crate::pause::PauseMenu>,
+    mut mute: ResMut<Mute>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+) {
+    if menu.capturing.is_some() {
+        return;
+    }
+    if config.controls.just_pressed(Control::MuteMusic, &keys) {
+        mute.music = !mute.music;
+        let text = if mute.music { "Music muted" } else { "Music on" };
+        toasts.write(crate::toast::Toast::new(text, 1500));
+    }
+    if config.controls.just_pressed(Control::MuteSound, &keys) {
+        mute.all = !mute.all;
+        let text = if mute.all { "Sound muted" } else { "Sound on" };
+        toasts.write(crate::toast::Toast::new(text, 1500));
+    }
+}
+
+/// The volumes the config asks for, less what is muted, when either changes (and once the sounds
+/// are there).
+fn volumes(config: Res<crate::config::Config>, mute: Res<Mute>, sounds: Option<Res<Sounds>>) {
     if let Some(sounds) = sounds
-        && (config.is_changed() || sounds.is_added())
+        && (config.is_changed() || mute.is_changed() || sounds.is_added())
     {
-        sounds
-            .lock()
-            .set_volumes(config.volume_fx, config.volume_music, config.volume_voice);
+        let unless = |muted: bool, volume: u8| if muted || mute.all { 0 } else { volume };
+        sounds.lock().set_volumes(
+            unless(false, config.volume_fx),
+            unless(mute.music, config.volume_music),
+            unless(false, config.volume_voice),
+        );
     }
 }
 

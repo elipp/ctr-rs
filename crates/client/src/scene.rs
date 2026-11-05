@@ -1,5 +1,6 @@
 //! Building the scene: the level, the kart and the cameras, and switching between them.
 
+use crate::controls::Control;
 use crate::subtract::SubtractMaterial;
 use crate::{
     AnimState, CHARACTERS, FlyCamera, GameTick, LevelData, LevelNumber, MeshOptions, Options,
@@ -86,16 +87,19 @@ pub(crate) fn keep_picks(
     }
 }
 
-/// `.` and `,`: the next or the previous racer, as `/character` would pick it (and is refused
+/// [`Control::NextRacer`] and [`Control::PreviousRacer`] (`.` and `,` at first): the next or the
+/// previous racer, as `/character` would pick it (and is refused
 /// alike: in a race, or a cup). On a touch screen the page's buttons step too
 /// (`web/play.html`).
 pub(crate) fn racer_keys(
     keys: Res<ButtonInput<KeyCode>>,
+    config: Res<crate::config::Config>,
     options: Res<Options>,
     mut actions: MessageWriter<command::Action>,
 ) {
+    let pressed = |control| config.controls.just_pressed(control, &keys) as i32;
     #[allow(unused_mut)]
-    let mut step = keys.just_pressed(KeyCode::Period) as i32 - keys.just_pressed(KeyCode::Comma) as i32;
+    let mut step = pressed(Control::NextRacer) - pressed(Control::PreviousRacer);
     #[cfg(target_arch = "wasm32")]
     {
         step += crate::web::take_racer_step();
@@ -106,7 +110,8 @@ pub(crate) fn racer_keys(
     }
 }
 
-/// `]` / Page Up and `[` / Page Down: shows the next or the previous level; and the racer
+/// [`Control::NextLevel`] and [`Control::PreviousLevel`] (`]` / Page Up and `[` / Page Down at
+/// first): shows the next or the previous level; and the racer
 /// `/character` (or [`racer_keys`]) picked. A new level loads right here (the window stands still meanwhile) and
 /// builds the scene from scratch; a new racer only replaces the kart, which drives on from where
 /// it was (the race and its music go on). On a touch screen the page's buttons step to the next
@@ -118,13 +123,10 @@ pub(crate) fn switch_level(world: &mut World) {
         return;
     }
     let keys = world.resource::<ButtonInput<KeyCode>>();
-    let pressed = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
-    let step =
-        |next: &[KeyCode], previous: &[KeyCode]| pressed(next) as i32 - pressed(previous) as i32;
-    let mut level_step = step(
-        &[KeyCode::BracketRight, KeyCode::PageUp],
-        &[KeyCode::BracketLeft, KeyCode::PageDown],
-    );
+    let controls = &world.resource::<crate::config::Config>().controls;
+    let pressed = |control| controls.just_pressed(control, keys) as i32;
+    #[allow(unused_mut)]
+    let mut level_step = pressed(Control::NextLevel) - pressed(Control::PreviousLevel);
     #[cfg(target_arch = "wasm32")]
     {
         level_step += crate::web::take_level_step();

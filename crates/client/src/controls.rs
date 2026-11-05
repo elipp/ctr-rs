@@ -1,6 +1,6 @@
-//! The keyboard's driving keys, which the pause menu's Controls change (`pause.rs`) and the config
-//! keeps (`config.rs`), by the names of Bevy's `KeyCode`s: `{"gas": ["ArrowUp"], ...}`. A control
-//! the config leaves out has its default keys, and a name it does not know, or of a key that
+//! The keyboard's driving keys, and the ones that step the level and the racer and mute, which the pause
+//! menu's Controls change (`pause.rs`) and the config keeps (`config.rs`), by the names of Bevy's
+//! `KeyCode`s: `{"gas": ["ArrowUp"], ...}`. A control the config leaves out has its default keys, and a name it does not know, or of a key that
 //! cannot be bound, is passed over.
 //!
 //! A key is one control's: binding it to another takes it from the one that had it, which gets the
@@ -30,10 +30,18 @@ pub enum Control {
     AimUp,
     /// Triangle: swaps the minimap and the speedometer (`speedometer.rs`).
     Speedometer,
+    /// The next or the previous level, and racer (`scene.rs`).
+    NextLevel,
+    PreviousLevel,
+    NextRacer,
+    PreviousRacer,
+    /// Mutes or unmutes the music, and every sound (`sound.rs`).
+    MuteMusic,
+    MuteSound,
 }
 
 impl Control {
-    pub const ALL: [Control; 9] = [
+    pub const ALL: [Control; 15] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -43,6 +51,12 @@ impl Control {
         Control::Item,
         Control::AimUp,
         Control::Speedometer,
+        Control::NextLevel,
+        Control::PreviousLevel,
+        Control::NextRacer,
+        Control::PreviousRacer,
+        Control::MuteMusic,
+        Control::MuteSound,
     ];
 
     /// Its name in the config.
@@ -57,6 +71,12 @@ impl Control {
             Control::Item => "item",
             Control::AimUp => "aim-up",
             Control::Speedometer => "speedometer",
+            Control::NextLevel => "next-level",
+            Control::PreviousLevel => "previous-level",
+            Control::NextRacer => "next-racer",
+            Control::PreviousRacer => "previous-racer",
+            Control::MuteMusic => "mute-music",
+            Control::MuteSound => "mute-sound",
         }
     }
 
@@ -72,6 +92,12 @@ impl Control {
             Control::Item => "Item",
             Control::AimUp => "Aim up",
             Control::Speedometer => "Speedometer",
+            Control::NextLevel => "Next level",
+            Control::PreviousLevel => "Previous level",
+            Control::NextRacer => "Next racer",
+            Control::PreviousRacer => "Previous racer",
+            Control::MuteMusic => "Mute music",
+            Control::MuteSound => "Mute sound",
         }
     }
 
@@ -82,10 +108,16 @@ impl Control {
             Control::Left => &[KeyCode::ArrowLeft],
             Control::Right => &[KeyCode::ArrowRight],
             Control::Hop => &[KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ShiftRight],
-            Control::Hop2 => &[KeyCode::KeyQ, KeyCode::ControlLeft],
+            Control::Hop2 => &[KeyCode::KeyQ],
             Control::Item => &[KeyCode::KeyD],
             Control::AimUp => &[KeyCode::KeyE],
             Control::Speedometer => &[KeyCode::KeyH],
+            Control::NextLevel => &[KeyCode::BracketRight, KeyCode::PageUp],
+            Control::PreviousLevel => &[KeyCode::BracketLeft, KeyCode::PageDown],
+            Control::NextRacer => &[KeyCode::Period],
+            Control::PreviousRacer => &[KeyCode::Comma],
+            Control::MuteMusic => &[KeyCode::KeyM],
+            Control::MuteSound => &[KeyCode::KeyS],
         }
     }
 
@@ -145,6 +177,11 @@ impl Controls {
         self.keys(control).iter().any(|&k| keys.pressed(k))
     }
 
+    /// Whether a key of `control` went down this frame.
+    pub fn just_pressed(&self, control: Control, keys: &ButtonInput<KeyCode>) -> bool {
+        self.keys(control).iter().any(|&k| keys.just_pressed(k))
+    }
+
     /// `key` is `control`'s only key. Another control that had it loses it, and takes
     /// `control`'s old keys if it has none left.
     pub fn bind(&mut self, control: Control, key: KeyCode) {
@@ -180,10 +217,6 @@ pub fn taken(key: KeyCode) -> Option<&'static str> {
         KeyCode::Enter => "opens the command line",
         KeyCode::F3 => "opens the effects panel",
         KeyCode::Home => "resets the camera",
-        KeyCode::BracketLeft | KeyCode::BracketRight | KeyCode::PageUp | KeyCode::PageDown => {
-            "changes the level"
-        }
-        KeyCode::Comma | KeyCode::Period => "changes the racer",
         _ => return None,
     })
 }
