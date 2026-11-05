@@ -110,25 +110,43 @@ impl Default for Effects {
     }
 }
 
-impl Effects {
-    /// Whether the race holds still this tick: it is frozen, and no step is left.
-    pub fn holds(&mut self) -> bool {
-        if !self.frozen {
-            return false;
-        }
-        if self.steps > 0 {
-            self.steps -= 1;
-            return false;
-        }
-        true
-    }
-}
-
 /// What stops an offline race: the pause menu, or the panel's freeze.
 #[derive(SystemParam)]
 pub struct Hold<'w> {
-    pub menu: ResMut<'w, crate::pause::PauseMenu>,
-    pub fx: ResMut<'w, Effects>,
+    menu: Res<'w, crate::pause::PauseMenu>,
+    fx: ResMut<'w, Effects>,
+    lobby: Res<'w, Lobby>,
+    drive: Option<Res<'w, crate::drive::Drive>>,
+    loading: Option<Res<'w, crate::loading::Loading>>,
+    time: ResMut<'w, Time<Virtual>>,
+    fixed: ResMut<'w, Time<Fixed>>,
+}
+
+/// Stops the game clock while an offline race is held (the pause menu, or the panel's freeze), so
+/// that nothing moves: no tick runs, and the drawing stays where it is between the last two ticks.
+/// A step lets one tick through. Before `TimeSystems`, for the clock to stop in this frame already.
+/// (`loading.rs` stops the clock as well, and starts it again itself.)
+fn hold(mut hold: Hold, mut held: Local<bool>) {
+    if hold.loading.is_some() {
+        return;
+    }
+    let wanted =
+        hold.drive.is_some() && hold.lobby.online.is_none() && (hold.menu.open || hold.fx.frozen);
+    if wanted != *held {
+        *held = wanted;
+        if wanted {
+            hold.time.pause();
+        } else {
+            hold.time.unpause();
+        }
+    }
+    if wanted && !hold.menu.open && hold.fx.steps > 0 {
+        hold.fx.steps -= 1;
+        // The clock adds nothing this frame, so this is exactly one tick, and the drawing stays as
+        // far between the ticks as it was.
+        let step = hold.fixed.timestep();
+        hold.fixed.accumulate_overstep(step);
+    }
 }
 
 /// Whether the level's weather is drawn.
@@ -147,6 +165,7 @@ impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Effects>()
             .init_resource::<Picked>()
+            .add_systems(First, hold.before(bevy::time::TimeSystems))
             .add_systems(
                 Update,
                 (act, online, keys, show)

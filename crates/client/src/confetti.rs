@@ -66,11 +66,6 @@ impl ConfettiView {
             .collect();
     }
 
-    /// The race is paused: nothing moves between ticks.
-    pub fn freeze(&mut self) {
-        self.pieces[0] = self.pieces[1].clone();
-    }
-
     /// The pieces `t` of the way from the last tick to this one.
     fn pieces(&self, t: f32) -> impl Iterator<Item = Piece> {
         self.pieces[1]

@@ -53,7 +53,6 @@ pub(super) struct Shown<'w, 's> {
 /// What [`drive_tick`] keeps from one tick to the next.
 #[derive(Default)]
 pub(super) struct Memory {
-    was_paused: bool,
     /// The ticks waited for a late player, and the buttons a spectator held last tick.
     waits: (u32, u32),
 }
@@ -64,7 +63,8 @@ pub(super) fn drive_tick(
     track: Res<Track>,
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
-    mut hold: crate::fx::Hold,
+    mut menu: ResMut<crate::pause::PauseMenu>,
+    fx: Res<crate::fx::Effects>,
     mut lobby: ResMut<crate::lobby::Lobby>,
     config: Res<crate::config::Config>,
     shown: Shown,
@@ -79,7 +79,6 @@ pub(super) fn drive_tick(
         mut sfx,
     } = shown;
     let Memory {
-        was_paused,
         waits,
     } = &mut *memory;
     let drive = &mut *drive;
@@ -94,26 +93,11 @@ pub(super) fn drive_tick(
         return;
     }
 
-    // The pause menu (or the effects panel's freeze) stops the race, unless the race is
-    // everyone's.
-    let paused = (hold.menu.open || hold.fx.holds()) && !online;
-    if paused && !*was_paused {
-        // Nothing moves between ticks now, so the interpolation must not either.
-        drive.previous_view = drive.current_view;
-        drive.weather.freeze();
-        drive.confetti.freeze();
-        for (mut motion, _, _) in &mut motions {
-            motion.freeze();
-        }
-    }
-    *was_paused = paused;
-    if paused {
-        return;
-    }
+    // (The pause menu and the effects panel's freeze stop the game clock: see `fx::hold`.)
 
     // The menu's RESTART is the grid: every start puts everything, the objects too, back
     // as it was at tick 0.
-    let picked = std::mem::take(&mut hold.menu.restart);
+    let picked = std::mem::take(&mut menu.restart);
     let mut restart = picked && !online;
     // The lobby closed, or the race failed: back to the grid with our kart alone.
     if !online && sim.race.karts.len() != 1 {
@@ -267,7 +251,7 @@ pub(super) fn drive_tick(
     // others get it as well. (A tick that waits plays the pad it already has.)
     if !spectating && sim.race.confirmed_until(own) <= tick {
         let held = sim.kart().held;
-        let pad = if online && hold.menu.open {
+        let pad = if online && menu.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if online {
@@ -419,7 +403,7 @@ pub(super) fn drive_tick(
     let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
     drive
         .confetti
-        .step(&drive.camera, hold.fx.confetti.apply(won));
+        .step(&drive.camera, fx.confetti.apply(won));
 
     // The offsets of the others' karts fade as far as their players' pings call for.
     for (mut motion, slot, ours) in &mut motions {

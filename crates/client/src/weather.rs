@@ -76,12 +76,6 @@ impl WeatherView {
         self.streaks[1] = self.weather.tick(&view);
     }
 
-    /// The race is paused: nothing moves between ticks.
-    pub fn freeze(&mut self) {
-        self.eyes[0] = self.eyes[1];
-        self.streaks[0] = self.streaks[1].clone();
-    }
-
     /// The streaks `t` of the way from the last tick to this one, as the two ends in the world.
     fn lines(&self, t: f32) -> impl Iterator<Item = [Vec3; 2]> {
         let eye = self.eyes[0].lerp(self.eyes[1], t);

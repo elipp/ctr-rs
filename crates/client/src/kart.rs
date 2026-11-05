@@ -236,13 +236,6 @@ impl KartMotion {
         *self = KartMotion::new(kart);
     }
 
-    /// Nothing moves between ticks now (the pause): stay where the last one put the kart.
-    pub fn freeze(&mut self) {
-        self.previous = self.current;
-        self.previous_offset = self.offset;
-        *self = self.clone().settled();
-    }
-
     /// The ticks that the rollbacks of the kart replayed, on average.
     pub fn replayed_average(&self) -> f32 {
         self.replayed_average
