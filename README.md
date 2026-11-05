@@ -1,21 +1,20 @@
 # ctr-rs
 
-ctr-rs is and online-focused port of Crash Team Racing (PS1, 1999), written in Rust.
-
-It is heavily based on the [ctr-native](https://github.com/CTR-tools/ctr-native) project, which is used to verify the physics simulation and other mechanics remains as faithful to the original as possible. As we see it, the original CTR's feel and controls are truly S-tier, and as such, replicating them is the absolute top priority for this project.
+ctr-rs is an online-focused reimplementation of Crash Team Racing (PS1, 1999), written in Rust.
 
 ## What's here
 
-- **Exact physics** - Kart against ground and wall, and kart against kart, follow the original tick for tick. `vehicle/tests/tick.rs` checks them against the C reference, `ctr-native`. The weapons, crates and the level's objects follow the original closely.
-- **Truly native performance, framerates/aspect ratio** - While the original wobbly graphics definitely has its own charm to it, the reimplementation has need for [PGXP](https://github.com/libretro/beetle-psx-libretro/tree/master/pgxp) or other workarounds, since we have an actual depth buffer.
-- **Cross-platform** - The project runs and builds on any system that Rust builds on.
-- **No emulator hacks, ROM patches or launchers** - The current "CTR online" solutions have quite a bit of jank to get running.
-- **The modding horizon is unlimited** - Modding ctr-native, while certainly possible, is difficult to get right, and limited in scope due to the recomp-style codebase and the C programming language.
-- **30 Hz simulation, hi-FPS rendering** - The game state advances at the original's 30 ticks a second, independent of the frame rate that is drawn.
-- **Rollback netcode with no local delay** - Players connect directly (if possible) to each other with [iroh](https://github.com/n0-computer/iroh) and [the QUIC protocol](https://en.wikipedia.org/wiki/QUIC).
-- **Custom tracks** - The `ctr-map` turns an xdelta patch of the disc into a `.ctrmap` file that the client can load through the lobby.
+- **Exact, reference-checked physics** - Kart physics/collision follow the original tick for tick. We check them against the C decompilation, [ctr-native](https://github.com/CTR-tools/ctr-native). The weapons, crates and the level's objects follow the original closely.
+- **Truly native performance, framerates/aspect ratio** - The original look definitely has its own charm to it, but the reimplementation has no need for [PGXP](https://github.com/libretro/beetle-psx-libretro/tree/master/pgxp) or other (awesome) emulator hacks, since we have full-precision vertices and a real depth buffer.
+- **Cross-platform** - The project runs and builds on any system that Rust builds on, and on the browser too!
+- **Hassle-free online play** - No patched ROMs, emulator builds or launchers required.
+- **Peer-to-peer networking** - Players are directly connected to each other over [QUIC](https://en.wikipedia.org/wiki/QUIC), using [iroh](https://github.com/n0-computer/iroh).
+- **No network setup** - No port forwarding, DMZ or dedicated servers. Connections punch through NAT automatically, and fall back to a relay when they can't.
+- **30 Hz simulation, hi-FPS rendering** - The game state advances at the original's 30 ticks/s, independent of the rendering frame rate.
+- **Custom tracks** - Just drag and drop an `.xdelta` (from e.g. [CTR Custom Tracks](https://ctrcustomtracks.com)) to the client window, and immediately play them with your friends.
 
 ## What's not here (not currently planned)
+
 - **Adventure mode**
 - **Time trial**
 - **Relic race**
@@ -31,7 +30,7 @@ cargo run -p client
 
 A build from the [releases](https://github.com/elipp/ctr-rs/releases) asks for the disc image the first time it starts. The macOS build is not signed, so macOS refuses to open it at first: allow it in System Settings → Privacy & Security ("Open Anyway"), or run `xattr -dr com.apple.quarantine ctr-rs.app`. On Linux, the `.AppImage` runs as it is once it is executable (`chmod +x`).
 
-The client has no command line options. `]` and `[` switch the level, `.` and `,` switch the racer, and `/` commands go through the in-game console.
+The client has no command line options. `]` and `[` switch the level, `.` and `,` switch the racer, and `Enter` opens the in-game console for `/` commands and chat.
 
 `ctr-query` (`crates/query`) looks up a level's data from the disc, and `ctr-map` (`crates/map`) imports and describes custom tracks.
 
@@ -41,10 +40,10 @@ The client has no command line options. `]` and `[` switch the level, `.` and `,
 cargo test --workspace --no-fail-fast
 ```
 
-Some tests need files that are not in the repository, and without them they skip and pass without checking anything. Their names say which:
+Some tests need files that are not in the repo, and without them they skip and pass without checking anything. Their names say which:
 
 - `needs_disc_…`: the disc image (`assets/ctr-u.bin`, or `CTR_BIN`), or the folder prepared from it (`assets/disc`, or `CTR_DISC_DIR`).
-- `needs_reference_…`: [ctr-native](https://github.com/CTR-tools/ctr-native) at the commit in [`docs/ctr-native.rev`](docs/ctr-native.rev), checked out at `reference/ctr-native` (git-ignored). Most of them also build the C side with `gcc -m32`, which on Debian and Ubuntu is the `gcc-multilib` package.
+- `needs_reference_…`: [ctr-native](https://github.com/CTR-tools/ctr-native) at the commit in [`docs/ctr-native.rev`](docs/ctr-native.rev), checked out at `reference/ctr-native` (git-ignored). Most of them also build the C side with `gcc -m32` (x86-64 only), which on Debian and Ubuntu is the `gcc-multilib` package.
 - `needs_disc_needs_reference_…`: both.
 
 Filters match anywhere in the name, so `cargo test --workspace -- --skip needs_disc` skips every test that needs the disc (those that need both as well), and `--skip needs_reference` every test that needs ctr-native.
@@ -60,7 +59,7 @@ Another commit of ctr-native may not match what the tests expect (they fail to l
 
 ## Prior work
 
-This project stands on the work of the CTR community, and could not exist without it.
+This project stands on the work of the CTR community, and absolutely could not exist without it:
 
 - [**ctr-native**](https://github.com/CTR-tools/ctr-native), a native PC port of the game built on the decompilation. It is our first reference for how the game behaves, and the oracle our physics tests compare against.
 - [**CTR-ModSDK**](https://github.com/CTR-tools/CTR-ModSDK), and the decompilation, symbols and headers that came out of it. We use them for the layouts of the game's data and for what ctr-native lacks.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ctr-rs</title>
-<meta name="description" content="An online-focused port of Crash Team Racing (PS1, 1999), written in Rust.">
+<meta name="description" content="An online-focused reimplementation of Crash Team Racing (PS1, 1999), written in Rust.">
 <style>
   @font-face {
     font-family: "Press Start 2P";
@@ -122,8 +122,8 @@
 <body>
 <main>
   <h1>CTR-RS</h1>
-  <p class="tagline">Crash Team Racing, ported to Rust.<br>Online first.</p>
-  <div class="screen" hidden>
+  <p class="tagline">Crash Team Racing (1999), rebuilt in Rust for online play.</p>
+    <div class="screen" hidden>
     <a class="start" href="play/">PRESS START</a>
   </div>
 
@@ -134,37 +134,36 @@
 
   <section>
     <h2>About</h2>
-    <p>ctr-rs is an online-focused port of Crash Team Racing (PS1, 1999), written in Rust.</p>
-    <p>It is heavily based on the <a href="https://github.com/CTR-tools/ctr-native">ctr-native</a>
-      project, which is used to verify that the physics simulation and other mechanics remain as
-      faithful to the original as possible. As we see it, the original CTR's feel and controls are
-      truly S-tier, and replicating them is the absolute top priority for this project.</p>
+    <p>ctr-rs is an online-focused reimplementation of Crash Team Racing (PS1, 1999), written in
+      Rust.</p>
   </section>
 
   <section>
     <h2>What's here</h2>
     <ul>
-      <li><b>Exact physics</b> Kart against ground and wall, and kart against kart, follow the
-        original tick for tick. <code>vehicle/tests/tick.rs</code> checks them against the C
-        reference, ctr-native. The weapons, crates and the level's objects follow the original
-        closely.</li>
-      <li><b>Native performance, frame rates and aspect ratios</b> The original's wobbly graphics
-        have a charm of their own, but there is no need for
+      <li><b>Exact, reference-checked physics</b> Kart physics and collision follow the original
+        tick for tick. We check them against the C decompilation,
+        <a href="https://github.com/CTR-tools/ctr-native">ctr-native</a>. The weapons, crates and
+        the level's objects follow the original closely.</li>
+      <li><b>Truly native performance, frame rates and aspect ratios</b> The original look has a
+        charm of its own, but the reimplementation has no need for
         <a href="https://github.com/libretro/beetle-psx-libretro/tree/master/pgxp">PGXP</a> or
-        other workarounds, since there is an actual depth buffer.</li>
+        other (awesome) emulator hacks, since it has full-precision vertices and a real depth
+        buffer.</li>
       <li><b>Cross-platform</b> It runs and builds on any system that Rust builds on, and in the
-        browser.</li>
-      <li><b>No emulator hacks, ROM patches or launchers</b> The current "CTR online" solutions
-        have quite a bit of jank to get running.</li>
-      <li><b>Unlimited modding horizon</b> Modding ctr-native is certainly possible, but difficult
-        to get right, and limited in scope by its recomp-style codebase and the C language.</li>
-      <li><b>30 Hz simulation, high-FPS rendering</b> The game advances at the original's 30 ticks
-        a second, independent of the frame rate it is drawn at.</li>
-      <li><b>Rollback netcode with no local delay</b> Players connect directly (if possible) to
-        each other with <a href="https://github.com/n0-computer/iroh">iroh</a> and
-        <a href="https://en.wikipedia.org/wiki/QUIC">the QUIC protocol</a>.</li>
-      <li><b>Custom tracks</b> <code>ctr-map</code> turns an xdelta patch of the disc into a
-        <code>.ctrmap</code> file that the client loads through the lobby.</li>
+        browser too.</li>
+      <li><b>Hassle-free online play</b> No patched ROMs, emulator builds or launchers
+        required.</li>
+      <li><b>Peer-to-peer networking</b> Players are directly connected to each other over
+        <a href="https://en.wikipedia.org/wiki/QUIC">QUIC</a>, using
+        <a href="https://github.com/n0-computer/iroh">iroh</a>.</li>
+      <li><b>No network setup</b> No port forwarding, DMZ or dedicated servers. Connections punch
+        through NAT automatically, and fall back to a relay when they can't.</li>
+      <li><b>30 Hz simulation, high-FPS rendering</b> The game state advances at the original's
+        30 ticks a second, independent of the rendering frame rate.</li>
+      <li><b>Custom tracks</b> Drag and drop an <code>.xdelta</code> (from e.g.
+        <a href="https://ctrcustomtracks.com">CTR Custom Tracks</a>) onto the client window, and
+        play it with your friends right away.</li>
     </ul>
   </section>
 
@@ -184,16 +183,23 @@
     <p><b>In the browser:</b> <a href="play/">press start</a> and drop the <code>.bin</code> on
       the page. The image is read on your computer and is never uploaded. Needs a keyboard and a
       browser with WebGL2; the first load is a big download.</p>
-    <p><b>Natively:</b> point <code>CTR_BIN</code> at the image, or put it at
-      <code>assets/ctr-u.bin</code>, and run</p>
+    <p><b>Natively:</b> a build from the
+      <a href="https://github.com/elipp/ctr-rs/releases">releases</a> asks for the image the first
+      time it starts. The macOS build is not signed, so allow it in System Settings &rarr; Privacy
+      &amp; Security ("Open Anyway"), or run
+      <code>xattr -dr com.apple.quarantine ctr-rs.app</code>. On Linux, make the
+      <code>.AppImage</code> executable (<code>chmod +x</code>) and run it.</p>
+    <p><b>From source:</b> the client asks for the image with a file dialog the first time; or
+      point <code>CTR_BIN</code> at it, or put it at <code>assets/ctr-u.bin</code>.</p>
     <pre><code>cargo run -p client</code></pre>
     <p><code>]</code> and <code>[</code> switch the level, <code>.</code> and <code>,</code>
-      switch the racer, and <code>/</code> commands go through the in-game console.</p>
+      switch the racer, and <code>Enter</code> opens the in-game console for <code>/</code>
+      commands and chat.</p>
   </section>
 
   <section>
     <h2>Prior work</h2>
-    <p>This project stands on the work of the CTR community, and could not exist without it.</p>
+    <p>This project stands on the work of the CTR community, and absolutely could not exist without it.</p>
     <ul>
       <li><b><a href="https://github.com/CTR-tools/ctr-native">ctr-native</a></b> A native PC port
         of the game built on the decompilation. Our first reference for how the game behaves, and
@@ -215,14 +221,14 @@
     <p>ctr-rs is an independent fan project, not affiliated with or endorsed by Sony Interactive
       Entertainment, Activision Publishing, Naughty Dog or any other rights holder. It ships no game
       content: no art, models, textures, sounds, music, levels or disc contents. You provide your
-      own legally obtained copy of the game, and everything is read from it at runtime. Custom maps
+      own legally obtained copy of the game, and everything is read from it at runtime. Custom tracks
       are not shipped either: you import them yourself from patches you have obtained.</p>
     <p>Crash Team Racing was developed by Naughty Dog and published by Sony Computer Entertainment.
       Crash Bandicoot and Crash Team Racing are trademarks of Activision Publishing, Inc.
       PlayStation is a trademark of Sony Interactive Entertainment Inc.</p>
     <p>Our own code is licensed under the
       <a href="https://github.com/elipp/ctr-rs/blob/main/LICENSE">GNU General Public License,
-      version 3</a>, the license of ctr-native and CTR-ModSDK. <code>crates/gte</code> is also
+      version 3</a>, the license of ctr-native and CTR-ModSDK, the projects it is ported from. <code>crates/gte</code> is also
       derived from MIT-licensed code; see
       <a href="https://github.com/elipp/ctr-rs/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>.</p>
     <p class="note">LLM-based tooling was heavily used in the construction of this project.</p>

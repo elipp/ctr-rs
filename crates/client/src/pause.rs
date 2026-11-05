@@ -1,7 +1,8 @@
 //! The pause menu, in the game's fonts. Escape, P or a pad's Start opens and closes it. Up and
 //! Down (W and S, the D-pad, the left stick pushed most of the way) pick an item, Return or Space (Cross) takes it, and Backspace
 //! (Triangle) goes back to the race. The mouse picks an item by pointing at it, and a click takes
-//! it, as a tap does on a touch screen.
+//! it, as a tap does on a touch screen. Items that do not fit scroll: with the mouse wheel, and
+//! to keep the pick shown as the keys move it.
 //!
 //! Outside a lobby it also offers "Public lobbies": the realm's list (`public_lobbies.rs`), where
 //! taking a lobby joins it. Backspace goes back from there to the menu, not to the race.
@@ -72,9 +73,14 @@ pub struct PauseMenu {
     /// A volume or a key changed since the config was last saved.
     unsaved: bool,
     /// The control whose key is waited for.
-    capturing: Option<Control>,
+    pub capturing: Option<Control>,
     /// The about page's list, once it is first shown.
     about: Option<Accordion>,
+    /// How far the items are scrolled, in logical pixels, when they are more than [`LIST_TEXELS`]
+    /// tall. Kept here, as the menu is built anew whenever what it shows changes.
+    scroll: f32,
+    /// The pick was moved by a key or a pad: scroll the list to show it, once it is laid out.
+    follow: bool,
 }
 
 impl HasAccordion for PauseMenu {
@@ -271,8 +277,6 @@ const TRACK: usize = 160;
 const TRACK_HEIGHT: usize = 10;
 const KNOB: usize = 5;
 const KNOB_HEIGHT: usize = 12;
-/// The width of a volume's label.
-const LABEL: usize = 56;
 /// `Options_VolumeSlider_Colors`: the wedge's colour at its point, and at its end.
 const WEDGE_FROM: [u8; 3] = [0, 0, 0x20];
 const WEDGE_TO: [u8; 3] = [0x80, 0x80, 0xff];
@@ -288,6 +292,11 @@ const STICK_PUSHED: f32 = 0x60 as f32 / 127.0;
 const ABOUT_LINES: usize = 22;
 const ABOUT_TEXELS: f32 = 5.0;
 
+/// The most the items take down, in texels of the 2D art (of its 240): taller, they scroll.
+const LIST_TEXELS: usize = 180;
+/// An item's height: a line of the middle font and its padding.
+const ROW_TEXELS: usize = Font::Middle.line_height() + 4;
+
 /// The panel behind the items, the line around it, and its shadow.
 const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
 const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
@@ -300,7 +309,11 @@ struct Shown {
     title: String,
 }
 
-/// An item's text, and its place in the menu.
+/// The items, which scroll when they do not fit.
+#[derive(Component)]
+struct List;
+
+/// A cell of an item, and the item's place in the menu.
 #[derive(Component)]
 struct Row(usize);
 
@@ -376,11 +389,19 @@ fn input(
     if focus_lost.read().count() > 0 {
         menu.slide_keys = 0;
     }
+    let wheel: Vec<MouseWheel> = wheel.read().cloned().collect();
     let font_size = size.0.y * ABOUT_TEXELS;
     let wheeled: f32 = wheel
-        .read()
+        .iter()
         .map(|event| accordion::wheel_lines(event, font_size))
         .sum();
+    // The items' list scrolls by rows.
+    let row = size.0.y * ROW_TEXELS as f32;
+    let wheeled_px: f32 = wheel
+        .iter()
+        .map(|event| accordion::wheel_lines(event, row) * row)
+        .sum();
+    let view = menu.view;
     let was_open = menu.open;
     let offline = lobby.online.is_none();
     let sound = |id| {
@@ -430,6 +451,7 @@ fn input(
         menu.open = !menu.open;
         menu.view = View::Main;
         menu.selected = 0;
+        menu.scroll = 0.0;
         menu.clicked = None;
         menu.capturing = None;
         test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
@@ -467,6 +489,7 @@ fn input(
         } else {
             if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up {
                 menu.selected = (menu.selected + count - 1) % count;
+                menu.follow = true;
                 sound(MENU_MOVE_SFX);
             }
             if key(&[KeyCode::ArrowDown, KeyCode::KeyS])
@@ -474,8 +497,11 @@ fn input(
                 || stick_down
             {
                 menu.selected = (menu.selected + 1) % count;
+                menu.follow = true;
                 sound(MENU_MOVE_SFX);
             }
+            // (`show` keeps it within the list.)
+            menu.scroll += wheeled_px;
         }
         // (On the about page taking is for the list, and Back is clicked.)
         let taken = if enter && menu.view != View::About {
@@ -564,6 +590,10 @@ fn input(
             Some(Item::Quit) => {
                 exit.write(AppExit::Success);
             }
+        }
+        // Another view starts at its top.
+        if menu.view != view {
+            menu.scroll = 0.0;
         }
         test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
         // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
@@ -672,7 +702,8 @@ fn show(
     size: Res<TexelSize>,
     wedge: Res<Wedge>,
     shown: Query<(Entity, &Shown)>,
-    rows: Query<(&Row, &Children)>,
+    rows: Query<(&Row, &Children, &ComputedNode, &UiGlobalTransform)>,
+    mut list: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<List>>,
     mut texts: Query<&mut CtrText>,
     mut knobs: Query<(&Knob, &mut Node)>,
     mut about_lines: accordion::Lines<PauseMenu>,
@@ -696,9 +727,35 @@ fn show(
         if let Some(wanted) = wanted {
             menu.selected = menu.selected.min(wanted.items.len() - 1);
             let about = menu.about.as_ref().filter(|_| menu.view == View::About);
-            spawn(&mut commands, wanted, menu.selected, about, &size, &wedge);
+            let scroll = menu.scroll;
+            spawn(&mut commands, wanted, menu.selected, scroll, about, &size, &wedge);
         }
         return;
+    }
+    // Once laid out: scrolled to show the pick if it was moved to, and no further than the end.
+    if let Ok((node, at, mut scroll)) = list.single_mut()
+        && node.size.y > 0.0
+    {
+        let logical = node.inverse_scale_factor;
+        let shown = node.size.y * logical;
+        if menu.follow {
+            let picked = rows.iter().find(|(row, ..)| row.0 == menu.selected);
+            if let Some((_, _, row, row_at)) = picked {
+                // The row's top and bottom down the whole list, as it was scrolled when laid out.
+                let top = (row_at.translation.y - row.size.y / 2.0)
+                    - (at.translation.y - node.size.y / 2.0)
+                    + node.scroll_position.y;
+                let top = top * logical;
+                let bottom = top + row.size.y * logical;
+                menu.scroll = menu.scroll.max(bottom - shown).min(top);
+            }
+            menu.follow = false;
+        }
+        let end = (node.content_size.y * logical - shown).max(0.0);
+        menu.scroll = menu.scroll.clamp(0.0, end);
+        if scroll.y != menu.scroll {
+            scroll.y = menu.scroll;
+        }
     }
     if let Some(list) = &menu.about {
         accordion::update(list, &mut about_lines);
@@ -709,7 +766,7 @@ fn show(
             node.left = at;
         }
     }
-    for (row, children) in &rows {
+    for (row, children, ..) in &rows {
         let gradient = gradient(row.0 == menu.selected);
         for &child in children {
             if let Ok(mut text) = texts.get_mut(child)
@@ -735,6 +792,7 @@ fn spawn(
     commands: &mut Commands,
     shown: Shown,
     selected: usize,
+    scroll: f32,
     about: Option<&Accordion>,
     size: &TexelSize,
     wedge: &Wedge,
@@ -782,69 +840,88 @@ fn spawn(
     if let Some(list) = about {
         spawn_about(commands, panel, list, size);
     }
+    // Two columns: the labels, and the values and volumes left-aligned beside them. An item
+    // without either spans both.
+    let list = commands
+        .spawn((
+            ChildOf(panel),
+            List,
+            Node {
+                display: Display::Grid,
+                grid_template_columns: RepeatedGridTrack::auto(2),
+                align_self: AlignSelf::Stretch,
+                max_height: size.y(LIST_TEXELS),
+                overflow: Overflow::scroll_y(),
+                ..default()
+            },
+            ScrollPosition(Vec2::new(0.0, scroll)),
+        ))
+        .id();
     for (i, item) in items.into_iter().enumerate() {
         let text = CtrText::new(item.label, Font::Middle, gradient(i == selected));
-        // A setting has its label at the left and its value at the right.
-        let justify = if item.value.is_some() {
-            JustifyContent::SpaceBetween
-        } else {
-            JustifyContent::Center
-        };
-        let row = commands
-            .spawn((
-                ChildOf(panel),
-                Row(i),
-                Node {
-                    width: Val::Percent(100.0),
-                    justify_content: justify,
-                    align_items: AlignItems::Center,
-                    column_gap: size.x(16),
-                    padding: UiRect::vertical(size.y(2)),
-                    ..default()
-                },
-            ))
-            .id();
+        let paired = item.value.is_some() || matches!(item.item, Item::Volume(_));
+        if !paired {
+            let only = cell(commands, list, i, size, |node| {
+                node.grid_column = GridPlacement::span(2);
+                node.justify_content = JustifyContent::Center;
+            });
+            commands.spawn((ChildOf(only), text));
+            continue;
+        }
+        // (The label's padding is the gap, so that pointing between the two still picks.)
+        let label = cell(commands, list, i, size, |node| {
+            node.padding.right = size.x(16);
+        });
+        commands.spawn((ChildOf(label), text));
+        let value_cell = cell(commands, list, i, size, |_| {});
         if let Some(value) = item.value {
-            commands.spawn((ChildOf(row), text));
             commands.spawn((
-                ChildOf(row),
+                ChildOf(value_cell),
                 CtrText::new(value, Font::Middle, gradient(i == selected)),
             ));
         } else if let Item::Volume(slider) = item.item {
-            commands.spawn((
-                ChildOf(row),
-                text,
-                Node {
-                    width: size.x(LABEL),
-                    ..default()
-                },
-            ));
-            spawn_track(commands, row, slider, size, wedge);
-        } else {
-            commands.spawn((ChildOf(row), text));
+            spawn_track(commands, value_cell, slider, size, wedge);
         }
-        commands
-            .entity(row)
-            .observe(move |_: On<PointerOver>, mut menu: ResMut<PauseMenu>| {
-                menu.selected = i;
-            })
-            .observe(
-                move |click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
-                    if click.button == PointerButton::Primary {
-                        menu.clicked = Some(i);
-                    }
-                },
-            )
-            // A touch's pointer is new in the frame it presses, when it is over nothing yet: Bevy
-            // has no press on the row, and so no click.
-            .observe(
-                move |release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
-                    if matches!(release.pointer.id, PointerId::Touch(_)) {
-                        menu.clicked = Some(i);
-                    }
-                },
-            );
     }
+}
+
+/// A cell of item `i` in `list`, laid out as `style` changes it: pointing at it picks the item,
+/// and clicking or tapping it takes it.
+fn cell(
+    commands: &mut Commands,
+    list: Entity,
+    i: usize,
+    size: &TexelSize,
+    style: impl FnOnce(&mut Node),
+) -> Entity {
+    let mut node = Node {
+        align_items: AlignItems::Center,
+        padding: UiRect::vertical(size.y(2)),
+        ..default()
+    };
+    style(&mut node);
+    commands
+        .spawn((ChildOf(list), Row(i), node))
+        .observe(move |_: On<PointerOver>, mut menu: ResMut<PauseMenu>| {
+            menu.selected = i;
+        })
+        .observe(
+            move |click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
+                if click.button == PointerButton::Primary {
+                    menu.clicked = Some(i);
+                }
+            },
+        )
+        // A touch's pointer is new in the frame it presses, when it is over nothing yet: Bevy has
+        // no press on the cell, and so no click.
+        .observe(
+            move |release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
+                if matches!(release.pointer.id, PointerId::Touch(_)) {
+                    menu.clicked = Some(i);
+                }
+            },
+        )
+        .id()
 }
 
 /// The about page in `panel`: the version, and the list.
