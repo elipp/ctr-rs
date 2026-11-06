@@ -490,7 +490,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 name: "lag",
                 about: "Hold back the others' pads here",
                 options: &[leaf("off", "No lag")],
-                arg: Some("<delay> [jitter], like 75ms 15ms"),
+                arg: Some("<delay> [jitter]"),
             },
             node(
                 "fx",
