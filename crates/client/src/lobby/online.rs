@@ -26,6 +26,8 @@ pub struct Online {
     /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
     /// the pads).
     pub inbox: Vec<(usize, u32, Vec<Pad>)>,
+    /// The pads of the others that `/debug lag` holds back before they go in the inbox.
+    pub delayed: super::lag::Delayed,
     /// Set by the start and cleared by `drive_tick`, which puts the sim back to tick 0.
     pub fresh: bool,
     /// Set once `remote::build` has put the other karts on the grid.
@@ -42,6 +44,10 @@ pub struct Online {
     pub checks: race::desync::Checks,
     /// How many ticks our clock is ahead of each player's (smoothed; ours is 0), from `net`.
     pub ahead: Vec<f32>,
+    /// A watching client's ticks (see [`Online::watches`]) that have the pad of every player
+    /// still racing and are not played yet (smoothed), which `pace` keeps near
+    /// `SPECTATE_BUFFER`. It plays only those (see `drive_tick`).
+    pub buffered: f32,
     /// The players whose sim differs from ours, with the first tick it was seen at.
     pub desync: Vec<Desync>,
     /// How many of the finishers (by place) have been announced.
@@ -49,6 +55,10 @@ pub struct Online {
     /// The players that left the race (by slot): they have a neutral pad from their last on, and
     /// the race does not wait for them to finish.
     pub gone: Vec<bool>,
+    /// The players whose kart has crossed the line (by slot), as the sim has it now: set by
+    /// `drive_tick`. The sim takes no more of their pads, so a client that watches does not wait
+    /// for them, and `pace` does not keep our clock with theirs.
+    pub finished: Vec<bool>,
     /// The players that left whose pads we still have to report (`Event::Gone`): `drive_tick`
     /// answers once the pads that came in are taken.
     pub asked: Vec<usize>,
@@ -76,6 +86,12 @@ impl Online {
     /// Whether we only watch: the slot is past the players', and there is no kart of ours.
     pub fn spectating(&self) -> bool {
         self.slot >= self.characters.len()
+    }
+
+    /// Whether we play only the ticks that have the pads of every player still racing, as a
+    /// spectator does: a spectator, or a player whose kart has finished (see `drive_tick`).
+    pub fn watches(&self) -> bool {
+        self.spectating() || self.finished.get(self.slot).copied().unwrap_or(false)
     }
 
     /// The kart of the sim that the view is of, and the HUD: ours, or the one a spectator follows.

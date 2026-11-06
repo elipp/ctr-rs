@@ -40,6 +40,7 @@ use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
 use hud::waiting;
 pub use online::Online;
+pub(crate) use progress::SPECTATE_BUFFER;
 use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
 use report::report;
@@ -48,6 +49,7 @@ pub(crate) mod commands;
 mod countdown;
 pub(crate) mod cup;
 mod hud;
+pub mod lag;
 mod online;
 mod placing;
 mod progress;
@@ -464,6 +466,7 @@ impl Plugin for LobbyPlugin {
         app.init_resource::<Lobby>()
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()
+            .init_resource::<lag::FakeLag>()
             .add_systems(Startup, spawn_waiting)
             .add_systems(
                 Update,

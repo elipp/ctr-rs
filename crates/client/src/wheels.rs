@@ -144,7 +144,7 @@ pub fn update(
         // The tires sit at the kart's squashed and stretched size.
         let (wheel_rotation, hazard_timer, scale) = motion
             .map_or((0, 0, [DRIVER_INSTANCE_SCALE; 3]), |m| {
-                (m.wheel_rotation, m.hazard_timer, m.inst_scale)
+                (m.wheel_rotation, m.hazard_timer, m.drawn_inst_scale())
             });
         let quads = wheel_quads(
             pose.translation,

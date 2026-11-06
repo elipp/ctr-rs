@@ -6,6 +6,7 @@ use render::mesh::SCALE;
 
 use super::{Drive, Kart};
 use crate::command::CommandLine;
+use crate::kart::{KartMotion, KartSlot};
 use crate::pause::PauseMenu;
 
 /// Marks the camera that shows the sim's `camera::CameraDc`.
@@ -100,8 +101,14 @@ impl Default for Orbit {
 /// it (left button held and move) and pulled away or closer by the scroll wheel. A double click
 /// or Home puts it back. This is the view only, the sim's camera (and the rollback) do not know
 /// of it.
+///
+/// The sim's camera follows the kart as the sim has it, but another player's kart is drawn eased
+/// from where a rollback put it right (`KartMotion::absorb`): the camera is moved along by the
+/// same offset, or the world would jump at each rollback while the kart drifts in the frame.
+/// (Only the place: turning the view with the kart's offset would swing all of it.)
 pub(super) fn chase(
     drive: Res<Drive>,
+    lobby: Res<crate::lobby::Lobby>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -113,6 +120,7 @@ pub(super) fn chase(
     mut orbit: Local<Orbit>,
     mut ui_scrolled_at: Local<Option<f32>>,
     karts: Query<&Transform, (With<Kart>, Without<ChaseCamera>)>,
+    others: Query<(&KartSlot, &KartMotion), Without<Kart>>,
     mut cameras: Query<&mut Transform, With<ChaseCamera>>,
 ) {
     let now = time.elapsed_secs();
@@ -147,10 +155,26 @@ pub(super) fn chase(
     let (a, b) = (drive.previous_view, drive.current_view);
     let mut eye = a.eye.lerp(b.eye, t);
     let mut target = a.target.lerp(b.target, t);
+    // The kart the camera follows, if it is another player's (a spectator's, or once we have
+    // finished): it is drawn where its motion says.
+    let watched = lobby.online.as_ref().and_then(|net| {
+        others
+            .iter()
+            .find(|(slot, _)| slot.0 == net.watching)
+            .map(|(_, motion)| motion)
+    });
+    if let Some(motion) = watched {
+        let shift = motion.eased_offset(t);
+        eye += shift;
+        target += shift;
+    }
+    let pivot = match watched {
+        Some(motion) => Some(motion.pose(t).translation),
+        None => karts.single().ok().map(|kart| kart.translation),
+    };
     if (orbit.angles != Vec2::ZERO || orbit.zoom != 1.0)
-        && let Ok(kart) = karts.single()
+        && let Some(pivot) = pivot
     {
-        let pivot = kart.translation;
         let right = (target - eye).cross(Vec3::Y).normalize_or_zero();
         let turn = Quat::from_axis_angle(Vec3::Y, orbit.angles.x)
             * Quat::from_axis_angle(right, orbit.angles.y);

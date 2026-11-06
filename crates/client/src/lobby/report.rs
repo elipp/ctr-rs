@@ -15,6 +15,8 @@ pub(super) const LEAD_SMOOTHING: f32 = 0.1;
 
 pub(super) fn report(
     mut lobby: ResMut<Lobby>,
+    mut lag: ResMut<super::lag::FakeLag>,
+    time: Res<Time<Real>>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -124,6 +126,7 @@ pub(super) fn report(
                     hash,
                     laps,
                     inbox: Vec::new(),
+                    delayed: default(),
                     fresh: true,
                     built: false,
                     go: false,
@@ -131,10 +134,12 @@ pub(super) fn report(
                     corrections: 0,
                     replayed: 0,
                     ahead: vec![0.0; characters_len],
+                    buffered: 0.0,
                     checks: race::desync::Checks::new(characters_len, slot),
                     desync: Vec::new(),
                     announced: 0,
                     gone: vec![false; characters_len],
+                    finished: vec![false; characters_len],
                     watching: if slot < characters_len { slot } else { 0 },
                     asked: Vec::new(),
                     frozen: vec![false; characters_len],
@@ -370,15 +375,22 @@ pub(super) fn report(
     let mut answers = Vec::new();
     if let Some(online) = &mut lobby.online {
         online.go |= go;
+        // (`/debug lag` holds the pads back a while; with no lag they go through at once.)
+        let now = time.elapsed();
+        online.delayed.hold(pads, now, &mut lag);
         // The pads of a player we reported on are not taken: the report is where they end.
         online.inbox.extend(
-            pads.into_iter()
+            online
+                .delayed
+                .release(now, &lag)
+                .into_iter()
                 .filter(|(slot, ..)| !online.frozen.get(*slot).copied().unwrap_or(false)),
         );
         for slot in gones {
             if !online.go {
                 // The sim has none of its pads yet, and takes none now.
                 online.inbox.retain(|(from, ..)| *from != slot);
+                online.delayed.forget(slot);
                 if let Some(frozen) = online.frozen.get_mut(slot) {
                     *frozen = true;
                 }

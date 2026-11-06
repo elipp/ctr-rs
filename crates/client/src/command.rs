@@ -90,6 +90,9 @@ pub enum Action {
     /// (Debug) Freeze this client for that long, online only: the others wait for it, and the
     /// host removes it after `net::KICK_AFTER`.
     DebugStall(std::time::Duration),
+    /// (Debug) Hold back the pads of the others that come to this client that long (`None` to
+    /// stop): see `lobby/lag.rs`.
+    DebugLag(Option<crate::lobby::lag::Lag>),
     /// (Debug) End the race now, as if the karts had finished in a random order (the host's;
     /// a cup scores it).
     DebugRanking,
@@ -152,7 +155,7 @@ const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...]";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -423,6 +426,35 @@ impl Action {
         })
     }
 
+    /// `/debug lag 75ms 15ms`: the delay, and the jitter (none if left out); `off` or 0 for none.
+    fn lag(line: &str) -> Result<Action, String> {
+        use crate::lobby::lag::{Lag, MAX_DELAY_MS, MAX_JITTER_MS};
+        let usage = || {
+            format!(
+                "Usage: /debug lag <delay> [jitter] | off: a delay of 0 to {MAX_DELAY_MS} ms and a jitter of 0 to {MAX_JITTER_MS} ms, like 75ms 15ms"
+            )
+        };
+        let (delay, jitter) = word(line);
+        if delay == "off" && jitter.is_empty() {
+            return Ok(Action::DebugLag(None));
+        }
+        let delay = milliseconds(delay).filter(|ms| (0.0..=MAX_DELAY_MS).contains(ms));
+        let jitter = match jitter {
+            "" => Some(0.0),
+            j => milliseconds(j).filter(|ms| (0.0..=MAX_JITTER_MS).contains(ms)),
+        };
+        let (Some(delay), Some(jitter)) = (delay, jitter) else {
+            return Err(usage());
+        };
+        if delay == 0.0 && jitter == 0.0 {
+            return Ok(Action::DebugLag(None));
+        }
+        Ok(Action::DebugLag(Some(Lag {
+            delay: std::time::Duration::from_secs_f64(delay / 1000.0),
+            jitter: std::time::Duration::from_secs_f64(jitter / 1000.0),
+        })))
+    }
+
     fn debug(line: &str) -> Result<Action, String> {
         let (sub, rest) = word(line);
         match sub {
@@ -460,6 +492,7 @@ impl Action {
                     STALL_MAX_MS / 1000.0
                 )),
             },
+            "lag" => Action::lag(rest),
             "viewer" => Ok(Action::DebugViewer),
             "ranking" => Ok(Action::DebugRanking),
             "hud" => match rest {
@@ -1622,6 +1655,19 @@ mod tests {
             Ok(Action::DebugStall(d)) if d == std::time::Duration::from_secs(3)
         ));
         assert!(Action::parse("debug stall").is_err());
+        let lag = |line| match Action::parse(line) {
+            Ok(Action::DebugLag(lag)) => Some(lag.map(|l| (l.delay.as_millis(), l.jitter.as_millis()))),
+            _ => None,
+        };
+        assert_eq!(lag("debug lag 75 15"), Some(Some((75, 15))));
+        assert_eq!(lag("debug lag 75ms"), Some(Some((75, 0))));
+        assert_eq!(lag("debug lag 0.1s 20ms"), Some(Some((100, 20))));
+        assert_eq!(lag("debug lag off"), Some(None));
+        assert_eq!(lag("debug lag 0"), Some(None));
+        assert_eq!(lag("debug lag"), None);
+        assert_eq!(lag("debug lag 2s"), None);
+        assert_eq!(lag("debug lag 75 600"), None);
+        assert_eq!(lag("debug lag 75 15 3"), None);
         assert!(Action::parse("debug stall 5m").is_err());
         assert!(Action::parse("debug stall 61s").is_err());
         assert!(Action::parse("debug netinfo").is_err());

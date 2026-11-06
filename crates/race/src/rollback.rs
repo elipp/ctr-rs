@@ -156,6 +156,15 @@ impl<S: Simulation> Rollback<S> {
         self.base + self.known[slot].len() as u32
     }
 
+    /// The first tick that some player's pad is missing for, played or not: the ticks before it
+    /// can be played with no prediction. `u32::MAX` once every player has left.
+    pub fn complete(&self) -> u32 {
+        (0..self.known.len())
+            .map(|slot| self.confirmed_until(slot))
+            .min()
+            .unwrap_or(u32::MAX)
+    }
+
     /// The first tick that is not final: the ticks before it have everyone's pad.
     pub fn settled(&self) -> u32 {
         (0..self.known.len())

@@ -39,18 +39,26 @@ pub fn reap(
     }
 }
 
-/// How far a kart is drawn from where the sim has it, and the turn of it: what a rollback moved
-/// the kart by, which fades away in the ticks after instead of showing as a jump.
+/// How far a kart is drawn from where the sim has it, the turn of it and the squash and stretch:
+/// what a rollback moved the kart by, which fades away in the ticks after instead of showing as a
+/// jump.
 #[derive(Clone, Copy)]
 struct Offset {
     translation: Vec3,
     rotation: Quat,
+    /// A factor on the scale (a landing's squash that the sim had and no longer has, say).
+    scale: Vec3,
 }
+
+/// The most a rollback's offset scales a kart by, either way: a kart squished flat has a scale of
+/// next to nothing, which is no factor to ease from.
+const OFFSET_SCALE_MAX: f32 = 4.0;
 
 impl Offset {
     const NONE: Offset = Offset {
         translation: Vec3::ZERO,
         rotation: Quat::IDENTITY,
+        scale: Vec3::ONE,
     };
 
     /// The offset a tick later, `ease` of it being left.
@@ -58,6 +66,7 @@ impl Offset {
         Offset {
             translation: self.translation * ease,
             rotation: Quat::IDENTITY.slerp(self.rotation, ease),
+            scale: Vec3::ONE.lerp(self.scale, ease),
         }
     }
 }
@@ -154,6 +163,9 @@ pub struct KartMotion {
     animation: (u8, i16),
     /// The same one tick earlier, to blend from.
     previous_animation: (u8, i16),
+    /// The frame a rollback took away (the one shown before it), faded out over the next ticks
+    /// as the offset is.
+    held: Option<HeldFrame>,
     /// The ground shadow at the last two ticks.
     shadow_previous: Option<GroundShadow>,
     shadow_current: Option<GroundShadow>,
@@ -161,6 +173,29 @@ pub struct KartMotion {
     hidden: bool,
     /// The kart is burnt (`Driver::burnTimer`): its body and driver are black.
     burnt: bool,
+}
+
+/// The frame shown before a rollback changed the animation, and how much of it is drawn over
+/// the sim's: at the last tick and at the latest.
+#[derive(Clone, Copy)]
+struct HeldFrame {
+    frame: (u8, i16),
+    previous_weight: f32,
+    weight: f32,
+}
+
+/// A held frame weighs less than this and is dropped; one weighs more than this and a new
+/// rollback does not take its place (what is drawn is mostly the held frame still).
+const HELD_DROP: f32 = 0.01;
+const HELD_KEEP: f32 = 0.5;
+
+/// What [`KartMotion::blend`] says to draw: two frames of the sim and how far between them, and a
+/// frame a rollback took away with how much of it goes over those.
+struct Blend {
+    from: (u8, i16),
+    to: (u8, i16),
+    t: f32,
+    held: Option<((u8, i16), f32)>,
 }
 
 /// The furthest apart two ticks' frames of an animation can be and still be blended: an
@@ -183,6 +218,7 @@ impl KartMotion {
             inst_scale: [0; 3],
             animation: (0, 0),
             previous_animation: (0, 0),
+            held: None,
             shadow_previous: None,
             shadow_current: None,
             hidden: false,
@@ -225,6 +261,14 @@ impl KartMotion {
             previous_offset: self.offset,
             offset: self.offset.faded(self.ease),
             previous_animation: self.animation,
+            held: self
+                .held
+                .map(|h| HeldFrame {
+                    previous_weight: h.weight,
+                    weight: h.weight * self.ease,
+                    ..h
+                })
+                .filter(|h| h.previous_weight >= HELD_DROP),
             shadow_previous: self.shadow_current,
             ..*self
         }
@@ -240,6 +284,9 @@ impl KartMotion {
     pub fn freeze(&mut self) {
         self.previous = self.current;
         self.previous_offset = self.offset;
+        if let Some(held) = &mut self.held {
+            held.previous_weight = held.weight;
+        }
         *self = self.clone().settled();
     }
 
@@ -268,10 +315,32 @@ impl KartMotion {
             self.replayed_average = average;
             return;
         }
+        let ratio = (predicted.scale / now.scale)
+            .clamp(Vec3::splat(1.0 / OFFSET_SCALE_MAX), Vec3::splat(OFFSET_SCALE_MAX));
         self.offset = Offset {
             translation: self.offset.translation + predicted.translation - now.translation,
             rotation: self.offset.rotation * predicted.rotation * now.rotation.inverse(),
+            scale: (self.offset.scale * ratio)
+                .clamp(Vec3::splat(1.0 / OFFSET_SCALE_MAX), Vec3::splat(OFFSET_SCALE_MAX)),
         };
+        // The frame that was shown goes on showing, and fades to the sim's. (The next push makes
+        // the sim's frames far apart, which are not blended: the held frame covers that.)
+        let corrected = (kart.driver.anim_index, kart.driver.anim_frame);
+        if corrected != self.animation && self.held.is_none_or(|h| h.weight < HELD_KEEP) {
+            self.held = Some(HeldFrame {
+                frame: self.animation,
+                previous_weight: 1.0,
+                weight: 1.0,
+            });
+        }
+    }
+
+    /// How far a rollback's offset moves the drawing from where the sim has the kart, `t` of the
+    /// way through the tick: what [`KartMotion::pose`] adds to the translation.
+    pub fn eased_offset(&self, t: f32) -> Vec3 {
+        self.previous_offset
+            .translation
+            .lerp(self.offset.translation, t)
     }
 
     /// Between the last two ticks, `t` of the way to the latest.
@@ -282,7 +351,7 @@ impl KartMotion {
                 .lerp(self.current.translation + to.translation, t),
             rotation: (from.rotation * self.previous.rotation)
                 .slerp(to.rotation * self.current.rotation, t),
-            scale: self.previous.scale.lerp(self.current.scale, t),
+            scale: (self.previous.scale * from.scale).lerp(self.current.scale * to.scale, t),
         }
     }
 }
@@ -306,10 +375,7 @@ impl KartMotion {
             Quat::from_mat3(&Mat3::from_cols(up.cross(forward), up, forward))
         };
         // (The ground does not move with a rollback's offset, but where the kart is drawn does.)
-        let eased = self
-            .previous_offset
-            .translation
-            .lerp(self.offset.translation, t);
+        let eased = self.eased_offset(t);
         Some((
             place(&before).lerp(place(&now), t) + Vec3::new(eased.x, 0.0, eased.z),
             Mat3::from_quat(orient(&before).slerp(orient(&now), t)),
@@ -319,13 +385,32 @@ impl KartMotion {
 
     /// The frames to show and how far from the first to the second, `t` of the way through the
     /// tick. Frames of different animations, or far apart, are not blended: the latest shows.
-    fn blend(&self, t: f32) -> ((u8, i16), (u8, i16), f32) {
+    /// Over them goes the frame a rollback took away, if it has not faded yet.
+    fn blend(&self, t: f32) -> Blend {
         let (from, to) = (self.previous_animation, self.animation);
-        if from.0 == to.0 && (to.1 - from.1).abs() <= MAX_BLEND_FRAMES && from != to {
-            (from, to, t)
-        } else {
-            (to, to, 0.0)
+        let (from, t_frames) =
+            if from.0 == to.0 && (to.1 - from.1).abs() <= MAX_BLEND_FRAMES && from != to {
+                (from, t)
+            } else {
+                (to, 0.0)
+            };
+        let held = self.held.and_then(|h| {
+            let weight = h.previous_weight + (h.weight - h.previous_weight) * t;
+            (h.frame != to || from != to).then_some((h.frame, weight))
+        });
+        Blend {
+            from,
+            to,
+            t: t_frames,
+            held,
         }
+    }
+
+    /// The instance's squash and stretch as drawn (the wheels follow it): the sim's, with what is
+    /// left of a rollback's offset.
+    pub fn drawn_inst_scale(&self) -> [i32; 3] {
+        let factor = self.offset.scale.to_array();
+        std::array::from_fn(|a| (self.inst_scale[a] as f32 * factor[a]).round() as i32)
     }
 }
 
@@ -335,8 +420,9 @@ impl KartMotion {
 pub struct KartRig {
     header: ModelHeader,
     pub(crate) parts: [Option<Handle<Mesh>>; PARTS],
-    /// The blend on the mesh: two frames and the bits of how far between them.
-    shown: Option<((u8, i16), (u8, i16), u32)>,
+    /// The blend on the mesh: two frames and the bits of how far between them, and the held
+    /// frame with the bits of its weight.
+    shown: Option<((u8, i16), (u8, i16), u32, Option<((u8, i16), u32)>)>,
     /// Whether the vertex colours are the burnt black ones.
     burnt: bool,
 }
@@ -570,13 +656,15 @@ pub fn show(
 #[derive(Component)]
 pub struct HiddenWithKart;
 
-/// A kart that is not drawn (a plant ate it) takes everything that belongs to it along: its
+/// A kart that is not drawn (a plant ate it, or it is a spectator's own) takes everything that
+/// belongs to it along: its
 /// wheels, shadow, smoke, tire marks, mask and shield. This is the one place that says so; the
 /// parts only decide when they show otherwise. When the kart is back the parts show as they
 /// would (each decides that again on its next update).
 pub fn hide_parts(
     mut commands: Commands,
-    karts: Query<&KartMotion>,
+    // (Not a part's: the parts' visibilities are written below.)
+    karts: Query<(&KartMotion, &Visibility), (Without<Attached>, Without<crate::wheels::Wheels>)>,
     mut attached: Query<
         (Entity, &Attached, &mut Visibility, Has<HiddenWithKart>),
         Without<crate::wheels::Wheels>,
@@ -589,8 +677,12 @@ pub fn hide_parts(
     )>,
 ) {
     let mut hide = |entity: Entity, kart: Entity, visibility: &mut Visibility, hidden: bool| {
-        let Ok(motion) = karts.get(kart) else { return };
-        if motion.is_hidden() {
+        let Ok((motion, shown)) = karts.get(kart) else {
+            return;
+        };
+        // Hidden as `show` hides the body: eaten, or a spectator's own kart, which follows the
+        // kart it watches and would draw its wheels over that kart's (in `KART_LAYER`).
+        if motion.is_hidden() || *shown == Visibility::Hidden {
             *visibility = Visibility::Hidden;
             if !hidden {
                 commands.entity(entity).insert(HiddenWithKart);
@@ -642,8 +734,8 @@ pub fn animate(
             }
             rig.burnt = motion.burnt;
         }
-        let (from, to, t) = motion.blend(t);
-        let key = (from, to, t.to_bits());
+        let Blend { from, to, t, held } = motion.blend(t);
+        let key = (from, to, t.to_bits(), held.map(|(f, w)| (f, w.to_bits())));
         if rig.shown == Some(key) {
             continue;
         }
@@ -659,14 +751,22 @@ pub fn animate(
         let Some(mut positions) = pose(to) else {
             continue;
         };
+        let mix = |positions: &mut [Vec<[f32; 3]>], other: &[Vec<[f32; 3]>], w: f32| {
+            for (now, other) in positions.iter_mut().zip(other) {
+                for (now, other) in now.iter_mut().zip(other) {
+                    *now = std::array::from_fn(|a| other[a] + (now[a] - other[a]) * w);
+                }
+            }
+        };
         if from != to
             && let Some(before) = pose(from)
         {
-            for (now, before) in positions.iter_mut().zip(&before) {
-                for (now, before) in now.iter_mut().zip(before) {
-                    *now = std::array::from_fn(|a| before[a] + (now[a] - before[a]) * t);
-                }
-            }
+            mix(&mut positions, &before, t);
+        }
+        if let Some((frame, weight)) = held
+            && let Some(held) = pose(frame)
+        {
+            mix(&mut positions, &held, 1.0 - weight);
         }
         rig.shown = Some(key);
         for (handle, positions) in rig.parts.iter().zip(positions) {
