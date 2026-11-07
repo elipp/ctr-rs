@@ -218,6 +218,19 @@ pub(crate) fn to_dial(
         .collect()
 }
 
+/// The roster with the players behind a hard NAT marked, for the log: `ab12, cd34 (hard)`.
+pub(crate) fn roster_nats(roster: &[EndpointId], hard: &[bool]) -> String {
+    roster
+        .iter()
+        .enumerate()
+        .map(|(i, id)| match hard.get(i) {
+            Some(true) => format!("{} (hard)", id.fmt_short()),
+            _ => id.fmt_short().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Dials the players that [`to_dial`] says.
 pub(crate) fn dial_links(
     endpoint: &Endpoint,
@@ -226,7 +239,13 @@ pub(crate) fn dial_links(
     links: &HashMap<EndpointId, Link>,
     dialed: &UnboundedSender<Connection>,
 ) {
-    for id in to_dial(endpoint.id(), roster, hard, |id| links.contains_key(id)) {
+    let ids = to_dial(endpoint.id(), roster, hard, |id| links.contains_key(id));
+    tracing::debug!(
+        roster = %roster_nats(roster, hard),
+        "dialing the links to [{}]",
+        ids.iter().map(|id| id.fmt_short().to_string()).collect::<Vec<_>>().join(", ")
+    );
+    for id in ids {
         dial(endpoint.clone(), id, dialed.clone());
     }
 }
