@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 6;
+pub const SIM_VERSION: u32 = 7;
 
 const UNSORTED: i16 = -1;
 
@@ -770,6 +770,7 @@ impl Race {
             let drivers: Vec<&Driver> = self.karts.iter().map(|k| &k.driver).collect();
             bots.update_globals(&drivers);
         }
+        self.bot_weapons(level, &doors, players, &mut ticks);
         for ((slot, tick), lap) in ticks.iter_mut().enumerate().zip(self.update_laps(level)) {
             if lap.new_lap {
                 self.lap_times[slot].push(lap.time);
@@ -927,6 +928,165 @@ fn after_tick(
         }
     }
     (landing, wall, spray, puffs)
+}
+
+/// `PICKUPBOTS_UPDATE_START_DELAY`: the bots fire nothing in the first 19.2 seconds of a race.
+const BOT_WEAPONS_FROM_MS: i32 = 0x4b00;
+/// `PICKUPBOTS_CLOSE_DIST_SQ_BIAS` and `_RANGE`: how far from a player (squared, flat) a bot
+/// next to it in the race fires at it.
+const BOT_WEAPON_NEAREST: u32 = 0x90001;
+const BOT_WEAPON_RANGE: u32 = 0x13a_ffff;
+/// `PICKUPBOTS_TRAILING_ATTACK_DISTANCE_TO_FINISH_MIN`
+const BOT_TRAILING_NEAR_FINISH: u32 = 16000;
+/// `PICKUPBOTS_VOICELINE_*`: what the bot says to the player it fires at.
+const BOT_VOICE_BOMB: u8 = 10;
+const BOT_VOICE_MISSILE: u8 = 11;
+const BOT_VOICE_MINE: u8 = 0xf;
+
+impl Race {
+    /// `PickupBots_UpdateArcade`: the bot just ahead of each player in the race, and the one just
+    /// behind, may fire at it when it is near enough: the one ahead drops a TNT or a beaker now
+    /// and then (Nitro or red after the first lap, half the time), or fires a bomb or a missile;
+    /// the one behind a missile (not on its last lap) or a bomb. Then it waits a while
+    /// (`weaponCooldown`). The weapons go off on the next tick, as ones fired this tick do.
+    fn bot_weapons(
+        &mut self,
+        level: &Level,
+        doors: &coll::doors::Doors,
+        players: usize,
+        ticks: &mut [KartTick],
+    ) {
+        if self.bots.is_none() || players == 0 || self.event_ms < BOT_WEAPONS_FROM_MS {
+            return;
+        }
+        let rank_of = |karts: &[Kart], rank: i32| {
+            let at = |k: &Kart| k.driver.driver_rank as i32 == rank;
+            if rank < 0 {
+                None
+            } else {
+                karts.iter().position(at)
+            }
+        };
+        for player in 0..players {
+            let rank = self.karts[player].driver.driver_rank as i32;
+            if rank != 0
+                && let Some(bot) = rank_of(&self.karts, rank - 1)
+                && self.bot_may_fire(bot, player)
+            {
+                let rng = &mut self.objects.random_number;
+                let roll = math::mix_rng_scramble(rng) % 200;
+                let shot = match roll {
+                    0 => {
+                        let bot_driver = &mut self.karts[bot].driver;
+                        if bot_driver.lap_index != 0 && math::mix_rng_scramble(rng) % 100 < 50 {
+                            bot_driver.num_wumpas = 10;
+                        }
+                        // (Retail picks by the parity of the race's milliseconds, which here go
+                        // by 32: the tick's stands in.)
+                        let launch = if self.tick & 1 != 0 {
+                            vehicle::item::Launch::Mine
+                        } else {
+                            vehicle::item::Launch::Potion
+                        };
+                        Some((launch, BOT_VOICE_MINE))
+                    }
+                    1 => Some((vehicle::item::Launch::Bomb, BOT_VOICE_BOMB)),
+                    2 => Some((vehicle::item::Launch::Missile, BOT_VOICE_MISSILE)),
+                    _ => None,
+                };
+                if let Some((launch, voice)) = shot {
+                    self.bot_fires(bot, launch, voice, level, doors, ticks);
+                    if roll == 0 {
+                        self.karts[bot].driver.num_wumpas = 0;
+                    }
+                    self.bot_cooldown(bot);
+                }
+            }
+            let p = &self.karts[player].driver;
+            let still_racing =
+                p.lap_index < self.laps || p.distance_to_finish_curr > BOT_TRAILING_NEAR_FINISH;
+            if rank < 3
+                && still_racing
+                && let Some(bot) = rank_of(&self.karts, rank + 1)
+                && self.bot_may_fire(bot, player)
+            {
+                let roll = math::mix_rng_scramble(&mut self.objects.random_number) % 800;
+                let last_lap = self.karts[bot].driver.lap_index as i32 == self.laps as i32 - 1;
+                let launch = if roll < 2 && !last_lap {
+                    Some(vehicle::item::Launch::Missile)
+                } else if roll < 4 {
+                    Some(vehicle::item::Launch::Bomb)
+                } else {
+                    None
+                };
+                if let Some(launch) = launch {
+                    self.bot_fires(bot, launch, BOT_VOICE_MISSILE, level, doors, ticks);
+                    self.bot_cooldown(bot);
+                }
+            }
+        }
+    }
+
+    /// Whether the kart in `bot` is a bot that can fire at the `player`'s: not hurt, still
+    /// racing, its cooldown over, no TNT on its head, no clock on it, and near enough.
+    fn bot_may_fire(&self, bot: usize, player: usize) -> bool {
+        let b = &self.karts[bot].driver;
+        let Some(data) = &b.bot else {
+            return false;
+        };
+        let ready = data.flags & vehicle::bot::flags::DAMAGE_ACTIVE == 0
+            && b.actions_flag_set & actions::RACE_FINISHED == 0
+            && data.weapon_cooldown == 0
+            && b.tnt_scale_y.is_none()
+            && b.clock_receive == 0;
+        let (p, at) = (self.karts[player].driver.inst_pos, b.inst_pos);
+        let (x, z) = (p[0].wrapping_sub(at[0]), p[2].wrapping_sub(at[2]));
+        let distance = x.wrapping_mul(x).wrapping_add(z.wrapping_mul(z)) as u32;
+        ready && distance.wrapping_sub(BOT_WEAPON_NEAREST) < BOT_WEAPON_RANGE
+    }
+
+    /// `VehPickupItem_ShootNow` for a bot, with what it says to the player it fires at.
+    fn bot_fires(
+        &mut self,
+        bot: usize,
+        launch: vehicle::item::Launch,
+        voice: u8,
+        level: &Level,
+        doors: &coll::doors::Doors,
+        ticks: &mut [KartTick],
+    ) {
+        let bodies: Vec<weapon::Body> = self
+            .karts
+            .iter()
+            .map(|k| weapon::Body::of(&k.driver))
+            .collect();
+        let aim = Aim {
+            level,
+            bodies: &bodies,
+            doors,
+            elapsed_time_ms: Env::default().elapsed_time_ms,
+        };
+        let mut effects = vec![Vec::new(); self.karts.len()];
+        effects[bot].push(Effect::Voiceline {
+            id: voice,
+            driver_id: bot as u8,
+            priority: vehicle::pick::VOICELINE_PRIORITY,
+        });
+        let fired = vehicle::item::Fired::Weapon(launch);
+        self.fire(bot, fired, &Input::default(), &aim, &mut effects);
+        for (tick, effects) in ticks.iter_mut().zip(effects) {
+            tick.effects.extend(effects);
+        }
+    }
+
+    /// `PickupBots_SetCooldown`: 4 to 8 seconds before the bot fires again (the drive counts it down
+    /// twice a tick).
+    fn bot_cooldown(&mut self, bot: usize) {
+        let roll = math::mix_rng_scramble(&mut self.objects.random_number);
+        if let Some(b) = &mut self.karts[bot].driver.bot {
+            b.weapon_cooldown = ((roll & 0xff) + 0xf0) as i16;
+        }
+    }
 }
 
 /// FNV-1a over the text written to it: a hash of a value's `Debug`, with no text kept.

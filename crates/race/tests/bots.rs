@@ -275,3 +275,42 @@ fn needs_disc_karts_bump_into_bots() {
     let v = race.karts[0].driver.velocity;
     assert!(v.x != 0 || v.z != 0, "the player bounced off");
 }
+
+/// The bots next to a player in the race fire at it now and then, once the race is under way,
+/// and say so; some of it hits.
+#[test]
+fn needs_disc_bots_fire_at_a_player_near_them() {
+    let id = LevelId::CRASH_COVE;
+    let Some((level, objects)) = level(id) else {
+        return;
+    };
+    let mut race = race_with(id, &level, objects, true);
+    // The player holds the gas and drives into the walls, so the bots go by it.
+    let gas = Pad {
+        held: vehicle::buttons::CROSS,
+        ..Pad::default()
+    };
+    let (mut shots, mut hits) = (0, 0);
+    while race.tick < 30 * 200 {
+        let ticks = race.tick(&level, &[gas]);
+        for tick in &ticks[1..] {
+            for effect in &tick.effects {
+                if let vehicle::Effect::Voiceline {
+                    id: 10 | 11 | 0xf, ..
+                } = effect
+                {
+                    assert!(race.event_ms >= 0x4b00, "nothing in the first seconds");
+                    shots += 1;
+                }
+            }
+        }
+        hits += race
+            .last_weapons
+            .hits
+            .iter()
+            .filter(|h| h.attacker.is_some_and(|a| a > 0))
+            .count();
+    }
+    assert!(shots > 0, "the bots fired");
+    assert!(hits > 0, "and hit");
+}

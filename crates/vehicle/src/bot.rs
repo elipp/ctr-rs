@@ -12,9 +12,12 @@
 //! A bump pushes a bot off its path ([`crash_ai`], from [`crate::collide`]), and of two bots that
 //! bump the one behind slows down ([`collide_with_other_ai`]).
 //!
-//! Not ported yet: the level's objects (`BOTS_LevInstColl`), weapons
-//! (`PickupBots_Update`), the mask that carries a bot back (only the drop is), the camera and
-//! sounds of a player's kart that a bot drives, and the adventure and boss modes' difficulty.
+//! What the bots fire (`PickupBots_UpdateArcade`) is the race's (`race::Race`): it needs the
+//! weapons.
+//!
+//! Not ported yet: the level's objects (`BOTS_LevInstColl`), the mask that carries a bot back
+//! (only the drop is), the camera and sounds of a player's kart that a bot drives, and the
+//! adventure and boss modes (their difficulty and `PickupBots_UpdateBoss`).
 
 mod difficulty;
 
