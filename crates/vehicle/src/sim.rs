@@ -632,7 +632,7 @@ fn tick_from_coll_fixed(
     }
 
     // The mask's own thread.
-    stuck::mask_tick(d, env);
+    stuck::mask_tick(d, env.elapsed_time_ms);
 
     // The shield's.
     crate::shield::tick(d, env.timer, effects);

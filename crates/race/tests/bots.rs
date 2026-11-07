@@ -314,3 +314,51 @@ fn needs_disc_bots_fire_at_a_player_near_them() {
     assert!(shots > 0, "the bots fired");
     assert!(hits > 0, "and hit");
 }
+
+/// A bot the plant let go of is brought back by its mask: the mask comes down with the kart,
+/// lets go of it on the path, and fades away.
+#[test]
+fn needs_disc_the_mask_brings_a_grabbed_bot_back() {
+    let id = LevelId::DINGO_CANYON;
+    let Some((level, objects)) = level(id) else {
+        return;
+    };
+    let mut race = race(id, &level, objects);
+    while race.event_ms < 20_000 {
+        race.tick(&level, &[Pad::default()]);
+    }
+    let slot = 4;
+    let mut effects = Vec::new();
+    assert!(vehicle::bot::hurt(
+        &mut race.karts[slot].driver,
+        vehicle::pick::damage::MASK_GRAB,
+        Some(true),
+        &mut effects
+    ));
+    let revving = |race: &Race| race.karts[slot].driver.bot.as_ref().unwrap().revving;
+    while !revving(&race) {
+        assert!(race.tick < MAX_TICKS);
+        race.tick(&level, &[Pad::default()]);
+    }
+    let mut carried = 0;
+    while revving(&race) {
+        let d = &race.karts[slot].driver;
+        let mask = d.mask.expect("the mask carries the bot");
+        assert!(mask.world_space && !mask.fading);
+        assert_eq!(
+            mask.pos[1],
+            (d.pos_curr.y >> 8) as i16,
+            "it comes down with the kart"
+        );
+        assert!(mask.shown.is_some());
+        carried += 1;
+        race.tick(&level, &[Pad::default()]);
+    }
+    assert!(carried > 30, "carried for {carried} ticks");
+    let mask = race.karts[slot].driver.mask.expect("it lets go");
+    assert!(!mask.world_space);
+    for _ in 0..30 {
+        race.tick(&level, &[Pad::default()]);
+    }
+    assert_eq!(race.karts[slot].driver.mask, None, "and is gone");
+}

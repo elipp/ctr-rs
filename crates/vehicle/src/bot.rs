@@ -15,9 +15,12 @@
 //! What the bots fire (`PickupBots_UpdateArcade`) is the race's (`race::Race`): it needs the
 //! weapons.
 //!
-//! Not ported yet: the level's objects (`BOTS_LevInstColl`), the mask that carries a bot back
-//! (only the drop is), the camera and sounds of a player's kart that a bot drives, and the
-//! adventure and boss modes (their difficulty and `PickupBots_UpdateBoss`).
+//! A bot that fell is brought back by the mask (`BOTS_MaskGrab`), the player's
+//! [`crate::stuck::MaskHead`]: it carries the kart down to its path and lets go there.
+//!
+//! Not ported yet: the level's objects (`BOTS_LevInstColl`), the camera and sounds of a player's
+//! kart that a bot drives, and the adventure and boss modes (their difficulty and
+//! `PickupBots_UpdateBoss`).
 
 mod difficulty;
 
@@ -523,6 +526,8 @@ pub fn tick_all(karts: &mut [Kart], bots: &mut Bots, level: &Level, env: &Env) {
         } else {
             tick.drive();
         }
+        // The mask's own thread.
+        crate::stuck::mask_tick(kart.driver, env.elapsed_time_ms);
         kart.driver.bot = Some(b);
     }
 }
@@ -2018,13 +2023,24 @@ impl Tick<'_, '_> {
         d.collision_disabled = false;
         d.pos_curr = b.position_backup;
         d.pos_curr.y = mips::add_lo(d.pos_curr.y, MASK_DROP_HEIGHT);
+        crate::stuck::use_mask(d);
+        if let Some(mask) = &mut d.mask {
+            mask.duration = crate::stuck::MASK_DURATION_NORMAL;
+            mask.world_space = true;
+        }
         b.revving = true;
         self.rev_engine();
     }
 
-    /// `BOTS_ThTick_RevEngine`: the kart sinks back to its path, and drives on from there.
+    /// `BOTS_ThTick_RevEngine`: the kart sinks back to its path under the mask, which lets go
+    /// there, and drives on from there.
     fn rev_engine(&mut self) {
         if self.b.position_backup.y >= self.d.pos_curr.y {
+            if let Some(mask) = &mut self.d.mask {
+                mask.scale = crate::stuck::MASK_SCALE_NORMAL;
+                mask.duration = 0;
+                mask.world_space = false;
+            }
             self.d.kart_state = kart_state::ENGINE_REVVING;
             self.d.clock_receive = 0;
             self.d.squish_timer = 0;
@@ -2037,6 +2053,9 @@ impl Tick<'_, '_> {
             d.pos_curr.y,
             mips::sra(mips::sll(self.env.elapsed_time_ms, 9), 5),
         );
+        if let Some(mask) = &mut d.mask {
+            mask.pos = [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z].map(|v| mips::sra(v, 8) as i16);
+        }
         translate_matrix(d, &mut self.coll.gte, self.effects);
         frame::driving(d);
     }
