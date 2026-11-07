@@ -30,7 +30,12 @@ fn spec(character: usize) -> KartSpec {
 
 /// One player who stays on the grid and seven bots, with the start ceremony.
 fn race(id: LevelId, level: &Level, objects: Objects) -> Race {
-    let mut race = Race::new(level, objects, &[spec(0)], false);
+    race_with(id, level, objects, false)
+}
+
+/// [`race`], with the karts bumping into each other or not.
+fn race_with(id: LevelId, level: &Level, objects: Objects, kart_collisions: bool) -> Race {
+    let mut race = Race::new(level, objects, &[spec(0)], kart_collisions);
     let setup = Setup {
         difficulty: difficulty_level::MEDIUM,
         track: Some(id.0 as u8),
@@ -55,7 +60,8 @@ fn needs_disc_bots_finish_every_track() {
     for id in LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0 {
         let id = LevelId(id);
         let (level, objects) = level(id).unwrap();
-        let mut race = race(id, &level, objects);
+        // (The karts bump: a bot pushed off its path finds it again.)
+        let mut race = race_with(id, &level, objects, true);
         assert_eq!(race.karts.len(), 8, "level {}: every bot has a path", id.0);
         let start: Vec<_> = race.karts.iter().map(|k| k.driver.pos_curr).collect();
         let mut finished_at = [None; 8];
@@ -230,4 +236,42 @@ fn needs_disc_a_bot_runs_into_crates_and_beakers() {
             _ => assert!(d.cloud.is_some(), "a cloud over the bot"),
         }
     }
+}
+
+/// Two bots that touch both lose their path for a moment; a bot the player runs into is pushed,
+/// and the player bounces.
+#[test]
+fn needs_disc_karts_bump_into_bots() {
+    use vehicle::bot::flags::FREE_PHYSICS;
+    let id = LevelId::DINGO_CANYON;
+    let Some((level, objects)) = level(id) else {
+        return;
+    };
+    let free = |race: &Race, slot: usize| {
+        race.karts[slot].driver.bot.as_ref().unwrap().flags & FREE_PHYSICS != 0
+    };
+
+    let mut race = race_with(id, &level, objects.clone(), true);
+    while race.event_ms < 20_000 {
+        race.tick(&level, &[Pad::default()]);
+    }
+    assert!(!free(&race, 4) && !free(&race, 3));
+    // Bot 4 ticks before bot 3: it finds bot 3 where it was last drawn.
+    let p = race.karts[4].driver.pos_curr;
+    race.karts[3].driver.inst_pos = [(p.x >> 8) + 40, p.y >> 8, p.z >> 8];
+    race.tick(&level, &[Pad::default()]);
+    assert!(free(&race, 4) && free(&race, 3), "both pushed off the path");
+
+    let mut race = race_with(id, &level, objects, true);
+    while race.event_ms < 20_000 {
+        race.tick(&level, &[Pad::default()]);
+    }
+    let p = race.karts[0].driver.pos_curr;
+    race.karts[5].driver.inst_pos = [(p.x >> 8) + 40, p.y >> 8, p.z >> 8];
+    race.tick(&level, &[Pad::default()]);
+    // (Its push sideways is small, and wears off within its own tick.)
+    let accel = race.karts[5].driver.bot.as_ref().unwrap().phys.accel;
+    assert!(accel.x != 0 || accel.z != 0, "the bot was pushed");
+    let v = race.karts[0].driver.velocity;
+    assert!(v.x != 0 || v.z != 0, "the player bounced off");
 }

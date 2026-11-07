@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 5;
+pub const SIM_VERSION: u32 = 6;
 
 const UNSORTED: i16 = -1;
 
@@ -617,7 +617,10 @@ impl Race {
         let karts: Vec<[i32; 3]> = self.karts.iter().map(|k| k.driver.inst_pos).collect();
         set_off_mines(&self.last.contacts, &karts, &mut self.weapons);
         let mut results = {
-            let mut racers: Vec<Racer> = self.karts[..players]
+            let (humans, bots) = self.karts.split_at_mut(players);
+            // The `ROBOT` bucket: the last born first.
+            let mut bots: Vec<&mut Driver> = bots.iter_mut().rev().map(|k| &mut k.driver).collect();
+            let mut racers: Vec<Racer> = humans
                 .iter_mut()
                 .zip(&inputs)
                 .zip(&mut effects)
@@ -631,6 +634,7 @@ impl Race {
             vehicle::sim::start_tick(&mut racers, &mut self.objects.random_number);
             vehicle::sim::tick_all(
                 &mut racers,
+                &mut bots,
                 level,
                 &env,
                 &mut self.objects,
@@ -654,6 +658,7 @@ impl Race {
                 traffic_lights_timer: self.lights_ms,
                 laps: self.laps,
                 timer: self.tick,
+                kart_collisions: self.kart_collisions,
             };
             vehicle::bot::tick_all(&mut karts, bots, level, &bot_env);
         }

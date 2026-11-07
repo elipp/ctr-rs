@@ -216,6 +216,8 @@ fn needs_reference_matches_reference() {
             &mut head[0],
             &mut Others {
                 drivers: &mut later,
+                bots: &mut [],
+                nav_paths: &[],
                 feedback: &mut feedback,
             },
             &env,

@@ -9,8 +9,10 @@
 //!
 //! [`hurt`] is `BOTS_ChangeState`, what a hit does to a bot: the drive tick plays it out.
 //!
-//! Not ported yet: bumping into other karts (`VehPhysCrash_AnyTwoCars`), the level's objects
-//! (`BOTS_LevInstColl`), weapons
+//! A bump pushes a bot off its path ([`crash_ai`], from [`crate::collide`]), and of two bots that
+//! bump the one behind slows down ([`collide_with_other_ai`]).
+//!
+//! Not ported yet: the level's objects (`BOTS_LevInstColl`), weapons
 //! (`PickupBots_Update`), the mask that carries a bot back (only the drop is), the camera and
 //! sounds of a player's kart that a bot drives, and the adventure and boss modes' difficulty.
 
@@ -18,7 +20,9 @@ mod difficulty;
 
 use coll::Collision;
 use gte::Gte;
-use loader::lev::{Level, NAV_PATH_COUNT, NavFrame, SVec3, nav_flags, nav_special, quad_flags};
+use loader::lev::{
+    Level, NAV_PATH_COUNT, NavFrame, NavPath, SVec3, nav_flags, nav_special, quad_flags,
+};
 use math::{Vec3, mips};
 
 use crate::force::{KART_SCALE_BASE, mvmva, rot_axis_angle, translate_matrix};
@@ -471,6 +475,8 @@ pub struct Env {
     pub laps: u8,
     /// `gGT->timer`
     pub timer: u32,
+    /// Whether karts bump into each other (see `vehicle::Env::kart_collisions`).
+    pub kart_collisions: bool,
 }
 
 /// A kart of [`tick_all`].
@@ -488,7 +494,15 @@ pub fn tick_all(karts: &mut [Kart], bots: &mut Bots, level: &Level, env: &Env) {
             continue;
         }
         let peers: Vec<Peer> = karts.iter().map(|k| Peer::of(k.driver)).collect();
-        let kart = &mut karts[slot];
+        // The threads after this one in the bucket: the bots born before it.
+        let (before, from) = karts.split_at_mut(slot);
+        let siblings: Vec<&mut Driver> = before
+            .iter_mut()
+            .rev()
+            .filter(|k| k.driver.bot.is_some())
+            .map(|k| &mut *k.driver)
+            .collect();
+        let kart = &mut from[0];
         let mut b = kart.driver.bot.take().expect("a bot");
         let mut tick = Tick {
             d: kart.driver,
@@ -498,6 +512,7 @@ pub fn tick_all(karts: &mut [Kart], bots: &mut Bots, level: &Level, env: &Env) {
             level,
             env,
             peers: &peers,
+            siblings,
             effects: kart.effects,
         };
         if tick.b.revving {
@@ -677,6 +692,103 @@ fn change_state(
     true
 }
 
+/// `VehPhysCrash_AI`: a bump moves the bot at `vel`. What of it goes along its nav frame is its
+/// speed on the path; the rest pushes it off ([`flags::FREE_PHYSICS`]).
+pub fn crash_ai(b: &mut BotData, nav_paths: &[NavPath], vel: [i32; 3]) {
+    let Some(frame) = nav_paths
+        .get(b.path)
+        .and_then(|path| path.frames.get(b.nav_frame))
+    else {
+        return;
+    };
+    let rot = frame.rot.map(|r| mips::sll(r as i32, 4) as i16);
+    let m = rot_to_matrix(SVec3 {
+        x: rot[0],
+        y: rot[1],
+        z: rot[2],
+    });
+    let forward = [0, 1, 2].map(|row| mips::sra(m.m[row][2] as i32, 4));
+    let speed = mips::sra(
+        mips::add_lo(
+            mips::add_lo(
+                mips::mul_lo(forward[0], vel[0]),
+                mips::mul_lo(forward[1], vel[1]),
+            ),
+            mips::mul_lo(forward[2], vel[2]),
+        ),
+        8,
+    );
+    let p = &mut b.phys;
+    p.speed_linear = speed;
+    p.accel.x = mips::sub_lo(vel[0], mips::sra(mips::mul_lo(forward[0], speed), 8));
+    p.accel.z = mips::sub_lo(vel[2], mips::sra(mips::mul_lo(forward[2], speed), 8));
+    b.flags |= flags::FREE_PHYSICS;
+}
+
+/// `BOTS_AI_COLLISION_SPEED_PENALTY`
+const COLLISION_SPEED_PENALTY: i32 = 3000;
+
+/// `BOTS_CollideWithOtherAI`: of two bots that bumped, the one behind (along the path of the one
+/// further back in the race) takes the speed of the one ahead, less a penalty.
+pub fn collide_with_other_ai(
+    one: (&Driver, &mut BotData),
+    two: (&Driver, &mut BotData),
+    nav_paths: &[NavPath],
+) {
+    let (one, two) = if one.0.driver_rank < two.0.driver_rank {
+        (two, one)
+    } else {
+        (one, two)
+    };
+    let Some(frames) = nav_paths.get(one.1.path).map(|p| &p.frames) else {
+        return;
+    };
+    let Some(&frame) = frames.get(one.1.nav_frame) else {
+        return;
+    };
+    let (start, end) = if one.1.flags & flags::ESTIMATE_NAV != 0 {
+        (one.1.estimate.pos, frame.pos)
+    } else {
+        (frame.pos, frames[(one.1.nav_frame + 1) % frames.len()].pos)
+    };
+    let along = |d: &Driver| {
+        let at = [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z].map(|v| mips::sra(v, 8) as i16);
+        map_range_pos_points(end, start, at)
+    };
+    let (ahead_one, ahead_two) = (along(one.0), along(two.0));
+    let ((_, behind), (_, front)) = if ahead_one < ahead_two {
+        (one, two)
+    } else {
+        (two, one)
+    };
+    behind.phys.speed_linear =
+        mips::sub_lo(front.phys.speed_linear, COLLISION_SPEED_PENALTY).max(0);
+}
+
+/// `CAM_MapRange_PosPoints`: how far along the line from `pos2` to `pos1` the point `curr` is,
+/// past `pos1` (in level units, negative before it).
+fn map_range_pos_points(pos1: SVec3, pos2: SVec3, curr: [i16; 3]) -> i32 {
+    let mut path = math::SVec3 {
+        x: pos1.x.wrapping_sub(pos2.x),
+        y: pos1.y.wrapping_sub(pos2.y),
+        z: pos1.z.wrapping_sub(pos2.z),
+    };
+    math::vector_normalize(&mut path);
+    let delta = [
+        curr[0].wrapping_sub(pos1.x),
+        curr[1].wrapping_sub(pos1.y),
+        curr[2].wrapping_sub(pos1.z),
+    ];
+    let dot = mips::add_lo(
+        mips::add_lo(
+            mips::mul_lo(path.x as i32, delta[0] as i32),
+            mips::mul_lo(path.y as i32, delta[1] as i32),
+        ),
+        mips::mul_lo(path.z as i32, delta[2] as i32),
+    );
+    dot >> 12
+}
+
 /// Whether the bot `d` is out of sight: a plant has it (`HIDE_MODEL`).
 pub fn hidden(d: &Driver) -> bool {
     d.bot.as_ref().is_some_and(|b| {
@@ -739,6 +851,8 @@ struct Tick<'a, 'b> {
     level: &'a Level,
     env: &'a Env,
     peers: &'b [Peer],
+    /// The bots that tick after this one, which it can bump into.
+    siblings: Vec<&'b mut Driver>,
     effects: &'a mut Vec<Effect>,
 }
 
@@ -810,6 +924,11 @@ impl Tick<'_, '_> {
         } else {
             (Cur::Estimate, self.b.nav_frame)
         };
+
+        if self.env.kart_collisions {
+            let paths = &self.level.nav_paths;
+            crate::collide::bump_bots(self.d, self.b, &mut self.siblings, paths);
+        }
 
         // `local_38`: the rubber band's boost of the drift's and the landing's turbos.
         let mut boost_scale = 1;
@@ -2009,6 +2128,37 @@ mod tests {
         let mut rear: Vec<u8> = bots.accelerate_order[4..].to_vec();
         rear.sort();
         assert_eq!(rear, [4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn of_two_bots_that_bump_the_one_behind_slows() {
+        // A path along +x.
+        let frame = |x| NavFrame {
+            pos: SVec3 { x, y: 0, z: 0 },
+            ..NavFrame::default()
+        };
+        let paths = [NavPath {
+            frames: vec![frame(0), frame(1000), frame(2000)],
+            ..NavPath::default()
+        }];
+        let kart = |x: i32, rank| {
+            let mut d = Driver::new(0, 0);
+            d.pos_curr.x = x << 8;
+            d.driver_rank = rank;
+            let mut b = BotData::default();
+            b.phys.speed_linear = 10_000;
+            (d, b)
+        };
+        let (front, mut front_bot) = kart(600, 0);
+        let (back, mut back_bot) = kart(500, 1);
+        front_bot.phys.speed_linear = 8_000;
+        collide_with_other_ai((&front, &mut front_bot), (&back, &mut back_bot), &paths);
+        assert_eq!(back_bot.phys.speed_linear, 8_000 - COLLISION_SPEED_PENALTY);
+        assert_eq!(front_bot.phys.speed_linear, 8_000);
+        assert_eq!(
+            map_range_pos_points(frame(1000).pos, frame(0).pos, [1200, 0, 0]),
+            200
+        );
     }
 
     #[test]
