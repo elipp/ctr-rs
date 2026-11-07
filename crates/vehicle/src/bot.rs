@@ -1349,7 +1349,7 @@ impl Tick<'_, '_> {
 
         let mut accelerate = p.speed_linear < target;
         if terrain.decel_to_target && !accelerate {
-            // Mud slows the bot to its speed at once.
+            // Mud halves the bot's speed each tick, down to its target.
             p.speed_linear = mips::sra(p.speed_linear, 1).max(target);
             accelerate = false;
         }

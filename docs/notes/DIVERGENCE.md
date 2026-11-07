@@ -2,8 +2,6 @@ This file is for the places where the port _intentionally_ differs from the orig
 
 **Adventure Mode (or any other mode than 1-8P Arcade) is not implemented
 
-**Bots are not implemented
-
 **Ground shadow (2026-10-20, uncommitted, NOT visually verified):** `vehicle::shadow` (cull + orientation), `render::shadow` (4 quads, atlas of global icons 0/1 `shadow1`/`shadow2`), `client::shadow` (subtractive mesh, race only). Known differences from `VehGroundShadow_Main`:
 - Camera-distance fade: retail only fades in the "small screen" case (the push buffer's screen-distance value is <= 0x100, which I read as split-screen). One player uses the fixed colour 0x1f1f1f, and so do we. The fade is not ported.
 - Texel blending: every visible texel is subtracted. Retail forces the tpage to subtractive, so only texels with the semi-transparency (STP) bit blend and the rest draw opaque. Not checked whether any shadow texels lack STP.
