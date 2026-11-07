@@ -109,6 +109,29 @@ fn needs_disc_track_lev_files_parse() {
             "level {id:>2}: recorded paths {:?}",
             lev.paths.iter().map(Vec::len).collect::<Vec<_>>()
         );
+        println!(
+            "level {id:>2}: nav paths {:?}",
+            lev.nav_paths
+                .iter()
+                .map(|n| n.frames.len())
+                .collect::<Vec<_>>()
+        );
+        for (k, path) in lev.nav_paths.iter().enumerate() {
+            let frames = &path.frames;
+            assert!(!frames.is_empty(), "level {id}: nav path {k} is empty");
+            // Each frame has the distance to the next one; the last's is to the first.
+            for (i, f) in frames.iter().enumerate() {
+                let next = frames[(i + 1) % frames.len()].pos;
+                let d = |a: i16, b: i16| (a as f64 - b as f64).powi(2);
+                let xz = (d(f.pos.x, next.x) + d(f.pos.z, next.z)).sqrt();
+                let xyz = (xz * xz + d(f.pos.y, next.y)).sqrt();
+                assert!(
+                    (xyz - f.dist_to_next_nav_xyz as f64).abs() <= 2.0
+                        && (xz - f.dist_to_next_nav_xz as f64).abs() <= 2.0,
+                    "level {id}: nav path {k} frame {i}: {f:?}, {xyz:.1} / {xz:.1} to the next"
+                );
+            }
+        }
         let mut with_model = 0;
         for inst in lev.instances.iter().filter(|i| i.model != 0) {
             let model = loader::model::Model::parse_at(&dram, inst.model)

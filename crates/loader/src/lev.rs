@@ -3,8 +3,8 @@
 //! A LEV file is a [`DramFile`](crate::dram::DramFile); every pointer in it is
 //! an offset into the payload. This module decodes the parts needed for
 //! collision and physics: the quad-block mesh, vertices, the BSP tree, driver
-//! spawns and restart points, the skybox and the placed models. Visibility data
-//! is not parsed yet.
+//! spawns and restart points, the bots' paths, the skybox and the placed models.
+//! Visibility data is not parsed yet.
 
 use std::io;
 
@@ -196,6 +196,62 @@ pub struct PosRot {
     pub rot: SVec3,
 }
 
+/// `NavFrame::flags`
+pub mod nav_flags {
+    pub const TURBO: u16 = 0x1;
+    pub const BACK_SKID: u16 = 0x2;
+    pub const FRONT_SKID: u16 = 0x4;
+    pub const SUPER_TURBO: u16 = 0x100;
+    pub const KILLPLANE: u16 = 0x200;
+    pub const JUMP: u16 = 0x400;
+    pub const DRIFT_LEFT: u16 = 0x800;
+    pub const DRIFT_RIGHT: u16 = 0x1000;
+    pub const ENGINE_ECHO: u16 = 0x2000;
+    pub const SPLIT_LINE: u16 = 0x8000;
+}
+
+/// `NavFrame::specialBits`: the low four bits are an index whose meaning the high ones pick.
+pub mod nav_special {
+    /// The low bits index [`NavPath::ramp_speed_linear`](super::NavPath) and `ramp_speed_y`.
+    pub const RAMP_PHYS: u8 = 0x10;
+    /// The low bits are the reflection.
+    pub const REFLECTIVE: u8 = 0x20;
+    pub const LEVEL_INST_COLL: u8 = 0x40;
+    pub const MOON_GRAVITY: u8 = 0x80;
+    pub const INDEX_MASK: u8 = 0xf;
+}
+
+/// A point of a bot's path (`struct NavFrame`).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NavFrame {
+    pub pos: SVec3,
+    /// Angles, 0x100 = a full turn (the game shifts them up by 4).
+    pub rot: [u8; 4],
+    pub dist_to_next_nav_xyz: i16,
+    pub dist_to_next_nav_xz: i16,
+    /// [`nav_flags`]; bits 4 to 7 are the terrain.
+    pub flags: u16,
+    /// Where a bot may switch to another path: the path in the bits from 10 up, the frame in
+    /// the ten below.
+    pub path_change_opcode: i16,
+    /// How many frames a bot that fell off the track is put back by.
+    pub go_back_count: u8,
+    /// [`nav_special`]
+    pub special_bits: u8,
+}
+
+/// One of the bots' paths (`struct NavHeader` and the frames after it). Empty where the level has
+/// none, or one the game would not use (its magic is not `0xecfd`): no bots drive on it.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct NavPath {
+    /// The speeds a bot is given on a frame with [`nav_special::RAMP_PHYS`]: `rampPhys1`,
+    /// `speedLinear`.
+    pub ramp_speed_linear: [i16; 16],
+    /// `rampPhys2`, `speedY`.
+    pub ramp_speed_y: [i16; 16],
+    pub frames: Vec<NavFrame>,
+}
+
 /// A placed model (`struct InstDef`): a mushroom, a crate, the start banner.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct InstDef {
@@ -323,6 +379,8 @@ pub struct Level {
     pub bsp: Vec<BspNode>,
     pub driver_spawns: [SpawnPoint; 8],
     pub restart_points: Vec<CheckpointNode>,
+    /// The bots' paths (`LevNavTable`, read by `BOTS_InitNavPath`).
+    pub nav_paths: [NavPath; NAV_PATH_COUNT],
     pub water: Water,
     pub scenery: Scenery,
     pub config_flags: u32,
@@ -420,6 +478,7 @@ const LEVEL_CONFIG_FLAGS: usize = 0xdc;
 const LEVEL_CLEAR_COLORS: usize = 0x160;
 const LEVEL_RESTART_COUNT: usize = 0x148;
 const LEVEL_RESTART_PTR: usize = 0x14c;
+const LEVEL_NAV_TABLE: usize = 0x188;
 const LEVEL_JUMP_SPEED_CAP: usize = 0x18c;
 const LEVEL_SPLIT_LINES: usize = 0x184;
 
@@ -427,6 +486,12 @@ const QUAD_BLOCK_SIZE: usize = 0x5c;
 const VERTEX_SIZE: usize = 0x10;
 const BSP_SIZE: usize = 0x20;
 const CHECKPOINT_SIZE: usize = 0xc;
+
+/// `BOTS_NAV_PATH_COUNT`
+pub const NAV_PATH_COUNT: usize = 3;
+const NAV_MAGIC: u16 = 0xecfd;
+const NAV_HEADER_SIZE: usize = 0x4c;
+const NAV_FRAME_SIZE: usize = 0x14;
 
 const SKY_VERTEX_SIZE: usize = 12;
 const SKY_FACE_SIZE: usize = 8;
@@ -566,6 +631,42 @@ impl Level {
                 })
             })
         })
+    }
+
+    fn parse_nav_paths(p: &Payload) -> io::Result<[NavPath; NAV_PATH_COUNT]> {
+        let mut paths: [NavPath; NAV_PATH_COUNT] = Default::default();
+        // None on Nitro Court.
+        let table = match p.u32(LEVEL_NAV_TABLE)? {
+            0 => return Ok(paths),
+            table => table as usize,
+        };
+        for (i, path) in paths.iter_mut().enumerate() {
+            let header = match p.u32(table + i * 4)? {
+                0 => continue,
+                header => header as usize,
+            };
+            if p.u16(header)? != NAV_MAGIC {
+                continue;
+            }
+            let count = p.i16(header + 2)?.max(0) as usize;
+            for k in 0..16 {
+                path.ramp_speed_linear[k] = p.i16(header + 0xc + k * 2)?;
+                path.ramp_speed_y[k] = p.i16(header + 0x2c + k * 2)?;
+            }
+            path.frames = p.array(header + NAV_HEADER_SIZE, count, NAV_FRAME_SIZE, |p, at| {
+                Ok(NavFrame {
+                    pos: p.svec3(at)?,
+                    rot: p.bytes(at + 6, 4)?.try_into().unwrap(),
+                    dist_to_next_nav_xyz: p.i16(at + 0xa)?,
+                    dist_to_next_nav_xz: p.i16(at + 0xc)?,
+                    flags: p.u16(at + 0xe)?,
+                    path_change_opcode: p.i16(at + 0x10)?,
+                    go_back_count: p.u8(at + 0x12)?,
+                    special_bits: p.u8(at + 0x13)?,
+                })
+            })?;
+        }
+        Ok(paths)
     }
 
     fn parse_models(p: &Payload) -> io::Result<Vec<u32>> {
@@ -794,6 +895,7 @@ impl Level {
             bsp,
             driver_spawns,
             restart_points,
+            nav_paths: Self::parse_nav_paths(&p)?,
             water: Water::parse(&file.data, verts_at, num_verts)?,
             scenery: Scenery::parse(&file.data, verts_at, num_verts)?,
             config_flags: p.u32(LEVEL_CONFIG_FLAGS)?,
