@@ -1,7 +1,7 @@
 //! Laps: how far along the track a kart is (`VehLap_UpdateProgress`) and what crossing the
 //! finish line does (the per-driver part of `PlayLevel_UpdateLapStats`).
 //!
-//! Not ported: the bots (their progress comes from their path), the lap times for the HUD, the
+//! Not ported: the lap times for the HUD, the
 //! final-lap sound and text, the end-of-race menu, and dropping the held item of a driver that
 //! finished. The confetti of a win is the viewer's (`client::confetti`).
 
@@ -40,14 +40,15 @@ pub struct Lap {
     pub finished: bool,
 }
 
-/// `VehLap_UpdateProgress` for a human driver: `distance_to_finish_curr` is the distance left
+/// `VehLap_UpdateProgress`: `distance_to_finish_curr` is the distance left
 /// to the finish line (in the same units as the checkpoints', 1/8 of the unit the nodes have),
 /// wrapped by the length of the track; and whether the kart drives against the track.
 pub fn update_progress(d: &mut Driver, level: &Level) {
-    let Some(quad) = d.last_valid else {
-        return;
+    let checkpoint_index = match (&d.bot, d.last_valid) {
+        (Some(bot), _) => bot.checkpoint_index,
+        (None, Some(quad)) => level.quad_blocks[quad as usize].checkpoint_index,
+        (None, None) => return,
     };
-    let checkpoint_index = level.quad_blocks[quad as usize].checkpoint_index;
     let points = &level.restart_points;
     if checkpoint_index == NO_CHECKPOINT
         || (points.len() as u32).wrapping_sub(1) >= NO_CHECKPOINT as u32
@@ -55,8 +56,18 @@ pub fn update_progress(d: &mut Driver, level: &Level) {
         return;
     }
 
-    let checkpoint = &points[checkpoint_index as usize];
-    let progress_node = &points[checkpoint.next_forward as usize];
+    // Papu Pyramid's bot paths name the point past the last, where retail reads what follows
+    // the points in the level.
+    let past_end = level
+        .restart_point_past_end
+        .as_ref()
+        .filter(|_| checkpoint_index as usize == points.len());
+    let Some(checkpoint) = points.get(checkpoint_index as usize).or(past_end) else {
+        return;
+    };
+    let Some(progress_node) = points.get(checkpoint.next_forward as usize) else {
+        return;
+    };
     let next_node = &points[progress_node.next_forward as usize];
 
     let position = [

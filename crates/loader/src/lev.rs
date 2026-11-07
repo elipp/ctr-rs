@@ -379,6 +379,9 @@ pub struct Level {
     pub bsp: Vec<BspNode>,
     pub driver_spawns: [SpawnPoint; 8],
     pub restart_points: Vec<CheckpointNode>,
+    /// The bytes after the restart points, read as one more: Papu Pyramid's bot paths name it,
+    /// and the lap counter of retail reads it.
+    pub restart_point_past_end: Option<CheckpointNode>,
     /// The bots' paths (`LevNavTable`, read by `BOTS_InitNavPath`).
     pub nav_paths: [NavPath; NAV_PATH_COUNT],
     pub water: Water,
@@ -849,20 +852,24 @@ impl Level {
         }
 
         let restart_count = p.u32(LEVEL_RESTART_COUNT)? as usize;
-        let restart_points = if restart_count == 0 {
-            Vec::new()
+        let checkpoint = |p: &Payload, at: usize| -> io::Result<CheckpointNode> {
+            Ok(CheckpointNode {
+                pos: p.svec3(at)?,
+                dist_to_finish: p.u16(at + 6)?,
+                next_forward: p.u8(at + 8)?,
+                next_left: p.u8(at + 9)?,
+                next_backward: p.u8(at + 10)?,
+                next_right: p.u8(at + 11)?,
+            })
+        };
+        let (restart_points, restart_point_past_end) = if restart_count == 0 {
+            (Vec::new(), None)
         } else {
             let at = p.ptr(LEVEL_RESTART_PTR, "restart points")?;
-            p.array(at, restart_count, CHECKPOINT_SIZE, |p, at| {
-                Ok(CheckpointNode {
-                    pos: p.svec3(at)?,
-                    dist_to_finish: p.u16(at + 6)?,
-                    next_forward: p.u8(at + 8)?,
-                    next_left: p.u8(at + 9)?,
-                    next_backward: p.u8(at + 10)?,
-                    next_right: p.u8(at + 11)?,
-                })
-            })?
+            (
+                p.array(at, restart_count, CHECKPOINT_SIZE, checkpoint)?,
+                checkpoint(&p, at + restart_count * CHECKPOINT_SIZE).ok(),
+            )
         };
 
         let rain = LEVEL_RAIN_BUFFER;
@@ -895,6 +902,7 @@ impl Level {
             bsp,
             driver_spawns,
             restart_points,
+            restart_point_past_end,
             nav_paths: Self::parse_nav_paths(&p)?,
             water: Water::parse(&file.data, verts_at, num_verts)?,
             scenery: Scenery::parse(&file.data, verts_at, num_verts)?,
