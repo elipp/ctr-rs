@@ -185,6 +185,12 @@ pub trait Instance {
     /// object goes on with that at once, as a thread that switches procedures does.
     fn caught(&mut self, _cx: &Context, _out: &mut Tick) {}
 
+    /// The [`Contact`] reached no player but a bot, which the object takes as it does (only a
+    /// plant tells them apart).
+    fn caught_bot(&mut self, cx: &Context, out: &mut Tick) {
+        self.caught(cx, out);
+    }
+
     /// How the object is drawn, for the ones that move or animate.
     fn pose(&self) -> Option<Pose> {
         None
@@ -666,6 +672,15 @@ impl Objects {
         self.each_object(|e| {
             if e.instance == instance {
                 e.object.caught(&e.cx, tick);
+            }
+        });
+    }
+
+    /// [`Objects::caught`] for a contact that caught a bot.
+    pub fn caught_bot(&mut self, instance: usize, tick: &mut Tick) {
+        self.each_object(|e| {
+            if e.instance == instance {
+                e.object.caught_bot(&e.cx, tick);
             }
         });
     }

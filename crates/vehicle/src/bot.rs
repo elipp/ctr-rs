@@ -7,8 +7,10 @@
 //! `BOTS_Driver_Init`, [`tick_all`] runs `BOTS_ThTick_Drive` (or `BOTS_ThTick_RevEngine`) of each,
 //! and [`Bots::update_globals`] is `BOTS_UpdateGlobals`.
 //!
-//! Not ported yet: being hit (`BOTS_ChangeState`: a hit is dropped), bumping into other karts
-//! (`VehPhysCrash_AnyTwoCars`), the level's objects (`BOTS_LevInstColl`), weapons
+//! [`hurt`] is `BOTS_ChangeState`, what a hit does to a bot: the drive tick plays it out.
+//!
+//! Not ported yet: bumping into other karts (`VehPhysCrash_AnyTwoCars`), the level's objects
+//! (`BOTS_LevInstColl`), weapons
 //! (`PickupBots_Update`), the mask that carries a bot back (only the drop is), the camera and
 //! sounds of a player's kart that a bot drives, and the adventure and boss modes' difficulty.
 
@@ -430,6 +432,7 @@ impl Bots {
 /// What a bot reads of another driver: a copy taken just before the bot's tick.
 #[derive(Clone, Copy, Debug)]
 struct Peer {
+    bot: bool,
     nav_frame: usize,
     distance_to_finish_curr: i32,
     lap_index: i32,
@@ -444,6 +447,7 @@ struct Peer {
 impl Peer {
     fn of(d: &Driver) -> Peer {
         Peer {
+            bot: d.bot.is_some(),
             nav_frame: d.bot.as_ref().map_or(0, |b| b.nav_frame),
             distance_to_finish_curr: d.distance_to_finish_curr as i32,
             lap_index: d.lap_index as i32,
@@ -550,6 +554,152 @@ fn set_rotation(d: &mut Driver, b: &mut BotData, level: &Level, spawn_yaw: bool)
     b.flags |= flags::ESTIMATE_NAV;
 }
 
+/// `sdata->AI_VelY_WhenBlasted_0x3000`: how high a blast throws a bot.
+const BLAST_SPEED_Y: i32 = 0x3000;
+/// `BotPhysics::squishCooldown` of a spin and of a squish: the turn they wind down from.
+const SPIN_COOLDOWN: i32 = 0x300;
+/// `rotXZ` of a squish (how long it lasts) and of a mask grab.
+const SQUISH_TIME: i16 = 0xf00;
+const MASK_GRAB_TIME: i16 = 0xd20;
+/// `burnTimer` and `squishTimer` that a burn and a squish give.
+const BURN_TIMER: i16 = 0xf00;
+const SQUISH_TIMER: i16 = 0xf00;
+
+/// `BOTS_ChangeState`: what a hit of `damage` (a [`crate::pick::damage`]) does to the bot `d`.
+/// `by_player` says whether a player's kart hit it (none for a hit nobody is to blame for): the
+/// bot a player blasts says so. The result is the game's: whether the bot was hurt. (A bot has
+/// no shield or mask to take it.)
+pub fn hurt(
+    d: &mut Driver,
+    damage: u8,
+    by_player: Option<bool>,
+    effects: &mut Vec<Effect>,
+) -> bool {
+    let Some(mut b) = d.bot.take() else {
+        return false;
+    };
+    let hurt = change_state(d, &mut b, damage, by_player, effects);
+    d.bot = Some(b);
+    hurt
+}
+
+fn change_state(
+    d: &mut Driver,
+    b: &mut BotData,
+    damage: u8,
+    by_player: Option<bool>,
+    effects: &mut Vec<Effect>,
+) -> bool {
+    use crate::pick::damage as kind;
+    d.pending_damage_type = 0;
+    if d.kart_state == kart_state::MASK_GRABBED {
+        return false;
+    }
+    d.kart_state = kart_state::NORMAL;
+    let p = &mut b.phys;
+    match damage {
+        kind::SPIN | kind::BURN => {
+            if b.flags & flags::DAMAGE_ACTIVE == 0 {
+                b.damage_state = damage_state::SPIN;
+                p.turbo_meter = 0;
+                let oxide = d.character == NITROS_OXIDE;
+                // Oxide in the air keeps his speed.
+                if !oxide || d.actions_flag_set & actions::TOUCH_GROUND != 0 {
+                    d.reserves = 0;
+                    d.turbo_outside_timer = 0;
+                    p.speed_linear = mips::sra(p.speed_linear, if oxide { 1 } else { 2 });
+                }
+                p.squish_cooldown = SPIN_COOLDOWN;
+                b.progress_cooldown = 0;
+                b.flags |= flags::DAMAGE_ACTIVE;
+            }
+            if damage == kind::BURN {
+                d.burn_timer = BURN_TIMER;
+            }
+        }
+        kind::BLAST => {
+            let already = b.flags & flags::DAMAGE_ACTIVE != 0;
+            b.blast_bounce_count = 0;
+            p.turbo_meter = 0;
+            b.damage_state = damage_state::BLAST;
+            d.reserves = 0;
+            d.turbo_outside_timer = 0;
+            p.speed_y = BLAST_SPEED_Y;
+            if !already {
+                p.speed_linear = mips::sra(p.speed_linear, 3);
+                b.position_backup.y = mips::add_lo(b.position_backup.y, 0x4000);
+            }
+            b.progress_cooldown = 0;
+            d.matrix_array = crate::MatrixArray::None;
+            b.flags |= flags::DAMAGE_ACTIVE;
+            match by_player {
+                // (Nor does it count for the attacker.)
+                None => return true,
+                Some(true) => effects.push(Effect::Voiceline {
+                    id: crate::pick::VOICELINE_COMMON_DAMAGE,
+                    driver_id: d.driver_id,
+                    priority: crate::pick::VOICELINE_PRIORITY,
+                }),
+                Some(false) => {}
+            }
+        }
+        kind::SQUISH => {
+            p.turbo_meter = 0;
+            b.damage_state = damage_state::SQUISH;
+            p.squish_cooldown = SPIN_COOLDOWN;
+            p.rot_xz = SQUISH_TIME;
+            d.squish_timer = SQUISH_TIMER;
+            d.reserves = 0;
+            d.turbo_outside_timer = 0;
+            p.speed_y = 0;
+            b.progress_cooldown = 0;
+            p.speed_linear = mips::sra(p.speed_linear, 1);
+            b.flags |= flags::DAMAGE_ACTIVE | flags::DAMAGE_SUPPRESS_EMITTER;
+        }
+        kind::MASK_GRAB => {
+            // Out of sight (in a plant's mouth) until the grab ends.
+            p.turbo_meter = 0;
+            p.speed_linear = 0;
+            p.speed_y = 0;
+            p.rot_xz = MASK_GRAB_TIME;
+            b.damage_state = damage_state::MASK_GRAB;
+            d.kart_state = kart_state::MASK_GRABBED;
+            b.flags |= flags::DAMAGE_ACTIVE | flags::DAMAGE_SUPPRESS_EMITTER;
+            d.collision_disabled = true;
+        }
+        kind::NONE => {
+            if b.flags & flags::DAMAGE_ACTIVE != 0 {
+                return false;
+            }
+        }
+        _ => b.progress_cooldown = 0x3c,
+    }
+    true
+}
+
+/// Whether the bot `d` is out of sight: a plant has it (`HIDE_MODEL`).
+pub fn hidden(d: &Driver) -> bool {
+    d.bot.as_ref().is_some_and(|b| {
+        b.flags & flags::DAMAGE_ACTIVE != 0 && b.damage_state == damage_state::MASK_GRAB
+    })
+}
+
+/// The tumble a blast gives the bot `d`, as a rotation to put on its model and a lift (what the
+/// drive tick does to `botInstance->matrix`): none unless it is blasted.
+pub fn blast_tumble(d: &Driver) -> Option<(SVec3, i32)> {
+    let b = d.bot.as_ref()?;
+    if b.flags & flags::DAMAGE_ACTIVE == 0 || b.damage_state != damage_state::BLAST {
+        return None;
+    }
+    let turn = b.phys.rot_xz as i32;
+    let rot = SVec3 {
+        x: mips::sll(turn, 8) as i16,
+        y: mips::mul_lo(turn, 0xe0) as i16,
+        z: 0,
+    };
+    Some((rot, 0x20))
+}
+
 /// Counts a millisecond timer down by `ms`, to 0.
 fn count_down(timer: &mut i16, ms: i32) {
     *timer = mips::sub_lo(*timer as u16 as i32, ms) as i16;
@@ -633,10 +783,13 @@ impl Tick<'_, '_> {
                 self.b.weapon_cooldown = self.b.weapon_cooldown.wrapping_sub(1);
             }
         } else {
-            // `BOTS_ChangeState` is not ported: the hit is dropped.
-            self.d.pending_damage_type = 0;
-            self.d.pending_damage_reason = 0;
-            self.d.pending_damage_attacker = None;
+            let by_player = self
+                .d
+                .pending_damage_attacker
+                .and_then(|slot| self.peers.get(slot as usize))
+                .map(|peer| !peer.bot);
+            let damage = self.d.pending_damage_type;
+            change_state(self.d, self.b, damage, by_player, self.effects);
         }
 
         let d = &mut *self.d;

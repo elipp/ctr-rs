@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 4;
+pub const SIM_VERSION: u32 = 5;
 
 const UNSORTED: i16 = -1;
 
@@ -597,7 +597,6 @@ impl Race {
         }
         // The objects that hurt a driver go on from there: a plant that ate one chews.
         let mut hurt = Vec::new();
-        // (A bot is not hurt by them yet.)
         for (kart, effects) in self.karts[..players].iter_mut().zip(&mut effects) {
             let first = hurt.len();
             before_tick(&mut kart.driver, &self.last, &mut hurt, effects);
@@ -606,8 +605,12 @@ impl Race {
                 kart.driver.plant_eating_me = self.objects.plant_eater(plant);
             }
         }
+        let eaten_bots = hurt_bots(&mut self.karts, players, &self.last, &hurt, &mut effects);
         for instance in hurt {
             self.objects.caught(instance, &mut self.last);
+        }
+        for instance in eaten_bots {
+            self.objects.caught_bot(instance, &mut self.last);
         }
         // Then the mines in their reach, the ones dropped this tick too: the hazards' threads run
         // after the karts' in retail.
@@ -692,12 +695,16 @@ impl Race {
                 .hit(hit.instance, &mut self.karts[hit.owner].driver, hit.model);
         }
         for hit in &self.last_weapons.hits {
+            let by_player = hit
+                .attacker
+                .map(|slot| self.karts[slot].driver.bot.is_none());
             let victim = &mut self.karts[hit.victim].driver;
-            // (`BOTS_ChangeState` is not ported: a bot shrugs a hit off.)
-            if victim.bot.is_some() {
-                continue;
-            }
-            let hurt = vehicle::pick::new_state(victim, hit.damage, &mut effects[hit.victim]);
+            let effects = &mut effects[hit.victim];
+            let hurt = if victim.bot.is_some() {
+                vehicle::bot::hurt(victim, hit.damage, by_player, effects)
+            } else {
+                vehicle::pick::new_state(victim, hit.damage, effects)
+            };
             // A red beaker that hurt the kart makes it rain on it.
             if hurt && hit.rain {
                 vehicle::cloud::init(victim, self.tick, &mut self.objects.random_number);
@@ -713,7 +720,7 @@ impl Race {
             }
         }
         let racers = self.karts.len();
-        for kart in &mut self.karts[..players] {
+        for kart in &mut self.karts {
             vehicle::cloud::tick(
                 &mut kart.driver,
                 racers,
@@ -843,6 +850,48 @@ fn before_tick(
             });
         }
     }
+}
+
+/// The hazards that reached no player's kart in their last tick hurt the first bot they reach
+/// instead (`RB_CheckHazardCollisions` looks in the `PLAYER` bucket, then in `ROBOT`, whose
+/// newest thread is the last bot). The result is the plants that have a bot in their mouth, which
+/// a plant that ate a player (in `hurt`) has not.
+fn hurt_bots(
+    karts: &mut [Kart],
+    players: usize,
+    objects: &instance::Tick,
+    hurt: &[usize],
+    effects: &mut [Vec<Effect>],
+) -> Vec<usize> {
+    let mut eaten = Vec::new();
+    let drivers = objects
+        .contacts
+        .iter()
+        .filter(|c| c.mines != instance::Mines::Only);
+    for contact in drivers {
+        if karts[..players]
+            .iter()
+            .any(|k| contact.hits(k.driver.inst_pos))
+        {
+            continue;
+        }
+        let eats = contact.damage == instance::Damage::Eat;
+        if eats && (hurt.contains(&contact.instance) || eaten.contains(&contact.instance)) {
+            continue;
+        }
+        let Some(slot) = (players..karts.len())
+            .rev()
+            .find(|&slot| contact.hits(karts[slot].driver.inst_pos))
+        else {
+            continue;
+        };
+        let d = &mut karts[slot].driver;
+        vehicle::bot::hurt(d, contact.damage as u8, None, &mut effects[slot]);
+        if eats {
+            eaten.push(contact.instance);
+        }
+    }
+    eaten
 }
 
 /// What a kart does after the stages of a tick. The sparks and the puffs are for the outside to
