@@ -70,6 +70,12 @@ pub enum Action {
     /// Lists the tracks there are (`/track list`).
     ListTracks,
     StartRace,
+    /// Fill the grid of our races with bots (`lobby::BotSettings`): how many, and how hard, or
+    /// say what it is with neither.
+    Bots {
+        count: Option<u8>,
+        difficulty: Option<u16>,
+    },
     RestartRace,
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
     CupCreate {
@@ -157,6 +163,7 @@ const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
+const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard], or /bots off";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7>";
 const NET_USAGE: &str =
@@ -190,6 +197,7 @@ impl Action {
         match name {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
+            "bots" => Action::bots(rest),
             "cup" => Action::cup(rest),
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
             "promote" => Ok(Action::Promote(rest.into())),
@@ -313,6 +321,24 @@ impl Action {
             "" => Err(CACHE_USAGE.into()),
             _ => Err(format!("Unknown command: /cache {sub}\n{CACHE_USAGE}")),
         }
+    }
+
+    fn bots(line: &str) -> Result<Action, String> {
+        use vehicle::bot::difficulty_level::{EASY, HARD, MEDIUM};
+        let (mut count, mut difficulty) = (None, None);
+        for word in line.split_whitespace() {
+            match word {
+                "off" => count = Some(0),
+                "easy" => difficulty = Some(EASY as u16),
+                "medium" => difficulty = Some(MEDIUM as u16),
+                "hard" => difficulty = Some(HARD as u16),
+                _ => match word.parse::<u8>() {
+                    Ok(n) if n < race::MAX_KARTS as u8 => count = Some(n),
+                    _ => return Err(BOTS_USAGE.into()),
+                },
+            }
+        }
+        Ok(Action::Bots { count, difficulty })
     }
 
     fn race(line: &str) -> Result<Action, String> {
@@ -1607,6 +1633,22 @@ fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bots_take_a_count_and_a_difficulty_in_any_order() {
+        let bots = |line| match Action::parse(line) {
+            Ok(Action::Bots { count, difficulty }) => Some((count, difficulty)),
+            _ => None,
+        };
+        assert_eq!(bots("bots"), Some((None, None)));
+        assert_eq!(bots("bots 7"), Some((Some(7), None)));
+        assert_eq!(bots("bots off"), Some((Some(0), None)));
+        assert_eq!(bots("bots hard 3"), Some((Some(3), Some(0xf0))));
+        assert_eq!(bots("bots 5 easy"), Some((Some(5), Some(0x50))));
+        assert_eq!(bots("bots medium"), Some((None, Some(0xa0))));
+        assert_eq!(bots("bots 8"), None);
+        assert_eq!(bots("bots lots"), None);
+    }
 
     #[test]
     fn commands_have_subcommands() {

@@ -47,7 +47,7 @@ pub struct Sim {
 impl Sim {
     pub fn new(level: &Level, objects: Objects, specs: &[KartSpec]) -> Sim {
         Sim {
-            race: Sim::rollback(level, objects.clone(), specs, 0, None, false),
+            race: Sim::rollback(level, objects.clone(), specs, 0, None, false, None),
             start: objects,
             own: 0,
         }
@@ -55,7 +55,8 @@ impl Sim {
 
     /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the laps of
     /// a race of a lobby, even if we are alone in it (None for a free drive). A `spectator`
-    /// drives none: `own` is the kart it is following, and no pad of it is waited for.
+    /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
+    /// race after the players.
     fn rollback(
         level: &Level,
         objects: Objects,
@@ -63,8 +64,12 @@ impl Sim {
         own: usize,
         online: Option<u8>,
         spectator: bool,
+        bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
     ) -> Rollback<Race> {
         let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
+        if let Some((setup, bots)) = bots.filter(|(_, bots)| !bots.is_empty()) {
+            race.add_bots(level, setup, bots);
+        }
         // An online race starts with the ceremony; offline the kart drives off at once.
         if let Some(laps) = online {
             race.laps = laps;
@@ -78,7 +83,8 @@ impl Sim {
             (!specs.is_empty() && !spectator).then_some(own),
             ROLLBACK_WINDOW,
         );
-        // Nobody to compare with alone, or offline (the dummy karts of `/debug spawn-karts`).
+        // Nobody to compare with alone (the bots are in our sim alone), or offline (the dummy
+        // karts of `/debug spawn-karts`).
         if specs.len() > 1 && online.is_some() {
             rollback.check_every(CHECK_EVERY)
         } else {
@@ -95,8 +101,17 @@ impl Sim {
         own: usize,
         online: Option<u8>,
         spectator: bool,
+        bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
     ) {
-        self.race = Sim::rollback(level, self.start.clone(), specs, own, online, spectator);
+        self.race = Sim::rollback(
+            level,
+            self.start.clone(),
+            specs,
+            own,
+            online,
+            spectator,
+            bots,
+        );
         self.own = own;
     }
 

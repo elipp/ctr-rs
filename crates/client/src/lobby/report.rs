@@ -96,9 +96,10 @@ pub(super) fn report(
                 track,
                 hash,
                 laps,
+                bots,
             } => {
                 debug!(
-                    "race started: you are player {slot} of {}, characters {characters:?}, track {track:#x}",
+                    "race started: you are player {slot} of {}, characters {characters:?}, bots {bots:?}, track {track:#x}",
                     characters.len()
                 );
                 // The host chose a map we do not have: it sends it, and the race waits.
@@ -110,6 +111,9 @@ pub(super) fn report(
                 sums.clear();
                 leads.clear();
                 let characters_len = characters.len();
+                let mut bots = bots;
+                bots.characters
+                    .truncate(race::MAX_KARTS.saturating_sub(characters_len));
                 stopped = false;
                 let names: Vec<String> = players
                     .iter()
@@ -131,6 +135,8 @@ pub(super) fn report(
                     built: false,
                     go: false,
                     specs: Vec::new(),
+                    bots,
+                    bot_specs: Vec::new(),
                     corrections: 0,
                     replayed: 0,
                     ahead: vec![0.0; characters_len],

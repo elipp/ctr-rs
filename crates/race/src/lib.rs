@@ -165,6 +165,12 @@ pub fn lights_on(lights_ms: i32) -> usize {
         .count()
 }
 
+/// The game's racing tracks are the `LevelId`s below this (Dingo Canyon to Turbo Track).
+pub const RACING_TRACKS: u32 = 18;
+
+/// The most karts a race has, the bots' included.
+pub const MAX_KARTS: usize = 8;
+
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
 
@@ -283,7 +289,7 @@ impl Race {
             .get_or_insert_with(|| vehicle::bot::Bots::new(setup));
         for spec in specs {
             let slot = self.karts.len();
-            if slot >= 8 {
+            if slot >= MAX_KARTS {
                 break;
             }
             let mut coll = Collision::default();

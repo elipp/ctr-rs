@@ -1,7 +1,7 @@
 //! The lobby's commands (`/lobby`, `/race`, `/net`, `/cache`) and what they answer.
 
 use super::countdown::Then;
-use super::cup::{CupDef, Finisher, Series};
+use super::cup::{CupDef, Finisher, Series, Who};
 use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, Lobby};
 use crate::command::Action;
@@ -88,6 +88,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             net::NOT_NOW
         }
         Action::StartRace if lobby.series.is_some() => net::NOT_NOW,
+        Action::Bots { .. } if lobby.joined => "Only the host of a lobby can do that",
         _ => return None,
     })
 }
@@ -167,6 +168,29 @@ pub(super) fn run(
             }
             Action::StartRace => {
                 lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
+                continue;
+            }
+            Action::Bots { count, difficulty } => {
+                let changed = count.is_some() || difficulty.is_some();
+                if let Some(count) = count {
+                    lobby.bots.count = *count;
+                }
+                if let Some(difficulty) = difficulty {
+                    lobby.bots.difficulty = *difficulty;
+                }
+                let bots = lobby.bots;
+                let mut text = match bots.count {
+                    0 => "No bots".to_string(),
+                    1 => format!("1 {} bot", bots.difficulty_name()),
+                    n => format!("{n} {} bots", bots.difficulty_name()),
+                };
+                if bots.count > 0 {
+                    text += ", as many as the grid has room for";
+                }
+                if changed && (lobby.online.is_some() || lobby.series.is_some()) {
+                    text += " (from the next race you start)";
+                }
+                toasts.write(Toast::new(text, 3000));
                 continue;
             }
             Action::CupCreate { name, tracks, laps } => {
@@ -279,7 +303,7 @@ pub(super) fn run(
                     .zip(&net.labels)
                     .take(net.characters.len())
                     .map(|(id, name)| Finisher {
-                        id: *id,
+                        who: Who::Player(*id),
                         name: name.clone(),
                     })
                     .collect();

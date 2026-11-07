@@ -37,6 +37,10 @@ pub struct Online {
     /// The kart of each slot, as the race takes them: set by `remote::build`, which has their
     /// models.
     pub specs: Vec<race::KartSpec>,
+    /// The bots the host added, in the karts' slots after the players' (`remote::build` drops
+    /// them on a track with no paths for them), and their karts.
+    pub bots: net::Bots,
+    pub bot_specs: Vec<race::KartSpec>,
     /// How many times a late pad differed from its prediction, and the ticks played again for it.
     pub corrections: u32,
     pub replayed: u32,
@@ -92,6 +96,32 @@ impl Online {
     /// spectator does: a spectator, or a player whose kart has finished (see `drive_tick`).
     pub fn watches(&self) -> bool {
         self.spectating() || self.finished.get(self.slot).copied().unwrap_or(false)
+    }
+
+    /// How many karts the race has: the players', then the bots'.
+    pub fn karts(&self) -> usize {
+        self.characters.len() + self.bots.characters.len()
+    }
+
+    /// The character of each kart, the bots' after the players'.
+    pub fn kart_characters(&self) -> Vec<u8> {
+        let bots = &self.bots.characters;
+        self.characters.iter().chain(bots).copied().collect()
+    }
+
+    /// What the kart in `slot` is called: its player, or the character a bot drives. (A slot
+    /// past the players in [`labels`](Self::labels) is a spectator's, not a bot's.)
+    pub fn kart_label(&self, slot: usize) -> &str {
+        let players = self.characters.len();
+        if slot < players {
+            return self.labels.get(slot).map_or("", String::as_str);
+        }
+        self.bots
+            .characters
+            .get(slot - players)
+            .and_then(|&c| crate::CHARACTERS.get(c as usize))
+            .copied()
+            .unwrap_or("")
     }
 
     /// The kart of the sim that the view is of, and the HUD: ours, or the one a spectator follows.

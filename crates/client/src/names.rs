@@ -101,8 +101,8 @@ pub(crate) fn overhead(
         }
         return;
     };
-    // A label for each player, and the one for the kart we watch.
-    for slot in 0..net.names.len() {
+    // A label for each kart, and the one for the kart we watch.
+    for slot in 0..net.karts() {
         if labels.iter().all(|(_, label, ..)| label.0 != slot) {
             let font = crate::font::bold(TextFont::from_font_size(MAX_SIZE));
             commands
@@ -197,7 +197,7 @@ pub(crate) fn overhead(
     };
     for (_, label, children, mut transform, mut node, mut visibility) in &mut labels {
         let slot = label.0;
-        let name = net.labels.get(slot).map_or("", String::as_str);
+        let name = net.kart_label(slot);
         let at = karts
             .iter()
             .find(|(kart, _)| kart.0 == slot)

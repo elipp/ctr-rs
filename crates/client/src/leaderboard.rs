@@ -87,7 +87,8 @@ fn build(
     let online = lobby.online.as_ref().filter(|online| online.built);
     for (entity, board) in &boards {
         // The same race goes on; a restart keeps the players, so it keeps the column too.
-        if online.is_some_and(|o| o.names == board.names && o.characters == board.characters) {
+        if online.is_some_and(|o| o.names == board.names && o.kart_characters() == board.characters)
+        {
             return;
         }
         commands.entity(entity).despawn();
@@ -101,7 +102,8 @@ fn build(
         &textures.vram,
         &mut images,
     );
-    let players = online.characters.len();
+    let karts = online.kart_characters();
+    let players = karts.len();
     let column = commands
         .spawn((
             Node {
@@ -115,11 +117,14 @@ fn build(
         .id();
     for slot in 0..players {
         let y = slot as f32 * SLOT;
-        let portrait =
-            spawn_portrait(&mut commands, column, &image, online.characters[slot], ICON_Y + y);
+        let portrait = spawn_portrait(&mut commands, column, &image, karts[slot], ICON_Y + y);
         commands.entity(portrait).insert(Row { slot, y, pop: 0.0 });
-        let label = online.labels.get(slot).map_or("", String::as_str);
-        let key = online.names.get(slot).map_or("", String::as_str);
+        let label = online.kart_label(slot);
+        // (A bot has no key.)
+        let key = match slot < online.characters.len() {
+            true => online.names.get(slot).map_or("", String::as_str),
+            false => "",
+        };
         // The host is slot 0 (`net::Event::Start`).
         if slot == 0 {
             spawn_host_badge(&mut commands, portrait, false);
@@ -144,7 +149,7 @@ fn build(
     }
     commands.entity(column).insert(Board {
         names: online.names.clone(),
-        characters: online.characters.clone(),
+        characters: karts,
         order: (0..players).collect(),
     });
 }
@@ -251,10 +256,9 @@ fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
         return;
     };
     for (NameTag(slot), mut text) in &mut tags {
-        if let Some(label) = online.labels.get(*slot)
-            && text.0 != *label
-        {
-            text.0.clone_from(label);
+        let label = online.kart_label(*slot);
+        if text.0 != label {
+            text.0 = label.to_string();
         }
     }
 }

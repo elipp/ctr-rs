@@ -79,6 +79,17 @@ pub struct Standings {
     pub next: Option<(u32, String)>,
 }
 
+/// The bots of a race, which every client adds after the players (`vehicle::bot`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub struct Bots {
+    /// The character of each bot, in the slots after the players'.
+    pub characters: Vec<u8>,
+    /// How hard they race (`gGT->arcadeDifficulty`, `vehicle::bot::difficulty_level`).
+    pub difficulty: u16,
+    /// The race is one of a cup.
+    pub cup: bool,
+}
+
 /// A player's points in [`Standings`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Score {
@@ -130,6 +141,7 @@ pub enum Message {
         hash: u64,
         /// The laps of the race.
         laps: u8,
+        bots: Bots,
         roster: Vec<[u8; 32]>,
         /// Whether each of the roster is behind a NAT of the hard kind (see [`Message::Nat`]).
         hard: Vec<bool>,
@@ -152,6 +164,7 @@ pub enum Message {
         track: u32,
         hash: u64,
         laps: u8,
+        bots: Bots,
     },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
@@ -414,6 +427,11 @@ mod tests {
                 track: 4,
                 hash: 0,
                 laps: 5,
+                bots: Bots {
+                    characters: vec![1, 2],
+                    difficulty: 0xa0,
+                    cup: true,
+                },
                 roster: vec![[1; 32], [2; 32], [3; 32]],
                 hard: vec![false, true, false],
             },
@@ -426,6 +444,7 @@ mod tests {
                 track: 7,
                 hash: 0xfeed,
                 laps: 3,
+                bots: Bots::default(),
             },
             Message::Want {
                 track: 0x8000_0001,

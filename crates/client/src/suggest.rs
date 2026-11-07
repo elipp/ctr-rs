@@ -240,6 +240,17 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("stop", "End the race for everyone"),
         ],
     ),
+    Spec {
+        name: "bots",
+        about: "Bots in the lobby's races (host only)",
+        options: &[
+            leaf("off", "No bots"),
+            leaf("easy", "Easy bots"),
+            leaf("medium", "Medium bots (the default)"),
+            leaf("hard", "Hard bots"),
+        ],
+        arg: Some("[0 to 7]"),
+    },
     node(
         "cup",
         "A series of races with points",
@@ -620,6 +631,7 @@ mod tests {
             [
                 "lobby",
                 "race",
+                "bots",
                 "cup",
                 "promote",
                 "track",

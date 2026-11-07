@@ -357,9 +357,9 @@ pub(crate) async fn run(
             }
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
-                Command::Start { track, hash, laps } => if let Some(host) = &mut host {
+                Command::Start { track, hash, laps, bots } => if let Some(host) = &mut host {
                     if host.handoff.is_none() {
-                        host.start_wanted = Some((track, hash, laps));
+                        host.start_wanted = Some((track, hash, laps, bots));
                     }
                 },
                 Command::Promote(to) => if let Some(host) = &mut host {
@@ -391,18 +391,19 @@ pub(crate) async fn run(
                     let text = "A player left the race: start a new one instead of restarting".to_string();
                     io.event(Event::Announce(text));
                 }
-                Command::Restart { track, hash, laps } => if plan.is_some()
+                Command::Restart { track, hash, laps, bots } => if plan.is_some()
                     && let Some(host) = &mut host
                     && let Some((slot, characters, players)) = race_info.clone()
                 {
                     epoch += 1;
                     for guest in &host.guests {
-                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track, hash, laps }).await;
+                        let restart = Message::Restart { epoch, track, hash, laps, bots: bots.clone() };
+                        let _ = send_reliably(&guest.connection, &restart).await;
                     }
                     start_over(&mut links, epoch);
                     (running, game_ready, ready_sent) = (false, false, false);
                     host.ready_from.clear();
-                    io.event(Event::Started { slot, characters, players, track, hash, laps });
+                    io.event(Event::Started { slot, characters, players, track, hash, laps, bots });
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -686,7 +687,7 @@ pub(crate) async fn run(
                         heirs.handed_over = false;
                         io.event(Event::Lobby { players, spectators, you, locked });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster, hard }
+                    Message::Start { epoch: new, slot, characters, track, hash, laps, bots, roster, hard }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -704,16 +705,16 @@ pub(crate) async fn run(
                         dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone()));
                         plan = Some(Plan { roster: roster.clone(), players: characters.len() });
-                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
+                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps, bots });
                     }
-                    Message::Restart { epoch: new, track, hash, laps }
+                    Message::Restart { epoch: new, track, hash, laps, bots }
                         if plan.is_some() && from == host_id && host.is_none() =>
                     {
                         if let Some((slot, characters, players)) = race_info.clone() {
                             epoch = new;
                             start_over(&mut links, epoch);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, players, track, hash, laps });
+                            io.event(Event::Started { slot, characters, players, track, hash, laps, bots });
                         }
                     }
                     Message::Announce { text } => {
@@ -1169,11 +1170,10 @@ pub(crate) async fn run(
 
         // The host starts the race once every guest has said what it drives.
         if let Some(host) = &mut host
-            && let Some((track, hash, laps)) = host
+            && let Some((track, hash, laps, bots)) = host
                 .start_wanted
-                .filter(|_| host.guests.iter().all(|g| g.hello.is_some()))
+                .take_if(|_| host.guests.iter().all(|g| g.hello.is_some()))
         {
-            host.start_wanted = None;
             // A race after another is a new one, with the players who are here now.
             host.guests.retain(|g| !host.gone.contains(&g.id));
             host.gone.clear();
@@ -1209,6 +1209,7 @@ pub(crate) async fn run(
                     track,
                     hash,
                     laps,
+                    bots: bots.clone(),
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                     hard: hard.clone(),
                 };
@@ -1232,6 +1233,7 @@ pub(crate) async fn run(
                 track,
                 hash,
                 laps,
+                bots,
             });
         }
 
