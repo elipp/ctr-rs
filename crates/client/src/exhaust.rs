@@ -398,9 +398,6 @@ pub fn update(
         // wheels as that spot is (the particles are relative to it).
         let origin = kart + pose.rotation * Vec3::new(0.0, 0.0, PIPE_Z * SCALE);
         transform.translation = origin;
-        let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
-            continue;
-        };
         let quads = MAX_QUADS;
         let mut positions = vec![[0.0f32; 3]; 4 * quads];
         let mut colors = vec![[0.0f32; 4]; 4 * quads];
@@ -438,8 +435,14 @@ pub fn update(
                 colors[n * 4 + k] = [gain[0], gain[1], gain[2], 1.0];
             }
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        crate::mesh_write::set_attributes(
+            &mut meshes,
+            &mesh.0,
+            [
+                (Mesh::ATTRIBUTE_POSITION, positions.into()),
+                (Mesh::ATTRIBUTE_COLOR, colors.into()),
+            ],
+        );
     }
 }
 
@@ -469,9 +472,6 @@ pub fn update_sparks(
             continue;
         };
         let kart = kart.translation;
-        let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
-            continue;
-        };
         let quads = MAX_QUADS;
         let mut positions = vec![[0.0f32; 3]; 4 * quads];
         let mut colors = vec![[0.0f32; 4]; 4 * quads];
@@ -507,7 +507,13 @@ pub fn update_sparks(
                 colors[n * 4 + k] = [color[0] * shade, color[1] * shade, color[2] * shade, 1.0];
             }
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        crate::mesh_write::set_attributes(
+            &mut meshes,
+            &mesh.0,
+            [
+                (Mesh::ATTRIBUTE_POSITION, positions.into()),
+                (Mesh::ATTRIBUTE_COLOR, colors.into()),
+            ],
+        );
     }
 }

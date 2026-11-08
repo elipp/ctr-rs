@@ -79,6 +79,7 @@ pub(super) fn drive_tick(
     mut hold: crate::fx::Hold,
     mut lobby: ResMut<crate::lobby::Lobby>,
     config: Res<crate::config::Config>,
+    dummies: Res<crate::remote::DummyKarts>,
     shown: Shown,
     mut memory: Local<Memory>,
 ) {
@@ -128,8 +129,9 @@ pub(super) fn drive_tick(
     // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = picked && !online;
-    // The lobby closed, or the race failed: back to the grid with our kart alone.
-    if !online && sim.race.karts.len() != 1 {
+    // The lobby closed, or the race failed: back to the grid with our kart alone (and the dummy
+    // karts of `/debug spawn-karts`, which also start it over when they change).
+    if !online && sim.race.karts.len() != 1 + dummies.0.len() {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
@@ -140,7 +142,13 @@ pub(super) fn drive_tick(
     if restart {
         let (specs, own, spectator) = match &lobby.online {
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
-            None => (vec![drive.spec()], 0, false),
+            None => (
+                std::iter::once(drive.spec())
+                    .chain(dummies.0.iter().copied())
+                    .collect(),
+                0,
+                false,
+            ),
         };
         sim.restart(
             &track.0,
@@ -149,6 +157,12 @@ pub(super) fn drive_tick(
             lobby.online.as_ref().map(|net| net.laps),
             spectator,
         );
+        // The dummies have left from tick 0: a neutral pad, and nothing to wait for.
+        if !online {
+            for slot in 1..sim.race.players() {
+                sim.race.leave(slot);
+            }
+        }
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         drive.weather = crate::weather::WeatherView::new(&track.0);

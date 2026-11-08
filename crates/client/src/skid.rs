@@ -156,9 +156,6 @@ pub fn update(
     let nothing = (None, Vec::new());
 
     for (kind, attached, mesh) in &marks {
-        let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
-            continue;
-        };
         let slot = karts.get(attached.0).map_or(usize::MAX, |slot| slot.0);
         let (bright, segments) = shown.get(slot).unwrap_or(&nothing);
         let mut positions = vec![[0.0f32; 3]; 4 * MAX_QUADS];
@@ -207,7 +204,13 @@ pub fn update(
                 colors[n * 4 + k] = shades[k];
             }
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        crate::mesh_write::set_attributes(
+            &mut meshes,
+            &mesh.0,
+            [
+                (Mesh::ATTRIBUTE_POSITION, positions.into()),
+                (Mesh::ATTRIBUTE_COLOR, colors.into()),
+            ],
+        );
     }
 }

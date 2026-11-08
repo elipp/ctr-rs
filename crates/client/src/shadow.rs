@@ -94,7 +94,7 @@ pub fn update(
             .get(attached.0)
             .ok()
             .and_then(|motion| motion.shadow(t));
-        let (Some((center, axes, height)), Some(mut mesh)) = (pose, meshes.get_mut(&mesh.0)) else {
+        let (Some((center, axes, height)), true) = (pose, meshes.contains(&mesh.0)) else {
             *visibility = Visibility::Hidden;
             continue;
         };
@@ -105,7 +105,13 @@ pub fn update(
             positions.extend(quad.corners.map(|c| c.to_array()));
             uvs.extend(shadow.uvs[quad.icon]);
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        crate::mesh_write::set_attributes(
+            &mut meshes,
+            &mesh.0,
+            [
+                (Mesh::ATTRIBUTE_POSITION, positions.into()),
+                (Mesh::ATTRIBUTE_UV_0, uvs.into()),
+            ],
+        );
     }
 }

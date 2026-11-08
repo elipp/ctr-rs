@@ -60,6 +60,8 @@ mod lobby;
 mod lobby_list;
 mod maps;
 mod mask;
+mod mesh_stats;
+mod mesh_write;
 mod minimap;
 mod names;
 mod paths;
@@ -323,7 +325,7 @@ fn main() {
         config::ConfigPlugin,
         probe::ProbePlugin,
     ));
-    app.add_plugins(track_picture::TrackPicturePlugin);
+    app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
     app.add_systems(Update, fly.run_if(not(drive::driving)))
         .init_resource::<scene::Picked>()
         .add_systems(Update, (
