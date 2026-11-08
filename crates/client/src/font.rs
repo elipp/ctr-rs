@@ -78,7 +78,7 @@ impl Fonts {
         }
     }
 
-    fn atlas(&self, font: Font) -> &FontAtlas {
+    pub(crate) fn atlas(&self, font: Font) -> &FontAtlas {
         match font {
             Font::Large => &self.large,
             Font::Middle => &self.middle,
