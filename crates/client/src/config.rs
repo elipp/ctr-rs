@@ -47,6 +47,7 @@
 
 use std::path::PathBuf;
 
+use bevy::light::cluster::{ClusterConfig, GlobalClusterSettings};
 use bevy::prelude::*;
 use bevy::render::view::{DebandDither, Tonemapping};
 use serde::{Deserialize, Serialize};
@@ -418,20 +419,29 @@ pub struct ConfigPlugin;
 
 impl Plugin for ConfigPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (apply, present_mode, net_transport, msaa))
+        app.add_systems(Startup, no_gpu_clustering)
+            .add_systems(Update, (apply, present_mode, net_transport, msaa))
             .add_observer(new_camera_defaults);
     }
 }
 
 /// A camera starts with the multisampling the config says, not Bevy's 4x, and without the
 /// tonemapping and the dither that Bevy gives a 3D camera: the game's colors are the disc's, and
-/// each of those is a pass over the whole picture.
+/// each of those is a pass over the whole picture. Nor does it sort lights into clusters: there
+/// are no lights, every material is unlit.
 fn new_camera_defaults(add: On<Add<Camera3d>>, config: Res<Config>, mut commands: Commands) {
     commands.entity(add.entity).insert((
         config.msaa(),
         Tonemapping::None,
         DebandDither::Disabled,
+        ClusterConfig::None,
     ));
+}
+
+/// Bevy clusters the lights on the GPU (compute passes and a readback, every frame, for every
+/// camera) even with no lights and `ClusterConfig::None`; `None` here makes it skip all of it.
+fn no_gpu_clustering(mut settings: ResMut<GlobalClusterSettings>) {
+    settings.gpu_clustering = None;
 }
 
 /// The cameras multisample as the config says, when it changes.

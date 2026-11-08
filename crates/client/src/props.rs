@@ -78,8 +78,8 @@ impl Sim {
             (!specs.is_empty() && !spectator).then_some(own),
             ROLLBACK_WINDOW,
         );
-        // Nobody to compare with alone.
-        if specs.len() > 1 {
+        // Nobody to compare with alone, or offline (the dummy karts of `/debug spawn-karts`).
+        if specs.len() > 1 && online.is_some() {
             rollback.check_every(CHECK_EVERY)
         } else {
             rollback

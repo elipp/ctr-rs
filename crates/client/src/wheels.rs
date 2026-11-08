@@ -138,9 +138,6 @@ pub fn update(
             commands.entity(entity).despawn();
             continue;
         };
-        let Some(mut mesh) = meshes.get_mut(&mesh.0) else {
-            continue;
-        };
         // The tires sit at the kart's squashed and stretched size.
         let (wheel_rotation, hazard_timer, scale) = motion
             .map_or((0, 0, [DRIVER_INSTANCE_SCALE; 3]), |m| {
@@ -181,7 +178,13 @@ pub fn update(
                 wheels.uvs[quad.sprite.min(wheels.uvs.len() - 1)],
             )
         };
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.to_vec());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs.to_vec());
+        crate::mesh_write::set_attributes(
+            &mut meshes,
+            &mesh.0,
+            [
+                (Mesh::ATTRIBUTE_POSITION, positions.to_vec().into()),
+                (Mesh::ATTRIBUTE_UV_0, uvs.to_vec().into()),
+            ],
+        );
     }
 }
