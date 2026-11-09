@@ -478,6 +478,7 @@ impl Plugin for LobbyPlugin {
                     crate::remote::build,
                     crate::remote::spawn_dummies,
                     crate::remote::dump_bots,
+                    crate::remote::bot_line,
                     finish,
                     placing,
                     rollback_toasts,

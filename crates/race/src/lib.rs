@@ -83,6 +83,9 @@ pub struct KartSpec {
     pub anim_num_frames: [u16; 8],
     /// The race drives the kart itself ([`bot::Bot`]), and takes no pad for it.
     pub bot: bool,
+    /// The bot path (into `Level::nav_paths`) a bot drives, instead of the one of its slot
+    /// ([`bot::Bot::new`]). (Debug: `/debug bot-line`.)
+    pub line: Option<u8>,
 }
 
 /// A kart of a race: the driver, its collision state, and the buttons of its last tick.
@@ -108,7 +111,9 @@ impl Kart {
         let mut driver = Driver::new(slot as u8, spec.character);
         driver.anim_num_frames = spec.anim_num_frames;
         spawn(&mut driver, &mut coll, level, order[slot] as usize);
-        let bot = spec.bot.then(|| bot::Bot::new(level, slot, &driver));
+        let bot = spec
+            .bot
+            .then(|| bot::Bot::new(level, slot, &driver, spec.line));
         Kart {
             driver,
             coll,

@@ -49,6 +49,7 @@ fn bots(turn: usize) -> Vec<KartSpec> {
             character: character_of(CLASSES[(slot + turn) % BOTS]),
             anim_num_frames: [0; 8],
             bot: true,
+            line: None,
         })
         .collect()
 }
@@ -384,7 +385,8 @@ fn needs_disc_bots_drive_a_lap_of_every_track() {
 }
 
 /// Not a test: tries steering settings against each other, a line for each. Run with
-/// `cargo test -p race --test bots tune -- --ignored --nocapture`.
+/// `cargo test -p race --test bots tune -- --ignored --nocapture`; `BOT_TUNE=<text>` runs only
+/// the tries with that in their names (and the default).
 #[test]
 #[ignore]
 fn needs_disc_tune_steering() {
@@ -410,6 +412,11 @@ fn needs_disc_tune_steering() {
         ("0xa0, far 1/4", Steering { full_error: 0xa0, far_weight: 64, ..d }),
         ("lookahead 9", Steering { lookahead_ticks: 9, ..d }),
         ("lookahead 15", Steering { lookahead_ticks: 15, ..d }),
+        ("lookahead 6", Steering { lookahead_ticks: 6, ..d }),
+        ("lookahead min 150", Steering { lookahead_min: 150, ..d }),
+        ("lookahead min 450", Steering { lookahead_min: 450, ..d }),
+        ("lookahead min 150, 9", Steering { lookahead_min: 150, lookahead_ticks: 9, ..d }),
+        ("lookahead min 450, 9", Steering { lookahead_min: 450, lookahead_ticks: 9, ..d }),
         ("no straight gaps", Steering { straight_gaps: false, ..d }),
         ("no firm gaps", Steering { gap_full_error: 0, ..d }),
         ("gap 0x30", Steering { gap_full_error: 0x30, ..d }),
@@ -421,7 +428,16 @@ fn needs_disc_tune_steering() {
         // run-up to a gap at any error.
         ("d-pad", Steering { full_error: 0x11, gap_full_error: 1, ..d }),
     ];
+    // `BOT_TUNE=lookahead`: only the tries whose names have that in them (and the default, to
+    // compare with).
+    let only = std::env::var("BOT_TUNE").ok();
     for (name, steering) in tries {
+        if only
+            .as_deref()
+            .is_some_and(|only| name != "default" && !name.contains(only))
+        {
+            continue;
+        }
         let runs = drive(&tracks, steering);
         let laps: Vec<i32> = runs.iter().filter_map(|r| r.lap_ms).collect();
         let grabs: u32 = runs.iter().map(|r| r.grabs).sum();
@@ -496,6 +512,7 @@ fn needs_disc_trace_gap() {
             character: character_of(CLASS),
             anim_num_frames: [0; 8],
             bot: true,
+            line: None,
         })
         .collect();
     let mut race = Race::new(&level, objects, &specs, false);
@@ -601,6 +618,7 @@ fn gap_takeoffs(level: &Level, objects: &Objects, steering: Steering) -> Vec<Tak
                 character: character_of(class),
                 anim_num_frames: [0; 8],
                 bot: true,
+                line: None,
             })
             .collect();
         let n = specs.len();
@@ -739,14 +757,17 @@ impl Dump {
             .split(';')
             .map(|spec| {
                 let parts: Vec<&str> = spec.split('/').collect();
-                let [character, anim, bot] = parts[..] else {
-                    panic!("a spec is character/anim,frames/bot: {spec}")
+                let (character, anim, bot, line) = match parts[..] {
+                    [character, anim, bot] => (character, anim, bot, None),
+                    [character, anim, bot, line] => (character, anim, bot, Some(line)),
+                    _ => panic!("a spec is character/anim,frames/bot[/line]: {spec}"),
                 };
                 let anim: Vec<u16> = anim.split(',').map(|n| n.parse().unwrap()).collect();
                 KartSpec {
                     character: character.parse().unwrap(),
                     anim_num_frames: anim.try_into().unwrap(),
                     bot: bot == "1",
+                    line: line.map(|l| l.parse().unwrap()),
                 }
             })
             .collect();
@@ -775,8 +796,19 @@ fn needs_disc_replay_dump() {
         eprintln!("skipping: no BOT_DUMP");
         return;
     };
+    let text = text.into_string().expect("BOT_DUMP is not UTF-8");
+    // A file (the test runs in `crates/race`, so a relative path is tried from the workspace's
+    // root too), or the line itself.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let text = std::fs::read_to_string(&text)
-        .unwrap_or_else(|_| text.into_string().expect("BOT_DUMP is not UTF-8"));
+        .or_else(|_| std::fs::read_to_string(root.join(&text)))
+        .unwrap_or_else(|_| {
+            assert!(
+                text.contains("BOT_DUMP") || text.contains("specs="),
+                "BOT_DUMP: no file {text} (here or in the workspace's root), nor a dump line"
+            );
+            text
+        });
     let line = text
         .lines()
         .find(|l| l.trim_start().starts_with("BOT_DUMP"))
@@ -805,16 +837,44 @@ fn needs_disc_replay_dump() {
         race.karts[slot].bot.as_ref().unwrap().path
     );
     let mut was_ground = true;
+    // The frames the trace has been on or aimed at, to list after it.
+    let mut seen_frames = std::collections::BTreeSet::new();
     while race.tick < dump.tick + after {
         if race.tick == dump.tick {
-            assert_eq!(
-                race.checksum(),
-                dump.checksum,
+            // Not the same race: the karts as the replay has them, in the dump's own format, to
+            // tell which of them went another way (one kart: something done to it alone, such as
+            // `.` / `,` changing the character of the watched one; all: the level or the sim).
+            // `BOT_NO_CHECK=1`: the race of the dump's karts as the bots drive it now, which
+            // is not the client's once the bots' code has changed (to try a fix on the dump).
+            let check = std::env::var_os("BOT_NO_CHECK").is_none();
+            if check && race.checksum() != dump.checksum {
+                for (slot, kart) in race.karts.iter().enumerate() {
+                    let d = &kart.driver;
+                    println!(
+                        "  kart {slot}: pos {:?} vel {:?} speed {} angle {} kart_state {} phys {:?} \
+                         character {} frame {}",
+                        [d.pos_curr.x >> 8, d.pos_curr.y >> 8, d.pos_curr.z >> 8],
+                        [d.velocity.x, d.velocity.y, d.velocity.z],
+                        d.speed,
+                        d.angle,
+                        d.kart_state,
+                        d.phys_state,
+                        d.character,
+                        kart.bot.as_ref().map_or(0, |b| b.tracker.frame),
+                    );
+                }
+            }
+            assert!(
+                !check || race.checksum() == dump.checksum,
                 "not the client's race at tick {}: another level file, sim, or a debug command \
                  that changed the race",
                 dump.tick
             );
-            println!("---- tick {}: the dump (checksum matches) ----", dump.tick);
+            if check {
+                println!("---- tick {}: the dump (checksum matches) ----", dump.tick);
+            } else {
+                println!("---- tick {}: the dump's tick (not checked) ----", dump.tick);
+            }
         }
         let kart = &race.karts[slot];
         let d = &kart.driver;
@@ -823,20 +883,96 @@ fn needs_disc_replay_dump() {
             // The pad it is about to make (on a copy: `pad` moves the tracker).
             let mut bot = kart.bot.clone().unwrap();
             let pad = bot.pad(&level, d, race.lights_ms <= 0);
+            // Where it aims: the point `Bot::pad` steers for on the ground (without the straight
+            // to a gap's landing), from where the kart will be, and how far it has to turn to
+            // face it (degrees, + left). The stick's side should match the error's.
+            let st = bot.steering;
+            let speed = (d.speed_approx as i32).abs();
+            let travel = (speed >> 8) * st.predict_ticks;
+            let lookahead = race::bot::lookahead(st, d);
+            let (aim, aim_frame) = bot.tracker.ahead(path_of(kart), d.pos_curr, travel + lookahead);
+            {
+                let n = path_of(kart).len();
+                let from = bot.tracker.frame as usize;
+                let to = from + (aim_frame + n - from) % n;
+                seen_frames.extend((from..=to + 2).map(|i| i % n));
+            }
+            let then = [
+                d.pos_curr.x.wrapping_add(d.velocity.x.wrapping_mul(st.predict_ticks)),
+                d.pos_curr.z.wrapping_add(d.velocity.z.wrapping_mul(st.predict_ticks)),
+            ];
+            let mut angle = d.angle as i32;
+            if d.kart_state == kart_state::NORMAL {
+                angle += (d.amp_turn_state as i32 * st.predict_ticks) >> 8;
+            }
+            let want = math::ratan2((aim.x - then[0]) >> 8, (aim.z - then[1]) >> 8);
+            let error = ((want - angle + 0x800) & 0xfff) - 0x800;
+            let going = math::ratan2(d.velocity.x, d.velocity.z);
+            let slip = ((going - d.angle as i32 + 0x800) & 0xfff) - 0x800;
             println!(
-                "{} {}, stick {:#04x}, held {:#06x}, state {}, stuck {}, reversing {}, \
-                 relocations {}",
+                "{} {}, aim frame {aim_frame} at {:?} error {:+}°, slip {:+}°, stick {:#04x} ({}), held {:#06x}, \
+                 state {}, stuck {}, reversing {}, relocations {}",
                 if ground { "ground" } else { "air   " },
                 Moment::of(kart, path_of(kart), race.tick),
+                [aim.x >> 8, aim.y >> 8, aim.z >> 8],
+                error * 360 / 0x1000,
+                slip * 360 / 0x1000,
                 pad.lx,
+                match pad.lx.cmp(&0x80) {
+                    std::cmp::Ordering::Less => "left",
+                    std::cmp::Ordering::Equal => "centre",
+                    std::cmp::Ordering::Greater => "right",
+                },
                 pad.held,
                 d.kart_state,
                 bot.stuck,
                 bot.reversing,
                 bot.tracker.relocations,
             );
+            if !ground {
+                // What `Bot::fly` turns its way of travel toward (after this tick's `pad`, as the
+                // race runs it), and how far off its way of travel that is (degrees, + left; past
+                // 90 it does not turn).
+                let (target, landing) = bot.air_target(path_of(kart), d);
+                let going = math::ratan2(d.velocity.x, d.velocity.z);
+                let want = math::ratan2(
+                    (target.x - d.pos_curr.x) >> 8,
+                    (target.z - d.pos_curr.z) >> 8,
+                );
+                let off = ((want - going + 0x800) & 0xfff) - 0x800;
+                let (dx, dz) = (
+                    ((target.x - d.pos_curr.x) >> 8) as i64,
+                    ((target.z - d.pos_curr.z) >> 8) as i64,
+                );
+                println!(
+                    "  fly: toward {} at {:?}, {} away on the ground, {:+}° off its way",
+                    match landing {
+                        Some(j) => format!("the gap's landing, frame {j},"),
+                        None => "the path ahead".to_string(),
+                    },
+                    [target.x >> 8, target.y >> 8, target.z >> 8],
+                    (dx * dx + dz * dz).isqrt(),
+                    off * 360 / 0x1000,
+                );
+            }
             if ground != was_ground {
                 println!("  {}", if ground { "landed" } else { "took off" });
+            }
+            // A relocation: where the tracker was searched for, and the frames on from there.
+            let old = kart.bot.as_ref().unwrap().tracker;
+            if bot.tracker.relocations != old.relocations {
+                println!("  relocated: frame {} -> {}", old.frame, bot.tracker.frame);
+                let path = path_of(kart);
+                for k in 0..=4 {
+                    let i = (bot.tracker.frame as usize + k) % path.len();
+                    let f = &path[i];
+                    println!(
+                        "    frame {i}: at {:?}, flags {:#06x}, special {:#04x}",
+                        [f.pos.x, f.pos.y, f.pos.z],
+                        f.flags,
+                        f.special_bits,
+                    );
+                }
             }
         }
         was_ground = ground;
@@ -848,5 +984,46 @@ fn needs_disc_replay_dump() {
         {
             println!("  grabbed by the mask");
         }
+    }
+    // The path where it went: what `Bot::pad` and `Bot::fly` steer by. A gap (flown straight from
+    // its lip to its landing) is a frame with special 0x10 followed by a kill plane frame.
+    let path = &level.nav_paths[race.karts[slot].bot.as_ref().unwrap().path as usize].frames;
+    println!("---- the frames of path {} it was on or aimed at ----", race.karts[slot].bot.as_ref().unwrap().path);
+    let names = [
+        (loader::lev::NavFrame::TURBO, "turbo"),
+        (loader::lev::NavFrame::SKID_BACK, "skid-back"),
+        (loader::lev::NavFrame::SKID_FRONT, "skid-front"),
+        (loader::lev::NavFrame::SUPER_TURBO, "super-turbo"),
+        (loader::lev::NavFrame::KILL_PLANE, "KILL-PLANE"),
+        (loader::lev::NavFrame::JUMP, "jump"),
+        (loader::lev::NavFrame::DRIFT_LEFT, "drift-left"),
+        (loader::lev::NavFrame::DRIFT_RIGHT, "drift-right"),
+        (loader::lev::NavFrame::ECHO, "echo"),
+        (0x4000, "0x4000"),
+        (loader::lev::NavFrame::SPLIT_LINE, "split-line"),
+    ];
+    for i in seen_frames {
+        let f = &path[i];
+        let flags: Vec<&str> = names
+            .iter()
+            .filter(|(bit, _)| f.flags & bit != 0)
+            .map(|(_, n)| *n)
+            .collect();
+        println!(
+            "  frame {i}: at {:?}, rot {:?}, {} to the next ({} on the ground), flags {:#06x} [{}] \
+             terrain {}, special {:#04x}{}",
+            [f.pos.x, f.pos.y, f.pos.z],
+            f.rot,
+            f.dist_to_next_xyz,
+            f.dist_to_next_xz,
+            f.flags,
+            flags.join(" "),
+            f.terrain(),
+            f.special_bits,
+            match race::bot::gap_landing(path, i) {
+                Some(j) => format!(", LIP of a gap landing at frame {j}"),
+                None => String::new(),
+            },
+        );
     }
 }

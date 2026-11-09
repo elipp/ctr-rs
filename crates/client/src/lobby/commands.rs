@@ -305,6 +305,8 @@ pub(super) fn run(
             | Action::DebugSpawnKarts { .. }
             | Action::DebugSpectate
             | Action::DebugDumpBots
+            | Action::DebugBotLine(_)
+            | Action::DebugNavPaths
             | Action::SetConfig(_)
             | Action::Character(_)
             | Action::Track(_)

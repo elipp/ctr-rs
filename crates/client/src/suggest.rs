@@ -488,6 +488,13 @@ pub(crate) const COMMANDS: &[Spec] = &[
             takes("spawn-karts", "Dummy karts on the grid, offline", "<0 to 7>"),
             leaf("spectate", "Watch the dummy karts, offline (toggle)"),
             leaf("dump-bots", "Print the race of bots to stdout, to replay in a test"),
+            Spec {
+                name: "bot-line",
+                about: "The bot path every bot drives, offline",
+                options: &[leaf("auto", "Each its slot's")],
+                arg: Some("<0 to 2>"),
+            },
+            leaf("navpaths", "Draw the bot paths in the race too (toggle)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             Spec {
                 name: "lag",

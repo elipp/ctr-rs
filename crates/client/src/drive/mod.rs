@@ -108,6 +108,7 @@ impl Drive {
             character: self.character,
             anim_num_frames: self.anim_num_frames,
             bot: false,
+            line: None,
         }
     }
 }

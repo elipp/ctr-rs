@@ -286,7 +286,12 @@ impl Steering {
         // and is grabbed by the mask 110 times (most of them a few bots falling at the same
         // place over and over), against 64 and 144 of the stick's travel in proportion (full at
         // 0x100, no prediction). Sewer Speedway, Cortex Castle, N. Gin Labs, Polar Pass and
-        // Oxide Station give every setting tried trouble.
+        // Oxide Station gave every setting tried trouble. Since (gaps with a frame between the
+        // lip and the drop, flying on along the road past a landing, the lookahead no longer
+        // stretched by turbo pads): 70 laps and 35 grabs, 28 of them on N. Gin Labs, where the
+        // Turn and Speed bots get round no lap. Since (steering by the nearest line while far off
+        // its own, `Bot::home`): 72 laps and 6 grabs; lookaheads of 6, 9 and 15 ticks, and of 150
+        // and 450 standing still, do no better.
         predict_ticks: 6,
         full_error: 0xc0,
         even_strength: true,
@@ -325,16 +330,26 @@ const AIR_TURN_LIMIT: i32 = 0x400;
 const MIN_GAP: i64 = 256;
 
 /// The landing of the gap whose lip is frame `lip` of `path`, if it is one: a frame that launches
-/// retail's bots, with the path dropping into a kill plane after it. The landing is the first
-/// frame out of the kill plane at least [`MIN_GAP`] from the lip on the ground plane.
+/// retail's bots, with the path dropping into a kill plane right after it (within
+/// [`RAMP_FRAMES`] frames and [`MIN_GAP`] on the ground plane: Cortex Castle's first gap has a
+/// frame out of the kill plane, 9 units on, between its lip and the drop). The landing is the
+/// first frame out of the kill plane at least [`MIN_GAP`] from the lip on the ground plane.
 pub fn gap_landing(path: &[NavFrame], lip: usize) -> Option<usize> {
     let n = path.len();
-    let next = (lip + 1) % n;
-    if path[lip].special_bits & SPECIAL_RAMP == 0 || path[next].flags & NavFrame::KILL_PLANE == 0
-    {
+    if path[lip].special_bits & SPECIAL_RAMP == 0 {
         return None;
     }
     let a = frame_pos(&path[lip]);
+    let drops = (1..=RAMP_FRAMES.min(n - 1))
+        .map(|k| (lip + k) % n)
+        .take_while(|&j| {
+            let b = frame_pos(&path[j]);
+            sq(b[0] - a[0]) + sq(b[2] - a[2]) < sq(MIN_GAP)
+        })
+        .any(|j| path[j].flags & NavFrame::KILL_PLANE != 0);
+    if !drops {
+        return None;
+    }
     (1..n).map(|k| (lip + k) % n).find(|&j| {
         let b = frame_pos(&path[j]);
         path[j].flags & NavFrame::KILL_PLANE == 0 && sq(b[0] - a[0]) + sq(b[2] - a[2]) >= sq(MIN_GAP)
@@ -359,12 +374,23 @@ const STUCK_SPEED: i32 = 0x200;
 const STUCK_TICKS: u16 = 30;
 const REVERSE_TICKS: u16 = 30;
 
+/// Further than this (level units) off its own line, with another line at most half as far, a bot
+/// steers by that one instead ([`Bot::home`]) ...
+const OFF_LINE: i64 = 300;
+/// ... until its own line is within this, or no further off than the one it steers by.
+const ON_LINE: i64 = 150;
+
 /// A kart the race drives: which of the level's paths it follows and where on it it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bot {
-    /// Into `Level::nav_paths`.
+    /// Into `Level::nav_paths`: the path it steers by.
     pub path: u8,
     pub tracker: Tracker,
+    /// The bot's own line, and where it is on it, while it steers by another (`path`): one it is
+    /// far off (spawned on another's place, knocked off it) with nothing known of what is in
+    /// between (a pit, a wall), the bot follows the line it is nearest instead, which is road,
+    /// until its own comes near (where the lines meet).
+    pub home: Option<(u8, Tracker)>,
     /// The ticks it has been stuck for.
     pub stuck: u16,
     /// The ticks it still backs out for.
@@ -373,20 +399,69 @@ pub struct Bot {
 }
 
 impl Bot {
-    /// A bot for the kart of `driver`, in place `slot`: on the path of the slot's number (as
-    /// retail spreads its bots over the three), or the first the level has.
-    pub fn new(level: &Level, slot: usize, driver: &Driver) -> Bot {
+    /// A bot for the kart of `driver`, in place `slot`: on path `line` if it is given (and the
+    /// level has it), else on the path of the slot's number (as retail spreads its bots over the
+    /// three), or the first the level has.
+    pub fn new(level: &Level, slot: usize, driver: &Driver, line: Option<u8>) -> Bot {
         let paths = &level.nav_paths;
+        let first = line.map_or(slot, usize::from);
         let path = (0..paths.len())
-            .map(|k| (slot + k) % paths.len())
+            .map(|k| (first + k) % paths.len())
             .find(|&i| paths[i].frames.len() >= 2)
             .unwrap_or(0);
         Bot {
             path: path as u8,
             tracker: Tracker::find(&paths[path].frames, driver.pos_curr),
+            home: None,
             stuck: 0,
             reversing: 0,
             steering: Steering::DEFAULT,
+        }
+    }
+
+    /// Picks the line to steer by, the kart being at `pos` on the ground, its tracker updated:
+    /// another one than its own while that is far ([`Bot::home`]). The trackers carry the bot's
+    /// count of relocations over, a switch being none.
+    fn choose_line(&mut self, level: &Level, pos: Vec3) {
+        let paths = &level.nav_paths;
+        let p = level_pos(pos);
+        let relocations = self.tracker.relocations;
+        match self.home {
+            Some((line, mut home)) => {
+                let own = &paths[line as usize].frames;
+                home.update(own, pos);
+                home.relocations = relocations;
+                let d2 = home.distance2(own, p);
+                let guide_d2 = self.tracker.distance2(&paths[self.path as usize].frames, p);
+                if d2 <= ON_LINE * ON_LINE || d2 <= guide_d2 {
+                    self.path = line;
+                    self.tracker = home;
+                    self.home = None;
+                } else {
+                    self.home = Some((line, home));
+                }
+            }
+            None => {
+                let own_d2 = self.tracker.distance2(&paths[self.path as usize].frames, p);
+                if own_d2 <= OFF_LINE * OFF_LINE {
+                    return;
+                }
+                let nearest_other = (0..paths.len())
+                    .filter(|&i| i != self.path as usize && paths[i].frames.len() >= 2)
+                    .map(|i| {
+                        let t = Tracker::find(&paths[i].frames, pos);
+                        (i, t, t.distance2(&paths[i].frames, p))
+                    })
+                    .min_by_key(|&(_, _, d2)| d2);
+                if let Some((i, mut t, d2)) = nearest_other
+                    && d2 * 4 <= own_d2
+                {
+                    t.relocations = relocations;
+                    self.home = Some((self.path, self.tracker));
+                    self.path = i as u8;
+                    self.tracker = t;
+                }
+            }
         }
     }
 
@@ -405,7 +480,9 @@ impl Bot {
             self.tracker.follow(path, driver.pos_curr);
         } else {
             self.tracker.update(path, driver.pos_curr);
+            self.choose_line(level, driver.pos_curr);
         }
+        let path = &level.nav_paths[self.path as usize].frames;
 
         let speed = (driver.speed_approx as i32).abs();
         // Stuck on a wall (or another kart): back out of it, the other way round.
@@ -423,7 +500,7 @@ impl Bot {
 
         let pos = driver.pos_curr;
         let st = self.steering;
-        let lookahead = st.lookahead_min + (speed >> 8) * st.lookahead_ticks;
+        let lookahead = lookahead(st, driver);
         if self.reversing > 0 {
             let (near, _frame) = self.tracker.ahead(path, pos, lookahead);
             // Backing up, the stick turns the kart the other way: this points its nose at
@@ -500,8 +577,8 @@ impl Bot {
 
 impl Bot {
     /// After the kart's tick: in the air, its way of travel turns toward where it should come down
-    /// (up to [`Steering::air_turn`] a tick), its speed kept. Over a gap that is the gap's landing,
-    /// elsewhere the path ahead. Retail's bots fly the path itself (`BOTS_Driver_Convert`); this
+    /// (up to [`Steering::air_turn`] a tick), its speed kept: the landing of the gap it is over and,
+    /// once past it, the road on from it; else the path ahead ([`Bot::air_target`]). Retail's bots fly the path itself (`BOTS_Driver_Convert`); this
     /// is that, only gentler, and the kart still flies by its physics.
     ///
     /// The way it goes is `Driver::axis_rotation_x`: the next tick makes the velocity from it and
@@ -523,21 +600,7 @@ impl Bot {
             return;
         }
         let pos = driver.pos_curr;
-        let target = match self.gap_landing_around(path) {
-            Some(landing) => {
-                let f = frame_pos(&path[landing]);
-                Vec3 {
-                    x: (f[0] << WORLD_POS_SHIFT) as i32,
-                    y: (f[1] << WORLD_POS_SHIFT) as i32,
-                    z: (f[2] << WORLD_POS_SHIFT) as i32,
-                }
-            }
-            None => {
-                let speed = (driver.speed_approx as i32).abs();
-                let lookahead = st.lookahead_min + (speed >> 8) * st.lookahead_ticks;
-                self.tracker.ahead(path, pos, lookahead).0
-            }
-        };
+        let (target, _) = self.air_target(path, driver);
         let going = math::ratan2(v.x, v.z);
         let error = heading_error(going, pos, target);
         // A target behind it is the tracker's mistake, not a way to fly.
@@ -551,9 +614,60 @@ impl Bot {
         driver.axis_rotation_x = way as i16;
     }
 
-    /// The landing of the gap the kart is over: one whose lip is up to [`RAMP_FRAMES`] ahead of
+    /// Where [`Bot::fly`] turns the kart of `driver` toward, on `path`: over a gap, its landing
+    /// (with the landing's frame) until the kart is past it, then the point of the road on from
+    /// it; elsewhere the point of the path ahead (with `None`). Ahead as far as the steering on
+    /// the ground looks.
+    ///
+    /// Past the landing, not the landing still: a kart that flies higher and further than the
+    /// gap needs (a hop on top of a ramp with turbo pads, Cortex Castle's first gap) crosses over
+    /// it high up, on the way it was turned toward it, at an angle to the road, and so would come
+    /// down off its side. The point that runs on along the road lines it up with the road
+    /// instead. (Not from the lip on: on a long gap that the kart only just clears, Hot Air
+    /// Skyway's, a point past the landing turns it off the landing before it gets there.)
+    pub fn air_target(&self, path: &[NavFrame], driver: &Driver) -> (Vec3, Option<usize>) {
+        let lookahead = lookahead(self.steering, driver);
+        let pos = driver.pos_curr;
+        match self.gap_landing_around(path) {
+            Some((lip, landing)) => {
+                let p = level_pos(pos);
+                let at = frame_pos(&path[landing]);
+                // Past the landing: over the line through it across the gap, on the ground
+                // plane. (`passed` would tilt that plane: the frame before the landing is right
+                // under it, in the kill plane.)
+                let across = sub(at, frame_pos(&path[lip]));
+                let off = sub(p, at);
+                if off[0] * across[0] + off[2] * across[2] < 0 {
+                    let to_world = |q: P| Vec3 {
+                        x: (q[0] << WORLD_POS_SHIFT) as i32,
+                        y: (q[1] << WORLD_POS_SHIFT) as i32,
+                        z: (q[2] << WORLD_POS_SHIFT) as i32,
+                    };
+                    return (to_world(at), Some(landing));
+                }
+                // On from the landing over the frames the kart has passed; only forward, as
+                // back from it are the gap's (in the kill plane).
+                let n = path.len();
+                let mut on = Tracker {
+                    frame: landing as u16,
+                    relocations: 0,
+                };
+                for _ in 0..MAX_STEPS {
+                    let next = (on.frame as usize + 1) % n;
+                    if !passed(path, next, p) {
+                        break;
+                    }
+                    on.frame = next as u16;
+                }
+                (on.ahead(path, pos, lookahead).0, Some(landing))
+            }
+            None => (self.tracker.ahead(path, pos, lookahead).0, None),
+        }
+    }
+
+    /// The lip and the landing of the gap the kart is over: one whose lip is up to [`RAMP_FRAMES`] ahead of
     /// its frame (it has just taken off), or behind it with the landing still ahead.
-    fn gap_landing_around(&self, path: &[NavFrame]) -> Option<usize> {
+    fn gap_landing_around(&self, path: &[NavFrame]) -> Option<(usize, usize)> {
         let n = path.len();
         let frame = self.tracker.frame as usize % n;
         // How many frames on from `a` frame `b` is.
@@ -563,7 +677,7 @@ impl Bot {
             .chain((1..=GAP_FRAMES.min(n - 1)).map(|k| ((frame + n - k) % n, false)))
             .find_map(|(lip, ahead)| {
                 let landing = gap_landing(path, lip)?;
-                (ahead || on(lip, frame) < on(lip, landing)).then_some(landing)
+                (ahead || on(lip, frame) < on(lip, landing)).then_some((lip, landing))
             })
     }
 
@@ -619,6 +733,19 @@ impl Bot {
             f.special_bits & SPECIAL_RAMP != 0 || f.flags & NavFrame::JUMP != 0
         })
     }
+}
+
+/// How far ahead on the path the kart of `driver` aims (in level units, past where it will be
+/// [`Steering::predict_ticks`] on): [`Steering::lookahead_min`] and
+/// [`Steering::lookahead_ticks`] of travel, at its speed but no faster than its top speed. Over
+/// turbo pads a kart goes half as fast again (Hot Air Skyway's path 1, before its frame 159): an
+/// aim that far ahead is round the bend after them, and it cuts the bend, off the inside of the
+/// road.
+pub fn lookahead(st: Steering, driver: &Driver) -> i32 {
+    let speed = (driver.speed_approx as i32)
+        .abs()
+        .min(driver.stats.speed_class_stat as i32);
+    st.lookahead_min + (speed >> 8) * st.lookahead_ticks
 }
 
 /// How far the kart heading `angle` (`Driver::angle`, 0x1000 a turn) has to turn to face
@@ -830,6 +957,7 @@ mod tests {
         let bot = Bot {
             path: 0,
             tracker: Tracker::find(&path, world(150, 0, 0)),
+            home: None,
             stuck: 0,
             reversing: 0,
             steering: Steering::DEFAULT,

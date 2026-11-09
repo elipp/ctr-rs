@@ -119,6 +119,11 @@ pub enum Action {
     /// (Debug, temporary) Print to stdout what replays the offline race of bots up to now, for
     /// `race`'s test `needs_disc_replay_dump` (`remote.rs`).
     DebugDumpBots,
+    /// (Debug) The bot path every bot drives (`race::KartSpec::line`), or each its slot's
+    /// (`None`), offline (`remote.rs`). The race starts over from the grid.
+    DebugBotLine(Option<u8>),
+    /// (Debug) Draw the bot paths in the race too, not only in the viewer (`nav.rs`). A toggle.
+    DebugNavPaths,
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
     NetInfo,
     /// Set how the drawing eases the karts of the others after a rollback.
@@ -164,7 +169,7 @@ const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static] | spectate | dump-bots";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static] | spectate | dump-bots | bot-line <0 to 2|auto> | navpaths";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -534,6 +539,16 @@ impl Action {
             }
             "spectate" => Ok(Action::DebugSpectate),
             "dump-bots" => Ok(Action::DebugDumpBots),
+            "bot-line" => match rest {
+                "auto" => Ok(Action::DebugBotLine(None)),
+                _ => rest
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|&n| (n as usize) < loader::lev::NAV_PATH_COUNT)
+                    .map(|n| Action::DebugBotLine(Some(n)))
+                    .ok_or_else(|| "Usage: /debug bot-line <0 to 2|auto>".to_string()),
+            },
+            "navpaths" => Ok(Action::DebugNavPaths),
             "crate" => {
                 const USAGE: &str = "Usage: /debug crate bias [number]";
                 let (what, value) = word(rest);
@@ -1725,6 +1740,20 @@ mod tests {
         assert!(matches!(
             Action::parse("debug dump-bots"),
             Ok(Action::DebugDumpBots)
+        ));
+        assert!(matches!(
+            Action::parse("debug bot-line 2"),
+            Ok(Action::DebugBotLine(Some(2)))
+        ));
+        assert!(matches!(
+            Action::parse("debug bot-line auto"),
+            Ok(Action::DebugBotLine(None))
+        ));
+        assert!(Action::parse("debug bot-line 3").is_err());
+        assert!(Action::parse("debug bot-line").is_err());
+        assert!(matches!(
+            Action::parse("debug navpaths"),
+            Ok(Action::DebugNavPaths)
         ));
         assert!(Action::parse("debug spawn-karts 8").is_err());
         assert!(Action::parse("debug spawn-karts").is_err());

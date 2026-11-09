@@ -71,6 +71,7 @@ pub fn build(
             character,
             anim_num_frames: crate::scene::anim_num_frames(model),
             bot: false,
+            line: None,
         };
         online.specs.push(spec);
         // (Ours is on the grid already.)
@@ -99,8 +100,10 @@ pub fn build(
 /// them away (`scene::restart_drive`), and so does an online race.
 /// (Temporary) The second is the slot watched by `/debug spectate`: then ours is a bot as well,
 /// drawn by a dummy of slot 0, and the race has no kart of ours.
+/// The third is the bot path every bot drives, of `/debug bot-line` (`KartSpec::line`); it stays
+/// from one scene to the next.
 #[derive(Resource, Default)]
-pub struct DummyKarts(pub Vec<KartSpec>, pub Option<usize>);
+pub struct DummyKarts(pub Vec<KartSpec>, pub Option<usize>, pub Option<u8>);
 
 /// A kart of [`DummyKarts`].
 #[derive(Component)]
@@ -154,6 +157,7 @@ pub fn spawn_dummies(
             } else if let Some(drive) = &drive {
                 let spec = KartSpec {
                     bot: true,
+                    line: dummies.2,
                     ..drive.spec()
                 };
                 let (model, wheel_icons) = crate::load_racer(spec.character);
@@ -192,6 +196,7 @@ pub fn spawn_dummies(
                 character,
                 anim_num_frames: crate::scene::anim_num_frames(model),
                 bot: bots,
+                line: dummies.2,
             };
             let birth = race::Kart::birth(&track.0, slot, &spec);
             // The first `show` puts it where the sim has it.
@@ -213,6 +218,41 @@ pub fn spawn_dummies(
             format!("{kind}: {}", names.join(", "))
         };
         toasts.write(crate::toast::Toast::new(text, 3000));
+    }
+}
+
+/// `/debug bot-line`: every bot drives that bot path (`KartSpec::line`), or each its slot's.
+/// The dummies change, so the next tick starts the race over from the grid (as `/debug
+/// spawn-karts` does), ours too when it is a bot (`/debug spectate`, see `drive_tick`).
+pub fn bot_line(
+    mut actions: MessageReader<crate::command::Action>,
+    lobby: Res<Lobby>,
+    track: Res<Track>,
+    mut dummies: ResMut<DummyKarts>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+) {
+    for action in actions.read() {
+        let crate::command::Action::DebugBotLine(line) = *action else {
+            continue;
+        };
+        if lobby.online.is_some() {
+            toasts.write(
+                crate::toast::Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)),
+            );
+            continue;
+        }
+        dummies.2 = line;
+        for spec in dummies.0.iter_mut().filter(|spec| spec.bot) {
+            spec.line = line;
+        }
+        let text = match line {
+            None => "(debug) bots drive the path of their slot".to_string(),
+            Some(n) if track.0.nav_paths[n as usize].frames.len() < 2 => {
+                format!("(debug) bots drive path {n}, which this level lacks: the next one")
+            }
+            Some(n) => format!("(debug) bots drive path {n}"),
+        };
+        toasts.write(crate::toast::Toast::new(text, 2500));
     }
 }
 
@@ -255,12 +295,17 @@ pub fn dump_bots(
                 let spec = match slot {
                     0 => race::KartSpec {
                         bot: kart.bot.is_some(),
+                        line: dummies.2.filter(|_| kart.bot.is_some()),
                         ..drive.spec()
                     },
                     _ => dummies.0[slot - 1],
                 };
                 let anim: Vec<String> = spec.anim_num_frames.iter().map(u16::to_string).collect();
-                format!("{}/{}/{}", spec.character, anim.join(","), spec.bot as u8)
+                let mut text = format!("{}/{}/{}", spec.character, anim.join(","), spec.bot as u8);
+                if let Some(line) = spec.line {
+                    text += &format!("/{line}");
+                }
+                text
             })
             .collect();
         println!(

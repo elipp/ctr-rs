@@ -25,6 +25,7 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
         character,
         anim_num_frames,
         bot: false,
+        line: None,
     };
     let kart = race::Kart::birth(&track.0, 0, &spec);
     drive::Drive::new(track, &kart.driver, character, anim_num_frames)

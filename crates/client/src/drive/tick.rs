@@ -147,6 +147,7 @@ pub(super) fn drive_tick(
             None => (
                 std::iter::once(race::KartSpec {
                     bot: dummies.1.is_some(),
+                    line: dummies.2.filter(|_| dummies.1.is_some()),
                     ..drive.spec()
                 })
                 .chain(dummies.0.iter().copied())
