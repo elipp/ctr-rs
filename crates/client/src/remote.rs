@@ -54,6 +54,7 @@ pub fn build(
     online.built = true;
     // The dummies too: the race is the lobby's.
     dummies.0.clear();
+    dummies.1 = None;
     for (entity, _) in &others {
         builder.commands.entity(entity).try_despawn();
     }
@@ -69,6 +70,7 @@ pub fn build(
         let spec = KartSpec {
             character,
             anim_num_frames: crate::scene::anim_num_frames(model),
+            bot: false,
         };
         online.specs.push(spec);
         // (Ours is on the grid already.)
@@ -89,13 +91,16 @@ pub fn build(
     lobby.ready();
 }
 
-/// The karts of `/debug spawn-karts`, offline: they stand on the grid with ours, in the slots
-/// after it (1 on), to see what many karts cost. Each of them has left the race from tick 0
-/// (`Rollback::leave`), so it holds a neutral pad, and nothing waits for it or predicts it.
+/// The karts of `/debug spawn-karts`, offline: on the grid with ours, in the slots after it (1 on),
+/// either bots (`race::bot`) or standing still. Each of them has left the race from tick 0
+/// (`Rollback::leave`), so nothing waits for its pad or predicts it: a bot's the race makes
+/// itself, and the others hold a neutral one.
 /// `drive_tick` builds the race with these; a new scene (another track, `/debug viewer`) takes
 /// them away (`scene::restart_drive`), and so does an online race.
+/// (Temporary) The second is the slot watched by `/debug spectate`: then ours is a bot as well,
+/// drawn by a dummy of slot 0, and the race has no kart of ours.
 #[derive(Resource, Default)]
-pub struct DummyKarts(pub Vec<KartSpec>);
+pub struct DummyKarts(pub Vec<KartSpec>, pub Option<usize>);
 
 /// A kart of [`DummyKarts`].
 #[derive(Component)]
@@ -110,26 +115,70 @@ pub fn spawn_dummies(
     track: Res<Track>,
     loading: Option<Res<crate::loading::Loading>>,
     mut dummies: ResMut<DummyKarts>,
-    old: Query<Entity, With<DummyKart>>,
+    old: Query<(Entity, &KartSlot), With<DummyKart>>,
+    drive: Option<Res<crate::drive::Drive>>,
     mut builder: KartBuilder,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
+    use crate::command::Action;
     use std::hash::BuildHasher;
     for action in actions.read() {
-        let crate::command::Action::DebugSpawnKarts(count) = *action else {
-            continue;
+        let (count, bots) = match *action {
+            Action::DebugSpawnKarts { count, bots } => (count, bots),
+            Action::DebugSpectate => (0, false),
+            _ => continue,
         };
-        if lobby.online.is_some() || loading.is_some() {
+        if lobby.online.is_some() || loading.is_some() || drive.is_none() {
             toasts.write(
                 crate::toast::Toast::new("Not now: offline, once the level is up", 2500)
                     .color(Color::srgb(1.0, 0.4, 0.4)),
             );
             continue;
         }
-        for entity in &old {
+        // (Temporary) `/debug spectate`: ours turns bot, and a dummy of slot 0 draws it (ours
+        // is hidden, as a spectator's is). Off, that dummy goes and ours drives again.
+        if matches!(action, Action::DebugSpectate) {
+            if dummies.1.is_some() {
+                for (entity, slot) in &old {
+                    if slot.0 == 0 {
+                        builder.commands.entity(entity).try_despawn();
+                    }
+                }
+                dummies.1 = None;
+                toasts.write(crate::toast::Toast::new("Spectating off", 2000));
+            } else if dummies.0.is_empty() {
+                toasts.write(
+                    crate::toast::Toast::new("No dummy karts to watch (/debug spawn-karts)", 2500)
+                        .color(Color::srgb(1.0, 0.4, 0.4)),
+                );
+            } else if let Some(drive) = &drive {
+                let spec = KartSpec {
+                    bot: true,
+                    ..drive.spec()
+                };
+                let (model, wheel_icons) = crate::load_racer(spec.character);
+                let birth = race::Kart::birth(&track.0, 0, &spec);
+                let kart = builder.spawn(
+                    &model,
+                    &wheel_icons,
+                    Transform::default(),
+                    false,
+                    Some((0, &birth)),
+                );
+                builder.commands.entity(kart).insert(DummyKart);
+                dummies.1 = Some(1);
+                toasts.write(crate::toast::Toast::new(
+                    "Spectating: R1 and L1 pick the kart",
+                    3000,
+                ));
+            }
+            continue;
+        }
+        for (entity, _) in &old {
             builder.commands.entity(entity).try_despawn();
         }
         dummies.0.clear();
+        dummies.1 = None;
         // (The std hasher is random enough.)
         let random = std::collections::hash_map::RandomState::new();
         let mut models: HashMap<usize, (Model, Vec<Icon>)> = HashMap::new();
@@ -142,6 +191,7 @@ pub fn spawn_dummies(
             let spec = KartSpec {
                 character,
                 anim_num_frames: crate::scene::anim_num_frames(model),
+                bot: bots,
             };
             let birth = race::Kart::birth(&track.0, slot, &spec);
             // The first `show` puts it where the sim has it.
@@ -159,8 +209,87 @@ pub fn spawn_dummies(
         let text = if names.is_empty() {
             "No dummy karts".to_string()
         } else {
-            format!("Dummy karts: {}", names.join(", "))
+            let kind = if bots { "Bots" } else { "Static karts" };
+            format!("{kind}: {}", names.join(", "))
         };
         toasts.write(crate::toast::Toast::new(text, 3000));
+    }
+}
+
+/// (Temporary) `/debug dump-bots`: prints to stdout what replays the offline race of bots up to
+/// now, for `race`'s test `needs_disc_replay_dump`. Its `BOT_DUMP` line rebuilds the race: the
+/// race is a pure function of the level, the karts and their pads, and with `/debug spectate`
+/// every kart is a bot, so no pads need recording. The checksum lets the test check that it
+/// got the very same race. (Without spectating, our own pads would be needed, which nothing
+/// keeps; `/debug set wumpa` and the like change the race outside of its pads, so they
+/// spoil a dump as well.)
+pub fn dump_bots(
+    mut actions: MessageReader<crate::command::Action>,
+    lobby: Res<Lobby>,
+    track: Res<Track>,
+    dummies: Res<DummyKarts>,
+    sim: Res<crate::props::Sim>,
+    drive: Option<Res<crate::drive::Drive>>,
+    mut toasts: MessageWriter<crate::toast::Toast>,
+) {
+    for action in actions.read() {
+        if !matches!(action, crate::command::Action::DebugDumpBots) {
+            continue;
+        }
+        let (Some(watched), Some(drive)) = (dummies.1.filter(|_| lobby.online.is_none()), &drive)
+        else {
+            toasts.write(
+                crate::toast::Toast::new("Only offline, spectating bots (/debug spectate)", 2500)
+                    .color(Color::srgb(1.0, 0.4, 0.4)),
+            );
+            continue;
+        };
+        let race = sim.race.state();
+        let specs: Vec<String> = race
+            .karts
+            .iter()
+            .enumerate()
+            .map(|(slot, kart)| {
+                // Slot 0 is ours, made a bot (as `drive_tick` builds the race); the rest are the
+                // dummies.
+                let spec = match slot {
+                    0 => race::KartSpec {
+                        bot: kart.bot.is_some(),
+                        ..drive.spec()
+                    },
+                    _ => dummies.0[slot - 1],
+                };
+                let anim: Vec<String> = spec.anim_num_frames.iter().map(u16::to_string).collect();
+                format!("{}/{}/{}", spec.character, anim.join(","), spec.bot as u8)
+            })
+            .collect();
+        println!(
+            "BOT_DUMP level={} collisions={} laps={} tick={} watched={} checksum={:#x} specs={}",
+            track.1.0,
+            kart_collisions() as u8,
+            race.laps,
+            race.tick,
+            watched,
+            race.checksum(),
+            specs.join(";"),
+        );
+        for (slot, kart) in race.karts.iter().enumerate() {
+            let d = &kart.driver;
+            println!(
+                "  kart {slot}{}: pos {:?} vel {:?} speed {} angle {} kart_state {} phys {:?} bot {:?}",
+                if slot == watched { " (watched)" } else { "" },
+                [d.pos_curr.x >> 8, d.pos_curr.y >> 8, d.pos_curr.z >> 8],
+                [d.velocity.x, d.velocity.y, d.velocity.z],
+                d.speed,
+                d.angle,
+                d.kart_state,
+                d.phys_state,
+                kart.bot,
+            );
+        }
+        toasts.write(crate::toast::Toast::new(
+            format!("(debug) race of bots at tick {} dumped to stdout", race.tick),
+            2500,
+        ));
     }
 }

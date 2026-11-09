@@ -631,11 +631,16 @@ impl KartBuilder<'_, '_> {
 pub fn show(
     fixed: Res<Time<Fixed>>,
     lobby: Res<crate::lobby::Lobby>,
+    dummies: Res<crate::remote::DummyKarts>,
     mut karts: Query<(&mut Transform, &mut Visibility, &KartMotion, Has<Kart>)>,
 ) {
     let t = fixed.overstep_fraction();
-    // A spectator has no kart of its own: the others' are all drawn, and ours is not.
-    let spectating = lobby.online.as_ref().is_some_and(|net| net.spectating());
+    // A spectator has no kart of its own: the others' are all drawn, and ours is not. (Nor
+    // with `/debug spectate`, where a dummy of slot 0 draws ours.)
+    let spectating = match &lobby.online {
+        Some(net) => net.spectating(),
+        None => dummies.1.is_some(),
+    };
     for (mut transform, mut visibility, motion, ours) in &mut karts {
         let want = if motion.hidden || (ours && spectating) {
             Visibility::Hidden

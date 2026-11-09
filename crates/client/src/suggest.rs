@@ -486,6 +486,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
             ),
             leaf("ranking", "Random ranking (host)"),
             takes("spawn-karts", "Dummy karts on the grid, offline", "<0 to 7>"),
+            leaf("spectate", "Watch the dummy karts, offline (toggle)"),
+            leaf("dump-bots", "Print the race of bots to stdout, to replay in a test"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             Spec {
                 name: "lag",

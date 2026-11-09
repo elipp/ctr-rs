@@ -79,7 +79,7 @@ pub(super) fn drive_tick(
     mut hold: crate::fx::Hold,
     mut lobby: ResMut<crate::lobby::Lobby>,
     config: Res<crate::config::Config>,
-    dummies: Res<crate::remote::DummyKarts>,
+    mut dummies: ResMut<crate::remote::DummyKarts>,
     shown: Shown,
     mut memory: Local<Memory>,
 ) {
@@ -130,8 +130,9 @@ pub(super) fn drive_tick(
     let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = picked && !online;
     // The lobby closed, or the race failed: back to the grid with our kart alone (and the dummy
-    // karts of `/debug spawn-karts`, which also start it over when they change).
-    if !online && sim.race.karts.len() != 1 + dummies.0.len() {
+    // karts of `/debug spawn-karts`, which also start it over when they change: in number, or
+    // in who they are and whether they drive).
+    if !online && (dummies.is_changed() || sim.race.karts.len() != 1 + dummies.0.len()) {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
@@ -142,12 +143,16 @@ pub(super) fn drive_tick(
     if restart {
         let (specs, own, spectator) = match &lobby.online {
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
+            // (`/debug spectate`: ours is a bot too, and we watch.)
             None => (
-                std::iter::once(drive.spec())
-                    .chain(dummies.0.iter().copied())
-                    .collect(),
-                0,
-                false,
+                std::iter::once(race::KartSpec {
+                    bot: dummies.1.is_some(),
+                    ..drive.spec()
+                })
+                .chain(dummies.0.iter().copied())
+                .collect(),
+                dummies.1.unwrap_or(0),
+                dummies.1.is_some(),
             ),
         };
         sim.restart(
@@ -159,7 +164,8 @@ pub(super) fn drive_tick(
         );
         // The dummies have left from tick 0: a neutral pad, and nothing to wait for.
         if !online {
-            for slot in 1..sim.race.players() {
+            let first = if dummies.1.is_some() { 0 } else { 1 };
+            for slot in first..sim.race.players() {
                 sim.race.leave(slot);
             }
         }
@@ -183,7 +189,10 @@ pub(super) fn drive_tick(
 
     let tick = sim.race.tick();
     let own = sim.own;
-    let spectating = lobby.online.as_ref().is_some_and(|net| net.spectating());
+    let spectating = match &lobby.online {
+        Some(net) => net.spectating(),
+        None => dummies.1.is_some(),
+    };
     let mut reports = Vec::new();
     if let Some(net) = lobby.online.as_mut() {
         // The pads of the others that came in since the last tick.
@@ -261,7 +270,7 @@ pub(super) fn drive_tick(
                 .collect();
             net.watches()
         }
-        None => false,
+        None => spectating,
     };
     // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
     // rollback window) and predict the others further and further. It waits for them instead.
@@ -490,8 +499,19 @@ pub(super) fn drive_tick(
         if net.watching != before {
             drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
         }
+    } else if let Some(watched) = dummies.1
+        && cycle != 0
+    {
+        // (`/debug spectate`: any kart, ours too. Not a change that starts the race over.)
+        let players = sim.race.players() as i32;
+        dummies.bypass_change_detection().1 =
+            Some((watched as i32 + cycle).rem_euclid(players) as usize);
+        drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
     }
-    let watching = lobby.online.as_ref().map_or(own, |net| net.watching);
+    let watching = lobby
+        .online
+        .as_ref()
+        .map_or(dummies.1.unwrap_or(own), |net| net.watching);
     // The HUD and the sounds follow the kart the spectator watches, as they follow ours.
     if spectating {
         sim.own = watching;

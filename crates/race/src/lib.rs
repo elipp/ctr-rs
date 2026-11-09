@@ -81,6 +81,8 @@ pub struct KartSpec {
     pub character: usize,
     /// The frames of the first eight animations of the kart's model (`Driver::animNumFrames`).
     pub anim_num_frames: [u16; 8],
+    /// The race drives the kart itself ([`bot::Bot`]), and takes no pad for it.
+    pub bot: bool,
 }
 
 /// A kart of a race: the driver, its collision state, and the buttons of its last tick.
@@ -90,6 +92,8 @@ pub struct Kart {
     pub coll: Collision,
     /// The buttons held in the last tick, for the taps.
     pub held: u32,
+    /// What drives the kart, if the race does.
+    pub bot: Option<bot::Bot>,
 }
 
 impl Kart {
@@ -104,10 +108,12 @@ impl Kart {
         let mut driver = Driver::new(slot as u8, spec.character);
         driver.anim_num_frames = spec.anim_num_frames;
         spawn(&mut driver, &mut coll, level, order[slot] as usize);
+        let bot = spec.bot.then(|| bot::Bot::new(level, slot, &driver));
         Kart {
             driver,
             coll,
             held: 0,
+            bot,
         }
     }
 }
@@ -513,6 +519,8 @@ impl Race {
             kart_collisions: self.kart_collisions,
             ..Env::default()
         };
+        // The bots wait for the green light before they count as stuck.
+        let racing = self.lights_ms <= 0;
         // A kart that has crossed the line takes no more of its pad: it coasts. So nobody needs
         // a finished player's pads to play a tick right, and it can watch the others as a
         // spectator does (see the client's `drive_tick`).
@@ -521,10 +529,15 @@ impl Race {
             .iter_mut()
             .zip(pads)
             .map(|(kart, pad)| {
+                // A bot's pad is its own: the one it was given (nobody sends any) is neutral.
+                let pad = match &mut kart.bot {
+                    Some(bot) => bot.pad(level, &kart.driver, racing),
+                    None => *pad,
+                };
                 let pad = if kart.driver.actions_flag_set & actions::RACE_FINISHED != 0 {
                     Pad::default()
                 } else {
-                    *pad
+                    pad
                 };
                 let input = pad.input(kart.held);
                 kart.held = pad.held;
@@ -590,6 +603,14 @@ impl Race {
                 &mut self.feedback,
             )
         };
+        // The bots in the air fly toward where they should come down (a cheat, as retail's).
+        if racing {
+            for kart in &mut self.karts {
+                if let Some(bot) = &kart.bot {
+                    bot.fly(level, &mut kart.driver);
+                }
+            }
+        }
         // The bombs and missiles fly, after the karts have moved. A bomb that its kart set off
         // goes with this tick's flight.
         for (slot, kart) in self.karts.iter_mut().enumerate() {

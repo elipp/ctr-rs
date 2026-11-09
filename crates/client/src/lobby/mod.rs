@@ -477,6 +477,7 @@ impl Plugin for LobbyPlugin {
                     report,
                     crate::remote::build,
                     crate::remote::spawn_dummies,
+                    crate::remote::dump_bots,
                     finish,
                     placing,
                     rollback_toasts,

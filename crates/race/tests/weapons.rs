@@ -29,6 +29,7 @@ fn race_on(id: LevelId, players: usize, patch: impl FnOnce(&mut Level)) -> Optio
         .map(|slot| KartSpec {
             character: slot,
             anim_num_frames: [0; 8],
+            bot: false,
         })
         .collect();
     Some((level.clone(), Race::new(&level, objects, &specs, false)))

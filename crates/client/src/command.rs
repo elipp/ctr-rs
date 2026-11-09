@@ -110,9 +110,15 @@ pub enum Action {
     DebugCrateBias(Option<f32>),
     /// (Debug) Try a visual effect, or open the panel of them (`fx.rs`).
     DebugFx(crate::fx::Fx),
-    /// (Debug) Put that many dummy karts on the grid with ours, of random characters, offline
-    /// (`remote.rs`); 0 takes them away.
-    DebugSpawnKarts(u8),
+    /// (Debug) Put that many karts on the grid with ours, of random characters, offline
+    /// (`remote.rs`); 0 takes them away. With `bots` they drive (`race::bot`), else they stand.
+    DebugSpawnKarts { count: u8, bots: bool },
+    /// (Debug, temporary) Watch the dummy karts, offline: ours turns bot too (`remote.rs`).
+    /// A toggle.
+    DebugSpectate,
+    /// (Debug, temporary) Print to stdout what replays the offline race of bots up to now, for
+    /// `race`'s test `needs_disc_replay_dump` (`remote.rs`).
+    DebugDumpBots,
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
     NetInfo,
     /// Set how the drawing eases the karts of the others after a rollback.
@@ -158,7 +164,7 @@ const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7>";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static] | spectate | dump-bots";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -511,12 +517,23 @@ impl Action {
             "toast" => Err("Usage: /debug toast <text>".into()),
             "level" => Action::level(rest),
             "fx" => Action::fx(rest).map(Action::DebugFx),
-            "spawn-karts" => rest
-                .parse::<u8>()
-                .ok()
-                .filter(|&n| n <= DUMMY_KARTS_MAX)
-                .map(Action::DebugSpawnKarts)
-                .ok_or_else(|| format!("Usage: /debug spawn-karts <0 to {DUMMY_KARTS_MAX}>")),
+            "spawn-karts" => {
+                let (count, kind) = word(rest);
+                let count = count.parse::<u8>().ok().filter(|&n| n <= DUMMY_KARTS_MAX);
+                let bots = match kind {
+                    "" | "bot" => Some(true),
+                    "static" => Some(false),
+                    _ => None,
+                };
+                count
+                    .zip(bots)
+                    .map(|(count, bots)| Action::DebugSpawnKarts { count, bots })
+                    .ok_or_else(|| {
+                        format!("Usage: /debug spawn-karts <0 to {DUMMY_KARTS_MAX}> [bot|static]")
+                    })
+            }
+            "spectate" => Ok(Action::DebugSpectate),
+            "dump-bots" => Ok(Action::DebugDumpBots),
             "crate" => {
                 const USAGE: &str = "Usage: /debug crate bias [number]";
                 let (what, value) = word(rest);
@@ -1685,7 +1702,29 @@ mod tests {
         assert!(Action::parse("debug netinfo").is_err());
         assert!(matches!(
             Action::parse("debug spawn-karts 7"),
-            Ok(Action::DebugSpawnKarts(7))
+            Ok(Action::DebugSpawnKarts {
+                count: 7,
+                bots: true
+            })
+        ));
+        assert!(matches!(
+            Action::parse("debug spawn-karts 3 bot"),
+            Ok(Action::DebugSpawnKarts {
+                count: 3,
+                bots: true
+            })
+        ));
+        assert!(matches!(
+            Action::parse("debug spawn-karts 3 static"),
+            Ok(Action::DebugSpawnKarts {
+                count: 3,
+                bots: false
+            })
+        ));
+        assert!(Action::parse("debug spawn-karts 3 parked").is_err());
+        assert!(matches!(
+            Action::parse("debug dump-bots"),
+            Ok(Action::DebugDumpBots)
         ));
         assert!(Action::parse("debug spawn-karts 8").is_err());
         assert!(Action::parse("debug spawn-karts").is_err());

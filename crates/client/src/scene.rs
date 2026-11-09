@@ -24,6 +24,7 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
     let spec = race::KartSpec {
         character,
         anim_num_frames,
+        bot: false,
     };
     let kart = race::Kart::birth(&track.0, 0, &spec);
     drive::Drive::new(track, &kart.driver, character, anim_num_frames)
@@ -360,6 +361,7 @@ pub(crate) fn restart_drive(world: &mut World, options: Options) {
     // The scene they were in is gone (`/debug spawn-karts`).
     if let Some(mut dummies) = world.get_resource_mut::<crate::remote::DummyKarts>() {
         dummies.0.clear();
+        dummies.1 = None;
     }
     if options.driving {
         let drive = new_drive(
