@@ -15,12 +15,14 @@
 //! What the bots fire (`PickupBots_UpdateArcade`) is the race's (`race::Race`): it needs the
 //! weapons.
 //!
+//! Where its path says so (and off its path), a bot touches the level's objects: it breaks crates
+//! and takes fruit for nothing (`BOTS_LevInstColl`).
+//!
 //! A bot that fell is brought back by the mask (`BOTS_MaskGrab`), the player's
 //! [`crate::stuck::MaskHead`]: it carries the kart down to its path and lets go there.
 //!
-//! Not ported yet: the level's objects (`BOTS_LevInstColl`), the camera and sounds of a player's
-//! kart that a bot drives, and the adventure and boss modes (their difficulty and
-//! `PickupBots_UpdateBoss`).
+//! Not ported yet: the camera and sounds of a player's kart that a bot drives, and the
+//! adventure and boss modes (their difficulty and `PickupBots_UpdateBoss`).
 
 mod difficulty;
 
@@ -33,6 +35,7 @@ use math::{Vec3, mips};
 
 use crate::force::{KART_SCALE_BASE, mvmva, rot_axis_angle, translate_matrix};
 use crate::rotmat::{convert_rot_to_matrix, rot_to_matrix};
+use crate::search::Instances;
 use crate::{Driver, Effect, actions, fire, forced_jump, frame, kart_state};
 
 /// `BotFlags` (`BotData::botFlags`)
@@ -493,8 +496,15 @@ pub struct Kart<'a> {
 }
 
 /// The `ROBOT` bucket's threads: every bot's tick, in the bucket's order (the last born first).
-/// `karts` is every kart by slot; the humans' are only read.
-pub fn tick_all(karts: &mut [Kart], bots: &mut Bots, level: &Level, env: &Env) {
+/// `karts` is every kart by slot; the humans' are only read. `instances` is what touching the
+/// level's objects does.
+pub fn tick_all(
+    karts: &mut [Kart],
+    bots: &mut Bots,
+    level: &Level,
+    env: &Env,
+    instances: &mut dyn Instances,
+) {
     for slot in (0..karts.len()).rev() {
         if karts[slot].driver.bot.is_none() {
             continue;
@@ -519,6 +529,7 @@ pub fn tick_all(karts: &mut [Kart], bots: &mut Bots, level: &Level, env: &Env) {
             env,
             peers: &peers,
             siblings,
+            instances: &mut *instances,
             effects: kart.effects,
         };
         if tick.b.revving {
@@ -576,6 +587,9 @@ fn set_rotation(d: &mut Driver, b: &mut BotData, level: &Level, spawn_yaw: bool)
     b.rot[1] = v;
     b.flags |= flags::ESTIMATE_NAV;
 }
+
+/// `BOTS_LEVEL_INST_COLL_RADIUS`: the bot's sphere against the level's objects.
+const LEVEL_INST_COLL_RADIUS: i16 = 0x19;
 
 /// `sdata->AI_VelY_WhenBlasted_0x3000`: how high a blast throws a bot.
 const BLAST_SPEED_Y: i32 = 0x3000;
@@ -861,6 +875,7 @@ struct Tick<'a, 'b> {
     peers: &'b [Peer],
     /// The bots that tick after this one, which it can bump into.
     siblings: Vec<&'b mut Driver>,
+    instances: &'b mut dyn Instances,
     effects: &'a mut Vec<Effect>,
 }
 
@@ -1221,7 +1236,7 @@ impl Tick<'_, '_> {
             self.steer(f, n, percentage);
         }
 
-        self.place(f, nav_flags_seen);
+        self.place(f, special_seen, nav_flags_seen);
     }
 
     /// The part of the drive that changes path: a bot right behind another on its path takes
@@ -1839,7 +1854,7 @@ impl Tick<'_, '_> {
 
     /// The end of the drive: the kart's rotation, matrices, speeds and position from where the
     /// path put it, its hazard timer, its matrices and animation.
-    fn place(&mut self, f: NavFrame, nav_flags_seen: u16) {
+    fn place(&mut self, f: NavFrame, special_seen: u8, nav_flags_seen: u16) {
         let ms = self.env.elapsed_time_ms;
         let d = &mut *self.d;
         let b = &mut *self.b;
@@ -1922,8 +1937,13 @@ impl Tick<'_, '_> {
 
         hazard_timer(d, ms);
 
-        // (Here `BOTS_LevInstColl` would touch the level's objects, on the frames that ask for it
-        // and off the path: it is not ported.)
+        if special_seen & nav_special::LEVEL_INST_COLL != 0
+            || b.flags & (flags::ESTIMATE_NAV | flags::FREE_PHYSICS) != 0
+        {
+            self.lev_inst_coll();
+        }
+        let d = &mut *self.d;
+        let b = &mut *self.b;
         if nav_flags_seen & nav_flags::SPLIT_LINE != 0 {
             d.split_line = true;
         }
@@ -1943,6 +1963,39 @@ impl Tick<'_, '_> {
         d.rot_curr_w = mips::neg_lo(cam) as i16;
         let cam = if cam > 0x7ff { cam | !0xfff } else { cam };
         b.rot_y_608 = (mips::add_lo(b.rot_y_608 as u16 as i32, mips::sra(cam, 3)) & 0xfff) as i16;
+    }
+
+    /// `BOTS_LevInstColl`: the bot's sphere, from where it was to where it is, touches the
+    /// level's objects, and the one it touched does what it does to a bot (`LInC`).
+    fn lev_inst_coll(&mut self) {
+        let d = &*self.d;
+        let at = |p: Vec3| SVec3 {
+            x: mips::sra(p.x, 8) as i16,
+            y: mips::add_lo(mips::sra(p.y, 8), LEVEL_INST_COLL_RADIUS as i32) as i16,
+            z: mips::sra(p.z, 8) as i16,
+        };
+        let (curr, prev) = (at(d.pos_curr), at(d.pos_prev));
+        let sps = &mut self.coll.sps;
+        sps.quad_block_coll.search_flags = coll::search_flags::TEST_INSTANCES;
+        sps.input1.model_id = coll::model_id::ROBOT_CAR;
+        sps.quad_block_coll.quad_flags_wanted = 0;
+        sps.quad_block_coll.quad_flags_ignored = 0;
+        sps.input1.hit_radius = LEVEL_INST_COLL_RADIUS;
+        self.coll.bots_search(self.level, curr, prev);
+        let sps = &mut self.coll.sps;
+        if sps.did_touch_hitbox == 0 {
+            return;
+        }
+        sps.quad_block_coll.search_flags &= !coll::search_flags::REUSE_NORMALS;
+        let Some(hit) = sps.bsp_hitbox else {
+            return;
+        };
+        if hit.flag & loader::lev::BspHitbox::COLLIDABLE == 0 {
+            return;
+        }
+        if let Some(instance) = hit.instance {
+            self.instances.touch(instance, self.d, &self.coll.sps);
+        }
     }
 
     /// `BOTS_Killplane`: the bot fell: it is put back on the frame before the restart point it

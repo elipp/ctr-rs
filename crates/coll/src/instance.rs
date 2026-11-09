@@ -156,6 +156,46 @@ impl Collision {
         }
     }
 
+    /// `COLL_FIXED_BotsSearch`: a bot's sphere (of `input1.hit_radius`) swept from `prev` to
+    /// `curr` against the hitboxes of the level's instances, with no quad blocks. What it touched
+    /// is left in `did_touch_hitbox` and `bsp_hitbox`.
+    pub fn bots_search(&mut self, level: &Level, curr: SVec3, prev: SVec3) {
+        let sps = &mut self.sps;
+        let radius = sps.input1.hit_radius;
+        sps.input1.hit_radius_squared = mips::mul_lo(radius as i32, radius as i32);
+        sps.input1.pos = curr;
+        let q = &mut sps.quad_block_coll;
+        q.hit_pos = curr;
+        q.hit_radius = radius;
+        q.hit_radius_squared = sps.input1.hit_radius_squared;
+        q.pos = prev;
+        let radius = radius as i32;
+        let low = |a: i16, b: i16| ((a as i32 - radius).min(b as i32 - radius)) as i16;
+        let high = |a: i16, b: i16| ((a as i32 + radius).max(b as i32 + radius)) as i16;
+        sps.bbox.min = SVec3 {
+            x: low(curr.x, prev.x),
+            y: low(curr.y, prev.y),
+            z: low(curr.z, prev.z),
+        };
+        sps.bbox.max = SVec3 {
+            x: high(curr.x, prev.x),
+            y: high(curr.y, prev.y),
+            z: high(curr.z, prev.z),
+        };
+        sps.did_touch_hitbox = 0;
+        sps.num_triangles_tested = 0;
+        sps.hit_fraction = FRACTION_ONE;
+        sps.collision.step_flags = 0;
+        sps.num_bsp_hitboxes_hit = 0;
+        let bounds = sps.bbox;
+        search_bsp(
+            level,
+            &bounds,
+            |this, level, leaf| this.test_leaf_instances(level, leaf),
+            self,
+        );
+    }
+
     /// `COLL_FIXED_BSPLEAF_TestInstance`: tests the hitboxes of a leaf the sweep reaches.
     pub(crate) fn test_leaf_instances(&mut self, level: &Level, leaf: &BspNode) {
         let BspKind::Leaf { hitboxes, .. } = &leaf.kind else {

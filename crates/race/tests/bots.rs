@@ -315,6 +315,34 @@ fn needs_disc_bots_fire_at_a_player_near_them() {
     assert!(hits > 0, "and hit");
 }
 
+/// Where their paths say so, the bots run through the crates and the fruit: they break the one
+/// and take the other (for nothing), while the player stays on the grid.
+#[test]
+fn needs_disc_bots_break_crates_and_take_fruit() {
+    let id = LevelId::DINGO_CANYON;
+    let Some((level, objects)) = level(id) else {
+        return;
+    };
+    let mut race = race(id, &level, objects);
+    while race.tick < 30 * 60 {
+        race.tick(&level, &[Pad::default()]);
+    }
+    let breaks: u32 = race.objects.crates.iter().map(|c| c.sim.breaks).sum();
+    let fruit = race
+        .objects
+        .fruit
+        .iter()
+        .filter(|f| f.sim.collected)
+        .count();
+    assert!(breaks > 0, "the bots broke crates");
+    assert!(fruit > 0, "and took fruit");
+    // A bot gets nothing out of them.
+    for kart in &race.karts[1..] {
+        assert_eq!(kart.driver.num_wumpas, 0);
+        assert_eq!(kart.driver.held_item_id, vehicle::item::held::NONE);
+    }
+}
+
 /// A bot the plant let go of is brought back by its mask: the mask comes down with the kart,
 /// lets go of it on the path, and fades away.
 #[test]

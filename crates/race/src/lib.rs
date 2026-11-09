@@ -24,7 +24,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 8;
+pub const SIM_VERSION: u32 = 9;
 
 const UNSORTED: i16 = -1;
 
@@ -660,7 +660,7 @@ impl Race {
                 timer: self.tick,
                 kart_collisions: self.kart_collisions,
             };
-            vehicle::bot::tick_all(&mut karts, bots, level, &bot_env);
+            vehicle::bot::tick_all(&mut karts, bots, level, &bot_env, &mut self.objects);
         }
         // The bombs and missiles fly, after the karts have moved. A bomb that its kart set off
         // goes with this tick's flight.
