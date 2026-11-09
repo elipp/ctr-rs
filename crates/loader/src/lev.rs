@@ -171,6 +171,63 @@ pub struct CheckpointNode {
     pub next_right: u8,
 }
 
+/// A point of a bot path (`struct NavFrame`): the authored racing line the AI follows.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NavFrame {
+    pub pos: SVec3,
+    /// The kart's orientation here, in 0x100 = a full turn (`rot[4]`; the last byte is unused
+    /// padding as far as is known).
+    pub rot: [u8; 4],
+    /// `distToNextNavXYZ`: the distance to the next frame.
+    pub dist_to_next_xyz: i16,
+    /// `distToNextNavXZ`: the same, on the ground plane.
+    pub dist_to_next_xz: i16,
+    /// What the kart does here: see [`NavFrame::TURBO`] and the others. Bits 4..=7 are a terrain.
+    pub flags: u16,
+    /// `pathChangeOpcode`: where a bot may switch to another path.
+    pub path_change_opcode: i16,
+    /// `goBackCount`: how many frames a bot that hits a kill plane is put back.
+    pub go_back_count: u8,
+    /// `specialBits`: with 0x10 the low nibble picks [`NavPath::ramp_phys_xz`] / `_y`, with 0x20
+    /// it is a reflection value; 0x40 runs level instance collision, 0x80 is moon gravity.
+    pub special_bits: u8,
+}
+
+impl NavFrame {
+    pub const TURBO: u16 = 0x0001;
+    pub const SKID_BACK: u16 = 0x0002;
+    pub const SKID_FRONT: u16 = 0x0004;
+    pub const TERRAIN_SHIFT: u16 = 4;
+    pub const TERRAIN_MASK: u16 = 0x00f0;
+    pub const SUPER_TURBO: u16 = 0x0100;
+    pub const KILL_PLANE: u16 = 0x0200;
+    pub const JUMP: u16 = 0x0400;
+    pub const DRIFT_LEFT: u16 = 0x0800;
+    pub const DRIFT_RIGHT: u16 = 0x1000;
+    pub const ECHO: u16 = 0x2000;
+    pub const SPLIT_LINE: u16 = 0x8000;
+
+    /// The terrain in bits 4..=7 of [`NavFrame::flags`].
+    pub fn terrain(&self) -> u8 {
+        ((self.flags & Self::TERRAIN_MASK) >> Self::TERRAIN_SHIFT) as u8
+    }
+}
+
+/// One of the level's bot paths (`struct NavHeader` and the frames after it).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct NavPath {
+    /// `posY_firstNode`.
+    pub pos_y_first_node: i32,
+    /// `rampPhys1`: the speed on the ground plane of a bot leaving a ramp, by the index in
+    /// [`NavFrame::special_bits`].
+    pub ramp_phys_xz: [i16; 0x10],
+    /// `rampPhys2`: the vertical speed for the same.
+    pub ramp_phys_y: [i16; 0x10],
+    /// Empty where the level has no path here, or the path is of an old format
+    /// (`BOTS_InitNavPath` gives those no points).
+    pub frames: Vec<NavFrame>,
+}
+
 /// A skybox vertex (`struct ShortVertex`).
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkyVertex {
@@ -323,6 +380,8 @@ pub struct Level {
     pub bsp: Vec<BspNode>,
     pub driver_spawns: [SpawnPoint; 8],
     pub restart_points: Vec<CheckpointNode>,
+    /// The bot paths (`LevNavTable`): all empty on levels without (Nitro Court).
+    pub nav_paths: [NavPath; NAV_PATH_COUNT],
     pub water: Water,
     pub scenery: Scenery,
     pub config_flags: u32,
@@ -420,6 +479,7 @@ const LEVEL_CONFIG_FLAGS: usize = 0xdc;
 const LEVEL_CLEAR_COLORS: usize = 0x160;
 const LEVEL_RESTART_COUNT: usize = 0x148;
 const LEVEL_RESTART_PTR: usize = 0x14c;
+const LEVEL_NAV_TABLE: usize = 0x188;
 const LEVEL_JUMP_SPEED_CAP: usize = 0x18c;
 const LEVEL_SPLIT_LINES: usize = 0x184;
 
@@ -427,6 +487,12 @@ const QUAD_BLOCK_SIZE: usize = 0x5c;
 const VERTEX_SIZE: usize = 0x10;
 const BSP_SIZE: usize = 0x20;
 const CHECKPOINT_SIZE: usize = 0xc;
+/// How many bot paths a level has (`BOTS_NAV_PATH_COUNT`).
+pub const NAV_PATH_COUNT: usize = 3;
+const NAV_HEADER_SIZE: usize = 0x4c;
+const NAV_FRAME_SIZE: usize = 0x14;
+/// `NavHeader::magicNumber` of the current format (`-0x1303`).
+const NAV_MAGIC: u16 = 0xecfd;
 
 const SKY_VERTEX_SIZE: usize = 12;
 const SKY_FACE_SIZE: usize = 8;
@@ -566,6 +632,50 @@ impl Level {
                 })
             })
         })
+    }
+
+    fn parse_nav_paths(p: &Payload) -> io::Result<[NavPath; NAV_PATH_COUNT]> {
+        let mut paths: [NavPath; NAV_PATH_COUNT] = Default::default();
+        let table = p.u32(LEVEL_NAV_TABLE)? as usize;
+        if table == 0 {
+            return Ok(paths);
+        }
+        for (i, path) in paths.iter_mut().enumerate() {
+            let at = p.u32(table + i * 4)? as usize;
+            if at == 0 {
+                continue;
+            }
+            let ramp = |base: usize| -> io::Result<[i16; 0x10]> {
+                let mut out = [0; 0x10];
+                for (j, v) in out.iter_mut().enumerate() {
+                    *v = p.i16(at + base + j * 2)?;
+                }
+                Ok(out)
+            };
+            *path = NavPath {
+                pos_y_first_node: p.u32(at + 4)? as i32,
+                ramp_phys_xz: ramp(0xc)?,
+                ramp_phys_y: ramp(0x2c)?,
+                frames: Vec::new(),
+            };
+            if p.u16(at)? != NAV_MAGIC {
+                continue;
+            }
+            let count = p.i16(at + 2)?.max(0) as usize;
+            path.frames = p.array(at + NAV_HEADER_SIZE, count, NAV_FRAME_SIZE, |p, at| {
+                Ok(NavFrame {
+                    pos: p.svec3(at)?,
+                    rot: p.bytes(at + 6, 4)?.try_into().unwrap(),
+                    dist_to_next_xyz: p.i16(at + 0xa)?,
+                    dist_to_next_xz: p.i16(at + 0xc)?,
+                    flags: p.u16(at + 0xe)?,
+                    path_change_opcode: p.i16(at + 0x10)?,
+                    go_back_count: p.u8(at + 0x12)?,
+                    special_bits: p.u8(at + 0x13)?,
+                })
+            })?;
+        }
+        Ok(paths)
     }
 
     fn parse_models(p: &Payload) -> io::Result<Vec<u32>> {
@@ -794,6 +904,7 @@ impl Level {
             bsp,
             driver_spawns,
             restart_points,
+            nav_paths: Self::parse_nav_paths(&p)?,
             water: Water::parse(&file.data, verts_at, num_verts)?,
             scenery: Scenery::parse(&file.data, verts_at, num_verts)?,
             config_flags: p.u32(LEVEL_CONFIG_FLAGS)?,
