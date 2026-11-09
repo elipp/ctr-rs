@@ -6,6 +6,7 @@
 //! What a tick asks of the outside (sounds, rumble, puffs and sparks to draw) comes out as
 //! [`KartTick`]s; nothing of it goes back in.
 
+pub mod bot;
 pub mod desync;
 pub mod rollback;
 
