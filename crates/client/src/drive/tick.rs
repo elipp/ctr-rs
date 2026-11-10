@@ -558,11 +558,23 @@ pub(super) fn drive_tick(
                 step(net, if cycle == 0 { 1 } else { cycle });
             }
         } else {
-            if !finished || net.watching >= players || net.gone[net.watching] {
+            // After our finish, R1 goes to the kart one place behind the watched one in the race
+            // and L1 to the one ahead (wrapping round), the retail bots' included.
+            let karts = sim.race.karts.len();
+            let here = |net: &crate::lobby::Online, slot: usize| !net.gone.get(slot).copied().unwrap_or(false);
+            if !finished || net.watching >= karts || !here(net, net.watching) {
                 net.watching = own;
             }
             if finished && cycle != 0 {
-                step(net, cycle);
+                let mut by_rank: Vec<(i16, usize)> = (0..karts)
+                    .filter(|&slot| here(net, slot))
+                    .map(|slot| (sim.race.karts[slot].driver.driver_rank, slot))
+                    .collect();
+                by_rank.sort();
+                if let Some(at) = by_rank.iter().position(|&(_, slot)| slot == net.watching) {
+                    let next = (at as i32 + cycle).rem_euclid(by_rank.len() as i32) as usize;
+                    net.watching = by_rank[next].1;
+                }
             }
         }
         if net.watching != before {
