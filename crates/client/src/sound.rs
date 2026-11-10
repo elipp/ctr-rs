@@ -1,7 +1,7 @@
 //! The game's sounds, which the sound engine of the `howl` crate plays: the beeps of the traffic
 //! lights, what the karts' ticks ask for ([`vehicle::Effect`]), and the engines. Our kart's play
 //! as retail plays a player's, in the middle; the other karts' are heard from where they are, as
-//! `PlaySound3D` hears a sound from the camera (see `DIVERGENCE.md`).
+//! `PlaySound3D` hears a sound from the camera (see `DEVIATIONS.md`).
 //!
 //! The sound engine is one [`Howl`] that the game and the audio thread share: the game starts,
 //! changes and stops sounds in it, and Bevy plays the samples it renders ([`Mixer`]). Rendering
@@ -22,7 +22,7 @@
 //! Our kart's other loops (the ground, the skid, the wall rub and the turbo's roar) are the ones
 //! its tick keeps going ([`Effect::Recycle`]); retail gives the AIs none. The other karts' skid
 //! and turbo's roar are kept going too, heard from where they are, and not from far (see
-//! `docs/notes/DIVERGENCE.md`).
+//! `docs/notes/DEVIATIONS.md`).
 //!
 //! [`Control::MuteMusic`] (M at first) mutes the music and [`Control::MuteSound`] (S) every sound,
 //! and the same again unmutes them ([`Mute`]). Neither touches the config's volumes, so unmuting

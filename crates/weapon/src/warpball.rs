@@ -269,7 +269,7 @@ impl Ctx<'_> {
         let mut along = ((node1.dist_to_finish as i32) << 3)
             .wrapping_add(projected)
             .wrapping_add(TARGET_LOOKAHEAD);
-        // DIVERGENCE: retail divides by a track of length 0 (there is none).
+        // DEVIATION: retail divides by a track of length 0 (there is none).
         if track != 0 {
             along = along.wrapping_rem(track);
         }

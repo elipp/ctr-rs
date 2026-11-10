@@ -1,4 +1,4 @@
-This file is for the places where the port _intentionally_ differs from the original: a different choice, a stand-in for something the engine cannot do, a retail quirk that is not reproduced. Something that is not implemented yet is not a divergence; it goes in `TODO.md`, and in the "Not ported" note of the module that would have it.
+This file is for the places where the port _intentionally_ differs from the original: a different choice, a stand-in for something the engine cannot do, a retail quirk that is not reproduced. Something that is not implemented yet is not a deviation; it goes in `TODO.md`, and in the "Not ported" note of the module that would have it.
 
 **Adventure Mode (or any other mode than 1-8P Arcade) is not implemented
 

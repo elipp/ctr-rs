@@ -6,7 +6,7 @@
 //! the snowball and the barrels) are `instance::Objects`: that is ticked here, and these only
 //! show it. What the game moves by other
 //! code (bobbing crates, anything that reacts) stands still. The fruit spin on their own
-//! axis and bob, at a speed of our own (DIVERGENCE.md).
+//! axis and bob, at a speed of our own (DEVIATIONS.md).
 
 use std::collections::HashMap;
 
@@ -192,7 +192,7 @@ pub struct FruitBody {
     rest: Quat,
 }
 
-/// The ticks a fruit takes to turn once around its own axis. Not retail's (see DIVERGENCE.md).
+/// The ticks a fruit takes to turn once around its own axis. Not retail's (see DEVIATIONS.md).
 pub(crate) const FRUIT_SPIN_TICKS: f32 = 60.0;
 
 /// The ticks of a bob up and down, and how far it goes either way (in level units). Only the
@@ -225,7 +225,7 @@ pub fn spin_fruit(
 }
 
 /// How far to raise instance `n` of a level, in level units, when the level places a crate inside
-/// the ground (see DIVERGENCE.md). Only what is drawn moves; the sim keeps the crate where the
+/// the ground (see DEVIATIONS.md). Only what is drawn moves; the sim keeps the crate where the
 /// level has it.
 ///
 /// Each is how far the drawn ground is above the crate's base at its center (`ctr-query crates`)
