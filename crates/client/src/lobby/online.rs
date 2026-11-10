@@ -89,6 +89,12 @@ pub struct Desync {
     pub told: bool,
 }
 
+/// What a bot that drives `character` is called, a brain bot or a retail one alike.
+pub fn bot_label(character: u8) -> String {
+    let name = crate::CHARACTERS.get(character as usize).unwrap_or(&"?");
+    format!("{name} (bot)")
+}
+
 impl Online {
     /// The slots of the host's bots: the last of the players. Their pads are the host's to make
     /// (`learned.rs`), and come to everyone else as a player's do.
@@ -146,20 +152,23 @@ impl Online {
         self.characters.iter().chain(bots).copied().collect()
     }
 
-    /// What the kart in `slot` is called: its player (or brain bot), or the character a retail
-    /// bot drives. (A slot past the players in [`labels`](Self::labels) is a spectator's, not a
-    /// bot's.)
-    pub fn kart_label(&self, slot: usize) -> &str {
+    /// What the kart in `slot` is called: its player, or a bot of either kind as
+    /// [`bot_label`] has it. (A slot past the players in [`labels`](Self::labels) is a
+    /// spectator's, not a bot's.)
+    pub fn kart_label(&self, slot: usize) -> std::borrow::Cow<'_, str> {
         let players = self.characters.len();
         if slot < players {
-            return self.labels.get(slot).map_or("", String::as_str);
+            return self.labels.get(slot).map_or("", String::as_str).into();
         }
         self.retail
             .characters
             .get(slot - players)
-            .and_then(|&c| crate::CHARACTERS.get(c as usize))
-            .copied()
-            .unwrap_or("")
+            .map_or("".into(), |&c| bot_label(c).into())
+    }
+
+    /// Whether the kart in `slot` is a bot, of either kind.
+    pub fn is_any_bot(&self, slot: usize) -> bool {
+        self.is_bot(slot) || (self.characters.len()..self.karts()).contains(&slot)
     }
 
     /// The kart of the sim that the view is of, and the HUD: ours, or the one a spectator follows.

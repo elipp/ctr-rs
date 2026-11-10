@@ -120,16 +120,16 @@ fn build(
         let portrait = spawn_portrait(&mut commands, column, &image, karts[slot], ICON_Y + y);
         commands.entity(portrait).insert(Row { slot, y, pop: 0.0 });
         let label = online.kart_label(slot);
-        // (A bot has no key.)
-        let key = match slot < online.characters.len() {
-            true => online.names.get(slot).map_or("", String::as_str),
-            false => "",
+        // (A bot has no key: a brain bot's would be the host's.)
+        let key = match online.is_any_bot(slot) {
+            false => online.names.get(slot).map_or("", String::as_str),
+            true => "",
         };
         // The host is slot 0 (`net::Event::Start`).
         if slot == 0 {
             spawn_host_badge(&mut commands, portrait, false);
         }
-        let tag = spawn_tags(&mut commands, portrait, label, key);
+        let tag = spawn_tags(&mut commands, portrait, &label, key);
         commands.entity(tag).insert(NameTag(slot));
     }
     // The numbers, over the portraits.

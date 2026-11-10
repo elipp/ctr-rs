@@ -166,8 +166,7 @@ pub(crate) fn overhead(
     let followed = net.watching != net.slot;
     for (_, mut text, mut visibility) in &mut watching {
         let line = if followed {
-            let name = net.labels.get(net.watching).map_or("?", String::as_str);
-            format!("{name}\nR1 / L1: change the camera")
+            format!("{}\nR1 / L1: change the camera", net.kart_label(net.watching))
         } else {
             String::new()
         };

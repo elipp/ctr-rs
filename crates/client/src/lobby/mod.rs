@@ -449,10 +449,7 @@ impl Lobby {
             let mut names = net::display_names(&players).into_iter();
             online.labels = (0..online.ids.len())
                 .map(|slot| match online.characters.get(slot) {
-                    Some(&c) if online.is_bot(slot) => {
-                        let character = crate::CHARACTERS.get(c as usize).unwrap_or(&"?");
-                        format!("{character} (bot)")
-                    }
+                    Some(&c) if online.is_bot(slot) => online::bot_label(c),
                     _ => names.next().unwrap_or_default(),
                 })
                 .collect();
