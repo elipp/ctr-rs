@@ -38,10 +38,7 @@ pub(super) fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
         c.at += 1.0;
         if c.left == 0 {
             match c.then {
-                Then::Start { track, laps } => {
-                    let bots = lobby.max_bots;
-                    lobby.start(track, laps, bots)
-                }
+                Then::Start { track, laps } => lobby.start(track, laps),
                 Then::Restart { track, hash, laps } => lobby.restart(track, hash, laps),
             }
             return;

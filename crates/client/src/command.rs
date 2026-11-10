@@ -57,10 +57,6 @@ pub enum Action {
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
     ToggleSpectator,
     CloseLobby,
-    /// Fill the races we host with up to that many bots that the learned policy drives
-    /// (`learned.rs`), as many as there is room for (up to `net::MAX_PLAYERS` karts); `None` says
-    /// how many. Kept until the game closes, not in the config.
-    LobbyBots(Option<u8>),
     /// Hand the lobby over to the player called that (a nickname or the short key): they host it
     /// from now on, and we are a guest of theirs (the host only, between races).
     Promote(String),
@@ -74,6 +70,14 @@ pub enum Action {
     /// Lists the tracks there are (`/track list`).
     ListTracks,
     StartRace,
+    /// Fill the grid of our races with bots (`lobby::BotSettings`): how many, how hard, and of
+    /// which kind, or say what it is with none of them. Kept until the game closes, not in the
+    /// config.
+    Bots {
+        count: Option<u8>,
+        difficulty: Option<u16>,
+        kind: Option<crate::lobby::BotKind>,
+    },
     RestartRace,
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
     CupCreate {
@@ -177,13 +181,14 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
-const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close | bots [0 to 7]";
+const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
+const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static|brain [file]] | spectate | dump-bots | bot-line <0 to 2|auto> | navpaths";
 const NET_USAGE: &str =
@@ -217,6 +222,7 @@ impl Action {
         match name {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
+            "bots" => Action::bots(rest),
             "cup" => Action::cup(rest),
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
             "promote" => Ok(Action::Promote(rest.into())),
@@ -265,17 +271,6 @@ impl Action {
                 .map(Action::SpectateLobby)
                 .map_err(|e| format!("Not a lobby address: {e}")),
             "close" => Ok(Action::CloseLobby),
-            "bots" => match rest {
-                "" => Ok(Action::LobbyBots(None)),
-                "off" => Ok(Action::LobbyBots(Some(0))),
-                n => match n.parse::<u8>() {
-                    Ok(n) if (n as usize) < net::MAX_PLAYERS => Ok(Action::LobbyBots(Some(n))),
-                    _ => Err(format!(
-                        "Usage: /lobby bots <0 to {}>, the most bots to fill the races you host with",
-                        net::MAX_PLAYERS - 1
-                    )),
-                },
-            },
             "" => Err(LOBBY_USAGE.into()),
             _ => Err(format!("Unknown command: /lobby {sub}\n{LOBBY_USAGE}")),
         }
@@ -351,6 +346,31 @@ impl Action {
             "" => Err(CACHE_USAGE.into()),
             _ => Err(format!("Unknown command: /cache {sub}\n{CACHE_USAGE}")),
         }
+    }
+
+    fn bots(line: &str) -> Result<Action, String> {
+        use vehicle::bot::difficulty_level::{EASY, HARD, MEDIUM};
+        use crate::lobby::BotKind;
+        let (mut count, mut difficulty, mut kind) = (None, None, None);
+        for word in line.split_whitespace() {
+            match word {
+                "off" => count = Some(0),
+                "brain" => kind = Some(BotKind::Brain),
+                "retail" => kind = Some(BotKind::Retail),
+                "easy" => difficulty = Some(EASY as u16),
+                "medium" => difficulty = Some(MEDIUM as u16),
+                "hard" => difficulty = Some(HARD as u16),
+                _ => match word.parse::<u8>() {
+                    Ok(n) if n < race::MAX_KARTS as u8 => count = Some(n),
+                    _ => return Err(BOTS_USAGE.into()),
+                },
+            }
+        }
+        Ok(Action::Bots {
+            count,
+            difficulty,
+            kind,
+        })
     }
 
     fn race(line: &str) -> Result<Action, String> {
@@ -1671,6 +1691,33 @@ fn suggestion_rows(line: &CommandLine) -> Vec<(String, String, Color)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bots_take_a_count_and_a_difficulty_in_any_order() {
+        let bots = |line| match Action::parse(line) {
+            Ok(Action::Bots {
+                count,
+                difficulty,
+                kind: _,
+            }) => Some((count, difficulty)),
+            _ => None,
+        };
+        assert_eq!(bots("bots"), Some((None, None)));
+        assert_eq!(bots("bots 7"), Some((Some(7), None)));
+        assert_eq!(bots("bots off"), Some((Some(0), None)));
+        assert_eq!(bots("bots hard 3"), Some((Some(3), Some(0xf0))));
+        assert_eq!(bots("bots 5 easy"), Some((Some(5), Some(0x50))));
+        assert_eq!(bots("bots medium"), Some((None, Some(0xa0))));
+        assert_eq!(bots("bots 8"), None);
+        assert_eq!(bots("bots lots"), None);
+        let kind = |line| match Action::parse(line) {
+            Ok(Action::Bots { kind, .. }) => kind,
+            _ => None,
+        };
+        assert_eq!(kind("bots 7 retail hard"), Some(crate::lobby::BotKind::Retail));
+        assert_eq!(kind("bots brain"), Some(crate::lobby::BotKind::Brain));
+        assert_eq!(kind("bots 3"), None);
+    }
 
     #[test]
     fn commands_have_subcommands() {

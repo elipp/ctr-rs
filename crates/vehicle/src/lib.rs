@@ -16,6 +16,7 @@
 
 pub mod angular;
 pub mod baked;
+pub mod bot;
 pub mod calc;
 pub mod cloud;
 pub mod collide;
@@ -97,6 +98,7 @@ pub mod actions {
     pub const HUMAN_HUMAN_COLLISION: u32 = 0x10000000;
     pub const REVERSE_STEER_LEFT: u32 = 0x20000000;
     pub const REVERSE_STEER_RIGHT: u32 = 0x40000000;
+    pub const DROPPING_MINE: u32 = 0x80000000;
 }
 
 /// Gamepad buttons (`GamepadButtons`) as the driver reads them.
@@ -633,4 +635,6 @@ pub struct Driver {
     /// The number of frames of the kart model's animations (`anim_index`),
     /// which time the crash animation.
     pub anim_num_frames: [u16; 8],
+    /// `botData`: what a bot (with [`actions::BOT`]) keeps of its own.
+    pub bot: Option<bot::BotData>,
 }

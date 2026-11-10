@@ -6,8 +6,11 @@
 //! after [`BETWEEN_RACES_SECONDS`]. Of a series, the guests only get the races and, after each
 //! race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
 //! ([`standings_text`]).
+//!
+//! Bots race for points too, and with them in the race the points are retail's of a cup with
+//! bots (`cupPointsPerPosition`: 9, 6, 3 and 1).
 
-use net::Score;
+use net::{EndpointId, Score};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -117,9 +120,12 @@ pub fn places_waited_for(present: usize) -> usize {
     present.min(SCORED_PLACES)
 }
 
+/// `data.cupPointsPerPosition`: the points of the places of a race with bots in it.
+const POINTS_WITH_BOTS: [u32; 4] = [9, 6, 3, 1];
+
 /// The points for coming `place`th (from 0) among `players`: the multiplayer rule of
-/// `UI_CupStandings_InputAndDraw`, with no bots to add to the field. The first of four gets 3,
-/// and so on down; past the fourth place there are none.
+/// `UI_CupStandings_InputAndDraw` when no bots race. The first of four gets 3, and so on down;
+/// past the fourth place there are none.
 pub fn points(players: usize, place: usize) -> u32 {
     if place < places_waited_for(players) {
         (players - 1 - place) as u32
@@ -128,11 +134,32 @@ pub fn points(players: usize, place: usize) -> u32 {
     }
 }
 
-/// A player of a race in the order they finished, and what they are called. The id is the
-/// player's endpoint id, or a bot's (`Online::score_id`).
+/// Who crossed the line: a player, or a bot (by the character it drives, which is its own for
+/// the whole cup).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Who {
+    Player(EndpointId),
+    Bot(u8),
+}
+
+impl Who {
+    /// What [`net::Score`] says it is: a player's key, or a made-up one for a bot.
+    fn id(&self) -> [u8; 32] {
+        match self {
+            Who::Player(id) => *id.as_bytes(),
+            Who::Bot(character) => {
+                let mut id = [0xb0; 32];
+                id[31] = *character;
+                id
+            }
+        }
+    }
+}
+
+/// A kart of a race in the order they finished, and what it is called.
 #[derive(Clone)]
 pub struct Finisher {
-    pub id: [u8; 32],
+    pub who: Who,
     pub name: String,
 }
 
@@ -146,9 +173,13 @@ pub struct Series {
     pub race: usize,
     /// Whether the races give points (a cup's do).
     pub scored: bool,
-    /// The points of every player so far, in the order they were first scored.
-    points: Vec<([u8; 32], u32)>,
-    names: HashMap<[u8; 32], String>,
+    /// The bots of every race of it: the host's brain bots (of these characters), or retail
+    /// ones. One kind or none.
+    pub brains: Vec<u8>,
+    pub retail: net::RetailBots,
+    /// The points of every player and bot so far, in the order they were first scored.
+    points: Vec<(Who, u32)>,
+    names: HashMap<Who, String>,
 }
 
 impl Series {
@@ -160,6 +191,8 @@ impl Series {
             laps,
             race: 0,
             scored: false,
+            brains: Vec::new(),
+            retail: net::RetailBots::default(),
             points: Vec::new(),
             names: HashMap::new(),
         }
@@ -173,6 +206,8 @@ impl Series {
             laps: def.laps,
             race: 0,
             scored: true,
+            brains: Vec::new(),
+            retail: net::RetailBots::default(),
             points: Vec::new(),
             names: HashMap::new(),
         }
@@ -188,20 +223,36 @@ impl Series {
         self.race + 1 < self.tracks.len()
     }
 
+    /// Whether its races have bots, of either kind.
+    pub fn has_bots(&self) -> bool {
+        !self.brains.is_empty() || !self.retail.characters.is_empty()
+    }
+
     /// Adds the points of a race in which `players` drove and `finishers` crossed the line, in
-    /// that order. Returns what each of the first got.
+    /// that order (with bots, every kart of the race is one, in the order of the race). Returns
+    /// what each of the first got.
     pub fn score(&mut self, players: usize, finishers: &[Finisher]) -> Vec<Score> {
+        let bots = self.has_bots();
+        let shown = if bots {
+            POINTS_WITH_BOTS.len()
+        } else {
+            places_waited_for(players)
+        };
         let mut gained = Vec::new();
         for (place, finisher) in finishers.iter().enumerate() {
-            self.names.insert(finisher.id, finisher.name.clone());
-            let won = points(players, place);
-            match self.points.iter_mut().find(|(id, _)| *id == finisher.id) {
+            self.names.insert(finisher.who, finisher.name.clone());
+            let won = if bots {
+                POINTS_WITH_BOTS.get(place).copied().unwrap_or(0)
+            } else {
+                points(players, place)
+            };
+            match self.points.iter_mut().find(|(who, _)| *who == finisher.who) {
                 Some((_, total)) => *total += won,
-                None => self.points.push((finisher.id, won)),
+                None => self.points.push((finisher.who, won)),
             }
-            if place < places_waited_for(players) {
+            if place < shown {
                 gained.push(Score {
-                    id: finisher.id,
+                    id: finisher.who.id(),
                     name: finisher.name.clone(),
                     points: won,
                 });
@@ -215,9 +266,9 @@ impl Series {
         let mut totals: Vec<Score> = self
             .points
             .iter()
-            .map(|(id, total)| Score {
-                id: *id,
-                name: self.names.get(id).cloned().unwrap_or_default(),
+            .map(|(who, total)| Score {
+                id: who.id(),
+                name: self.names.get(who).cloned().unwrap_or_default(),
                 points: *total,
             })
             .collect();
@@ -258,7 +309,7 @@ mod tests {
     fn finishers(n: u8) -> Vec<Finisher> {
         (0..n)
             .map(|i| Finisher {
-                id: [i + 1; 32],
+                who: Who::Player(net::SecretKey::from_bytes(&[i + 1; 32]).public()),
                 name: format!("p{i}"),
             })
             .collect()
@@ -326,6 +377,28 @@ mod tests {
         // A third race, won by p1, breaks the tie.
         series.score(3, &[order[1].clone(), order[0].clone(), order[2].clone()]);
         assert_eq!(named(series.totals())[0], ("p1".to_string(), 4));
+    }
+
+    #[test]
+    fn with_bots_the_first_four_get_retails_points() {
+        let mut series = Series::single(0, 3);
+        series.retail.characters = vec![3, 4, 5];
+        let mut order = finishers(1);
+        for character in [3, 4, 5] {
+            order.insert(
+                0,
+                Finisher {
+                    who: Who::Bot(character),
+                    name: format!("bot{character}"),
+                },
+            );
+        }
+        let gained: Vec<u32> = series.score(1, &order).iter().map(|s| s.points).collect();
+        assert_eq!(gained, [9, 6, 3, 1]);
+        // Each bot keeps its points under its own made-up key.
+        let totals = series.totals();
+        assert_eq!(totals[0].name, "bot5");
+        assert_ne!(totals[0].id, totals[1].id);
     }
 
     #[test]

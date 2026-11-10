@@ -267,6 +267,14 @@ impl Instance for Plant {
         self.tick(&cx.frames, out);
     }
 
+    /// A bot in its mouth: it grabs and eats all the same, without a sound (retail grabs even
+    /// when the bot was not hurt).
+    fn caught_bot(&mut self, cx: &Context, out: &mut Tick) {
+        self.start(Phase::Grabbing, anim::GRAB_DRIVER);
+        self.cycles = 0;
+        self.tick(&cx.frames, out);
+    }
+
     fn pose(&self) -> Option<Pose> {
         Some(Pose {
             pos: self.pos,
@@ -426,6 +434,30 @@ mod tests {
             ticks += 1;
             assert!(ticks < 200);
         }
+        assert!(out.sounds.is_empty());
+    }
+    #[test]
+    fn a_plant_that_caught_a_bot_eats_it_without_a_sound() {
+        let mut plant = Plant::new(&def(), 0, 0);
+        hungry(&mut plant);
+        let cx = Context {
+            instance: 4,
+            frames: FRAMES,
+            ticks: 0,
+            position_path: &[],
+            roll_paths: &[],
+            blockers: &[],
+        };
+        let mut out = Tick::default();
+        plant.caught_bot(&cx, &mut out);
+        assert_eq!((plant.anim_index, plant.anim_frame), (anim::GRAB_DRIVER, 1));
+        let mut ticks = 0;
+        while plant.phase != Phase::Rest {
+            plant.tick(&FRAMES, &mut out);
+            ticks += 1;
+            assert!(ticks < 300);
+        }
+        assert_eq!(out.spits.len(), 1);
         assert!(out.sounds.is_empty());
     }
 }

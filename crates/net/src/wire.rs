@@ -82,6 +82,19 @@ pub struct Standings {
     pub next: Option<(u32, String)>,
 }
 
+/// The retail bots of a race (`vehicle::bot`), which every client adds after the players and
+/// drives itself: they take no pads. (The other kind, the host's brain bots, are players of the
+/// host's: see [`Message::Start`].) A race has one kind or the other.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub struct RetailBots {
+    /// The character of each bot, in the slots after the players'.
+    pub characters: Vec<u8>,
+    /// How hard they race (`gGT->arcadeDifficulty`, `vehicle::bot::difficulty_level`).
+    pub difficulty: u16,
+    /// The race is one of a cup.
+    pub cup: bool,
+}
+
 /// A player's points in [`Standings`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Score {
@@ -135,6 +148,8 @@ pub enum Message {
         hash: u64,
         /// The laps of the race.
         laps: u8,
+        /// The retail bots, after the players (and before the spectators).
+        retail: RetailBots,
         roster: Vec<[u8; 32]>,
         /// Whether each of the roster is behind a NAT of the hard kind (see [`Message::Nat`]).
         hard: Vec<bool>,
@@ -168,6 +183,7 @@ pub enum Message {
         track: u32,
         hash: u64,
         laps: u8,
+        retail: RetailBots,
     },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
@@ -437,6 +453,11 @@ mod tests {
                 track: 4,
                 hash: 0,
                 laps: 5,
+                retail: RetailBots {
+                    characters: vec![1, 2],
+                    difficulty: 0xa0,
+                    cup: true,
+                },
                 roster: vec![[1; 32], [2; 32], [3; 32]],
                 hard: vec![false, true, false],
                 bots: 1,
@@ -450,6 +471,7 @@ mod tests {
                 track: 7,
                 hash: 0xfeed,
                 laps: 3,
+                retail: RetailBots::default(),
             },
             Message::Want {
                 track: 0x8000_0001,

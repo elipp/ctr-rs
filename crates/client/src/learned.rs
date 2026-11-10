@@ -1,6 +1,6 @@
 //! The karts a policy the `brain` crate trained drives, as its `eval` drives one: the dummy
 //! karts of `/debug spawn-karts <n> brain` offline, and the bots that fill the races of a host
-//! (`/lobby bots`). Their pads are made here and go into the race like ours (`drive_tick`).
+//! (`/bots brain`). Their pads are made here and go into the race like ours (`drive_tick`).
 //! Offline they are all known before the tick plays: nothing to predict. Online the host makes
 //! them from the race as it predicts it, and sends them out with its own (`net::Session::bot_input`):
 //! to everyone else they are a player's.

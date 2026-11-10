@@ -374,6 +374,8 @@ pub fn tick_with(
         instances,
         &mut Others {
             drivers: &mut [],
+            bots: &mut [],
+            nav_paths: &level.nav_paths,
             feedback: &mut feedback,
         },
         effects,
@@ -437,9 +439,11 @@ pub fn start_tick(racers: &mut [Racer], random_number: &mut i32) {
 /// One 30 Hz tick of all the drivers (after [`start_tick`], without [`after_logic`]), in
 /// `MainFrame`'s order: each stage over every driver, in the thread list's order, before the next
 /// stage. A driver bumps into the ones after it in the list (the original's sibling threads), which
-/// have run the stages before it and not those after. `feedback` times the bump sounds.
+/// have run the stages before it and not those after, and into the `bots` (in their bucket's
+/// order), which tick after all of them. `feedback` times the bump sounds.
 pub fn tick_all(
     racers: &mut [Racer],
+    bots: &mut [&mut Driver],
     level: &Level,
     env: &Env,
     instances: &mut dyn Instances,
@@ -457,6 +461,8 @@ pub fn tick_all(
             r.driver,
             &mut Others {
                 drivers: &mut later,
+                bots: &mut *bots,
+                nav_paths: &level.nav_paths,
                 feedback,
             },
             env,
@@ -641,7 +647,7 @@ fn tick_from_coll_fixed(
     }
 
     // The mask's own thread.
-    stuck::mask_tick(d, env);
+    stuck::mask_tick(d, env.elapsed_time_ms);
 
     // The shield's.
     crate::shield::tick(d, env.timer, effects);

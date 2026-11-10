@@ -60,7 +60,7 @@ const NO_CHECKPOINT: u8 = 0xff;
 const CONFIG_VOID_FALL: u32 = 2;
 
 /// `MASK_HEAD_DURATION_NORMAL`, and with the wumpa fruit juiced.
-const MASK_DURATION_NORMAL: i16 = 0x1e00;
+pub(crate) const MASK_DURATION_NORMAL: i16 = 0x1e00;
 const MASK_DURATION_JUICED: i16 = 0x2d00;
 const WUMPA_JUICED_COUNT: i8 = 10;
 /// `STATIC_AKUAKU` and `STATIC_UKAUKA` plus `MASK_SOUND_ID_OFFSET_FROM_MODEL`: what the mask says.
@@ -224,7 +224,7 @@ pub struct RevEngine {
 }
 
 /// `VehPickupItem_MaskUseWeapon`: the driver has a mask, a new one or the one it had.
-fn use_mask(d: &mut Driver) {
+pub(crate) fn use_mask(d: &mut Driver) {
     let duration = if d.num_wumpas < WUMPA_JUICED_COUNT {
         MASK_DURATION_NORMAL
     } else {
@@ -261,7 +261,7 @@ pub fn shoot_mask(d: &mut Driver, effects: &mut Vec<Effect>) {
 
 /// `RB_MaskWeapon_ThTick` and `RB_MaskWeapon_FadeAway`: the mask turns round the kart, runs
 /// out, fades away and is gone.
-pub fn mask_tick(d: &mut Driver, env: &Env) {
+pub fn mask_tick(d: &mut Driver, elapsed_time_ms: i32) {
     let Some(mask) = &mut d.mask else { return };
     let mut shown = mask.shown.unwrap_or_default();
 
@@ -301,13 +301,13 @@ pub fn mask_tick(d: &mut Driver, env: &Env) {
         mask.rot_y = mask.rot_y.wrapping_sub(MASK_TURN_STEP);
 
         if mask.duration != 0 {
-            mask.duration = (mask.duration as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
+            mask.duration = (mask.duration as u16).wrapping_sub(elapsed_time_ms as u16) as i16;
             if mask.duration < 0 {
                 mask.duration = 0;
             }
         } else {
             mask.fading = true;
-            if fade_step(mask, &mut shown, env) {
+            if fade_step(mask, &mut shown, elapsed_time_ms) {
                 d.mask = None;
                 return;
             }
@@ -321,7 +321,7 @@ pub fn mask_tick(d: &mut Driver, env: &Env) {
         return;
     }
 
-    if fade_step(mask, &mut shown, env) {
+    if fade_step(mask, &mut shown, elapsed_time_ms) {
         d.mask = None;
     } else {
         mask.shown = Some(shown);
@@ -330,7 +330,7 @@ pub fn mask_tick(d: &mut Driver, env: &Env) {
 
 /// `RB_MaskWeapon_FadeAway`: the head shrinks as it spirals in to the kart, the beam shrinks
 /// and fades. True once it is gone.
-fn fade_step(mask: &mut MaskHead, shown: &mut MaskShown, env: &Env) -> bool {
+fn fade_step(mask: &mut MaskHead, shown: &mut MaskShown, elapsed_time_ms: i32) -> bool {
     let (sin, cos) = math::sin_cos(mask.rot_y as i32 as u32);
     let radius = |trig: i32| {
         mips::sra(
@@ -356,7 +356,7 @@ fn fade_step(mask: &mut MaskHead, shown: &mut MaskShown, env: &Env) -> bool {
     }
 
     if mask.duration < MASK_FADE_END {
-        mask.duration = (mask.duration as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
+        mask.duration = (mask.duration as u16).wrapping_add(elapsed_time_ms as u16) as i16;
         if mask.duration > MASK_FADE_END {
             mask.duration = MASK_FADE_END;
         }
@@ -932,17 +932,17 @@ mod tests {
         assert_eq!(d.mask.unwrap().duration, MASK_DURATION_NORMAL);
         d.mask.as_mut().unwrap().duration = 3 * 32;
         for _ in 0..3 {
-            mask_tick(&mut d, &env);
+            mask_tick(&mut d, env.elapsed_time_ms);
         }
         assert_eq!(d.mask.unwrap().duration, 0);
         assert!(!d.mask.unwrap().fading);
 
         // The fade lasts 16 ticks, the one that starts it included, and the mask is gone on the next.
         for _ in 0..16 {
-            mask_tick(&mut d, &env);
+            mask_tick(&mut d, env.elapsed_time_ms);
             assert!(d.mask.unwrap().fading);
         }
-        mask_tick(&mut d, &env);
+        mask_tick(&mut d, env.elapsed_time_ms);
         assert_eq!(d.mask, None);
     }
 
@@ -1038,7 +1038,7 @@ mod tests {
         let mut d = kart();
         let env = Env::default();
         use_mask(&mut d);
-        mask_tick(&mut d, &env);
+        mask_tick(&mut d, env.elapsed_time_ms);
         let first = d.mask.unwrap().shown.unwrap();
         // The first tick shows the mask at its start: in front of the kart, `sin(0) = 0`.
         assert_eq!(first.head.offset, [0, MASK_HEIGHT, 0x40]);
@@ -1046,7 +1046,7 @@ mod tests {
         assert_eq!(first.head.scale, MASK_SCALE_NORMAL);
 
         for _ in 0..MASK_BEAM_FRAMES - 1 {
-            mask_tick(&mut d, &env);
+            mask_tick(&mut d, env.elapsed_time_ms);
         }
         let mask = d.mask.unwrap();
         assert_eq!(mask.beam_frame, 0, "the beam's animation has come round");
@@ -1057,7 +1057,7 @@ mod tests {
         // Bobbing: lower in the middle of the beam's animation.
         let mut low = i16::MAX;
         for _ in 0..MASK_BEAM_FRAMES {
-            mask_tick(&mut d, &env);
+            mask_tick(&mut d, env.elapsed_time_ms);
             low = low.min(d.mask.unwrap().shown.unwrap().head.offset[1]);
         }
         assert_eq!(low, MASK_HEIGHT - 32);
@@ -1069,11 +1069,11 @@ mod tests {
         let env = Env::default();
         use_mask(&mut d);
         d.mask.as_mut().unwrap().duration = 0;
-        mask_tick(&mut d, &env);
+        mask_tick(&mut d, env.elapsed_time_ms);
         // The tick that starts the fade ends with the mask at its own size.
         assert_eq!(d.mask.unwrap().shown.unwrap().head.scale, MASK_SCALE_NORMAL);
         for tick in 1..16 {
-            mask_tick(&mut d, &env);
+            mask_tick(&mut d, env.elapsed_time_ms);
             let shown = d.mask.unwrap().shown.unwrap();
             assert_eq!(
                 shown.head.scale,
@@ -1084,7 +1084,7 @@ mod tests {
             assert!(!shown.world_space);
         }
         assert_eq!(d.mask.unwrap().shown.unwrap().beam_alpha, MASK_ALPHA_GONE);
-        mask_tick(&mut d, &env);
+        mask_tick(&mut d, env.elapsed_time_ms);
         assert_eq!(d.mask, None);
     }
 

@@ -3,7 +3,7 @@
 use super::countdown::Then;
 use super::cup::{CupDef, Finisher, Series};
 use super::progress::RollbackToasts;
-use super::{ANNOUNCE_COLOR, Lobby};
+use super::{ANNOUNCE_COLOR, BotKind, Lobby};
 use crate::command::Action;
 use crate::console::{Log, console};
 use crate::maps;
@@ -88,6 +88,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             net::NOT_NOW
         }
         Action::StartRace if lobby.series.is_some() => net::NOT_NOW,
+        Action::Bots { .. } if lobby.joined => "Only the host of a lobby can do that",
         _ => return None,
     })
 }
@@ -169,19 +170,39 @@ pub(super) fn run(
                 lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
                 continue;
             }
-            Action::LobbyBots(n) => {
-                if let Some(n) = *n {
-                    lobby.max_bots = n as usize;
+            Action::Bots {
+                count,
+                difficulty,
+                kind,
+            } => {
+                let changed = count.is_some() || difficulty.is_some() || kind.is_some();
+                if let Some(count) = count {
+                    lobby.bots.count = *count;
                 }
-                let text = match lobby.max_bots {
-                    0 => "The races you host have no bots".to_string(),
-                    n => format!(
-                        "Up to {n} bot{} fill the races you host (up to {} karts)",
-                        if n == 1 { "" } else { "s" },
-                        net::MAX_PLAYERS
-                    ),
+                if let Some(difficulty) = difficulty {
+                    lobby.bots.difficulty = *difficulty;
+                }
+                if let Some(kind) = kind {
+                    lobby.bots.kind = *kind;
+                }
+                let bots = lobby.bots;
+                // (The brain has no difficulty.)
+                let what = match bots.kind {
+                    BotKind::Brain => "brain".to_string(),
+                    BotKind::Retail => format!("{} retail", bots.difficulty_name()),
                 };
-                toasts.write(Toast::new(text, 2500));
+                let mut text = match bots.count {
+                    0 => format!("No bots ({what} when there are)"),
+                    1 => format!("1 {what} bot"),
+                    n => format!("{n} {what} bots"),
+                };
+                if bots.count > 0 {
+                    text += ", as many as the grid has room for";
+                }
+                if changed && (lobby.online.is_some() || lobby.series.is_some()) {
+                    text += " (from the next race you start)";
+                }
+                toasts.write(Toast::new(text, 3000));
                 continue;
             }
             Action::CupCreate { name, tracks, laps } => {
@@ -288,11 +309,11 @@ pub(super) fn run(
             Action::DebugRanking => {
                 // The others are told the race stopped; the host scores it like a finished one.
                 let Some(net) = &lobby.online else { continue };
-                let mut finishers: Vec<Finisher> = (0..net.characters.len())
+                let mut finishers: Vec<Finisher> = (0..net.karts())
                     .filter_map(|slot| {
                         Some(Finisher {
-                            id: net.score_id(slot)?,
-                            name: net.labels.get(slot)?.clone(),
+                            who: net.who(slot)?,
+                            name: net.kart_label(slot).to_string(),
                         })
                     })
                     .collect();

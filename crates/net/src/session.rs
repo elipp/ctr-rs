@@ -358,9 +358,9 @@ pub(crate) async fn run(
             }
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
-                Command::Start { track, hash, laps } => if let Some(host) = &mut host {
+                Command::Start { track, hash, laps, retail } => if let Some(host) = &mut host {
                     if host.handoff.is_none() {
-                        host.start_wanted = Some((track, hash, laps));
+                        host.start_wanted = Some((track, hash, laps, retail));
                     }
                 },
                 Command::Promote(to) => if let Some(host) = &mut host {
@@ -392,20 +392,24 @@ pub(crate) async fn run(
                     let text = "A player left the race: start a new one instead of restarting".to_string();
                     io.event(Event::Announce(text));
                 }
-                Command::Restart { track, hash, laps } => if plan.is_some()
+                Command::Restart { track, hash, laps, mut retail } => if plan.is_some()
                     && let Some(host) = &mut host
                     && let Some((slot, characters, players, bots)) = race_info.clone()
                 {
                     epoch += 1;
+                    // The same players, so the brain bots of the race before, and retail bots only
+                    // where they were (a race has one kind or the other), as many as fit.
+                    retail.characters.truncate(if bots > 0 { 0 } else { MAX_PLAYERS.saturating_sub(characters.len()) });
                     for guest in &host.guests {
-                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track, hash, laps }).await;
+                        let restart = Message::Restart { epoch, track, hash, laps, retail: retail.clone() };
+                        let _ = send_reliably(&guest.connection, &restart).await;
                     }
                     if let Some(plan) = &plan {
                         start_over(&mut links, epoch, plan, me);
                     }
                     (running, game_ready, ready_sent) = (false, false, false);
                     host.ready_from.clear();
-                    io.event(Event::Started { slot, characters, players, track, hash, laps, bots });
+                    io.event(Event::Started { slot, characters, players, track, hash, laps, bots, retail });
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -700,7 +704,7 @@ pub(crate) async fn run(
                         heirs.handed_over = false;
                         io.event(Event::Lobby { players, spectators, you, locked });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster, hard, bots }
+                    Message::Start { epoch: new, slot, characters, track, hash, laps, retail, roster, hard, bots }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -720,9 +724,9 @@ pub(crate) async fn run(
                         dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone(), bots));
                         plan = Some(new_plan);
-                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps, bots });
+                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps, bots, retail });
                     }
-                    Message::Restart { epoch: new, track, hash, laps }
+                    Message::Restart { epoch: new, track, hash, laps, retail }
                         if plan.is_some() && from == host_id && host.is_none() =>
                     {
                         if let Some((slot, characters, players, bots)) = race_info.clone()
@@ -731,7 +735,7 @@ pub(crate) async fn run(
                             epoch = new;
                             start_over(&mut links, epoch, plan, me);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, players, track, hash, laps, bots });
+                            io.event(Event::Started { slot, characters, players, track, hash, laps, bots, retail });
                         }
                     }
                     Message::Announce { text } => {
@@ -1212,11 +1216,10 @@ pub(crate) async fn run(
 
         // The host starts the race once every guest has said what it drives.
         if let Some(host) = &mut host
-            && let Some((track, hash, laps)) = host
+            && let Some((track, hash, laps, mut retail)) = host
                 .start_wanted
-                .filter(|_| host.guests.iter().all(|g| g.hello.is_some()))
+                .take_if(|_| host.guests.iter().all(|g| g.hello.is_some()))
         {
-            host.start_wanted = None;
             // A race after another is a new one, with the players who are here now.
             host.guests.retain(|g| !host.gone.contains(&g.id));
             host.gone.clear();
@@ -1229,12 +1232,11 @@ pub(crate) async fn run(
             // the race up (they are ours, with our id), and the spectators take the slots after.
             let racers: Vec<&Guest> = host.guests.iter().filter(|g| !g.spectator).collect();
             let watchers: Vec<&Guest> = host.guests.iter().filter(|g| g.spectator).collect();
-            let bot_characters: Vec<u8> = host
-                .bots
-                .iter()
-                .copied()
-                .take(MAX_PLAYERS.saturating_sub(1 + racers.len()))
-                .collect();
+            // A race has one kind of bot: the retail ones, if it was started with any, else ours.
+            let room = MAX_PLAYERS.saturating_sub(1 + racers.len());
+            retail.characters.truncate(room);
+            let brains = if retail.characters.is_empty() { room } else { 0 };
+            let bot_characters: Vec<u8> = host.bots.iter().copied().take(brains).collect();
             let bots = bot_characters.len();
             let players = 1 + racers.len() + bots;
             let characters: Vec<u8> = std::iter::once(character)
@@ -1261,6 +1263,7 @@ pub(crate) async fn run(
                     track,
                     hash,
                     laps,
+                    retail: retail.clone(),
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                     hard: hard.clone(),
                     bots: bots as u8,
@@ -1288,6 +1291,7 @@ pub(crate) async fn run(
                 hash,
                 laps,
                 bots,
+                retail,
             });
         }
 

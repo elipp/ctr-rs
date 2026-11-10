@@ -33,7 +33,7 @@ pub use realm::{
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
-pub use wire::{Pad, Score, Standings, Tick};
+pub use wire::{Pad, RetailBots, Score, Standings, Tick};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -158,7 +158,7 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/14";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/15";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -224,7 +224,8 @@ pub enum Event {
     /// [`Session::ready`] says so; [`Event::Go`] then starts it. The race has `laps` laps.
     /// The last `bots` of the players are the host's bots (their endpoint is the host's): the
     /// host makes their pads ([`Session::bot_input`]), and everyone else gets them as
-    /// [`Event::Pads`] of their slots.
+    /// [`Event::Pads`] of their slots. The `retail` bots come after the players (a race has one
+    /// kind of bot or the other): every client adds them to its race and drives them itself.
     Started {
         slot: usize,
         characters: Vec<u8>,
@@ -233,6 +234,7 @@ pub enum Event {
         hash: u64,
         laps: u8,
         bots: usize,
+        retail: RetailBots,
     },
     /// The host sent the custom track asked for with [`Session::fetch`], as the bytes it
     /// [provided](Session::provide) it as. They are not checked: that the contents hash to `hash`
@@ -371,11 +373,13 @@ enum Command {
         track: u32,
         hash: u64,
         laps: u8,
+        retail: RetailBots,
     },
     Restart {
         track: u32,
         hash: u64,
         laps: u8,
+        retail: RetailBots,
     },
     Provide {
         track: u32,
@@ -436,9 +440,14 @@ impl Session {
     /// Starts the race on level `track`, if we host the lobby. Everyone then gets
     /// [`Event::Started`]. `hash` is that of a custom track's contents (0 for the game's own),
     /// which has to be [provided](Self::provide) for the players who lack it. The race has `laps`
-    /// laps.
-    pub fn start(&self, track: u32, hash: u64, laps: u8) {
-        let _ = self.commands.send(Command::Start { track, hash, laps });
+    /// laps, and the `retail` bots after the players (the brain bots are [`set_bots`](Self::set_bots)').
+    pub fn start(&self, track: u32, hash: u64, laps: u8, retail: RetailBots) {
+        let _ = self.commands.send(Command::Start {
+            track,
+            hash,
+            laps,
+            retail,
+        });
     }
 
     /// Makes the custom track `track` (whose contents hash to `hash`) available to the players
@@ -457,8 +466,13 @@ impl Session {
     /// Starts the race again on level `track`, if we host the lobby and a race has been started
     /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
     /// the way it did the first time.
-    pub fn restart(&self, track: u32, hash: u64, laps: u8) {
-        let _ = self.commands.send(Command::Restart { track, hash, laps });
+    pub fn restart(&self, track: u32, hash: u64, laps: u8, retail: RetailBots) {
+        let _ = self.commands.send(Command::Restart {
+            track,
+            hash,
+            laps,
+            retail,
+        });
     }
 
     /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host

@@ -23,6 +23,11 @@
 //! * `/net rollbacks on|off`: a toast for each rollback (on at first)
 //! * `/net relay add <url>`: use that relay too, besides the public ones (kept in the config; `clear` drops them all)
 //! * `/race stop`: end the race in progress for everyone, with no winner (the host only)
+//! * `/bots [count] [easy|medium|hard] [brain|retail]`, `/bots off`: fill the grid of the host's
+//!   races with bots, the characters no player drives, up to eight karts: the learned policy's
+//!   (`learned.rs`, whose pads the host sends), or retail's (`vehicle::bot`, which every client
+//!   drives itself; the difficulty is theirs). A race has one kind or the other, and a cup keeps
+//!   the bots it started with
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -93,13 +98,52 @@ pub struct Lobby {
     chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
-    /// The characters of the bots that fill our races (`/lobby bots`), drawn once for the lobby
-    /// so that each bot keeps its own from one race of a cup to the next.
-    bot_characters: Vec<u8>,
-    /// The most bots to fill the races we host with (`/lobby bots`). It outlasts the lobby, not
-    /// the game.
-    pub(crate) max_bots: usize,
+    /// The bots our races have, when we host (`/bots`). Kept when the lobby closes.
+    pub bots: BotSettings,
     pub online: Option<Online>,
+}
+
+/// How many bots the host's races have, of which kind, and how hard they race (`/bots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BotSettings {
+    pub count: u8,
+    /// `vehicle::bot::difficulty_level` (of the retail bots: the brain has none).
+    pub difficulty: u16,
+    pub kind: BotKind,
+}
+
+/// Who drives the bots of a race.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BotKind {
+    /// The learned policy (`learned.rs`): the host makes their pads, and they drive the kart as a
+    /// player does.
+    #[default]
+    Brain,
+    /// Retail's (`vehicle::bot`): they slide along the bot paths, and every client drives them.
+    Retail,
+}
+
+
+impl Default for BotSettings {
+    fn default() -> BotSettings {
+        BotSettings {
+            count: 0,
+            difficulty: vehicle::bot::difficulty_level::MEDIUM as u16,
+            kind: BotKind::default(),
+        }
+    }
+}
+
+impl BotSettings {
+    /// The difficulty as `/bots` names it.
+    pub fn difficulty_name(&self) -> &'static str {
+        use vehicle::bot::difficulty_level::{EASY, HARD};
+        match self.difficulty as i16 {
+            EASY => "easy",
+            HARD => "hard",
+            _ => "medium",
+        }
+    }
 }
 
 /// A player in the lobby, as the last [`Event::Lobby`] said.
@@ -217,8 +261,31 @@ impl Lobby {
         });
     }
 
-    /// Starts the series, with the countdown to its first race (the host only).
-    fn start_series(&mut self, series: Series, now: f32) {
+    /// The characters of the bots of a race the players in the lobby now drive in: the first
+    /// that none of them drives, as many as `/bots` asks and the grid has room for.
+    fn bot_characters(&self) -> Vec<u8> {
+        let taken: Vec<u8> = self.roster.iter().map(|m| m.character).collect();
+        let room = race::MAX_KARTS.saturating_sub(taken.len().max(1));
+        (0..crate::CHARACTERS.len() as u8)
+            .filter(|c| !taken.contains(c))
+            .take((self.bots.count as usize).min(room))
+            .collect()
+    }
+
+    /// Starts the series, with the countdown to its first race (the host only). Its bots are
+    /// the ones of now, for all its races.
+    fn start_series(&mut self, mut series: Series, now: f32) {
+        let characters = self.bot_characters();
+        match self.bots.kind {
+            BotKind::Brain => series.brains = characters,
+            BotKind::Retail => {
+                series.retail = net::RetailBots {
+                    characters,
+                    difficulty: self.bots.difficulty,
+                    cup: series.scored,
+                }
+            }
+        }
         let then = Then::Start {
             track: series.track(),
             laps: series.laps,
@@ -269,10 +336,9 @@ impl Lobby {
 
     /// Leaves the lobby, ours or another's, and the race in it.
     pub fn close(&mut self) {
-        *self = Lobby {
-            max_bots: self.max_bots,
-            ..Lobby::default()
-        };
+        let bots = self.bots;
+        *self = Lobby::default();
+        self.bots = bots;
     }
 
     /// Joins the lobby at `ticket`.
@@ -421,32 +487,31 @@ impl Lobby {
         }
     }
 
-    /// Starts the race over on `track` (the host only).
+    /// Starts the race over on `track` (the host only), with the bots it had.
     pub fn restart(&self, track: u32, hash: u64, laps: u8) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            session.restart(track, hash, laps);
+            let bots = self
+                .online
+                .as_ref()
+                .map(|o| o.retail.clone())
+                .unwrap_or_default();
+            session.restart(track, hash, laps, bots);
         }
     }
 
-    /// Starts the race on `track` (the host only), filled up with as many as `bots` bots as
-    /// there is room for.
-    fn start(&mut self, track: u32, laps: u8, bots: usize) {
-        if bots > 0 && self.bot_characters.is_empty() {
-            // Every character once, in a random order (the std hasher is random enough).
-            use std::hash::BuildHasher;
-            let random = std::collections::hash_map::RandomState::new();
-            let mut characters: Vec<u8> = (0..crate::CHARACTERS.len() as u8).collect();
-            for i in (1..characters.len()).rev() {
-                characters.swap(i, random.hash_one(i) as usize % (i + 1));
-            }
-            self.bot_characters = characters;
-        }
+    /// Starts the race on `track` (the host only), with the bots of the series: its brain bots
+    /// (the session takes as many as there is room for), or its retail ones.
+    fn start(&self, track: u32, laps: u8) {
         if let Some(session) = &self.session {
             self.provide(session, track);
-            // (The session takes as many of them as there is room for.)
-            session.set_bots(self.bot_characters.iter().copied().take(bots).collect());
-            session.start(track, Self::hash_of(track), laps);
+            let (brains, retail) = self
+                .series
+                .as_ref()
+                .map(|s| (s.brains.clone(), s.retail.clone()))
+                .unwrap_or_default();
+            session.set_bots(brains);
+            session.start(track, Self::hash_of(track), laps, retail);
             self.list(&maps::name(track));
         }
     }

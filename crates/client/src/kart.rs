@@ -235,7 +235,7 @@ impl KartMotion {
         self.hazard_timer = d.hazard_timer;
         self.inst_scale = [d.inst_scale_x, d.inst_scale_y, d.inst_scale_z].map(i32::from);
         self.animation = (d.anim_index, d.anim_frame);
-        self.hidden = d.phys_state == vehicle::PhysState::PlantEaten;
+        self.hidden = d.phys_state == vehicle::PhysState::PlantEaten || vehicle::bot::hidden(d);
         self.burnt = d.burn_timer != 0;
         self
     }

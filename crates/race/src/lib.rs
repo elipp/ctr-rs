@@ -28,7 +28,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 3;
+pub const SIM_VERSION: u32 = 10;
 
 const UNSORTED: i16 = -1;
 
@@ -220,6 +220,12 @@ pub fn lights_on(lights_ms: i32) -> usize {
         .count()
 }
 
+/// The game's racing tracks are the `LevelId`s below this (Dingo Canyon to Turbo Track).
+pub const RACING_TRACKS: u32 = 18;
+
+/// The most karts a race has, the bots' included.
+pub const MAX_KARTS: usize = 8;
+
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
 
@@ -292,6 +298,8 @@ pub struct Race {
     /// `elapsedEventTime`: the milliseconds since the green light (since tick 0 in a race with
     /// no ceremony). The lap times are of this clock.
     pub event_ms: i32,
+    /// What the bots share, if the race has any. Their karts come after the players'.
+    pub bots: Option<vehicle::bot::Bots>,
 }
 
 impl Race {
@@ -324,6 +332,7 @@ impl Race {
             intro_ticks: 0,
             light: None,
             event_ms: 0,
+            bots: None,
         }
     }
 
@@ -347,6 +356,43 @@ impl Race {
         }
     }
 
+    /// Fills the grid after the players with a bot of each of `specs` (`BOTS_Driver_Init`), in
+    /// the slots that follow theirs. A bot the level has no path for is left out.
+    pub fn add_bots(&mut self, level: &Level, setup: vehicle::bot::Setup, specs: &[KartSpec]) {
+        let bots = self
+            .bots
+            .get_or_insert_with(|| vehicle::bot::Bots::new(setup));
+        for spec in specs {
+            let slot = self.karts.len();
+            if slot >= MAX_KARTS {
+                break;
+            }
+            let mut coll = Collision::default();
+            let mut driver = Driver::new(slot as u8, spec.character);
+            driver.anim_num_frames = spec.anim_num_frames;
+            if !bots.spawn(&mut driver, &mut coll, level) {
+                continue;
+            }
+            self.karts.push(Kart {
+                driver,
+                coll,
+                held: 0,
+                bot: None,
+            });
+            self.lap_times.push(Vec::new());
+            self.checkpoints.push(0);
+            self.splits.push(Vec::new());
+        }
+    }
+
+    /// The karts the players drive: the ones before the bots'.
+    pub fn players(&self) -> usize {
+        self.karts
+            .iter()
+            .take_while(|k| k.driver.bot.is_none())
+            .count()
+    }
+
     /// Starts the race with the ceremony: the camera flies in (if the level has the fly-in), then
     /// the traffic lights count down, and the karts rev their engines on the grid until they go
     /// green. (Without it a race starts straight in driving.)
@@ -357,7 +403,7 @@ impl Race {
         } else {
             0
         };
-        for kart in &mut self.karts {
+        for kart in self.karts.iter_mut().filter(|k| k.driver.bot.is_none()) {
             vehicle::stuck::rev_engine_init(&mut kart.driver);
         }
     }
@@ -535,10 +581,11 @@ impl Race {
         Some((number, time, time - first))
     }
 
-    /// One game tick: the objects, then every kart from its pad (`pads[slot]`), in the order of
-    /// the slots, each stage over all of them. The result is by slot.
+    /// One game tick: the objects, then every player's kart from its pad (`pads[slot]`), in the
+    /// order of the slots, each stage over all of them, then the bots. The result is by slot.
     pub fn tick(&mut self, level: &Level, pads: &[Pad]) -> Vec<KartTick> {
-        assert_eq!(pads.len(), self.karts.len(), "one pad for each kart");
+        let players = self.players();
+        assert_eq!(pads.len(), players, "one pad for each player");
         // The clocks' timers on the screens, before anything ticks.
         self.last_blurs = self
             .karts
@@ -592,8 +639,7 @@ impl Race {
         // A kart that has crossed the line takes no more of its pad: it coasts. So nobody needs
         // a finished player's pads to play a tick right, and it can watch the others as a
         // spectator does (see the client's `drive_tick`).
-        let inputs: Vec<Input> = self
-            .karts
+        let inputs: Vec<Input> = self.karts[..players]
             .iter_mut()
             .zip(pads)
             .map(|(kart, pad)| {
@@ -625,7 +671,7 @@ impl Race {
             doors: &doors,
             elapsed_time_ms: env.elapsed_time_ms,
         };
-        for slot in 0..self.karts.len() {
+        for slot in 0..players {
             let fired =
                 vehicle::item::shoot_on_circle_press(&mut self.karts[slot].driver, &mut effects[slot]);
             if let Some(fired) = fired {
@@ -634,7 +680,7 @@ impl Race {
         }
         // The objects that hurt a driver go on from there: a plant that ate one chews.
         let mut hurt = Vec::new();
-        for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
+        for (kart, effects) in self.karts[..players].iter_mut().zip(&mut effects) {
             let first = hurt.len();
             before_tick(&mut kart.driver, &self.last, &mut hurt, effects);
             // The plant that ate the kart is the one its camera looks at.
@@ -642,16 +688,22 @@ impl Race {
                 kart.driver.plant_eating_me = self.objects.plant_eater(plant);
             }
         }
+        let eaten_bots = hurt_bots(&mut self.karts, players, &self.last, &hurt, &mut effects);
         for instance in hurt {
             self.objects.caught(instance, &mut self.last);
+        }
+        for instance in eaten_bots {
+            self.objects.caught_bot(instance, &mut self.last);
         }
         // Then the mines in their reach, the ones dropped this tick too: the hazards' threads run
         // after the karts' in retail.
         let karts: Vec<[i32; 3]> = self.karts.iter().map(|k| k.driver.inst_pos).collect();
         set_off_mines(&self.last.contacts, &karts, &mut self.weapons);
-        let results = {
-            let mut racers: Vec<Racer> = self
-                .karts
+        let mut results = {
+            let (humans, bots) = self.karts.split_at_mut(players);
+            // The `ROBOT` bucket: the last born first.
+            let mut bots: Vec<&mut Driver> = bots.iter_mut().rev().map(|k| &mut k.driver).collect();
+            let mut racers: Vec<Racer> = humans
                 .iter_mut()
                 .zip(&inputs)
                 .zip(&mut effects)
@@ -665,6 +717,7 @@ impl Race {
             vehicle::sim::start_tick(&mut racers, &mut self.objects.random_number);
             vehicle::sim::tick_all(
                 &mut racers,
+                &mut bots,
                 level,
                 &env,
                 &mut self.objects,
@@ -678,6 +731,28 @@ impl Race {
                     bot.fly(level, &mut kart.driver);
                 }
             }
+        }
+        // Then the retail bots, after the karts that run the physics.
+        results.resize(self.karts.len(), Default::default());
+        if let Some(bots) = &mut self.bots {
+            let mut karts: Vec<vehicle::bot::Kart> = self
+                .karts
+                .iter_mut()
+                .zip(&mut effects)
+                .map(|(kart, effects)| vehicle::bot::Kart {
+                    driver: &mut kart.driver,
+                    coll: &mut kart.coll,
+                    effects,
+                })
+                .collect();
+            let bot_env = vehicle::bot::Env {
+                elapsed_time_ms: env.elapsed_time_ms,
+                traffic_lights_timer: self.lights_ms,
+                laps: self.laps,
+                timer: self.tick,
+                kart_collisions: self.kart_collisions,
+            };
+            vehicle::bot::tick_all(&mut karts, bots, level, &bot_env, &mut self.objects);
         }
         // The bombs and missiles fly, after the karts have moved. A bomb that its kart set off
         // goes with this tick's flight.
@@ -717,8 +792,16 @@ impl Race {
                 .hit(hit.instance, &mut self.karts[hit.owner].driver, hit.model);
         }
         for hit in &self.last_weapons.hits {
+            let by_player = hit
+                .attacker
+                .map(|slot| self.karts[slot].driver.bot.is_none());
             let victim = &mut self.karts[hit.victim].driver;
-            let hurt = vehicle::pick::new_state(victim, hit.damage, &mut effects[hit.victim]);
+            let effects = &mut effects[hit.victim];
+            let hurt = if victim.bot.is_some() {
+                vehicle::bot::hurt(victim, hit.damage, by_player, effects)
+            } else {
+                vehicle::pick::new_state(victim, hit.damage, effects)
+            };
             // A red beaker that hurt the kart makes it rain on it.
             if hurt && hit.rain {
                 vehicle::cloud::init(victim, self.tick, &mut self.objects.random_number);
@@ -726,7 +809,12 @@ impl Race {
         }
         // The exhaust fires (after the weapons' buckets) and the HUD's jump meters.
         for (kart, effects) in self.karts.iter_mut().zip(&mut effects) {
-            vehicle::sim::after_logic(&mut kart.driver, &env, effects);
+            if kart.driver.bot.is_some() {
+                // A bot has the exhaust fire of its boosts, and no HUD.
+                vehicle::turbo::tick(&mut kart.driver, env.elapsed_time_ms as i16, effects);
+            } else {
+                vehicle::sim::after_logic(&mut kart.driver, &env, effects);
+            }
         }
         let racers = self.karts.len();
         for kart in &mut self.karts {
@@ -743,7 +831,7 @@ impl Race {
             kart.driver.tnt_scale_y = self.weapons.tnt_scale_y(slot);
         }
         // The weapon roulettes that crates started run on, and pick.
-        for kart in &mut self.karts {
+        for kart in &mut self.karts[..players] {
             vehicle::item::tick(
                 &mut kart.driver,
                 racers,
@@ -770,6 +858,11 @@ impl Race {
                 }
             })
             .collect();
+        if let Some(bots) = &mut self.bots {
+            let drivers: Vec<&Driver> = self.karts.iter().map(|k| &k.driver).collect();
+            bots.update_globals(&drivers);
+        }
+        self.bot_weapons(level, &doors, players, &mut ticks);
         for ((slot, tick), lap) in ticks.iter_mut().enumerate().zip(self.update_laps(level)) {
             if lap.new_lap {
                 self.lap_times[slot].push(lap.time);
@@ -857,6 +950,48 @@ fn before_tick(
     }
 }
 
+/// The hazards that reached no player's kart in their last tick hurt the first bot they reach
+/// instead (`RB_CheckHazardCollisions` looks in the `PLAYER` bucket, then in `ROBOT`, whose
+/// newest thread is the last bot). The result is the plants that have a bot in their mouth, which
+/// a plant that ate a player (in `hurt`) has not.
+fn hurt_bots(
+    karts: &mut [Kart],
+    players: usize,
+    objects: &instance::Tick,
+    hurt: &[usize],
+    effects: &mut [Vec<Effect>],
+) -> Vec<usize> {
+    let mut eaten = Vec::new();
+    let drivers = objects
+        .contacts
+        .iter()
+        .filter(|c| c.mines != instance::Mines::Only);
+    for contact in drivers {
+        if karts[..players]
+            .iter()
+            .any(|k| contact.hits(k.driver.inst_pos))
+        {
+            continue;
+        }
+        let eats = contact.damage == instance::Damage::Eat;
+        if eats && (hurt.contains(&contact.instance) || eaten.contains(&contact.instance)) {
+            continue;
+        }
+        let Some(slot) = (players..karts.len())
+            .rev()
+            .find(|&slot| contact.hits(karts[slot].driver.inst_pos))
+        else {
+            continue;
+        };
+        let d = &mut karts[slot].driver;
+        vehicle::bot::hurt(d, contact.damage as u8, None, &mut effects[slot]);
+        if eats {
+            eaten.push(contact.instance);
+        }
+    }
+    eaten
+}
+
 /// What a kart does after the stages of a tick. The sparks and the puffs are for the outside to
 /// draw.
 fn after_tick(
@@ -885,6 +1020,165 @@ fn after_tick(
         }
     }
     (landing, wall, spray, puffs)
+}
+
+/// `PICKUPBOTS_UPDATE_START_DELAY`: the bots fire nothing in the first 19.2 seconds of a race.
+const BOT_WEAPONS_FROM_MS: i32 = 0x4b00;
+/// `PICKUPBOTS_CLOSE_DIST_SQ_BIAS` and `_RANGE`: how far from a player (squared, flat) a bot
+/// next to it in the race fires at it.
+const BOT_WEAPON_NEAREST: u32 = 0x90001;
+const BOT_WEAPON_RANGE: u32 = 0x13a_ffff;
+/// `PICKUPBOTS_TRAILING_ATTACK_DISTANCE_TO_FINISH_MIN`
+const BOT_TRAILING_NEAR_FINISH: u32 = 16000;
+/// `PICKUPBOTS_VOICELINE_*`: what the bot says to the player it fires at.
+const BOT_VOICE_BOMB: u8 = 10;
+const BOT_VOICE_MISSILE: u8 = 11;
+const BOT_VOICE_MINE: u8 = 0xf;
+
+impl Race {
+    /// `PickupBots_UpdateArcade`: the bot just ahead of each player in the race, and the one just
+    /// behind, may fire at it when it is near enough: the one ahead drops a TNT or a beaker now
+    /// and then (Nitro or red after the first lap, half the time), or fires a bomb or a missile;
+    /// the one behind a missile (not on its last lap) or a bomb. Then it waits a while
+    /// (`weaponCooldown`). The weapons go off on the next tick, as ones fired this tick do.
+    fn bot_weapons(
+        &mut self,
+        level: &Level,
+        doors: &coll::doors::Doors,
+        players: usize,
+        ticks: &mut [KartTick],
+    ) {
+        if self.bots.is_none() || players == 0 || self.event_ms < BOT_WEAPONS_FROM_MS {
+            return;
+        }
+        let rank_of = |karts: &[Kart], rank: i32| {
+            let at = |k: &Kart| k.driver.driver_rank as i32 == rank;
+            if rank < 0 {
+                None
+            } else {
+                karts.iter().position(at)
+            }
+        };
+        for player in 0..players {
+            let rank = self.karts[player].driver.driver_rank as i32;
+            if rank != 0
+                && let Some(bot) = rank_of(&self.karts, rank - 1)
+                && self.bot_may_fire(bot, player)
+            {
+                let rng = &mut self.objects.random_number;
+                let roll = math::mix_rng_scramble(rng) % 200;
+                let shot = match roll {
+                    0 => {
+                        let bot_driver = &mut self.karts[bot].driver;
+                        if bot_driver.lap_index != 0 && math::mix_rng_scramble(rng) % 100 < 50 {
+                            bot_driver.num_wumpas = 10;
+                        }
+                        // (Retail picks by the parity of the race's milliseconds, which here go
+                        // by 32: the tick's stands in.)
+                        let launch = if self.tick & 1 != 0 {
+                            vehicle::item::Launch::Mine
+                        } else {
+                            vehicle::item::Launch::Potion
+                        };
+                        Some((launch, BOT_VOICE_MINE))
+                    }
+                    1 => Some((vehicle::item::Launch::Bomb, BOT_VOICE_BOMB)),
+                    2 => Some((vehicle::item::Launch::Missile, BOT_VOICE_MISSILE)),
+                    _ => None,
+                };
+                if let Some((launch, voice)) = shot {
+                    self.bot_fires(bot, launch, voice, level, doors, ticks);
+                    if roll == 0 {
+                        self.karts[bot].driver.num_wumpas = 0;
+                    }
+                    self.bot_cooldown(bot);
+                }
+            }
+            let p = &self.karts[player].driver;
+            let still_racing =
+                p.lap_index < self.laps || p.distance_to_finish_curr > BOT_TRAILING_NEAR_FINISH;
+            if rank < 3
+                && still_racing
+                && let Some(bot) = rank_of(&self.karts, rank + 1)
+                && self.bot_may_fire(bot, player)
+            {
+                let roll = math::mix_rng_scramble(&mut self.objects.random_number) % 800;
+                let last_lap = self.karts[bot].driver.lap_index as i32 == self.laps as i32 - 1;
+                let launch = if roll < 2 && !last_lap {
+                    Some(vehicle::item::Launch::Missile)
+                } else if roll < 4 {
+                    Some(vehicle::item::Launch::Bomb)
+                } else {
+                    None
+                };
+                if let Some(launch) = launch {
+                    self.bot_fires(bot, launch, BOT_VOICE_MISSILE, level, doors, ticks);
+                    self.bot_cooldown(bot);
+                }
+            }
+        }
+    }
+
+    /// Whether the kart in `bot` is a bot that can fire at the `player`'s: not hurt, still
+    /// racing, its cooldown over, no TNT on its head, no clock on it, and near enough.
+    fn bot_may_fire(&self, bot: usize, player: usize) -> bool {
+        let b = &self.karts[bot].driver;
+        let Some(data) = &b.bot else {
+            return false;
+        };
+        let ready = data.flags & vehicle::bot::flags::DAMAGE_ACTIVE == 0
+            && b.actions_flag_set & actions::RACE_FINISHED == 0
+            && data.weapon_cooldown == 0
+            && b.tnt_scale_y.is_none()
+            && b.clock_receive == 0;
+        let (p, at) = (self.karts[player].driver.inst_pos, b.inst_pos);
+        let (x, z) = (p[0].wrapping_sub(at[0]), p[2].wrapping_sub(at[2]));
+        let distance = x.wrapping_mul(x).wrapping_add(z.wrapping_mul(z)) as u32;
+        ready && distance.wrapping_sub(BOT_WEAPON_NEAREST) < BOT_WEAPON_RANGE
+    }
+
+    /// `VehPickupItem_ShootNow` for a bot, with what it says to the player it fires at.
+    fn bot_fires(
+        &mut self,
+        bot: usize,
+        launch: vehicle::item::Launch,
+        voice: u8,
+        level: &Level,
+        doors: &coll::doors::Doors,
+        ticks: &mut [KartTick],
+    ) {
+        let bodies: Vec<weapon::Body> = self
+            .karts
+            .iter()
+            .map(|k| weapon::Body::of(&k.driver))
+            .collect();
+        let aim = Aim {
+            level,
+            bodies: &bodies,
+            doors,
+            elapsed_time_ms: Env::default().elapsed_time_ms,
+        };
+        let mut effects = vec![Vec::new(); self.karts.len()];
+        effects[bot].push(Effect::Voiceline {
+            id: voice,
+            driver_id: bot as u8,
+            priority: vehicle::pick::VOICELINE_PRIORITY,
+        });
+        let fired = vehicle::item::Fired::Weapon(launch);
+        self.fire(bot, fired, &Input::default(), &aim, &mut effects);
+        for (tick, effects) in ticks.iter_mut().zip(effects) {
+            tick.effects.extend(effects);
+        }
+    }
+
+    /// `PickupBots_SetCooldown`: 4 to 8 seconds before the bot fires again (the drive counts it down
+    /// twice a tick).
+    fn bot_cooldown(&mut self, bot: usize) {
+        let roll = math::mix_rng_scramble(&mut self.objects.random_number);
+        if let Some(b) = &mut self.karts[bot].driver.bot {
+            b.weapon_cooldown = ((roll & 0xff) + 0xf0) as i16;
+        }
+    }
 }
 
 /// FNV-1a over the text written to it: a hash of a value's `Debug`, with no text kept.
@@ -927,8 +1221,8 @@ impl Race {
         }
         let _ = write!(
             hash,
-            "{:?} {:?} {:?}",
-            self.last, self.weapons, self.last_weapons
+            "{:?} {:?} {:?} {:?}",
+            self.last, self.weapons, self.last_weapons, self.bots
         );
         hash.0
     }

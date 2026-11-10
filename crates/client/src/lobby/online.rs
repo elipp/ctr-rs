@@ -39,6 +39,11 @@ pub struct Online {
     /// The kart of each slot, as the race takes them: set by `remote::build`, which has their
     /// models.
     pub specs: Vec<race::KartSpec>,
+    /// The retail bots the host added, in the karts' slots after the players' (`remote::build`
+    /// drops them on a track with no paths for them), and their karts. (Not the brain bots: those
+    /// are players, see [`Online::bots`].)
+    pub retail: net::RetailBots,
+    pub retail_specs: Vec<race::KartSpec>,
     /// How many times a late pad differed from its prediction, and the ticks played again for it.
     pub corrections: u32,
     pub replayed: u32,
@@ -106,16 +111,16 @@ impl Online {
         self.slot == 0 && self.is_bot(slot)
     }
 
-    /// What a cup scores the kart of `slot` by: the player's endpoint id, or the bot's place
-    /// among the bots.
-    pub fn score_id(&self, slot: usize) -> Option<[u8; 32]> {
-        if self.is_bot(slot) {
-            let mut id = [0; 32];
-            id[..4].copy_from_slice(b"bot ");
-            id[4] = (slot - self.bot_slots().start) as u8;
-            return Some(id);
+    /// Who drives the kart of `slot`, for a cup to score: a player, or a bot of either kind (by
+    /// its character).
+    pub fn who(&self, slot: usize) -> Option<super::cup::Who> {
+        use super::cup::Who;
+        let players = self.characters.len();
+        match slot.checked_sub(players) {
+            None if self.is_bot(slot) => Some(Who::Bot(self.characters[slot])),
+            None => self.ids.get(slot).copied().map(Who::Player),
+            Some(bot) => self.retail.characters.get(bot).copied().map(Who::Bot),
         }
-        self.ids.get(slot).map(|id| *id.as_bytes())
     }
 
     /// Whether we only watch: the slot is past the players', and there is no kart of ours.
@@ -127,6 +132,34 @@ impl Online {
     /// spectator does: a spectator, or a player whose kart has finished (see `drive_tick`).
     pub fn watches(&self) -> bool {
         self.spectating() || self.finished.get(self.slot).copied().unwrap_or(false)
+    }
+
+    /// How many karts the race has: the players' (the brain bots among them), then the retail
+    /// bots'.
+    pub fn karts(&self) -> usize {
+        self.characters.len() + self.retail.characters.len()
+    }
+
+    /// The character of each kart, the retail bots' after the players'.
+    pub fn kart_characters(&self) -> Vec<u8> {
+        let bots = &self.retail.characters;
+        self.characters.iter().chain(bots).copied().collect()
+    }
+
+    /// What the kart in `slot` is called: its player (or brain bot), or the character a retail
+    /// bot drives. (A slot past the players in [`labels`](Self::labels) is a spectator's, not a
+    /// bot's.)
+    pub fn kart_label(&self, slot: usize) -> &str {
+        let players = self.characters.len();
+        if slot < players {
+            return self.labels.get(slot).map_or("", String::as_str);
+        }
+        self.retail
+            .characters
+            .get(slot - players)
+            .and_then(|&c| crate::CHARACTERS.get(c as usize))
+            .copied()
+            .unwrap_or("")
     }
 
     /// The kart of the sim that the view is of, and the HUD: ours, or the one a spectator follows.

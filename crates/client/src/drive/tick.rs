@@ -157,12 +157,23 @@ pub(super) fn drive_tick(
                 dummies.1.is_some(),
             ),
         };
+        let bots = lobby.online.as_ref().map(|net| {
+            let setup = vehicle::bot::Setup {
+                difficulty: net.retail.difficulty as i16,
+                // A custom track has the rubber band of the first.
+                track: (net.track < race::RACING_TRACKS).then_some(net.track as u8),
+                cup: net.retail.cup,
+                players: net.characters.len(),
+            };
+            (setup, net.retail_specs.as_slice())
+        });
         sim.restart(
             &track.0,
             &specs,
             own,
             lobby.online.as_ref().map(|net| net.laps),
             spectator,
+            bots,
         );
         // The dummies have left from tick 0: a neutral pad, and nothing to wait for. Unless the
         // policy drives them: then their pads are made here, each tick (below).

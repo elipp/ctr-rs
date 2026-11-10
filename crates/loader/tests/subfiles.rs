@@ -109,28 +109,29 @@ fn needs_disc_track_lev_files_parse() {
             "level {id:>2}: recorded paths {:?}",
             lev.paths.iter().map(Vec::len).collect::<Vec<_>>()
         );
-        // A frame's `dist_to_next_xyz` should be about the distance to the next frame: a check
-        // that the layout is read right.
-        let nav: Vec<_> = lev
-            .nav_paths
-            .iter()
-            .map(|path| {
-                let worst = path
-                    .frames
-                    .windows(2)
-                    .map(|w| {
-                        let d = |a: i16, b: i16| (b as f64 - a as f64).powi(2);
-                        let real = (d(w[0].pos.x, w[1].pos.x)
-                            + d(w[0].pos.y, w[1].pos.y)
-                            + d(w[0].pos.z, w[1].pos.z))
-                        .sqrt();
-                        (real - w[0].dist_to_next_xyz as f64).abs()
-                    })
-                    .fold(0.0, f64::max);
-                (path.frames.len(), worst as i32)
-            })
-            .collect();
-        println!("level {id:>2}: nav paths (frames, worst distance error) {nav:?}");
+        println!(
+            "level {id:>2}: nav paths {:?}",
+            lev.nav_paths
+                .iter()
+                .map(|n| n.frames.len())
+                .collect::<Vec<_>>()
+        );
+        for (k, path) in lev.nav_paths.iter().enumerate() {
+            let frames = &path.frames;
+            assert!(!frames.is_empty(), "level {id}: nav path {k} is empty");
+            // Each frame has the distance to the next one; the last's is to the first.
+            for (i, f) in frames.iter().enumerate() {
+                let next = frames[(i + 1) % frames.len()].pos;
+                let d = |a: i16, b: i16| (a as f64 - b as f64).powi(2);
+                let xz = (d(f.pos.x, next.x) + d(f.pos.z, next.z)).sqrt();
+                let xyz = (xz * xz + d(f.pos.y, next.y)).sqrt();
+                assert!(
+                    (xyz - f.dist_to_next_xyz as f64).abs() <= 2.0
+                        && (xz - f.dist_to_next_xz as f64).abs() <= 2.0,
+                    "level {id}: nav path {k} frame {i}: {f:?}, {xyz:.1} / {xz:.1} to the next"
+                );
+            }
+        }
         let mut with_model = 0;
         for inst in lev.instances.iter().filter(|i| i.model != 0) {
             let model = loader::model::Model::parse_at(&dram, inst.model)

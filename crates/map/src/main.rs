@@ -243,6 +243,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             println!("instances: {names:?}");
             println!(
+                "bot paths: {:?} frames",
+                l.nav_paths.iter().map(|n| n.frames.len()).collect::<Vec<_>>()
+            );
+            println!(
                 "data: {} bytes, {} pointers; {} vram images",
                 map.dram.data.len(),
                 map.dram.pointer_slots.len(),
