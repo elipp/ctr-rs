@@ -37,6 +37,10 @@ pub struct Rules {
     /// wall, or the wrong way, to practise getting out. A stuck kart is otherwise rare, and cut
     /// soon, and a policy that has hardly seen one does nothing at all when it is.
     pub turned_starts: f32,
+    /// The share of the episodes that start [`Rules::run_up`] before one of the spots the env's
+    /// kart was grabbed at lately (the last [`GRAB_SPOTS`]): practice where the policy fails,
+    /// on whatever track, without a list of them. A spot it no longer falls at drops out.
+    pub grab_starts: f32,
     pub weights: Weights,
     /// The reward the trainer sees is the sum of [`Rules::weights`]' over the held ticks, times
     /// this (for the critic's targets to be of a size of 1 or so).
@@ -56,6 +60,7 @@ impl Default for Rules {
             jump_starts: 0.25,
             run_up: 1200,
             turned_starts: 0.15,
+            grab_starts: 0.15,
             weights: Weights::DEFAULT,
             reward_scale: 0.1,
         }
@@ -92,12 +97,19 @@ pub struct Episode {
     pub air_ticks: u32,
     pub air_misalign: f32,
     pub air_askew: u32,
-    /// It started before a jump ([`Rules::jump_starts`]).
+    /// It started before a jump ([`Rules::jump_starts`]), or a spot of a grab
+    /// ([`Rules::grab_starts`]).
     pub jump_start: bool,
-    /// Ticks against a wall.
+    pub grab_start: bool,
+    /// Times a stuck kart tried another path (`Progress::switch_due`).
+    pub switches: u32,
+    /// Ticks against a wall, and braking (`Step::braking`).
     pub wall: u32,
+    pub braking: u32,
     /// The progress made in the air that mask grabs took back (`Step::taken_back`).
     pub taken_back: i64,
+    /// The reserves lost (`Step::reserves_lost`), in milliseconds.
+    pub reserves_lost: i64,
     /// Drifts started; the boost tries in them (taps of R1 or L1 with the meter on) that came
     /// too early, while the meter was still over half; and the drifts whose meter ran out
     /// untouched (which ends their tries). The tries in time are [`Episode::boosts`].
@@ -153,7 +165,15 @@ pub struct Env<'a> {
     latch: Latch,
     progress: Progress,
     episode: Episode,
+    /// Where the kart was grabbed lately, as (track, path, frame): the frame it last had the
+    /// ground under it at, for a fall (the takeoff, not where it came down).
+    spots: std::collections::VecDeque<(usize, usize, usize)>,
+    /// The tracker's frame the last tick the kart touched the ground.
+    ground_frame: usize,
 }
+
+/// How many grab spots an env keeps ([`Rules::grab_starts`]).
+pub const GRAB_SPOTS: usize = 32;
 
 impl<'a> Env<'a> {
     pub fn new(tracks: &'a [Track], rules: Rules, seed: u64) -> Env<'a> {
@@ -170,6 +190,8 @@ impl<'a> Env<'a> {
             latch: Latch::default(),
             progress: Progress::default(),
             episode: Episode::default(),
+            spots: std::collections::VecDeque::with_capacity(GRAB_SPOTS),
+            ground_frame: 0,
         };
         env.reset();
         env
@@ -194,13 +216,24 @@ impl<'a> Env<'a> {
     fn reset(&mut self) {
         let any_jumps = self.tracks.iter().any(|t| !t.jumps.is_empty());
         loop {
-            let jump_start = any_jumps && self.rng.unit() < self.rules.jump_starts;
-            self.track = self.pick_track();
+            let u = self.rng.unit();
+            let jump_start = any_jumps && u < self.rules.jump_starts;
+            let grab_start = !jump_start
+                && !self.spots.is_empty()
+                && u < self.rules.jump_starts + self.rules.grab_starts;
+            let spot = grab_start.then(|| self.spots[self.rng.below(self.spots.len())]);
+            self.track = match spot {
+                Some((track, _, _)) => track,
+                None => self.pick_track(),
+            };
             let track = &self.tracks[self.track];
             if track.paths.is_empty() || (jump_start && track.jumps.is_empty()) {
                 continue;
             }
-            let frame = if jump_start {
+            let frame = if let Some((_, path, at)) = spot {
+                self.path = path;
+                run_up_frame(&track.lengths[path], at, self.rules.run_up)
+            } else if jump_start {
                 let (path, lip) = track.jumps[self.rng.below(track.jumps.len())];
                 self.path = path;
                 run_up_frame(&track.lengths[path], lip, self.rules.run_up)
@@ -212,8 +245,9 @@ impl<'a> Env<'a> {
             let spec = spec(self.rng.below(vehicle::stats::CHARACTER_ENGINES.len()));
             let mut race = Race::new(&track.level, track.objects.clone(), &[spec], false);
             race.laps = race::FREE_DRIVE_LAPS;
-            // (Not before a jump: those are for flying.)
-            let turn = if !jump_start && self.rng.unit() < self.rules.turned_starts {
+            // (Not before a jump or a grab's spot: those are for getting over it.)
+            let turn = if !jump_start && !grab_start && self.rng.unit() < self.rules.turned_starts
+            {
                 self.rng.below(0x1000) as i32 - 0x800
             } else {
                 0
@@ -226,8 +260,10 @@ impl<'a> Env<'a> {
             self.tracker = Tracker::find(frames, driver.pos_curr);
             self.progress = Progress::new(frames, &track.lengths[self.path], &self.tracker, driver);
             self.latch = Latch::default();
+            self.ground_frame = self.tracker.frame as usize;
             self.episode = Episode {
                 jump_start,
+                grab_start,
                 ..Episode::default()
             };
             return;
@@ -240,24 +276,33 @@ impl<'a> Env<'a> {
     }
 
     pub fn step(&mut self, action: Action) -> Step {
-        let track = &self.tracks[self.track];
-        let frames = &track.level.nav_paths[self.path].frames;
-        let lengths = &track.lengths[self.path];
+        let tracks = self.tracks;
+        let track = &tracks[self.track];
         let mut reward = 0.0;
         self.episode.choices += 1;
         for _ in 0..self.rules.repeat {
+            // (The path may change from tick to tick: a stuck kart tries another.)
+            let frames = &track.level.nav_paths[self.path].frames;
+            let lengths = &track.lengths[self.path];
             let pressed = self.latch.r1;
-            let (was_drifting, attempted) = {
+            let (was_drifting, attempted, fast) = {
                 let d = &self.race.karts[0].driver;
-                (d.kart_state == vehicle::kart_state::DRIFTING, d.num_boosts_attempted)
+                (
+                    d.kart_state == vehicle::kart_state::DRIFTING,
+                    d.num_boosts_attempted,
+                    (d.speed_approx as i32) * 4 > d.stats.speed_class_stat as i32,
+                )
             };
-            let pad: Pad = self.latch.pad(action, was_drifting);
+            let pad: Pad = self.latch.pad(action, was_drifting, attempted > 0);
+            let braking =
+                fast && pad.held & (vehicle::buttons::SQUARE | vehicle::buttons::DOWN) != 0;
             self.race.tick(&track.level, &[pad]);
             let driver = &self.race.karts[0].driver;
             let drifting = driver.kart_state == vehicle::kart_state::DRIFTING;
             let relocated = nn::track(&mut self.tracker, frames, driver);
             let step = nn::Step {
                 steer_change: self.latch.steer_change,
+                braking,
                 ..self.progress.step(frames, lengths, &self.tracker, relocated, driver)
             };
             let r = self.rules.weights.reward(&step);
@@ -267,9 +312,20 @@ impl<'a> Env<'a> {
             e.ticks += 1;
             e.progress += step.progress;
             e.grabs += step.grabbed as u32;
+            if driver.actions_flag_set & vehicle::actions::TOUCH_GROUND != 0 {
+                self.ground_frame = self.tracker.frame as usize;
+            }
+            if step.grabbed {
+                if self.spots.len() == GRAB_SPOTS {
+                    self.spots.pop_front();
+                }
+                self.spots.push_back((self.track, self.path, self.ground_frame));
+            }
             e.boosts += step.boosts as u32;
             e.wall += step.wall as u32;
+            e.braking += step.braking as u32;
             e.taken_back += step.taken_back;
+            e.reserves_lost += step.reserves_lost as i64;
             // A tap is one try (`powerslide::update`), and the meter running out takes all three.
             let tries = driver.num_boosts_attempted as i32 - attempted as i32;
             if drifting && !was_drifting {
@@ -289,6 +345,16 @@ impl<'a> Env<'a> {
             // (`1 - cos 45°`.)
             e.air_askew += (step.air_misalign > 0.293) as u32;
             e.steer_change += step.steer_change as u32;
+            if self.progress.switch_due(driver)
+                && let Some((path, tracker)) =
+                    nn::next_path(&track.level, self.path, driver.pos_curr)
+            {
+                self.path = path;
+                self.tracker = tracker;
+                let frames = &track.level.nav_paths[path].frames;
+                self.progress.switched(frames, &track.lengths[path], &self.tracker, driver);
+                e.switches += 1;
+            }
         }
         let e = self.episode;
         let done = if self.progress.stalled >= self.rules.stuck_ticks {

@@ -16,12 +16,6 @@ use race::nn::{self, Action, Latch, Progress};
 use race::rollback::Rollback;
 use race::{KartSpec, Pad, Race};
 
-/// After this many ticks without getting further along its path (`Progress::stalled`), a kart's
-/// choices are drawn from the policy's odds, as in training, instead of the likeliest: stuck,
-/// what it sees hardly changes from tick to tick, nor would the likeliest choice, and it would
-/// sit there for good. Drawn, it jiggles out as it learned to.
-const SAMPLE_AFTER_STALLED: u32 = 30;
-
 /// Where the policy is read from when none is given: `BRAIN_POLICY`, or else this (where `train`
 /// saves it, from the workspace).
 const DEFAULT_POLICY: &str = "target/brain/policy.safetensors";
@@ -33,7 +27,8 @@ pub struct Brains {
     /// The file of the policy last given on the console: the next spawn reads it again.
     given: Option<PathBuf>,
     karts: Vec<Driven>,
-    /// For the choices of the karts that are stuck ([`SAMPLE_AFTER_STALLED`]).
+    /// For the choices of the karts that are stuck, or just put back by the mask
+    /// (`nn::draw_choices`).
     rng: Rng,
 }
 
@@ -120,7 +115,7 @@ impl Brains {
             return Vec::new();
         }
         let decide = tick % brain::env::Rules::default().repeat == 0;
-        // The likeliest choices, and the drawn ones of the karts that are stuck.
+        // The likeliest choices, and the drawn ones (`nn::draw_choices`).
         let mut obs: [Vec<nn::Obs>; 2] = [Vec::new(), Vec::new()];
         let mut deciding: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
         for (i, k) in self.karts.iter_mut().enumerate() {
@@ -132,8 +127,20 @@ impl Brains {
             let relocated = nn::track(&mut k.tracker, frames, &kart.driver);
             k.progress
                 .step(frames, &k.lengths, &k.tracker, relocated, &kart.driver);
+            // Stuck: try another path, as in training.
+            if k.progress.switch_due(&kart.driver)
+                && let Some((path, tracker)) =
+                    nn::next_path(level, k.path, kart.driver.pos_curr)
+            {
+                k.path = path;
+                k.tracker = tracker;
+                k.lengths = PathLength::of(&level.nav_paths[path].frames);
+                let frames = &level.nav_paths[path].frames;
+                k.progress.switched(frames, &k.lengths, &k.tracker, &kart.driver);
+            }
+            let frames = &level.nav_paths[k.path].frames;
             if decide {
-                let drawn = (k.progress.stalled >= SAMPLE_AFTER_STALLED) as usize;
+                let drawn = nn::draw_choices(&k.progress) as usize;
                 obs[drawn].push(nn::observe(frames, &k.tracker, &k.progress, kart, &k.latch));
                 deciding[drawn].push(i);
             }
@@ -156,8 +163,14 @@ impl Brains {
             .iter_mut()
             .map(|k| {
                 let has_path = level.nav_paths[k.path].frames.len() >= 2;
-                let drifting = race.karts[k.slot].driver.kart_state == vehicle::kart_state::DRIFTING;
-                let pad = if has_path { k.latch.pad(k.action, drifting) } else { Pad::default() };
+                let d = &race.karts[k.slot].driver;
+                let drifting = d.kart_state == vehicle::kart_state::DRIFTING;
+                let tried = d.num_boosts_attempted > 0;
+                let pad = if has_path {
+                    k.latch.pad(k.action, drifting, tried)
+                } else {
+                    Pad::default()
+                };
                 (k.slot, pad)
             })
             .collect()

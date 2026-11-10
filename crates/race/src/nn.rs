@@ -135,7 +135,9 @@ pub fn observe(
 
     // (The way the path goes over a stretch, not the segment's: see `path_heading`.)
     let (offset, _) = tracker.offset(path, pos);
-    let heading = path_heading(path, tracker, pos);
+    let heading = progress
+        .flight_heading
+        .unwrap_or_else(|| path_heading(path, tracker, pos));
     o.push(offset as f32 / DISTANCE_SCALE);
     let error = (heading - d.angle as i32) as f32 * ANGLE_TO_RAD;
     o.push(error.sin());
@@ -176,7 +178,7 @@ pub fn observe(
     o.push((d.reserves as f32 / 2000.0).min(2.0));
 
     o.flag(kart.held & buttons::CROSS != 0);
-    o.flag(kart.held & buttons::SQUARE != 0);
+    o.flag(kart.held & (buttons::SQUARE | buttons::DOWN) != 0);
     o.flag(kart.held & buttons::R1 != 0);
     o.flag(kart.held & buttons::L1 != 0);
     o.push(latch.hold_left as f32 / HOLD_TICKS as f32);
@@ -231,7 +233,11 @@ pub enum Throttle {
     #[default]
     Gas,
     Coast,
-    /// Square: brakes, then backs up.
+    /// D-pad down (the stick all the way down, as the client's D-pad sends it), alone: backs up at
+    /// the full reverse speed (`vehicle::linear`'s reverse from neutral), slowing the kart first
+    /// if it is going forward. Not Square: alone that only brakes, to a stop (a kart against a
+    /// wall could not get out), and with or without Down it throws the reserves away and ends a
+    /// drift.
     Reverse,
 }
 
@@ -296,14 +302,24 @@ impl Latch {
     /// makes L1 the button the next drift is held with (`vehicle::linear`), and that drift ends
     /// as soon as L1 is let go: by chance, a few ticks in, long before its meter can boost. A hop
     /// with L1 is no different from one with R1, so nothing is lost.
-    pub fn pad(&mut self, action: Action, drifting: bool) -> Pad {
+    ///
+    /// The long hold ([`Hop::HoldLong`]) is for getting a drift to its meter's window: once the
+    /// drift has `tried` a boost (`Driver::num_boosts_attempted`: in time, too early, or the
+    /// meter ran out), it is over, and the hop's choice holds R1 or lets go again. Held on
+    /// regardless, the one way out of a drift whose corner ends sooner would be Square, which
+    /// throws the reserves away.
+    pub fn pad(&mut self, action: Action, drifting: bool, tried: bool) -> Pad {
         self.steer_change = self.steer.abs_diff(action.steer);
         self.steer = action.steer;
         let mut pad = action.pad();
         if !drifting {
             pad.held &= !buttons::L1;
         }
-        if action.hop == Hop::HoldLong && self.hold_left == 0 {
+        let done = drifting && tried;
+        if done {
+            self.hold_left = 0;
+        }
+        if action.hop == Hop::HoldLong && self.hold_left == 0 && !done {
             self.hold_left = HOLD_TICKS;
             // In a drift, R1 holds it: letting go would end it. Out of one, let go for this
             // tick, for the next to be a press.
@@ -358,13 +374,14 @@ impl Action {
         let throttle = match self.throttle {
             Throttle::Gas => buttons::CROSS,
             Throttle::Coast => 0,
-            Throttle::Reverse => buttons::SQUARE,
+            Throttle::Reverse => buttons::DOWN,
         };
         Pad {
             held: throttle
                 | if self.hop != Hop::Release { buttons::R1 } else { 0 }
                 | if self.boost { buttons::L1 } else { 0 },
             lx: lx.clamp(0, 0xff) as u8,
+            ly: if self.throttle == Throttle::Reverse { 0xff } else { STICK_CENTER as u8 },
             ..Pad::default()
         }
     }
@@ -399,6 +416,10 @@ pub fn path_heading(path: &[NavFrame], tracker: &Tracker, pos: Vec3) -> i32 {
 /// turn made in these ticks still costs for the rest of the flight.
 pub const AIR_GRACE_TICKS: u32 = 15;
 
+/// The reserves a boost spends a tick (`vehicle::linear`'s count-down, by `Env::elapsed_time_ms`):
+/// what they drop by more than this is lost ([`Step::reserves_lost`]).
+pub const RESERVES_SPENT_PER_TICK: i32 = 32;
+
 /// Ticks without getting further along before [`Step::stalled`]: a back-up or a turn round is
 /// free.
 pub const STALL_GRACE_TICKS: u32 = 30;
@@ -420,6 +441,14 @@ pub struct Step {
     /// The progress made in the air that a mask grab took back (level units, out of
     /// [`Step::progress`]): see [`Progress::air_progress`]. 0 but at a grab.
     pub taken_back: i64,
+    /// The reserves it lost this tick (milliseconds), beyond the [`RESERVES_SPENT_PER_TICK`] a
+    /// boost spends: thrown away by Square (`vehicle::linear`), a wall's scrub, a crash, a spin,
+    /// the mask. The ways a drift ends badly (`brake`, `wall`) cost what they cost the boost.
+    pub reserves_lost: i32,
+    /// Reverse (Down, or Square) was held going forward faster than a quarter of the top speed:
+    /// braking, not backing out. [`Progress::step`] knows nothing of the pads: the caller puts it
+    /// in.
+    pub braking: bool,
     /// It has got no further along for more than [`STALL_GRACE_TICKS`] ([`Progress::stalled`]).
     pub stalled: bool,
     /// In the air (and not carried by the mask) for more than [`AIR_GRACE_TICKS`], how far the
@@ -431,6 +460,9 @@ pub struct Step {
     /// Drift boosts fired this tick: taps of L1 in time, each of a drift's three
     /// (`Driver::num_boosts_success`).
     pub boosts: u8,
+    /// Of the drift's boosts, the number of the last fired this tick (1 for its first; with
+    /// [`Step::boosts`], for [`Weights::boost_growth`]).
+    pub boost_number: u8,
     /// How many steering bins the stick moved for this tick's pad ([`Latch::steer_change`]).
     /// [`Progress::step`] knows nothing of the pads: the caller puts it in.
     pub steer_change: u8,
@@ -459,9 +491,94 @@ pub struct Progress {
     /// progress, [`track`]). A grab takes this back, so that a fall is worth none of the way it
     /// flew (a jump that lands keeps it).
     pub air_progress: i64,
+    /// The ticks since the mask put the kart back (`u32::MAX` if it never has).
+    pub since_respawn: u32,
+    /// It was grabbed again soon after the last respawn ([`GRAB_LOOP_TICKS`]): the next
+    /// [`Progress::switch_due`] on the ground is a switch.
+    pub loop_switch: bool,
+    /// In a flight off a gap's lip, the way from the lip to its landing ([`gap_heading`]): the
+    /// way the path goes, for the whole flight, instead of [`path_heading`]. That one looks
+    /// some way along the path from where the kart is, which past a landing with a corner right
+    /// after it bends into the corner while the kart is
+    /// still in the air: the cost and the observation would have it turn mid-air.
+    pub flight_heading: Option<i32>,
+}
+
+/// The way from the lip of the gap the kart at `frame` of `path` is taking off from (within a
+/// couple of frames of it) to the gap's landing (`bot::gap_landing`), if it is at one.
+pub fn gap_heading(path: &[NavFrame], frame: usize) -> Option<i32> {
+    let n = path.len();
+    if n < 2 {
+        return None;
+    }
+    (0..5).find_map(|k| {
+        let lip = (frame + n + k - 2) % n;
+        let landing = crate::bot::gap_landing(path, lip)?;
+        let (a, b) = (&path[lip].pos, &path[landing].pos);
+        Some(math::ratan2(b.x as i32 - a.x as i32, b.z as i32 - a.z as i32))
+    })
+}
+
+/// After this many ticks without getting further along ([`Progress::stalled`]) ...
+pub const SAMPLE_AFTER_STALLED: u32 = 30;
+/// ... or for this many after a respawn, a bot that drives by the likeliest choices should draw
+/// them from the policy's odds instead, as in training ([`draw_choices`]).
+pub const SAMPLE_AFTER_RESPAWN: u32 = 90;
+
+/// Every this many ticks of a stall ([`Progress::stalled`]), a bot tries another path
+/// ([`Progress::switch_due`]) ...
+pub const SWITCH_AFTER_STALLED: u32 = 60;
+/// ... and when the mask grabs it again within this many ticks of putting it back: a loop, the
+/// line it steers by leading off the same edge again.
+pub const GRAB_LOOP_TICKS: u32 = 30 * 20;
+
+/// The path a stuck bot at `pos` switches to: the level's next one after `path` (two frames or
+/// more), round them in turn, and where on it the bot is. In turn, not the nearest: with three
+/// lines side by side the nearest to one is often the one it came from, and the third would
+/// never be tried. None if there is no other.
+pub fn next_path(level: &Level, path: usize, pos: Vec3) -> Option<(usize, Tracker)> {
+    let n = level.nav_paths.len();
+    (1..n)
+        .map(|k| (path + k) % n)
+        .find(|&i| level.nav_paths[i].frames.len() >= 2)
+        .map(|i| (i, Tracker::find(&level.nav_paths[i].frames, pos)))
+}
+
+/// Whether the bot at `progress` should draw its choices, not take the likeliest. The sim is the
+/// same every time, and so is the likeliest choice from where it is: stuck, what the bot sees
+/// hardly changes, and it would sit there for good; put back by the mask at the same spot,
+/// standing still, it would drive off the same edge again, and again. Drawn, it gets out as it
+/// learned to.
+pub fn draw_choices(progress: &Progress) -> bool {
+    progress.stalled >= SAMPLE_AFTER_STALLED || progress.since_respawn < SAMPLE_AFTER_RESPAWN
 }
 
 impl Progress {
+    /// Whether the bot of `driver` should try another path now ([`next_path`]): on the
+    /// ground, after each [`SWITCH_AFTER_STALLED`] ticks of a stall, or once put back by the mask
+    /// after a loop of grabs ([`Progress::loop_switch`], which this clears). The line it steers
+    /// by may lead past what it cannot get round (a wall, a drop it went down beside the road),
+    /// or off an edge, and another may show a way.
+    pub fn switch_due(&mut self, driver: &Driver) -> bool {
+        let on_ground = driver.actions_flag_set & actions::TOUCH_GROUND != 0
+            && driver.kart_state != kart_state::MASK_GRABBED;
+        if !on_ground {
+            return false;
+        }
+        let stalled = self.stalled > 0 && self.stalled % SWITCH_AFTER_STALLED == 0;
+        let looped = std::mem::take(&mut self.loop_switch);
+        stalled || looped
+    }
+
+    /// Goes on along another path, the kart being at `tracker` on it: the progress from here is
+    /// along that one. The stall goes on (a switch is no progress), so that a bot still stuck
+    /// is still cut and switches again.
+    pub fn switched(&mut self, path: &[NavFrame], lengths: &PathLength, tracker: &Tracker, driver: &Driver) {
+        self.arc = tracker.arc(path, lengths, driver.pos_curr);
+        self.air_progress = 0;
+        self.flight_heading = None;
+    }
+
     pub fn new(path: &[NavFrame], lengths: &PathLength, tracker: &Tracker, driver: &Driver) -> Progress {
         Progress {
             arc: tracker.arc(path, lengths, driver.pos_curr),
@@ -473,6 +590,9 @@ impl Progress {
             airborne: 0,
             boosts_success: driver.num_boosts_success,
             air_progress: 0,
+            since_respawn: u32::MAX,
+            loop_switch: false,
+            flight_heading: None,
         }
     }
 
@@ -497,6 +617,14 @@ impl Progress {
                 .delta(self.arc, arc)
                 .clamp(-MAX_PROGRESS, MAX_PROGRESS)
         };
+        if grabbed && self.since_respawn < GRAB_LOOP_TICKS {
+            self.loop_switch = true;
+        }
+        self.since_respawn = if driver.kart_state == kart_state::MASK_GRABBED {
+            0
+        } else {
+            self.since_respawn.saturating_add(1)
+        };
         let mut taken_back = 0;
         if grabbed {
             taken_back = self.air_progress;
@@ -515,6 +643,8 @@ impl Progress {
         } else {
             (driver.reserves as i32 - self.reserves as i32).max(0)
         };
+        let reserves_lost =
+            (self.reserves as i32 - driver.reserves as i32 - RESERVES_SPENT_PER_TICK).max(0);
         self.reserves = driver.reserves;
         self.total += progress;
         // Carried by the mask, or put somewhere else: where it ends up is the new furthest, not
@@ -531,11 +661,18 @@ impl Progress {
         let airborne = driver.actions_flag_set & actions::TOUCH_GROUND == 0
             && driver.kart_state != kart_state::MASK_GRABBED;
         self.airborne = if airborne { self.airborne + 1 } else { 0 };
+        match self.airborne {
+            0 => self.flight_heading = None,
+            1 => self.flight_heading = gap_heading(path, tracker.frame as usize),
+            _ => {}
+        }
         // (A drift that ends puts it back to 0: no boost.)
         let boosts = (driver.num_boosts_success as i32 - self.boosts_success as i32).max(0) as u8;
         self.boosts_success = driver.num_boosts_success;
         let air_misalign = if self.airborne > AIR_GRACE_TICKS {
-            let heading = path_heading(path, tracker, driver.pos_curr);
+            let heading = self
+                .flight_heading
+                .unwrap_or_else(|| path_heading(path, tracker, driver.pos_curr));
             1.0 - ((heading - driver.angle as i32) as f32 * ANGLE_TO_RAD).cos()
         } else {
             0.0
@@ -546,9 +683,12 @@ impl Progress {
             reserves_gained,
             air_misalign,
             stalled: self.stalled > STALL_GRACE_TICKS,
+            braking: false,
+            reserves_lost,
             taken_back,
             wall: driver.actions_flag_set & actions::DRIVING_AGAINST_WALL != 0,
             boosts,
+            boost_number: driver.num_boosts_success.max(0) as u8,
             steer_change: 0,
         }
     }
@@ -567,6 +707,12 @@ pub struct Weights {
     /// For each millisecond of reserves gained: speed in the bank, which the progress pays for
     /// only once spent (and a drift without its boost costs some first).
     pub reserves: f32,
+    /// For each millisecond of reserves lost ([`Step::reserves_lost`]): as much as gaining one
+    /// pays, so that thrown away they were worth nothing.
+    pub reserves_lost: f32,
+    /// Each tick of [`Step::braking`] (on top of the reserves it throws away). Square at low
+    /// speed, backing out of a wall, is free.
+    pub brake: f32,
     /// Each tick of [`Step::stalled`]: more than anything a kart standing still could earn.
     pub stall: f32,
     /// Each tick against a wall ([`Step::wall`]): the speed it loses the progress pays for, but
@@ -576,6 +722,10 @@ pub struct Weights {
     /// that): a weak one counts as well, for a policy that has yet to find out about them. Not
     /// for the reserves of turbo pads and the start, which the progress pays for already.
     pub drift_boost: f32,
+    /// Each boost of a drift after its first is worth this many times the one before: the
+    /// k-th pays `drift_boost * boost_growth^(k - 1)`, for a policy to find out about chaining
+    /// them (they fire hotter as well, which the progress pays for, later). 1 for none.
+    pub boost_growth: f32,
     /// Each tick in the air, for each unit of [`Step::air_misalign`]: a long jump flies
     /// straight, or turns with the path.
     pub air_heading: f32,
@@ -596,11 +746,15 @@ impl Weights {
         reserves: 0.01,
         // As much as 15 ticks at top speed; with a full bar's reserves, about 34.
         drift_boost: 15.0,
+        boost_growth: 1.0,
         // A short scrape (a few ticks) is about as much as a tick or three at top speed.
         wall: 0.3,
         // Half what a tick at top speed earns, and more than a turbo pad tops up a tick (some
         // 33 ms of reserves, 0.33).
         stall: 0.5,
+        reserves_lost: 0.01,
+        // A second of braking is as much as half a second at top speed.
+        brake: 0.5,
         // A flight of 30 ticks sideways is as much as 6 ticks at top speed; within 15° of the
         // path, next to nothing.
         air_heading: 0.2,
@@ -608,15 +762,27 @@ impl Weights {
         steer_change: 0.05,
     };
 
+    /// What the drift boosts of `step` are worth, each by its number in the drift.
+    fn drift_boosts(&self, step: &Step) -> f32 {
+        let last = step.boost_number as i32;
+        let first = last + 1 - step.boosts as i32;
+        (first.max(1)..=last)
+            .map(|k| self.boost_growth.powi(k - 1))
+            .sum::<f32>()
+            * self.drift_boost
+    }
+
     pub fn reward(&self, step: &Step) -> f32 {
         step.progress as f32 * self.progress
             - if step.grabbed { self.grabbed } else { 0.0 }
             - self.time
             + step.reserves_gained as f32 * self.reserves
-            + step.boosts as f32 * self.drift_boost
+            + self.drift_boosts(step)
             - step.air_misalign * self.air_heading
             - if step.wall { self.wall } else { 0.0 }
             - if step.stalled { self.stall } else { 0.0 }
+            - step.reserves_lost as f32 * self.reserves_lost
+            - if step.braking { self.brake } else { 0.0 }
             - step.steer_change as f32 / (STEER_BINS - 1) as f32 * self.steer_change
     }
 }
@@ -644,7 +810,9 @@ mod tests {
                     let a = Action { steer, throttle, hop, boost };
                     let pad = a.pad();
                     assert_eq!(pad.held & buttons::CROSS != 0, throttle == Throttle::Gas);
-                    assert_eq!(pad.held & buttons::SQUARE != 0, throttle == Throttle::Reverse);
+                    assert_eq!(pad.held & buttons::DOWN != 0, throttle == Throttle::Reverse);
+                    assert_eq!(pad.held & buttons::SQUARE, 0);
+                    assert_eq!(pad.ly == 0xff, throttle == Throttle::Reverse);
                     assert_eq!(pad.held & buttons::R1 != 0, hop != Hop::Release);
                     assert_eq!(pad.held & buttons::L1 != 0, boost);
                     assert_eq!(Action::from_heads(a.heads()), a);
@@ -658,12 +826,12 @@ mod tests {
         let mut latch = Latch::default();
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
         let release = Action::default();
-        assert!(latch.pad(long, false).held & buttons::R1 != 0);
+        assert!(latch.pad(long, false, false).held & buttons::R1 != 0);
         for _ in 1..HOLD_TICKS {
-            assert!(latch.pad(release, false).held & buttons::R1 != 0);
+            assert!(latch.pad(release, false, false).held & buttons::R1 != 0);
         }
         assert_eq!(latch.hold_left, 0);
-        assert_eq!(latch.pad(release, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(release, false, false).held & buttons::R1, 0);
     }
 
     #[test]
@@ -671,12 +839,12 @@ mod tests {
         let mut latch = Latch::default();
         let left = Action { steer: 0, ..Action::default() };
         assert_eq!(latch.steer, STEER_STEPS as u8);
-        latch.pad(left, false);
+        latch.pad(left, false, false);
         assert_eq!(latch.steer_change, STEER_STEPS as u8);
         // Held for another tick: no move.
-        latch.pad(left, false);
+        latch.pad(left, false, false);
         assert_eq!(latch.steer_change, 0);
-        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() }, false);
+        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() }, false, false);
         assert_eq!(latch.steer_change, STEER_BINS as u8 - 1);
     }
 
@@ -685,18 +853,33 @@ mod tests {
         let mut latch = Latch::default();
         let hold = Action { hop: Hop::Hold, ..Action::default() };
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
-        assert!(latch.pad(hold, true).held & buttons::R1 != 0);
+        assert!(latch.pad(hold, true, false).held & buttons::R1 != 0);
         for _ in 0..HOLD_TICKS {
-            assert!(latch.pad(long, true).held & buttons::R1 != 0);
+            assert!(latch.pad(long, true, false).held & buttons::R1 != 0);
         }
+    }
+
+    #[test]
+    fn a_long_hold_ends_once_the_drift_has_tried_a_boost() {
+        let mut latch = Latch::default();
+        let long = Action { hop: Hop::HoldLong, ..Action::default() };
+        let release = Action::default();
+        assert!(latch.pad(long, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(release, true, false).held & buttons::R1 != 0);
+        // Tried: the choice lets go.
+        assert_eq!(latch.pad(release, true, true).held & buttons::R1, 0);
+        assert_eq!(latch.hold_left, 0);
+        // And a long hold chosen then is a plain hold.
+        assert!(latch.pad(long, true, true).held & buttons::R1 != 0);
+        assert_eq!(latch.hold_left, 0);
     }
 
     #[test]
     fn l1_only_in_a_drift() {
         let mut latch = Latch::default();
         let boost = Action { boost: true, ..Action::default() };
-        assert_eq!(latch.pad(boost, false).held & buttons::L1, 0);
-        assert!(latch.pad(boost, true).held & buttons::L1 != 0);
+        assert_eq!(latch.pad(boost, false, false).held & buttons::L1, 0);
+        assert!(latch.pad(boost, true, false).held & buttons::L1 != 0);
     }
 
     #[test]
@@ -704,11 +887,11 @@ mod tests {
         let mut latch = Latch::default();
         let hold = Action { hop: Hop::Hold, ..Action::default() };
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
-        assert!(latch.pad(hold, false).held & buttons::R1 != 0);
+        assert!(latch.pad(hold, false, false).held & buttons::R1 != 0);
         // Let go, then pressed and held on (the choice repeated, as the env holds it).
-        assert_eq!(latch.pad(long, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(long, false, false).held & buttons::R1, 0);
         for _ in 0..HOLD_TICKS {
-            assert!(latch.pad(long, false).held & buttons::R1 != 0);
+            assert!(latch.pad(long, false, false).held & buttons::R1 != 0);
         }
         assert_eq!(latch.hold_left, 0);
     }

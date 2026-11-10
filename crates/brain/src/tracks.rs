@@ -29,6 +29,84 @@ pub struct Track {
     pub weight: f32,
 }
 
+/// The path of `track` that is nearest the others on the whole: with three lines side by side,
+/// the middle one. By each path's frames' mean distance (on the ground plane) to the nearest frame
+/// of each other path. None with fewer than three paths.
+pub fn middle_path(track: &Track) -> Option<usize> {
+    if track.paths.len() < 3 {
+        return None;
+    }
+    let pos = |p: usize| -> Vec<(i64, i64)> {
+        track.level.nav_paths[p]
+            .frames
+            .iter()
+            .map(|f| (f.pos.x as i64, f.pos.z as i64))
+            .collect()
+    };
+    let points: Vec<(usize, Vec<(i64, i64)>)> = track.paths.iter().map(|&p| (p, pos(p))).collect();
+    let mean_to = |from: &[(i64, i64)], to: &[(i64, i64)]| -> f64 {
+        from.iter()
+            .map(|&(x, z)| {
+                to.iter()
+                    .map(|&(u, v)| (x - u).pow(2) + (z - v).pow(2))
+                    .min()
+                    .map_or(0.0, |d2| (d2 as f64).sqrt())
+            })
+            .sum::<f64>()
+            / from.len().max(1) as f64
+    };
+    points
+        .iter()
+        .map(|(p, from)| {
+            let off: f64 = points
+                .iter()
+                .filter(|(q, _)| q != p)
+                .map(|(_, to)| mean_to(from, to))
+                .sum();
+            (*p, off)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(p, _)| p)
+}
+
+/// Keeps only some of the tracks' paths, by `list`: `id:path` or `id:middle` ([`middle_path`]),
+/// comma-separated (several for one track keep each). The jumps on the others go too.
+pub fn keep_paths(tracks: &mut [Track], list: &str) -> Result<(), String> {
+    let mut keep: Vec<(u32, usize)> = Vec::new();
+    for entry in list.split(',') {
+        let (id, path) = entry
+            .trim()
+            .split_once(':')
+            .ok_or_else(|| format!("paths: expected id:path or id:middle, got {entry:?}"))?;
+        let id: u32 = id.parse().map_err(|e| format!("paths: {id:?}: {e}"))?;
+        let track = tracks
+            .iter()
+            .find(|t| t.id.0 == id)
+            .ok_or_else(|| format!("paths: track {id} is not among the ones loaded"))?;
+        let path = match path {
+            "middle" => middle_path(track)
+                .ok_or_else(|| format!("paths: track {id} has no middle of three paths"))?,
+            p => p.parse().map_err(|e| format!("paths: {p:?}: {e}"))?,
+        };
+        if !track.paths.contains(&path) {
+            return Err(format!("paths: track {id} has no path {path}"));
+        }
+        keep.push((id, path));
+    }
+    for track in tracks.iter_mut() {
+        let kept: Vec<usize> = keep
+            .iter()
+            .filter(|(id, _)| *id == track.id.0)
+            .map(|&(_, p)| p)
+            .collect();
+        if !kept.is_empty() {
+            track.paths.retain(|p| kept.contains(p));
+            track.jumps.retain(|(p, _)| kept.contains(p));
+        }
+    }
+    Ok(())
+}
+
 /// The launches of `path` ([`Track::jumps`]).
 fn launches(path: &[loader::lev::NavFrame]) -> Vec<usize> {
     let n = path.len();
