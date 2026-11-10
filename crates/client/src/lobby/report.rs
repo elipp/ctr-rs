@@ -36,6 +36,7 @@ pub(super) fn report(
     let mut map_failed = None;
     let mut roster = None;
     let mut started = None;
+    let mut cup_next = None;
     let mut go = false;
     let mut pads = Vec::new();
     let mut sums = Vec::new();
@@ -70,6 +71,7 @@ pub(super) fn report(
             } => roster = Some((players, spectators, you, locked, bots)),
             Event::Announce(text) => announce(&mut toasts, text),
             Event::Standings(standings) => {
+                cup_next = standings.next.as_ref().map(|(track, _)| *track);
                 announce(&mut toasts, super::cup::standings_text(&standings))
             }
             Event::Chat { from, text } => chats.push((from, text)),
@@ -276,7 +278,11 @@ pub(super) fn report(
         }
         None => {}
     }
+    if cup_next.is_some() {
+        lobby.cup_next = cup_next;
+    }
     if stopped {
+        lobby.cup_next = None;
         lobby.end_race();
         toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
     }

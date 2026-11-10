@@ -58,7 +58,7 @@ impl Howl {
     /// mask's song (Uka Uka's if Aku Aku's is the race's, else Aku Aku's), and the voices grunt
     /// as `character` does, every [`VOICE_TEST_FRAMES`] of the game's `frame`.
     ///
-    /// DIVERGENCE: retail grunts on the frames that are a multiple of 25. The caller's frames
+    /// DEVIATION: retail grunts on the frames that are a multiple of 25. The caller's frames
     /// may skip one, so this grunts when the frame passes one instead.
     pub fn test_sound(&mut self, slider: Option<Slider>, character: u8, frame: u32) {
         let test = self.test;

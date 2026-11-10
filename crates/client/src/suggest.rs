@@ -500,6 +500,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("ranking", "Random ranking (host)"),
             leaf("navpaths", "Draw the bot paths in the race too (toggle)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
+            takes(
+                "loading-screen",
+                "Show the loading screen",
+                "<duration, like 3s>",
+            ),
             Spec {
                 name: "lag",
                 about: "Hold back the others' pads here",

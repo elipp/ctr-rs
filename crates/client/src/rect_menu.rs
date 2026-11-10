@@ -5,7 +5,7 @@
 //! behind it whose green comes and goes (`MenuHighlight`). Sizes are pixels of the PS1's picture
 //! ([`TexelSize`]).
 //!
-//! DIVERGENCE: retail adds the frame and the bar to what is under them; these lay them over, which
+//! DEVIATION: retail adds the frame and the bar to what is under them; these lay them over, which
 //! is darker on light parts of the picture (as `flash.rs`).
 
 use bevy::prelude::*;

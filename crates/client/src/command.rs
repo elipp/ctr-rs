@@ -120,6 +120,8 @@ pub enum Action {
     DebugFx(crate::fx::Fx),
     /// (Debug) Draw the bot paths in the race too, not only in the viewer (`nav.rs`). A toggle.
     DebugNavPaths,
+    /// (Debug) Put the loading screen up for that long, over the game as it goes on.
+    DebugLoadingScreen(std::time::Duration),
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
     NetInfo,
     /// Set how the drawing eases the karts of the others after a rollback.
@@ -165,12 +167,15 @@ const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
 /// The longest stall that can be set.
 const STALL_MAX_MS: f64 = 60_000.0;
+
+/// The longest `/debug loading-screen` holds the screen up.
+const LOADING_SCREEN_MAX_MS: f64 = 60_000.0;
 
 /// The longest smoothing that can be set.
 const SMOOTHING_MAX_MS: f64 = 1000.0;
@@ -526,6 +531,15 @@ impl Action {
                 _ => Err(format!(
                     "A stall is 0 to {} s, like 3s or 500ms\n{DEBUG_USAGE}",
                     STALL_MAX_MS / 1000.0
+                )),
+            },
+            "loading-screen" => match milliseconds(rest) {
+                Some(ms) if (0.0..=LOADING_SCREEN_MAX_MS).contains(&ms) => Ok(
+                    Action::DebugLoadingScreen(std::time::Duration::from_secs_f64(ms / 1000.0)),
+                ),
+                _ => Err(format!(
+                    "Usage: /debug loading-screen <duration>: 0 to {} s, like 3s or 500ms",
+                    LOADING_SCREEN_MAX_MS / 1000.0
                 )),
             },
             "lag" => Action::lag(rest),
@@ -1732,6 +1746,12 @@ mod tests {
         assert_eq!(lag("debug lag 2s"), None);
         assert_eq!(lag("debug lag 75 600"), None);
         assert_eq!(lag("debug lag 75 15 3"), None);
+        assert!(matches!(
+            Action::parse("debug loading-screen 3s"),
+            Ok(Action::DebugLoadingScreen(d)) if d == std::time::Duration::from_secs(3)
+        ));
+        assert!(Action::parse("debug loading-screen").is_err());
+        assert!(Action::parse("debug loading-screen 61s").is_err());
         assert!(Action::parse("debug stall 5m").is_err());
         assert!(Action::parse("debug stall 61s").is_err());
         assert!(Action::parse("debug netinfo").is_err());

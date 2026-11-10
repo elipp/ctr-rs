@@ -124,6 +124,11 @@ pub(crate) fn switch_level(world: &mut World) {
     if world.contains_resource::<crate::loading::Loading>() {
         return;
     }
+    // The flag is coming in before the next race of a cup: the level loads once it covers the
+    // window.
+    if crate::loading::entering(world) {
+        return;
+    }
     let keys = world.resource::<ButtonInput<KeyCode>>();
     let controls = &world.resource::<crate::config::Config>().controls;
     let pressed = |control| controls.just_pressed(control, keys) as i32;
@@ -142,6 +147,15 @@ pub(crate) fn switch_level(world: &mut World) {
         .map(|o| (o.track, o.hash));
     let missing = race_track.is_some_and(|(track, hash)| !maps::has(track, hash));
     let race_track = race_track.map(|(track, _)| track);
+    // The next race of a cup has started: the loading screen comes in over the race before first.
+    if let Some(track) = race_track
+        && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
+        && lobby.cup_next == Some(track)
+    {
+        lobby.cup_next = None;
+        crate::loading::bring_in(world);
+        return;
+    }
     // The level shown before the race took the viewer to its own: back to it when the race is
     // over (the lobby closed, or failed).
     let mut before = world
@@ -235,7 +249,7 @@ pub(crate) fn switch_level(world: &mut World) {
         }
         spawn_kart(world);
     }
-    crate::loading::begin(world, id != current);
+    crate::loading::begin(world);
     for mut window in world.query::<&mut Window>().iter_mut(world) {
         window.title = format!(
             "ctr-rs: {}, {}",
@@ -259,7 +273,7 @@ pub(crate) fn rebuild_scene(world: &mut World, options: Options) {
     despawn(world, scene);
     restart_drive(world, options);
     run_scene_systems(world, options);
-    crate::loading::begin(world, true);
+    crate::loading::begin(world);
 }
 
 /// `/debug viewer`: the race becomes the viewer with the probe, or the viewer the race again; and

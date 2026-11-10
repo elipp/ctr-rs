@@ -1231,7 +1231,7 @@ fn starts_line(runs: &[Run], r: usize) -> usize {
 ///
 /// By default each has a GTE of its own (2): retail's hazard wobble reads a rotation matrix that
 /// another kart's stages left in the GTE, which the port does not reproduce (see
-/// `docs/notes/DIVERGENCE.md`). The scratchpad is shared, as in retail; the port's own per kart
+/// `docs/notes/DEVIATIONS.md`). The scratchpad is shared, as in retail; the port's own per kart
 /// gives the same drivers.
 fn own_collision() -> u8 {
     std::env::var("VEHICLE_TICK_OWN_COLLISION")
