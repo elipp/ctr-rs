@@ -167,6 +167,13 @@ pub(super) fn drive_tick(
             };
             (setup, net.retail_specs.as_slice())
         });
+        // The host's brain bots are players to the race: it rubber-bands them (at the difficulty
+        // of `/bots`, which comes with the retail bots' even when there are none).
+        let band = lobby
+            .online
+            .as_ref()
+            .filter(|net| net.bots > 0)
+            .map(|net| race::Band::new(net.bot_slots(), net.retail.difficulty as i16));
         sim.restart(
             &track.0,
             &specs,
@@ -174,6 +181,7 @@ pub(super) fn drive_tick(
             lobby.online.as_ref().map(|net| net.laps),
             spectator,
             bots,
+            band,
         );
         // The dummies have left from tick 0: a neutral pad, and nothing to wait for. Unless the
         // policy drives them: then their pads are made here, each tick (below).

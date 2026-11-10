@@ -25,8 +25,9 @@
 //! * `/race stop`: end the race in progress for everyone, with no winner (the host only)
 //! * `/bots [count] [easy|medium|hard] [brain|retail]`, `/bots off`: fill the grid of the host's
 //!   races with bots, the characters no player drives, up to eight karts: the learned policy's
-//!   (`learned.rs`, whose pads the host sends), or retail's (`vehicle::bot`, which every client
-//!   drives itself; the difficulty is theirs). A race has one kind or the other, and a cup keeps
+//!   (`learned.rs`, whose pads the host sends; the difficulty is their rubber band's,
+//!   `race::Band`), or retail's (`vehicle::bot`, which every client drives itself). A race has
+//!   one kind or the other, and a cup keeps
 //!   the bots it started with
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
@@ -80,6 +81,12 @@ pub struct Lobby {
     /// Whether we, the host, have told the session to fix them (for the cup, see
     /// [`tell_lock`](Self::tell_lock)).
     lock_told: bool,
+    /// The bots the host's races are filled with, as the last [`Event::Lobby`] said (the count
+    /// the most: as many as there is room for).
+    lobby_bots: net::LobbyBots,
+    /// The `/bots` we, the host, have told the session to show, if we have (see
+    /// [`tell_bots`](Self::tell_bots)).
+    bots_told: Option<BotSettings>,
     /// The guests that only watch, as the same said: the name and the short key of each.
     watchers: Vec<(String, String)>,
     /// The nickname of every player the lobby has told of (empty for none).
@@ -107,7 +114,7 @@ pub struct Lobby {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BotSettings {
     pub count: u8,
-    /// `vehicle::bot::difficulty_level` (of the retail bots: the brain has none).
+    /// `vehicle::bot::difficulty_level`: the retail bots', or the brain bots' rubber band's.
     pub difficulty: u16,
     pub kind: BotKind,
 }
@@ -233,6 +240,7 @@ impl Lobby {
     /// The name is the lobby's, not ours: it stays as it is when we change nickname.
     pub fn host(&mut self, character: u8, nick: &str, public: Option<&str>) {
         self.session = Some(net::host(character, nick, race::SIM_VERSION));
+        self.bots_told = None;
         self.public = public.map(|name| {
             Some(name)
                 .filter(|name| !name.is_empty())
@@ -276,15 +284,16 @@ impl Lobby {
     /// the ones of now, for all its races.
     fn start_series(&mut self, mut series: Series, now: f32) {
         let characters = self.bot_characters();
+        // (The difficulty goes with the retail bots, none of them for brain bots: it is their
+        // rubber band's, `race::Band`.)
+        series.retail = net::RetailBots {
+            characters: Vec::new(),
+            difficulty: self.bots.difficulty,
+            cup: series.scored,
+        };
         match self.bots.kind {
             BotKind::Brain => series.brains = characters,
-            BotKind::Retail => {
-                series.retail = net::RetailBots {
-                    characters,
-                    difficulty: self.bots.difficulty,
-                    cup: series.scored,
-                }
-            }
+            BotKind::Retail => series.retail.characters = characters,
         }
         let then = Then::Start {
             track: series.track(),
@@ -387,6 +396,40 @@ impl Lobby {
             session.lock_characters(locked);
             self.lock_told = locked;
         }
+    }
+
+    /// Has the session show everyone our `/bots` (the host only).
+    fn tell_bots(&mut self) {
+        let bots = self.bots;
+        if self.bots_told != Some(bots)
+            && let Some(session) = &self.session
+        {
+            session.show_bots(net::LobbyBots {
+                count: bots.count,
+                retail: bots.kind == BotKind::Retail,
+                difficulty: bots.difficulty,
+            });
+            self.bots_told = Some(bots);
+        }
+    }
+
+    /// What the host's bots are, as the lobby shows them: "medium, brain", in the order `/bots` takes them.
+    pub fn next_bots_kind(&self) -> String {
+        let b = self.lobby_bots;
+        let settings = BotSettings {
+            count: b.count,
+            difficulty: b.difficulty,
+            kind: if b.retail { BotKind::Retail } else { BotKind::Brain },
+        };
+        let kind = if b.retail { "retail" } else { "brain" };
+        format!("{}, {kind}", settings.difficulty_name())
+    }
+
+    /// How many bots the next race of the lobby has, as far as we know: as many as the host's
+    /// `/bots` asks and the grid has room for after the players.
+    pub fn next_bots(&self) -> usize {
+        let room = race::MAX_KARTS.saturating_sub(self.roster.len().max(1));
+        (self.lobby_bots.count as usize).min(room)
     }
 
     /// We drive another character now, which the others learn before the race starts.

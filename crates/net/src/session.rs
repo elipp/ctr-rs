@@ -126,6 +126,7 @@ pub(crate) async fn tell_lobby(
             .as_ref()
             .map(|p| (*p.realm.as_bytes(), p.name.clone(), p.track.clone())),
         locked: host.locked,
+        bots: host.shown_bots,
     };
     for guest in &guests {
         let _ = send_reliably(&guest.connection, &message).await;
@@ -135,6 +136,7 @@ pub(crate) async fn tell_lobby(
         spectators,
         you: Some(0),
         locked: host.locked,
+        bots: host.shown_bots,
     });
 }
 
@@ -458,6 +460,12 @@ pub(crate) async fn run(
                     host.locked = locked;
                     tell_lobby(me, character, &nick, host, &io).await;
                 },
+                Command::ShowBots(bots) => if let Some(host) = &mut host
+                    && host.shown_bots != bots
+                {
+                    host.shown_bots = bots;
+                    tell_lobby(me, character, &nick, host, &io).await;
+                },
                 Command::Spectate(watch) => if watch != spectator && let Some(connection) = &host_connection {
                     spectator = watch;
                     let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
@@ -670,7 +678,7 @@ pub(crate) async fn run(
                         (running, game_ready, ready_sent) = (false, false, false);
                         io.event(Event::Announce(format!("{name} is now the lobby host")));
                     }
-                    Message::Lobby { players, watching, public, locked } if from == host_id && host.is_none() => {
+                    Message::Lobby { players, watching, public, locked, bots } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
                             .iter()
                             .map(|(bytes, character, nick)| {
@@ -702,7 +710,7 @@ pub(crate) async fn run(
                         heirs.dead.clear();
                         heirs.heard.clear();
                         heirs.handed_over = false;
-                        io.event(Event::Lobby { players, spectators, you, locked });
+                        io.event(Event::Lobby { players, spectators, you, locked, bots });
                     }
                     Message::Start { epoch: new, slot, characters, track, hash, laps, retail, roster, hard, bots }
                         if from == host_id && host.is_none() =>

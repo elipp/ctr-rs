@@ -28,7 +28,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 10;
+pub const SIM_VERSION: u32 = 11;
 
 const UNSORTED: i16 = -1;
 
@@ -89,6 +89,104 @@ pub struct KartSpec {
     /// The bot path (into `Level::nav_paths`) a bot drives, instead of the one of its slot
     /// ([`bot::Bot::new`]). (Debug: `/debug bot-line`.)
     pub line: Option<u8>,
+}
+
+/// The rubber band of the learned bots ([`Race::band`]): karts whose stats the race sets each
+/// tick by how far they are from the best human, slower ahead of them and faster behind. The
+/// policy only makes a pad, so the band acts on the kart instead (retail's bots, which move
+/// along their path at the speed they are given, have theirs: `vehicle::bot`).
+///
+/// The range is absolute, the same for every character: at a gap of
+/// [`BAND_FULL_GAP_LAP_DIV`] or more, a kart that leads has the worst any engine class has, and
+/// one that trails the best any has, times the difficulty's boost; at no gap, its class's own,
+/// and between, blended. So a Turn kart that trails on hard has the Speed class's top speed
+/// × 1.08, and the Accel class's acceleration × 1.08.
+///
+/// The top speed is `speed_class_stat` and `accel_speed_class_stat` (the wumpas' bonus is the
+/// gap between them). Trailing, the acceleration (`accel_class_stat`) and turning (`turn_rate`,
+/// `turn_input_delay`, the rate the turning builds up at, and `drift_turn_base`) go the same
+/// way; leading, they stay the class's own (holding back is the top speed's to do). The policy
+/// sees its speed over `speed_class_stat` (`nn::observe`), so a banded kart still looks to be at
+/// its top speed, but it learned the corners at its class's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Band {
+    /// The karts it acts on, a bit by slot.
+    pub slots: u8,
+    /// `vehicle::bot::difficulty_level`: how hard the bots race, which sets how far past the
+    /// best class a kart that trails gets.
+    pub difficulty: i16,
+}
+
+/// The band's pull and boost are out of this.
+const BAND_ONE: i64 = 0x1000;
+
+/// At a gap of this fraction of a lap (or more), the band pulls its hardest.
+const BAND_FULL_GAP_LAP_DIV: i64 = 6;
+
+/// How far past the best class a kart that trails gets at most, out of [`BAND_ONE`]: at
+/// difficulty 0 and at [`BAND_DIFFICULTY_MAX`], blended between (easy 4%, medium 6%, hard 8%).
+const BAND_BOOST: [i64; 2] = [0x52, 0x148]; // 2% .. 8%
+const BAND_DIFFICULTY_MAX: i64 = 0xf0;
+
+/// Every engine class, for the band's range.
+const ENGINE_CLASSES: [vehicle::stats::EngineClass; 4] = {
+    use vehicle::stats::EngineClass::*;
+    [Balanced, Accel, Speed, Turn]
+};
+
+impl Band {
+    /// A band on the karts of `slots`.
+    pub fn new(slots: impl IntoIterator<Item = usize>, difficulty: i16) -> Band {
+        let slots = slots
+            .into_iter()
+            .filter(|&s| s < MAX_KARTS)
+            .fold(0, |m, s| m | 1 << s);
+        Band { slots, difficulty }
+    }
+
+    pub fn has(&self, slot: usize) -> bool {
+        slot < MAX_KARTS && self.slots & 1 << slot != 0
+    }
+
+    /// How hard the band pulls a kart `gap` behind the best human (ahead of them below 0), on a
+    /// track `track` long: from `-BAND_ONE` (leading by the full gap) to `BAND_ONE` (trailing
+    /// by it).
+    fn pull(gap: i64, track: i64) -> i64 {
+        let full = track / BAND_FULL_GAP_LAP_DIV;
+        if full <= 0 {
+            return 0;
+        }
+        (gap * BAND_ONE / full).clamp(-BAND_ONE, BAND_ONE)
+    }
+
+    /// How far past the best class a kart that trails by the full gap gets, out of [`BAND_ONE`].
+    fn boost(&self) -> i64 {
+        let d = (self.difficulty as i64).clamp(0, BAND_DIFFICULTY_MAX);
+        BAND_BOOST[0] + (BAND_BOOST[1] - BAND_BOOST[0]) * d / BAND_DIFFICULTY_MAX
+    }
+
+    /// A stat of the class's `own` value, pulled by `pull`: toward the best of the classes
+    /// times the boost when it trails, toward the worst when it leads (if the stat holds back a
+    /// leader, `leading`). `stat` reads it from a class's stats.
+    fn stat(
+        &self,
+        own: &vehicle::stats::Stats,
+        stat: impl Fn(&vehicle::stats::Stats) -> i64,
+        pull: i64,
+        leading: bool,
+    ) -> i64 {
+        let values = ENGINE_CLASSES.map(|c| stat(&vehicle::stats::Stats::for_class(c)));
+        let own = stat(own);
+        let end = if pull > 0 {
+            let best = values.into_iter().max().unwrap_or(own);
+            best * (BAND_ONE + self.boost()) / BAND_ONE
+        } else if leading {
+            values.into_iter().min().unwrap_or(own)
+        } else {
+            own
+        };
+        own + (end - own) * pull.abs() / BAND_ONE
+    }
 }
 
 /// A kart of a race: the driver, its collision state, and the buttons of its last tick.
@@ -300,6 +398,9 @@ pub struct Race {
     pub event_ms: i32,
     /// What the bots share, if the race has any. Their karts come after the players'.
     pub bots: Option<vehicle::bot::Bots>,
+    /// The rubber band of the learned bots, which are players to the race. A rule of the race,
+    /// like the laps.
+    pub band: Option<Band>,
 }
 
 impl Race {
@@ -333,6 +434,7 @@ impl Race {
             light: None,
             event_ms: 0,
             bots: None,
+            band: None,
         }
     }
 
@@ -581,6 +683,55 @@ impl Race {
         Some((number, time, time - first))
     }
 
+    /// The rubber band ([`Race::band`]): each of its karts gets its class's top speed, scaled by
+    /// how far it is from the best human, measured as retail's bots measure it (the laps, less
+    /// one behind the start line, and the distance to the finish). Unscaled with no human to
+    /// chase, before the green light, and once the kart has finished.
+    fn pull_band(&mut self, level: &Level, racing: bool) {
+        let Some(band) = self.band else {
+            return;
+        };
+        let track = level
+            .restart_points
+            .first()
+            .map_or(0, |p| (p.dist_to_finish as i64) << 3);
+        let progress = |d: &Driver| {
+            let lap =
+                d.lap_index as i64 - (d.actions_flag_set & actions::BEHIND_START_LINE != 0) as i64;
+            lap * track + track - d.distance_to_finish_curr as i64
+        };
+        let best = self
+            .karts
+            .iter()
+            .enumerate()
+            .filter(|&(slot, k)| !band.has(slot) && k.bot.is_none() && k.driver.bot.is_none())
+            .map(|(_, k)| progress(&k.driver))
+            .max();
+        for (slot, kart) in self.karts.iter_mut().enumerate() {
+            if !band.has(slot) {
+                continue;
+            }
+            let d = &mut kart.driver;
+            let pull = match best {
+                Some(best) if racing && d.actions_flag_set & actions::RACE_FINISHED == 0 => {
+                    Band::pull(best - progress(d), track)
+                }
+                _ => 0,
+            };
+            let class = vehicle::stats::Stats::for_class(
+                vehicle::stats::CHARACTER_ENGINES[d.character as usize],
+            );
+            let s = &mut d.stats;
+            s.speed_class_stat = band.stat(&class, |c| c.speed_class_stat as i64, pull, true) as i16;
+            s.accel_speed_class_stat =
+                band.stat(&class, |c| c.accel_speed_class_stat as i64, pull, true) as i16;
+            s.accel_class_stat = band.stat(&class, |c| c.accel_class_stat as i64, pull, false) as i16;
+            s.turn_rate = band.stat(&class, |c| c.turn_rate as i64, pull, false) as u8;
+            s.turn_input_delay = band.stat(&class, |c| c.turn_input_delay as i64, pull, false) as i16;
+            s.drift_turn_base = band.stat(&class, |c| c.drift_turn_base as i64, pull, false) as i8;
+        }
+    }
+
     /// One game tick: the objects, then every player's kart from its pad (`pads[slot]`), in the
     /// order of the slots, each stage over all of them, then the bots. The result is by slot.
     pub fn tick(&mut self, level: &Level, pads: &[Pad]) -> Vec<KartTick> {
@@ -636,6 +787,7 @@ impl Race {
         };
         // The bots wait for the green light before they count as stuck.
         let racing = self.lights_ms <= 0;
+        self.pull_band(level, racing);
         // A kart that has crossed the line takes no more of its pad: it coasts. So nobody needs
         // a finished player's pads to play a tick right, and it can watch the others as a
         // spectator does (see the client's `drive_tick`).
@@ -1244,6 +1396,35 @@ impl rollback::Simulation for Race {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_band_goes_from_the_worst_class_to_the_best_times_the_boost() {
+        use vehicle::bot::difficulty_level::{EASY, HARD};
+        use vehicle::stats::{EngineClass, Stats};
+        let track = 6000;
+        let (easy, hard) = (Band::new([1, 2], EASY), Band::new([1, 2], HARD));
+        assert!(easy.has(1) && easy.has(2) && !easy.has(0));
+        // Past the full gap it pulls no harder; a track of no length not at all.
+        assert_eq!(Band::pull(1000, track), BAND_ONE);
+        assert_eq!(Band::pull(5000, track), BAND_ONE);
+        assert_eq!(Band::pull(-5000, track), -BAND_ONE);
+        assert_eq!(Band::pull(1000, 0), 0);
+        let turn = Stats::for_class(EngineClass::Turn);
+        let speed = |c: &Stats| c.speed_class_stat as i64;
+        let accel = |c: &Stats| c.accel_class_stat as i64;
+        // No gap: its own. Trailing on hard: the Speed class's top speed and the Accel class's
+        // acceleration, × 1.08. Leading: the worst top speed (the Turn class's own), and its
+        // own acceleration.
+        assert_eq!(hard.stat(&turn, speed, 0, true), 12950);
+        assert_eq!(hard.stat(&turn, speed, BAND_ONE, true), 13900 * 4424 / 4096);
+        assert_eq!(hard.stat(&turn, accel, BAND_ONE, false), 544 * 4424 / 4096);
+        assert_eq!(hard.stat(&turn, speed, -BAND_ONE, true), 12950);
+        assert_eq!(hard.stat(&turn, accel, -BAND_ONE, false), 512);
+        let fast = Stats::for_class(EngineClass::Speed);
+        assert_eq!(easy.stat(&fast, speed, -BAND_ONE, true), 12950);
+        // Hard helps a trailer more than easy.
+        assert!(hard.stat(&turn, speed, BAND_ONE, true) > easy.stat(&turn, speed, BAND_ONE, true));
+    }
 
     #[test]
     fn the_lights_come_on_one_by_one() {

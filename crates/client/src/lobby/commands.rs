@@ -186,9 +186,8 @@ pub(super) fn run(
                     lobby.bots.kind = *kind;
                 }
                 let bots = lobby.bots;
-                // (The brain has no difficulty.)
                 let what = match bots.kind {
-                    BotKind::Brain => "brain".to_string(),
+                    BotKind::Brain => format!("{} brain", bots.difficulty_name()),
                     BotKind::Retail => format!("{} retail", bots.difficulty_name()),
                 };
                 let mut text = match bots.count {

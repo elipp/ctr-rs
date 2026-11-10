@@ -22,6 +22,7 @@ pub(super) fn report(
 ) {
     if !lobby.joined {
         lobby.tell_lock();
+        lobby.tell_bots();
     }
     let Some(session) = &lobby.session else {
         return;
@@ -65,7 +66,8 @@ pub(super) fn report(
                 spectators,
                 you,
                 locked,
-            } => roster = Some((players, spectators, you, locked)),
+                bots,
+            } => roster = Some((players, spectators, you, locked, bots)),
             Event::Announce(text) => announce(&mut toasts, text),
             Event::Standings(standings) => {
                 announce(&mut toasts, super::cup::standings_text(&standings))
@@ -225,6 +227,8 @@ pub(super) fn report(
     // The host left, and the lobby is ours now (the session listed it, if it was public).
     if let Some((ticket, public)) = promoted {
         lobby.joined = false;
+        // (The lobby shows the bots of ours now.)
+        lobby.bots_told = None;
         lobby.public = public.map(|public| public.name);
         copy_to_clipboard(format!("/lobby join {ticket}"));
         lobby.list("");
@@ -304,8 +308,9 @@ pub(super) fn report(
         lobby.close();
         return;
     }
-    if let Some((players, spectators, you, locked)) = roster {
+    if let Some((players, spectators, you, locked, bots)) = roster {
         lobby.characters_locked = locked;
+        lobby.lobby_bots = bots;
         // The names are told apart among everyone in the lobby, those who only watch too.
         let mut labels = net::display_names(
             &players

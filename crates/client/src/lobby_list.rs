@@ -3,7 +3,9 @@
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
 //! has an "H" on its portrait's corner. Our name is in [`HIGHLIGHT`], as in the race's
-//! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.)
+//! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
+//! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),
+//! if any, and then those who only watch.
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -17,12 +19,14 @@ use crate::portrait_row::{
     spawn_portrait, spawn_tags,
 };
 
-/// The column of rows, with the players it was built for, and which of them is us.
+/// The column of rows, with the players it was built for, and which of them is us, and the bots
+/// (how many, and what kind).
 #[derive(Component)]
 struct List(
     Vec<(u8, String, String)>,
     Vec<(String, String)>,
     Option<usize>,
+    (usize, String),
 );
 
 /// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
@@ -43,10 +47,14 @@ const FIRST_Y: f32 = 12.0;
 /// the names, which hang under the portraits.
 const SLOT: f32 = 28.0;
 
-/// The lines of retail's screen between the last portrait and the first who only watches (more
-/// than a row's own gap), and from one to the next.
+/// The lines of retail's screen between the last portrait and the line of the bots, or the first
+/// who only watches (more than a row's own gap), and from one of those lines to the next.
 const WATCHER_GAP: f32 = 12.0;
 const WATCHER_LINE: f32 = 9.0;
+
+/// The lines of retail's screen from each of the bots' two lines ([`Font::Middle`], 8 lines
+/// tall) to the next.
+const BOTS_LINE: f32 = 12.0;
 
 pub struct LobbyListPlugin;
 
@@ -82,8 +90,13 @@ fn build(
         Vec::new()
     };
     let you = lobby.you();
+    let bots = if players.is_empty() {
+        (0, String::new())
+    } else {
+        (lobby.next_bots(), lobby.next_bots_kind())
+    };
     for (entity, list) in &lists {
-        if list.0 == players && list.1 == watchers && list.2 == you {
+        if list.0 == players && list.1 == watchers && list.2 == you && list.3 == bots {
             return;
         }
         commands.entity(entity).despawn();
@@ -130,8 +143,29 @@ fn build(
             commands.entity(tag).insert(TextColor(HIGHLIGHT));
         }
     }
-    // Those who only watch have no portrait: a line each, a little further down.
-    let below = FIRST_Y + players.len() as f32 * SLOT + WATCHER_GAP;
+    // The bots and those who only watch have no portrait: a line each, a little further down,
+    // the bots' in the game's font as the title is: how many, and under it what kind.
+    let mut below = FIRST_Y + players.len() as f32 * SLOT + WATCHER_GAP;
+    if bots.0 > 0 {
+        let count = match bots.0 {
+            1 => "+1 bot".to_string(),
+            n => format!("+{n} bots"),
+        };
+        for (text, gradient) in [(count, Gradient::WHITE), (bots.1.clone(), Gradient::YELLOW)] {
+            commands.spawn((
+                CtrText::new(text, Font::Middle, gradient).fixed(hud::PIXEL),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: hud::x(ICON_X),
+                    top: hud::y(below),
+                    ..default()
+                },
+                Pickable::IGNORE,
+                ChildOf(column),
+            ));
+            below += BOTS_LINE;
+        }
+    }
     for (n, (name, _)) in watchers.iter().enumerate() {
         commands.spawn((
             Text::new(format!("{name} (spectator)")),
@@ -152,5 +186,5 @@ fn build(
             ChildOf(column),
         ));
     }
-    commands.entity(column).insert(List(players, watchers, you));
+    commands.entity(column).insert(List(players, watchers, you, bots));
 }

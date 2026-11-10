@@ -33,7 +33,7 @@ pub use realm::{
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
-pub use wire::{Pad, RetailBots, Score, Standings, Tick};
+pub use wire::{LobbyBots, Pad, RetailBots, Score, Standings, Tick};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -158,7 +158,7 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/15";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/16";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -201,6 +201,9 @@ pub enum Event {
         /// The host has fixed what everyone drives (a cup is on, see
         /// [`Session::lock_characters`]): a change of character is not taken.
         locked: bool,
+        /// How many bots the host's races are filled with, as many as the grid has room for
+        /// ([`Session::show_bots`]).
+        bots: LobbyBots,
     },
     /// We joined the lobby of this host. (Also when the host left and the lobby went on with
     /// another one: we joined that one.)
@@ -395,6 +398,7 @@ enum Command {
     Say(String),
     Character(u8),
     Lock(bool),
+    ShowBots(LobbyBots),
     Spectate(bool),
     Nickname(String),
     RaceOver,
@@ -504,6 +508,12 @@ impl Session {
     /// one it joined with). Everyone is told in [`Event::Lobby`].
     pub fn lock_characters(&self, locked: bool) {
         let _ = self.commands.send(Command::Lock(locked));
+    }
+
+    /// Tells everyone in the lobby, in [`Event::Lobby`], what bots our races are filled with, if
+    /// we host it.
+    pub fn show_bots(&self, bots: LobbyBots) {
+        let _ = self.commands.send(Command::ShowBots(bots));
     }
 
     /// Changes whether we only watch, for the race that has not started yet (a guest's to do;

@@ -95,6 +95,18 @@ pub struct RetailBots {
     pub cup: bool,
 }
 
+/// The bots the host's races are filled with, as the lobby shows them before a race
+/// ([`Message::Lobby`]): what `/bots` says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub struct LobbyBots {
+    /// The most (a race has as many as there is room for); 0 for none.
+    pub count: u8,
+    /// Retail's bots, else the host's brain bots.
+    pub retail: bool,
+    /// `vehicle::bot::difficulty_level`.
+    pub difficulty: u16,
+}
+
 /// A player's points in [`Standings`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Score {
@@ -209,6 +221,9 @@ pub enum Message {
         public: Option<([u8; 32], String, String)>,
         /// The host takes no change of character (a cup is on).
         locked: bool,
+        /// How many bots the host's races are filled with, as many as there is room for
+        /// (`Session::show_bots`).
+        bots: LobbyBots,
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
@@ -491,6 +506,11 @@ mod tests {
                 watching: vec![([3; 32], "Eyes".into())],
                 public: Some(([6; 32], "Friday cup".into(), "Coco Park".into())),
                 locked: true,
+                bots: LobbyBots {
+                    count: 3,
+                    retail: true,
+                    difficulty: 0xa0,
+                },
             },
             Message::Announce {
                 text: "Restarting in 5".into(),

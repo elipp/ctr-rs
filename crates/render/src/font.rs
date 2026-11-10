@@ -223,6 +223,12 @@ impl Gradient {
         bottom: [0xb0, 0xb0, 0xb0],
     };
 
+    /// Yellower than the orange: what the lobby's bots are.
+    pub const YELLOW: Gradient = Gradient {
+        top: [0xff, 0xf8, 0x60],
+        bottom: [0xd8, 0xa8, 0x10],
+    };
+
     /// Redder than the orange: the suffix of a place, the lap of a lap time.
     pub const RED: Gradient = Gradient {
         top: [0xff, 0x70, 0x20],

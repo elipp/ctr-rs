@@ -43,6 +43,8 @@ pub(crate) struct HostState {
     pub(crate) racing: bool,
     /// No change of character is taken (`Session::lock_characters`).
     pub(crate) locked: bool,
+    /// The bots the races are filled with, for the lobby to show (`Session::show_bots`).
+    pub(crate) shown_bots: crate::LobbyBots,
     /// The players that left the race, whose pads are still being settled, by slot.
     pub(crate) departures: HashMap<usize, Departure>,
     /// The listing of the lobby in the realm, if it is public.
