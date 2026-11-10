@@ -11,8 +11,12 @@
 //! - `save_every` (25): iterations between checkpoints.
 //! - `seed` (1).
 //! - `reserves` (0.01): the reward for each millisecond of reserves gained.
-//! - `reserves_fade` (none): `start,end` iterations over which that reward fades to 0, as
+//! - `drift_boost` (15): the reward for each drift boost fired.
+//! - `reserves_fade` (none): `start,end` iterations over which those two rewards fade to 0, as
 //!   `500,1500` (full until 500, none from 1500).
+//! - `air_heading` (0.2), `steer_change` (0.05): the costs of facing away from the path in a
+//!   long flight, and of moving the stick ([`race::nn::Weights`]).
+//! - `stuck_penalty` (30): the cost of getting nowhere ([`brain::env::Rules`]).
 //! - `gamma` 0.995 is worth it for drifts (their boost pays off seconds after the hop).
 //! - the [`brain::ppo::Config`] ones: `steps`, `gamma`, `lambda`, `clip`, `epochs`, `minibatch`,
 //!   `lr`, `entropy_coef`, `target_kl`.
@@ -70,6 +74,11 @@ fn main() -> Result<(), Error> {
     let out = PathBuf::from(take("out").unwrap_or_else(|| "target/brain".into()));
     let load = take("load").map(PathBuf::from);
     let reserves: f32 = parse(take("reserves"), race::nn::Weights::DEFAULT.reserves)?;
+    let mut rules = Rules::default();
+    let drift_boost: f32 = parse(take("drift_boost"), rules.weights.drift_boost)?;
+    rules.weights.air_heading = parse(take("air_heading"), rules.weights.air_heading)?;
+    rules.weights.steer_change = parse(take("steer_change"), rules.weights.steer_change)?;
+    rules.stuck_penalty = parse(take("stuck_penalty"), rules.stuck_penalty)?;
     let fade: Option<(usize, usize)> = match take("reserves_fade") {
         Some(v) => {
             let (a, b) = v
@@ -93,7 +102,7 @@ fn main() -> Result<(), Error> {
     let disc = brain::tracks::disc_path();
     let tracks = brain::tracks::load(&disc, ids)
         .map_err(|e| format!("reading the tracks off {}: {e}", disc.display()))?;
-    println!("{} tracks, {envs} envs, {config:?}", tracks.len());
+    println!("{} tracks, {envs} envs, {config:?}, {rules:?}", tracks.len());
 
     let device = ppo::device();
     let mut vars = VarMap::new();
@@ -102,7 +111,6 @@ fn main() -> Result<(), Error> {
         vars.load(path)?;
         println!("going on from {}", path.display());
     }
-    let rules = Rules::default();
     let envs: Vec<Env> = (0..envs)
         .map(|i| Env::new(&tracks, rules, seed.wrapping_mul(1_000_003).wrapping_add(i as u64)))
         .collect();
@@ -115,20 +123,18 @@ fn main() -> Result<(), Error> {
         .open(out.join("log.csv"))?;
     writeln!(
         log,
-        "iter,episodes,ep_reward,ep_ticks,units_per_tick,grabs_per_min,boosts_per_min,hops_per_min,r1_pct,drift_pct,cut_time,cut_grabs,\
+        "iter,episodes,ep_reward,ep_ticks,units_per_tick,grabs_per_min,boosts_per_min,hops_per_min,r1_pct,drift_pct,drifts_per_min,drift_len,early_per_drift,boosts_per_drift,outs_per_drift,air_misalign,steer_change,cut_time,cut_grabs,\
          cut_stuck,mean_reward,policy_loss,value_loss,entropy,approx_kl,clip_frac,updates,\
          rollout_secs,update_secs"
     )?;
 
     for iter in 1..=iters {
-        let w = match fade {
+        let f = match fade {
             Some((_, end)) if iter >= end => 0.0,
-            Some((start, end)) if iter > start => {
-                reserves * (end - iter) as f32 / (end - start) as f32
-            }
-            _ => reserves,
+            Some((start, end)) if iter > start => (end - iter) as f32 / (end - start) as f32,
+            _ => 1.0,
         };
-        trainer.set_reserves_weight(w);
+        trainer.set_bonuses(reserves * f, drift_boost * f);
         let s = trainer.iterate()?;
         let n = s.episodes.len().max(1) as f32;
         let sum = |f: &dyn Fn(&brain::env::Episode) -> f32| {
@@ -143,12 +149,33 @@ fn main() -> Result<(), Error> {
         let hops_per_min = sum(&|e| e.hops as f32) / minutes;
         let drifting = sum(&|e| e.drifting as f32) / ticks.max(1.0) * 100.0;
         let r1 = sum(&|e| e.r1 as f32) / ticks.max(1.0) * 100.0;
+        // Per tick in the air, and bins per choice.
+        let air_misalign = sum(&|e| e.air_misalign) / sum(&|e| e.air_ticks as f32).max(1.0);
+        let steer_change = sum(&|e| e.steer_change as f32) / sum(&|e| e.choices as f32).max(1.0);
+        // Where the drifts go: their length, and per drift the tries too early, the boosts, and
+        // the meters that ran out.
+        let drifts = sum(&|e| e.drifts as f32).max(1.0);
+        let drift_len = sum(&|e| e.drifting as f32) / drifts;
+        let early = sum(&|e| e.early_taps as f32) / drifts;
+        let in_time = sum(&|e| e.boosts as f32) / drifts;
+        let outs = sum(&|e| e.meter_outs as f32) / drifts;
+        let drifts_per_min = sum(&|e| e.drifts as f32) / minutes;
+        // The share of the drifts that ended each way, in percent.
+        let ends: Vec<f32> = (0..brain::env::DRIFT_ENDS.len())
+            .map(|i| sum(&|e| e.drift_ends[i] as f32) / drifts * 100.0)
+            .collect();
+        let ends_text: Vec<String> = brain::env::DRIFT_ENDS
+            .iter()
+            .zip(&ends)
+            .map(|(name, pct)| format!("{name} {pct:.0}%"))
+            .collect();
         let cuts = |d: Done| s.episodes.iter().filter(|(c, _)| *c == d).count();
         println!(
             "{iter:5} | eps {:4} reward {ep_reward:7.1} | {units_per_tick:5.1} u/tick, \
-             {grabs_per_min:4.2} grabs/min, {boosts_per_min:5.1} boosts/min, {hops_per_min:4.0} hops/min, R1 {r1:3.0}% drift {drifting:3.0}% | cut T/G/S {}/{}/{} | ent {:.2} kl {:.4} clip {:.2} \
+             {grabs_per_min:4.2} grabs/min, {boosts_per_min:5.1} boosts/min, {hops_per_min:4.0} hops/min, R1 {r1:3.0}% drift {drifting:3.0}% | {drifts_per_min:4.1} drifts/min of {drift_len:4.1} ticks: early {early:4.2} boost {in_time:4.2} out {outs:4.2} | ended: {} | air {air_misalign:4.2} steer {steer_change:4.2} | cut T/G/S {}/{}/{} | ent {:.2} kl {:.4} clip {:.2} \
              vloss {:.3} | {} upd, {:.1}s + {:.1}s",
             s.episodes.len(),
+            ends_text.join(" "),
             cuts(Done::Time),
             cuts(Done::Grabs),
             cuts(Done::Stuck),
@@ -162,7 +189,7 @@ fn main() -> Result<(), Error> {
         );
         writeln!(
             log,
-            "{iter},{},{ep_reward},{},{units_per_tick},{grabs_per_min},{boosts_per_min},{hops_per_min},{r1},{drifting},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{iter},{},{ep_reward},{},{units_per_tick},{grabs_per_min},{boosts_per_min},{hops_per_min},{r1},{drifting},{drifts_per_min},{drift_len},{early},{in_time},{outs},{air_misalign},{steer_change},{},{},{},{},{},{},{},{},{},{},{},{}",
             s.episodes.len(),
             ticks / n,
             cuts(Done::Time),

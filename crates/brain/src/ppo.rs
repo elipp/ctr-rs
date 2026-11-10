@@ -113,11 +113,12 @@ impl<'a> Trainer<'a> {
         })
     }
 
-    /// Sets what each millisecond of reserves gained is worth, in every env (to fade the bonus out
-    /// over the training).
-    pub fn set_reserves_weight(&mut self, w: f32) {
+    /// Sets what each millisecond of reserves gained and each drift boost are worth, in every env
+    /// (to fade the bonuses out over the training).
+    pub fn set_bonuses(&mut self, reserves: f32, drift_boost: f32) {
         for env in &mut self.envs {
-            env.rules.weights.reserves = w;
+            env.rules.weights.reserves = reserves;
+            env.rules.weights.drift_boost = drift_boost;
         }
     }
 

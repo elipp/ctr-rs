@@ -11,8 +11,8 @@ use bevy::prelude::*;
 use brain::policy::Policy;
 use brain::rng::Rng;
 use loader::lev::Level;
-use race::bot::{Bot, Tracker};
-use race::nn::{self, Action, Latch};
+use race::bot::{Bot, PathLength, Tracker};
+use race::nn::{self, Action, Latch, Progress};
 use race::rollback::Rollback;
 use race::{KartSpec, Pad, Race};
 
@@ -47,7 +47,9 @@ struct Driven {
     slot: usize,
     /// Into `Level::nav_paths`: the path it steers by, as a scripted bot of its slot would.
     path: usize,
+    lengths: PathLength,
     tracker: Tracker,
+    progress: Progress,
     latch: Latch,
     /// The choice it holds.
     action: Action,
@@ -80,10 +82,15 @@ impl Brains {
     ) {
         self.karts = slots
             .filter_map(|slot| {
-                let bot = Bot::new(level, slot, &race.karts.get(slot)?.driver, specs[slot].line);
+                let driver = &race.karts.get(slot)?.driver;
+                let bot = Bot::new(level, slot, driver, specs[slot].line);
+                let frames = &level.nav_paths[bot.path as usize].frames;
+                let lengths = PathLength::of(frames);
                 Some(Driven {
                     slot,
                     path: bot.path as usize,
+                    progress: Progress::new(frames, &lengths, &bot.tracker, driver),
+                    lengths,
                     tracker: bot.tracker,
                     latch: Latch::default(),
                     action: Action::default(),
@@ -115,9 +122,11 @@ impl Brains {
                 continue;
             }
             let kart = &race.karts[k.slot];
-            nn::track(&mut k.tracker, frames, &kart.driver);
+            let relocated = nn::track(&mut k.tracker, frames, &kart.driver);
+            k.progress
+                .step(frames, &k.lengths, &k.tracker, relocated, &kart.driver);
             if decide {
-                obs.push(nn::observe(frames, &k.tracker, kart, &k.latch));
+                obs.push(nn::observe(frames, &k.tracker, &k.progress, kart, &k.latch));
                 deciding.push(i);
             }
         }

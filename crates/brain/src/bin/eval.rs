@@ -65,15 +65,16 @@ fn drive(track: &Track, mut race: Race, laps: u8, mut pad: impl FnMut(&Race) -> 
     };
     while race.tick < MAX_TICKS_PER_LAP * laps as u32 && race.finished == 0 {
         let p = pad(&race);
-        let (state, boosting) = {
+        let (state, boosts) = {
             let d = &race.karts[0].driver;
-            (d.kart_state, d.drift_boost_time_ms > 0)
+            (d.kart_state, d.num_boosts_success)
         };
         race.tick(&track.level, &[p]);
         let d = &race.karts[0].driver;
         run.grabs += (d.kart_state == kart_state::MASK_GRABBED
             && state != kart_state::MASK_GRABBED) as u32;
-        run.boosts += (!boosting && d.drift_boost_time_ms > 0) as u32;
+        // (Each of a drift's; a drift that ends puts the count back to 0.)
+        run.boosts += (d.num_boosts_success as i32 - boosts as i32).max(0) as u32;
     }
     run.laps = race.lap_times[0].clone();
     run.finished = race.finished > 0;
@@ -140,15 +141,18 @@ fn main() -> Result<(), Error> {
 
         // The policy, steering by the level's first path.
         let race = Race::new(&track.level, track.objects.clone(), &[spec(character, false)], false);
+        let lengths = &track.lengths[path];
         let mut tracker = Tracker::find(frames, race.karts[0].driver.pos_curr);
+        let mut progress = nn::Progress::new(frames, lengths, &tracker, &race.karts[0].driver);
         let mut latch = Latch::default();
         let mut action = nn::Action::default();
         let mut failed = None;
         let learned = drive(track, race, laps, |race| {
             let kart = &race.karts[0];
-            nn::track(&mut tracker, frames, &kart.driver);
+            let relocated = nn::track(&mut tracker, frames, &kart.driver);
+            progress.step(frames, lengths, &tracker, relocated, &kart.driver);
             if race.tick % REPEAT == 0 {
-                let obs = nn::observe(frames, &tracker, kart, &latch);
+                let obs = nn::observe(frames, &tracker, &progress, kart, &latch);
                 match policy.act(&[obs], greedy, &mut rng) {
                     Ok(c) => action = c[0].action,
                     Err(e) => failed = Some(e),

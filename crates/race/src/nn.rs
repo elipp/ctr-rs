@@ -12,7 +12,8 @@
 //!   hold of R1 goes on over the choices after it).
 //! - [`Progress`]: how far along its path a kart got in a tick, and whether it fell off, for the
 //!   reward ([`Weights::reward`]). Being on the line is worth nothing in itself: the line is only
-//!   the way round.
+//!   the way round. Two costs keep the driving tidy: facing away from the path in the air, and
+//!   moving the stick from choice to choice.
 
 use loader::lev::{Level, NavFrame};
 use math::Vec3;
@@ -43,7 +44,9 @@ pub const OBS_LEN: usize = AHEAD.len() * 3 // the points ahead
     + STATES.len() + 1
     + 4 // drift: its turn, the boost meter, boost tries left, reserves
     + 4 // the buttons held last tick: gas, reverse, hop, boost
-    + 1; // the ticks a long hold of R1 has left ([`Latch`])
+    + 1 // the ticks a long hold of R1 has left ([`Latch`])
+    + 1 // the stick of the last choice ([`Latch::steer`]), for what moving it costs
+    + 1; // the ticks it has got no further along ([`Progress::stalled`])
 
 pub type Obs = [f32; OBS_LEN];
 
@@ -106,8 +109,14 @@ impl Fill {
 }
 
 /// What the bot of `kart` sees, it steering by `path` and being at `tracker` on it (kept up with
-/// [`track`]), and its pads coming from `latch`.
-pub fn observe(path: &[NavFrame], tracker: &Tracker, kart: &Kart, latch: &Latch) -> Obs {
+/// [`track`]) and `progress` along it, and its pads coming from `latch`.
+pub fn observe(
+    path: &[NavFrame],
+    tracker: &Tracker,
+    progress: &Progress,
+    kart: &Kart,
+    latch: &Latch,
+) -> Obs {
     let d = &kart.driver;
     let pos = d.pos_curr;
     let frame = Frame::of(pos, d.angle as i32);
@@ -169,6 +178,8 @@ pub fn observe(path: &[NavFrame], tracker: &Tracker, kart: &Kart, latch: &Latch)
     o.flag(kart.held & buttons::R1 != 0);
     o.flag(kart.held & buttons::L1 != 0);
     o.push(latch.hold_left as f32 / HOLD_TICKS as f32);
+    o.push((latch.steer as f32 - STEER_STEPS as f32) / STEER_STEPS as f32);
+    o.push((progress.stalled as f32 / STALL_TICKS as f32).min(1.0));
 
     debug_assert_eq!(o.at, OBS_LEN, "an observation is filled in full");
     o.obs
@@ -248,19 +259,37 @@ impl Hop {
 /// ticks) can be turned into a boost once under half (`turbo_low_room_warning`).
 pub const HOLD_TICKS: u32 = 16;
 
-/// What goes on of a bot's choices from tick to tick: a long hold of R1.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What goes on of a bot's choices from tick to tick: a long hold of R1, and where the stick was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Latch {
     /// The ticks R1 is still held for, whatever is chosen.
     pub hold_left: u32,
     /// R1 was held on the last pad.
     pub r1: bool,
+    /// The steering bin of the last pad (`Action::steer`); centred to begin with.
+    pub steer: u8,
+    /// How many bins the stick moved for the last pad: on the first tick of a choice, the move
+    /// from the one before; 0 while a choice is held.
+    pub steer_change: u8,
+}
+
+impl Default for Latch {
+    fn default() -> Latch {
+        Latch {
+            hold_left: 0,
+            r1: false,
+            steer: STEER_STEPS as u8,
+            steer_change: 0,
+        }
+    }
 }
 
 impl Latch {
     /// The pad of this tick, the bot having chosen `action` (this tick, or one before that it
     /// still holds).
     pub fn pad(&mut self, action: Action) -> Pad {
+        self.steer_change = self.steer.abs_diff(action.steer);
+        self.steer = action.steer;
         let mut pad = action.pad();
         if action.hop == Hop::HoldLong && self.hold_left == 0 {
             self.hold_left = HOLD_TICKS;
@@ -332,8 +361,17 @@ impl Action {
 /// about 75. More is a teleport.
 pub const MAX_PROGRESS: i64 = 128;
 
+/// After this many ticks without getting further along its path ([`Progress::stalled`]), a kart
+/// is stuck: [`observe`] sees it as 1 from here on, and the trainer gives up on it.
+pub const STALL_TICKS: u32 = 30 * 5;
+
+/// Ticks in the air before [`Step::air_misalign`] counts: a hop (about 10) is free, as a drift
+/// starts with one, steered, which turns the kart in the air; a long jump (30 to 60) is not. A
+/// turn made in these ticks still costs for the rest of the flight.
+pub const AIR_GRACE_TICKS: u32 = 15;
+
 /// What a tick did for a kart's progress along its path ([`Progress::step`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Step {
     /// How far along the path it went (level units, negative backwards), within
     /// ±[`MAX_PROGRESS`]; 0 in a tick it was searched for.
@@ -343,6 +381,16 @@ pub struct Step {
     /// The reserves (`Driver::reserves`, milliseconds of boost) it gained this tick: a drift's
     /// boost, a turbo pad, the start's.
     pub reserves_gained: i32,
+    /// In the air (and not carried by the mask) for more than [`AIR_GRACE_TICKS`], how far the
+    /// kart faces away from the path: `1 - cos` of the angle, 0 straight along it, 1 sideways, 2
+    /// backwards. 0 on the ground, where a drift faces away on purpose, and in a hop.
+    pub air_misalign: f32,
+    /// Drift boosts fired this tick: taps of L1 in time, each of a drift's three
+    /// (`Driver::num_boosts_success`).
+    pub boosts: u8,
+    /// How many steering bins the stick moved for this tick's pad ([`Latch::steer_change`]).
+    /// [`Progress::step`] knows nothing of the pads: the caller puts it in.
+    pub steer_change: u8,
 }
 
 /// Where a kart was along its path, to tell how far it went in a tick.
@@ -351,6 +399,17 @@ pub struct Progress {
     pub arc: i64,
     pub kart_state: u8,
     pub reserves: i16,
+    /// The progress since [`Progress::new`] (the sum of [`Step::progress`]), and the most it has
+    /// been.
+    pub total: i64,
+    pub furthest: i64,
+    /// The ticks since `total` last went past `furthest`: getting nowhere (stuck, or the wrong
+    /// way). A mask grab or a relocation starts it over from where the kart is.
+    pub stalled: u32,
+    /// The ticks it has been in the air for, on end (not counting the mask's carry).
+    pub airborne: u32,
+    /// `Driver::num_boosts_success` (the drift's boosts so far; 0 out of a drift).
+    pub boosts_success: i8,
 }
 
 impl Progress {
@@ -359,6 +418,11 @@ impl Progress {
             arc: tracker.arc(path, lengths, driver.pos_curr),
             kart_state: driver.kart_state,
             reserves: driver.reserves,
+            total: 0,
+            furthest: 0,
+            stalled: 0,
+            airborne: 0,
+            boosts_success: driver.num_boosts_success,
         }
     }
 
@@ -385,10 +449,37 @@ impl Progress {
         self.kart_state = driver.kart_state;
         let reserves_gained = (driver.reserves as i32 - self.reserves as i32).max(0);
         self.reserves = driver.reserves;
+        self.total += progress;
+        // Carried by the mask, or put somewhere else: where it ends up is the new furthest, not
+        // ground to make up.
+        if relocated || driver.kart_state == kart_state::MASK_GRABBED {
+            self.furthest = self.total;
+            self.stalled = 0;
+        } else if self.total > self.furthest {
+            self.furthest = self.total;
+            self.stalled = 0;
+        } else {
+            self.stalled += 1;
+        }
+        let airborne = driver.actions_flag_set & actions::TOUCH_GROUND == 0
+            && driver.kart_state != kart_state::MASK_GRABBED;
+        self.airborne = if airborne { self.airborne + 1 } else { 0 };
+        // (A drift that ends puts it back to 0: no boost.)
+        let boosts = (driver.num_boosts_success as i32 - self.boosts_success as i32).max(0) as u8;
+        self.boosts_success = driver.num_boosts_success;
+        let air_misalign = if self.airborne > AIR_GRACE_TICKS {
+            let (_, heading) = tracker.offset(path, driver.pos_curr);
+            1.0 - ((heading - driver.angle as i32) as f32 * ANGLE_TO_RAD).cos()
+        } else {
+            0.0
+        };
         Step {
             progress,
             grabbed,
             reserves_gained,
+            air_misalign,
+            boosts,
+            steer_change: 0,
         }
     }
 }
@@ -406,6 +497,17 @@ pub struct Weights {
     /// For each millisecond of reserves gained: speed in the bank, which the progress pays for
     /// only once spent (and a drift without its boost costs some first).
     pub reserves: f32,
+    /// For each drift boost fired ([`Step::boosts`]), whatever its size (the reserves pay for
+    /// that): a weak one counts as well, for a policy that has yet to find out about them. Not
+    /// for the reserves of turbo pads and the start, which the progress pays for already.
+    pub drift_boost: f32,
+    /// Each tick in the air, for each unit of [`Step::air_misalign`]: a long jump flies
+    /// straight, or turns with the path.
+    pub air_heading: f32,
+    /// For a move of the stick from one end to the other ([`Step::steer_change`], in
+    /// `STEER_BINS - 1` bins), less for less: enough to settle the choice between near bins,
+    /// which otherwise flips from choice to choice (the wiggles), not enough to stop a turn.
+    pub steer_change: f32,
 }
 
 impl Weights {
@@ -417,6 +519,13 @@ impl Weights {
         // A drift's best boost (`turbo_full_bar_reserve_gain << 5`, 1920 ms) is about 19:
         // as much as 19 ticks at top speed.
         reserves: 0.01,
+        // As much as 15 ticks at top speed; with a full bar's reserves, about 34.
+        drift_boost: 15.0,
+        // A flight of 30 ticks sideways is as much as 6 ticks at top speed; within 15° of the
+        // path, next to nothing.
+        air_heading: 0.2,
+        // Swinging end to end at every choice is about 2.5% of what top speed earns.
+        steer_change: 0.05,
     };
 
     pub fn reward(&self, step: &Step) -> f32 {
@@ -424,6 +533,9 @@ impl Weights {
             - if step.grabbed { self.grabbed } else { 0.0 }
             - self.time
             + step.reserves_gained as f32 * self.reserves
+            + step.boosts as f32 * self.drift_boost
+            - step.air_misalign * self.air_heading
+            - step.steer_change as f32 / (STEER_BINS - 1) as f32 * self.steer_change
     }
 }
 
@@ -470,6 +582,20 @@ mod tests {
         }
         assert_eq!(latch.hold_left, 0);
         assert_eq!(latch.pad(release).held & buttons::R1, 0);
+    }
+
+    #[test]
+    fn the_latch_counts_the_stick_moves_once_a_choice() {
+        let mut latch = Latch::default();
+        let left = Action { steer: 0, ..Action::default() };
+        assert_eq!(latch.steer, STEER_STEPS as u8);
+        latch.pad(left);
+        assert_eq!(latch.steer_change, STEER_STEPS as u8);
+        // Held for another tick: no move.
+        latch.pad(left);
+        assert_eq!(latch.steer_change, 0);
+        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() });
+        assert_eq!(latch.steer_change, STEER_BINS as u8 - 1);
     }
 
     #[test]

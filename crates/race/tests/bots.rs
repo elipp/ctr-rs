@@ -1078,7 +1078,7 @@ fn needs_disc_karts_placed_on_paths_drive_on() {
                 let mut progress = Progress::new(path, &lengths, &tracker, &race.karts[0].driver);
                 let (mut gone, mut reward, mut grabbed) = (0, 0.0, false);
                 for _ in 0..PLACE_TICKS {
-                    let obs = observe(path, &tracker, &race.karts[0], &Default::default());
+                    let obs = observe(path, &tracker, &progress, &race.karts[0], &Default::default());
                     assert!(
                         obs.iter().all(|v| v.is_finite()),
                         "{id:?} path {line} frame {frame}: {obs:?}"
