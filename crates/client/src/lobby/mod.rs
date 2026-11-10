@@ -93,6 +93,9 @@ pub struct Lobby {
     chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
+    /// The track of the cup's next race, as the standings of the race before told it: its start
+    /// brings the loading screen's flag in over the race before (`scene::switch_level`).
+    pub(crate) cup_next: Option<u32>,
     pub online: Option<Online>,
 }
 

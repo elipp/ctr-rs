@@ -303,6 +303,7 @@ pub(super) fn run(
             | Action::DebugCrateBias(_)
             | Action::DebugFx(_)
             | Action::DebugSpawnKarts(_)
+            | Action::DebugLoadingScreen(_)
             | Action::SetConfig(_)
             | Action::Character(_)
             | Action::Track(_)
