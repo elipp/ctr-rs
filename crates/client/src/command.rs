@@ -111,8 +111,8 @@ pub enum Action {
     /// (Debug) Try a visual effect, or open the panel of them (`fx.rs`).
     DebugFx(crate::fx::Fx),
     /// (Debug) Put that many karts on the grid with ours, of random characters, offline
-    /// (`remote.rs`); 0 takes them away. With `bots` they drive (`race::bot`), else they stand.
-    DebugSpawnKarts { count: u8, bots: bool },
+    /// (`remote.rs`); 0 takes them away. Of `kind`: how they drive, if at all.
+    DebugSpawnKarts { count: u8, kind: DummyKind },
     /// (Debug, temporary) Watch the dummy karts, offline: ours turns bot too (`remote.rs`).
     /// A toggle.
     DebugSpectate,
@@ -141,6 +141,19 @@ pub enum Action {
 }
 
 /// How the level's mesh is built (`/debug level`).
+/// What drives the dummy karts of `/debug spawn-karts`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DummyKind {
+    /// The race itself (`race::bot`).
+    Bot,
+    /// Nothing: they stand.
+    Static,
+    /// A learned policy (`brain.rs`, `--features brain`): the one saved at that path, or else
+    /// at `BRAIN_POLICY`, or `target/brain/policy.safetensors`. A path given is kept for the
+    /// next.
+    Brain(Option<String>),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum MeshSetting {
     /// Keep the blocks without textures and the faces with a pure red corner.
@@ -169,7 +182,7 @@ const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static] | spectate | dump-bots | bot-line <0 to 2|auto> | navpaths";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static|brain [file]] | spectate | dump-bots | bot-line <0 to 2|auto> | navpaths";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -525,16 +538,21 @@ impl Action {
             "spawn-karts" => {
                 let (count, kind) = word(rest);
                 let count = count.parse::<u8>().ok().filter(|&n| n <= DUMMY_KARTS_MAX);
-                let bots = match kind {
-                    "" | "bot" => Some(true),
-                    "static" => Some(false),
+                let (kind, path) = word(kind);
+                let kind = match (kind, path) {
+                    ("" | "bot", "") => Some(DummyKind::Bot),
+                    ("static", "") => Some(DummyKind::Static),
+                    ("brain", "") => Some(DummyKind::Brain(None)),
+                    ("brain", path) => Some(DummyKind::Brain(Some(path.to_string()))),
                     _ => None,
                 };
                 count
-                    .zip(bots)
-                    .map(|(count, bots)| Action::DebugSpawnKarts { count, bots })
+                    .zip(kind)
+                    .map(|(count, kind)| Action::DebugSpawnKarts { count, kind })
                     .ok_or_else(|| {
-                        format!("Usage: /debug spawn-karts <0 to {DUMMY_KARTS_MAX}> [bot|static]")
+                        format!(
+                            "Usage: /debug spawn-karts <0 to {DUMMY_KARTS_MAX}> [bot|static|brain [policy file]]"
+                        )
                     })
             }
             "spectate" => Ok(Action::DebugSpectate),
@@ -1719,24 +1737,39 @@ mod tests {
             Action::parse("debug spawn-karts 7"),
             Ok(Action::DebugSpawnKarts {
                 count: 7,
-                bots: true
+                kind: DummyKind::Bot
             })
         ));
         assert!(matches!(
             Action::parse("debug spawn-karts 3 bot"),
             Ok(Action::DebugSpawnKarts {
                 count: 3,
-                bots: true
+                kind: DummyKind::Bot
             })
         ));
         assert!(matches!(
             Action::parse("debug spawn-karts 3 static"),
             Ok(Action::DebugSpawnKarts {
                 count: 3,
-                bots: false
+                kind: DummyKind::Static
             })
         ));
+        assert!(matches!(
+            Action::parse("debug spawn-karts 7 brain"),
+            Ok(Action::DebugSpawnKarts {
+                count: 7,
+                kind: DummyKind::Brain(None)
+            })
+        ));
+        assert!(matches!(
+            Action::parse("debug spawn-karts 2 brain runs/a b.safetensors"),
+            Ok(Action::DebugSpawnKarts {
+                count: 2,
+                kind: DummyKind::Brain(Some(path))
+            }) if path == "runs/a b.safetensors"
+        ));
         assert!(Action::parse("debug spawn-karts 3 parked").is_err());
+        assert!(Action::parse("debug spawn-karts 3 static x").is_err());
         assert!(matches!(
             Action::parse("debug dump-bots"),
             Ok(Action::DebugDumpBots)

@@ -1027,3 +1027,89 @@ fn needs_disc_replay_dump() {
         );
     }
 }
+
+/// Every this many frames of each path, [`needs_disc_karts_placed_on_paths_drive_on`] drops a
+/// kart.
+const PLACE_EVERY: usize = 20;
+
+/// The ticks each kart dropped on a path drives for.
+const PLACE_TICKS: u32 = 60;
+
+/// A kart dropped anywhere on a path (`Race::place_on_path`, how a learned bot is trained on every
+/// part of a track) stands on the road there, facing along it: the scripted bot, driving it from
+/// there, gets on along the path, and what a learned bot would see of it (`race::nn::observe`)
+/// is all finite. Run with `--nocapture` for the spots that went wrong.
+#[test]
+fn needs_disc_karts_placed_on_paths_drive_on() {
+    use race::bot::{PathLength, Tracker};
+    use race::nn::{Progress, Weights, observe, track};
+
+    let Some(tracks) = tracks() else {
+        eprintln!("skipped: no disc image");
+        return;
+    };
+    let (mut placed, mut stuck, mut skipped) = (0, Vec::new(), 0);
+    for (id, level, objects) in &tracks {
+        for (line, nav) in level.nav_paths.iter().enumerate() {
+            let path = &nav.frames[..];
+            if path.len() < 2 {
+                continue;
+            }
+            let lengths = PathLength::of(path);
+            let spec = KartSpec {
+                line: Some(line as u8),
+                ..bots(0)[0]
+            };
+            let mut race = Race::new(level, objects.clone(), &[spec], false);
+            race.laps = race::FREE_DRIVE_LAPS;
+            for frame in (0..path.len()).step_by(PLACE_EVERY) {
+                if !race.place_on_path(level, 0, &spec, line, frame) {
+                    skipped += 1;
+                    continue;
+                }
+                placed += 1;
+                let mut tracker = Tracker::find(path, race.karts[0].driver.pos_curr);
+                let off = (tracker.frame as i64 - frame as i64).rem_euclid(path.len() as i64);
+                assert!(
+                    off <= 2 || off >= path.len() as i64 - 2,
+                    "{id:?} path {line} frame {frame}: placed at frame {}",
+                    tracker.frame
+                );
+                let mut progress = Progress::new(path, &lengths, &tracker, &race.karts[0].driver);
+                let (mut gone, mut reward, mut grabbed) = (0, 0.0, false);
+                for _ in 0..PLACE_TICKS {
+                    let obs = observe(path, &tracker, &race.karts[0], &Default::default());
+                    assert!(
+                        obs.iter().all(|v| v.is_finite()),
+                        "{id:?} path {line} frame {frame}: {obs:?}"
+                    );
+                    race.tick(level, &[Pad::default()]);
+                    let relocated = track(&mut tracker, path, &race.karts[0].driver);
+                    let step =
+                        progress.step(path, &lengths, &tracker, relocated, &race.karts[0].driver);
+                    gone += step.progress;
+                    grabbed |= step.grabbed;
+                    reward += Weights::DEFAULT.reward(&step);
+                }
+                // Two seconds from a standstill go well over this.
+                if gone < 300 || grabbed {
+                    println!(
+                        "{id:?} path {line} frame {frame}: {gone} units on, grabbed {grabbed}, \
+                         reward {reward:.1}"
+                    );
+                    stuck.push((*id, line, frame));
+                }
+            }
+        }
+    }
+    println!(
+        "{placed} karts placed ({skipped} frames over gaps skipped), {} got nowhere",
+        stuck.len()
+    );
+    // Some spots are bad starts whatever (a standstill on a ramp's run-up, a hairpin).
+    assert!(
+        stuck.len() * 20 <= placed,
+        "{} of {placed} placed karts got nowhere",
+        stuck.len()
+    );
+}

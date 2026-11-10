@@ -363,6 +363,7 @@ pub(crate) fn restart_drive(world: &mut World, options: Options) {
     if let Some(mut dummies) = world.get_resource_mut::<crate::remote::DummyKarts>() {
         dummies.0.clear();
         dummies.1 = None;
+        dummies.3 = false;
     }
     if options.driving {
         let drive = new_drive(

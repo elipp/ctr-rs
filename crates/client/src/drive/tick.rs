@@ -82,6 +82,7 @@ pub(super) fn drive_tick(
     mut dummies: ResMut<crate::remote::DummyKarts>,
     shown: Shown,
     mut memory: Local<Memory>,
+    #[cfg(feature = "brain")] mut brains: ResMut<crate::learned::Brains>,
 ) {
     let Shown {
         mut particles,
@@ -143,10 +144,10 @@ pub(super) fn drive_tick(
     if restart {
         let (specs, own, spectator) = match &lobby.online {
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
-            // (`/debug spectate`: ours is a bot too, and we watch.)
+            // (`/debug spectate`: ours is driven as the dummies are, and we watch.)
             None => (
                 std::iter::once(race::KartSpec {
-                    bot: dummies.1.is_some(),
+                    bot: dummies.1.is_some() && !dummies.3,
                     line: dummies.2.filter(|_| dummies.1.is_some()),
                     ..drive.spec()
                 })
@@ -163,11 +164,17 @@ pub(super) fn drive_tick(
             lobby.online.as_ref().map(|net| net.laps),
             spectator,
         );
-        // The dummies have left from tick 0: a neutral pad, and nothing to wait for.
+        // The dummies have left from tick 0: a neutral pad, and nothing to wait for. Unless the
+        // policy drives them: then their pads are made here, each tick (below).
         if !online {
             let first = if dummies.1.is_some() { 0 } else { 1 };
-            for slot in first..sim.race.players() {
-                sim.race.leave(slot);
+            if dummies.3 {
+                #[cfg(feature = "brain")]
+                brains.start(&track.0, &sim.race, &specs, first..sim.race.players());
+            } else {
+                for slot in first..sim.race.players() {
+                    sim.race.leave(slot);
+                }
             }
         }
         particles.list.clear();
@@ -356,6 +363,16 @@ pub(super) fn drive_tick(
         let taps = held & !waits.1;
         waits.1 = held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
+    }
+    // The pads of the karts the policy drives (`/debug spawn-karts <n> brain`), from the race as
+    // it is now. Offline every pad is in before the tick plays: nothing is predicted.
+    #[cfg(feature = "brain")]
+    if !online && dummies.3 {
+        for (slot, pad) in brains.pads(&track.0, &sim.race) {
+            sim.race
+                .confirm(slot, tick, pad)
+                .expect("the policy's pads come in order");
+        }
     }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
     // others get it as well. (A tick that waits plays the pad it already has.) Once we have

@@ -485,7 +485,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
             leaf("ranking", "Random ranking (host)"),
-            takes("spawn-karts", "Dummy karts on the grid, offline", "<0 to 7>"),
+            takes(
+                "spawn-karts",
+                "Dummy karts on the grid, offline",
+                "<0 to 7> [bot|static|brain [file]]",
+            ),
             leaf("spectate", "Watch the dummy karts, offline (toggle)"),
             leaf("dump-bots", "Print the race of bots to stdout, to replay in a test"),
             Spec {

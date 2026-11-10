@@ -8,6 +8,7 @@
 
 pub mod bot;
 pub mod desync;
+pub mod nn;
 pub mod rollback;
 
 use coll::Collision;
@@ -120,6 +121,43 @@ impl Kart {
             held: 0,
             bot,
         }
+    }
+}
+
+impl Kart {
+    /// The kart of `spec` at frame `frame` of bot path `path`, facing the next frame, standing
+    /// still: anywhere on the track rather than the grid (to train a bot on every part of it).
+    /// None if the level has no such frame, or it is over a kill plane (a gap).
+    pub fn birth_on_path(
+        level: &Level,
+        slot: usize,
+        spec: &KartSpec,
+        path: usize,
+        frame: usize,
+    ) -> Option<Kart> {
+        let frames = &level.nav_paths.get(path)?.frames;
+        let here = frames.get(frame)?;
+        if frames.len() < 2 || here.flags & loader::lev::NavFrame::KILL_PLANE != 0 {
+            return None;
+        }
+        let next = &frames[(frame + 1) % frames.len()];
+        let angle = math::ratan2(
+            next.pos.x as i32 - here.pos.x as i32,
+            next.pos.z as i32 - here.pos.z as i32,
+        );
+        let mut coll = Collision::default();
+        let mut driver = Driver::new(slot as u8, spec.character);
+        driver.anim_num_frames = spec.anim_num_frames;
+        vehicle::sim::spawn_at(&mut driver, &mut coll, level, here.pos, angle as i16);
+        let bot = spec
+            .bot
+            .then(|| bot::Bot::new(level, slot, &driver, spec.line));
+        Some(Kart {
+            driver,
+            coll,
+            held: 0,
+            bot,
+        })
     }
 }
 
@@ -281,6 +319,25 @@ impl Race {
             intro_ticks: 0,
             light: None,
             event_ms: 0,
+        }
+    }
+
+    /// Puts the kart in `slot` (of `spec`) at frame `frame` of bot path `path`, standing still
+    /// ([`Kart::birth_on_path`]). Returns whether it could: not on a frame over a gap.
+    pub fn place_on_path(
+        &mut self,
+        level: &Level,
+        slot: usize,
+        spec: &KartSpec,
+        path: usize,
+        frame: usize,
+    ) -> bool {
+        match Kart::birth_on_path(level, slot, spec, path, frame) {
+            Some(kart) => {
+                self.karts[slot] = kart;
+                true
+            }
+            None => false,
         }
     }
 

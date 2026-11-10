@@ -29,17 +29,17 @@ pub const LOST_DISTANCE: i64 = 1500;
 /// hairpin).
 const SEARCH_WINDOW: usize = 48;
 
-type P = [i64; 3];
+pub(crate) type P = [i64; 3];
 
-fn frame_pos(f: &NavFrame) -> P {
+pub(crate) fn frame_pos(f: &NavFrame) -> P {
     [f.pos.x as i64, f.pos.y as i64, f.pos.z as i64]
 }
 
-fn level_pos(pos: Vec3) -> P {
+pub(crate) fn level_pos(pos: Vec3) -> P {
     [pos.x, pos.y, pos.z].map(|v| (v >> WORLD_POS_SHIFT) as i64)
 }
 
-fn sub(a: P, b: P) -> P {
+pub(crate) fn sub(a: P, b: P) -> P {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
@@ -47,7 +47,7 @@ fn sq(v: i64) -> i64 {
     v * v
 }
 
-fn dot(a: P, b: P) -> i64 {
+pub(crate) fn dot(a: P, b: P) -> i64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
@@ -162,7 +162,7 @@ impl Tracker {
     }
 
     /// The square of the kart's distance from the segment it is on.
-    fn distance2(&self, path: &[NavFrame], p: P) -> i64 {
+    pub(crate) fn distance2(&self, path: &[NavFrame], p: P) -> i64 {
         let i = self.frame as usize;
         let a = frame_pos(&path[i]);
         let b = frame_pos(&path[(i + 1) % path.len()]);
@@ -221,6 +221,89 @@ impl Tracker {
             [0, 1, 2].map(|k| a[k] + d[k] * left / len)
         };
         (to_world(point), i)
+    }
+}
+
+/// The ground-plane length of the segment from frame `i` of `path` to the next, and how far
+/// along it `p` is level with (clamped to the segment), in level units: as [`Tracker::ahead`]
+/// measures.
+fn along_segment(path: &[NavFrame], i: usize, p: P) -> (i64, i64) {
+    let a = frame_pos(&path[i]);
+    let b = frame_pos(&path[(i + 1) % path.len()]);
+    let d = [b[0] - a[0], 0, b[2] - a[2]];
+    let len = dot(d, d).isqrt();
+    if len == 0 {
+        return (0, 0);
+    }
+    let ap = sub(p, a);
+    let along = (dot([ap[0], 0, ap[2]], d) / len).clamp(0, len);
+    (along, len)
+}
+
+/// How far along a bot path each frame is from its first, on the ground plane (in level units),
+/// for a kart's progress along it ([`Tracker::arc`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PathLength {
+    /// By frame: the length of the path up to it.
+    pub start: Vec<i64>,
+    /// Round the whole loop, back to the first frame.
+    pub total: i64,
+}
+
+impl PathLength {
+    pub fn of(path: &[NavFrame]) -> PathLength {
+        let mut start = Vec::with_capacity(path.len());
+        let mut total = 0;
+        for i in 0..path.len() {
+            start.push(total);
+            if path.len() >= 2 {
+                total += along_segment(path, i, frame_pos(&path[i])).1;
+            }
+        }
+        PathLength { start, total }
+    }
+
+    /// How far `to` is ahead of `from` (both [`Tracker::arc`]s), the shorter way round the loop:
+    /// negative behind.
+    pub fn delta(&self, from: i64, to: i64) -> i64 {
+        if self.total == 0 {
+            return 0;
+        }
+        let d = (to - from).rem_euclid(self.total);
+        if d > self.total / 2 { d - self.total } else { d }
+    }
+}
+
+impl Tracker {
+    /// Where the kart at `pos` is along the path, from its first frame (in level units, on the
+    /// ground plane): `0..lengths.total`.
+    pub fn arc(&self, path: &[NavFrame], lengths: &PathLength, pos: Vec3) -> i64 {
+        let i = self.frame as usize;
+        if path.len() < 2 || i >= path.len() {
+            return 0;
+        }
+        lengths.start[i] + along_segment(path, i, level_pos(pos)).0
+    }
+
+    /// The kart at `pos` off the segment it is on, sideways on the ground plane (in level units):
+    /// positive to the left of the way the path goes (the side a raised `Driver::angle` turns
+    /// to). With it, the way the path goes there (as `Driver::angle`, 0x1000 a turn).
+    pub fn offset(&self, path: &[NavFrame], pos: Vec3) -> (i64, i32) {
+        let i = self.frame as usize;
+        if path.len() < 2 || i >= path.len() {
+            return (0, 0);
+        }
+        let a = frame_pos(&path[i]);
+        let b = frame_pos(&path[(i + 1) % path.len()]);
+        let (dx, dz) = (b[0] - a[0], b[2] - a[2]);
+        let len = (dx * dx + dz * dz).isqrt();
+        let heading = math::ratan2(dx as i32, dz as i32);
+        if len == 0 {
+            return (0, heading);
+        }
+        let ap = sub(level_pos(pos), a);
+        // Facing (sin, cos) in x and z, the left (a quarter turn up) is (cos, -sin).
+        ((ap[0] * dz - ap[2] * dx) / len, heading)
     }
 }
 
@@ -314,7 +397,7 @@ impl Default for Steering {
 const RAMP_FRAMES: usize = 4;
 
 /// `NavFrame::special_bits`: the frame launches retail's bots by `rampPhys`.
-const SPECIAL_RAMP: u8 = 0x10;
+pub(crate) const SPECIAL_RAMP: u8 = 0x10;
 
 /// How many frames back from the kart's frame [`Bot::fly`] looks for the lip of a gap it is over.
 const GAP_FRAMES: usize = 64;

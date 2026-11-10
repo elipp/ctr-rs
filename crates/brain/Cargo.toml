@@ -1,0 +1,16 @@
+[package]
+name = "brain"
+version = "0.1.0"
+edition = "2024"
+
+# Learned bots: their policy (a small MLP in candle), the training environment, and PPO to train
+# it (`cargo run --release -p brain --bin train`). The host runs the policy for the bots of a
+# race; nothing of it is part of the sim (see `race::nn`).
+
+[dependencies]
+candle-core = "0.11.1"
+candle-nn = "0.11.1"
+instance = { path = "../instance" }
+loader = { path = "../loader" }
+race = { path = "../race" }
+vehicle = { path = "../vehicle" }

@@ -17,6 +17,9 @@ debug = ["bevy/debug"]
 # The browser build draws through WebGPU instead of WebGL2 (`web/build.sh release webgpu`). Bevy
 # picks the backend as it is compiled: a browser without WebGPU gets no picture from this build.
 webgpu = ["bevy/webgpu"]
+# Dummy karts driven by a learned policy (`/debug spawn-karts 7 brain`, `brain.rs`). Off by
+# default, as candle adds to the build: `--features brain`. Native builds only, for now.
+brain = ["dep:brain"]
 
 [dependencies]
 bevy = { version = "0.20.0", features = [
@@ -37,6 +40,7 @@ race = { path = "../race" }
 math = { path = "../math" }
 weapon = { path = "../weapon" }
 map = { path = "../map" }
+brain = { path = "../brain", optional = true }
 # Where a release build keeps its files (`paths.rs`).
 directories = "6.0.0"
 

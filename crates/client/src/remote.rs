@@ -93,17 +93,26 @@ pub fn build(
 }
 
 /// The karts of `/debug spawn-karts`, offline: on the grid with ours, in the slots after it (1 on),
-/// either bots (`race::bot`) or standing still. Each of them has left the race from tick 0
-/// (`Rollback::leave`), so nothing waits for its pad or predicts it: a bot's the race makes
-/// itself, and the others hold a neutral one.
+/// either bots (`race::bot`), standing still, or driven by a learned policy (`learned.rs`). The
+/// first two have left the race from tick 0 (`Rollback::leave`), so nothing waits for their pads
+/// or predicts them: a bot's the race makes itself, and the others hold a neutral one. The
+/// policy's are made each tick and confirmed like ours (`drive_tick`).
 /// `drive_tick` builds the race with these; a new scene (another track, `/debug viewer`) takes
 /// them away (`scene::restart_drive`), and so does an online race.
-/// (Temporary) The second is the slot watched by `/debug spectate`: then ours is a bot as well,
-/// drawn by a dummy of slot 0, and the race has no kart of ours.
+/// (Temporary) The second is the slot watched by `/debug spectate`: then ours is driven as the
+/// dummies are (a bot, or by the policy), drawn by a dummy of slot 0, and the race has no kart of
+/// ours.
 /// The third is the bot path every bot drives, of `/debug bot-line` (`KartSpec::line`); it stays
 /// from one scene to the next.
+/// The fourth is whether the policy drives the dummies (`/debug spawn-karts <n> brain`): their
+/// specs say `bot: false`, as the static ones' do.
 #[derive(Resource, Default)]
-pub struct DummyKarts(pub Vec<KartSpec>, pub Option<usize>, pub Option<u8>);
+pub struct DummyKarts(
+    pub Vec<KartSpec>,
+    pub Option<usize>,
+    pub Option<u8>,
+    pub bool,
+);
 
 /// A kart of [`DummyKarts`].
 #[derive(Component)]
@@ -122,13 +131,14 @@ pub fn spawn_dummies(
     drive: Option<Res<crate::drive::Drive>>,
     mut builder: KartBuilder,
     mut toasts: MessageWriter<crate::toast::Toast>,
+    #[cfg(feature = "brain")] mut brains: ResMut<crate::learned::Brains>,
 ) {
-    use crate::command::Action;
+    use crate::command::{Action, DummyKind};
     use std::hash::BuildHasher;
     for action in actions.read() {
-        let (count, bots) = match *action {
-            Action::DebugSpawnKarts { count, bots } => (count, bots),
-            Action::DebugSpectate => (0, false),
+        let (count, kind) = match action {
+            Action::DebugSpawnKarts { count, kind } => (*count, kind.clone()),
+            Action::DebugSpectate => (0, DummyKind::Static),
             _ => continue,
         };
         if lobby.online.is_some() || loading.is_some() || drive.is_none() {
@@ -156,7 +166,7 @@ pub fn spawn_dummies(
                 );
             } else if let Some(drive) = &drive {
                 let spec = KartSpec {
-                    bot: true,
+                    bot: !dummies.3,
                     line: dummies.2,
                     ..drive.spec()
                 };
@@ -178,11 +188,33 @@ pub fn spawn_dummies(
             }
             continue;
         }
+        // The policy first: without it, the karts there are stay.
+        if let DummyKind::Brain(path) = &kind
+            && count > 0
+        {
+            #[cfg(feature = "brain")]
+            let loaded = brains.load(path.as_deref());
+            #[cfg(not(feature = "brain"))]
+            let loaded: Result<std::path::PathBuf, String> = {
+                let _ = path;
+                Err("This build has no learned bots: build it with --features brain".into())
+            };
+            match loaded {
+                Ok(path) => info!("learned bots: the policy {}", path.display()),
+                Err(e) => {
+                    toasts.write(
+                        crate::toast::Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)),
+                    );
+                    continue;
+                }
+            }
+        }
         for (entity, _) in &old {
             builder.commands.entity(entity).try_despawn();
         }
         dummies.0.clear();
         dummies.1 = None;
+        dummies.3 = matches!(kind, DummyKind::Brain(_));
         // (The std hasher is random enough.)
         let random = std::collections::hash_map::RandomState::new();
         let mut models: HashMap<usize, (Model, Vec<Icon>)> = HashMap::new();
@@ -195,7 +227,7 @@ pub fn spawn_dummies(
             let spec = KartSpec {
                 character,
                 anim_num_frames: crate::scene::anim_num_frames(model),
-                bot: bots,
+                bot: kind == DummyKind::Bot,
                 line: dummies.2,
             };
             let birth = race::Kart::birth(&track.0, slot, &spec);
@@ -214,7 +246,11 @@ pub fn spawn_dummies(
         let text = if names.is_empty() {
             "No dummy karts".to_string()
         } else {
-            let kind = if bots { "Bots" } else { "Static karts" };
+            let kind = match kind {
+                DummyKind::Bot => "Bots",
+                DummyKind::Static => "Static karts",
+                DummyKind::Brain(_) => "Learned bots",
+            };
             format!("{kind}: {}", names.join(", "))
         };
         toasts.write(crate::toast::Toast::new(text, 3000));
@@ -242,7 +278,8 @@ pub fn bot_line(
             continue;
         }
         dummies.2 = line;
-        for spec in dummies.0.iter_mut().filter(|spec| spec.bot) {
+        let learned = dummies.3;
+        for spec in dummies.0.iter_mut().filter(|spec| spec.bot || learned) {
             spec.line = line;
         }
         let text = match line {
@@ -274,6 +311,13 @@ pub fn dump_bots(
 ) {
     for action in actions.read() {
         if !matches!(action, crate::command::Action::DebugDumpBots) {
+            continue;
+        }
+        if dummies.3 {
+            toasts.write(
+                crate::toast::Toast::new("Not with learned bots: their pads are not kept", 2500)
+                    .color(Color::srgb(1.0, 0.4, 0.4)),
+            );
             continue;
         }
         let (Some(watched), Some(drive)) = (dummies.1.filter(|_| lobby.online.is_none()), &drive)
