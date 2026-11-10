@@ -259,11 +259,14 @@ pub fn launch_effects(d: &Driver, launch: Launch, at: [i32; 3], effects: &mut Ve
         Launch::Warpball => (WARPBALL_SOUND, WARPBALL_VOICELINE),
     };
     effects.push(Effect::Sound3D(Sound3D { id, pos: at }));
-    effects.push(Effect::Voiceline {
-        id: voice,
-        driver_id: d.driver_id,
-        priority: VOICELINE_PRIORITY,
-    });
+    // A bot says its own line (`PickupBots_PlayVoice`).
+    if d.actions_flag_set & actions::BOT == 0 {
+        effects.push(Effect::Voiceline {
+            id: voice,
+            driver_id: d.driver_id,
+            priority: VOICELINE_PRIORITY,
+        });
+    }
 }
 
 /// `VehPhysProc`'s "Item Used By Player", for the driver whose fire button was tapped: asks to fire
@@ -710,7 +713,8 @@ mod tests {
         let rng = (0..)
             .find(|&seed| {
                 let mut r = seed;
-                (math::mix_rng_scramble(&mut r) as u32 >> RNG_SHIFT) % RNG_BUCKETS * 19 / RNG_BUCKETS
+                (math::mix_rng_scramble(&mut r) as u32 >> RNG_SHIFT) % RNG_BUCKETS * 19
+                    / RNG_BUCKETS
                     == 4
             })
             .unwrap();

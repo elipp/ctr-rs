@@ -759,6 +759,14 @@ pub fn inst_matrix(d: &Driver) -> (Matrix, [i32; 3]) {
             *t = mips::add_lo(*t, mips::sra(n as i32 * SQUISH_OFFSET_NORMAL_SCALE, 12));
         }
     }
+    // A blasted bot tumbles (it has no baked tumble of its own).
+    if let Some((rot, lift)) = crate::bot::blast_tumble(d) {
+        let tumble = crate::rotmat::rot_to_matrix(rot);
+        return (
+            matrix_rotate(&mut Gte::default(), &matrix, &tumble),
+            [t[0], mips::add_lo(t[1], lift), t[2]],
+        );
+    }
     (matrix, t)
 }
 

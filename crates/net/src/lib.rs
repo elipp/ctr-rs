@@ -33,7 +33,7 @@ pub use realm::{
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
-pub use wire::{Pad, Score, Standings, Tick};
+pub use wire::{LobbyBots, Pad, RetailBots, Score, Standings, Tick};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -158,13 +158,16 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/13";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/16";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
 /// one, the host's pair with each guest included, so the host is no different from the others
 /// to the network.
-pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/1";
+pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/2";
+
+/// The most karts a race has: the host's bots fill it up to this (see [`Session::set_bots`]).
+pub const MAX_PLAYERS: usize = 8;
 
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
@@ -198,6 +201,9 @@ pub enum Event {
         /// The host has fixed what everyone drives (a cup is on, see
         /// [`Session::lock_characters`]): a change of character is not taken.
         locked: bool,
+        /// How many bots the host's races are filled with, as many as the grid has room for
+        /// ([`Session::show_bots`]).
+        bots: LobbyBots,
     },
     /// We joined the lobby of this host. (Also when the host left and the lobby went on with
     /// another one: we joined that one.)
@@ -219,6 +225,10 @@ pub enum Event {
     /// the `hash` of its contents (0 for the game's own); a game that lacks it asks for it with
     /// [`Session::fetch`] first. Once the level is up, and the game has built the race,
     /// [`Session::ready`] says so; [`Event::Go`] then starts it. The race has `laps` laps.
+    /// The last `bots` of the players are the host's bots (their endpoint is the host's): the
+    /// host makes their pads ([`Session::bot_input`]), and everyone else gets them as
+    /// [`Event::Pads`] of their slots. The `retail` bots come after the players (a race has one
+    /// kind of bot or the other): every client adds them to its race and drives them itself.
     Started {
         slot: usize,
         characters: Vec<u8>,
@@ -226,6 +236,8 @@ pub enum Event {
         track: u32,
         hash: u64,
         laps: u8,
+        bots: usize,
+        retail: RetailBots,
     },
     /// The host sent the custom track asked for with [`Session::fetch`], as the bytes it
     /// [provided](Session::provide) it as. They are not checked: that the contents hash to `hash`
@@ -364,11 +376,13 @@ enum Command {
         track: u32,
         hash: u64,
         laps: u8,
+        retail: RetailBots,
     },
     Restart {
         track: u32,
         hash: u64,
         laps: u8,
+        retail: RetailBots,
     },
     Provide {
         track: u32,
@@ -384,6 +398,7 @@ enum Command {
     Say(String),
     Character(u8),
     Lock(bool),
+    ShowBots(LobbyBots),
     Spectate(bool),
     Nickname(String),
     RaceOver,
@@ -394,6 +409,8 @@ enum Command {
         pads: Vec<Pad>,
     },
     Input(Pad),
+    BotInput(Vec<Pad>),
+    Bots(Vec<u8>),
     Checksum {
         tick: Tick,
         hash: u64,
@@ -427,9 +444,14 @@ impl Session {
     /// Starts the race on level `track`, if we host the lobby. Everyone then gets
     /// [`Event::Started`]. `hash` is that of a custom track's contents (0 for the game's own),
     /// which has to be [provided](Self::provide) for the players who lack it. The race has `laps`
-    /// laps.
-    pub fn start(&self, track: u32, hash: u64, laps: u8) {
-        let _ = self.commands.send(Command::Start { track, hash, laps });
+    /// laps, and the `retail` bots after the players (the brain bots are [`set_bots`](Self::set_bots)').
+    pub fn start(&self, track: u32, hash: u64, laps: u8, retail: RetailBots) {
+        let _ = self.commands.send(Command::Start {
+            track,
+            hash,
+            laps,
+            retail,
+        });
     }
 
     /// Makes the custom track `track` (whose contents hash to `hash`) available to the players
@@ -448,8 +470,13 @@ impl Session {
     /// Starts the race again on level `track`, if we host the lobby and a race has been started
     /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
     /// the way it did the first time.
-    pub fn restart(&self, track: u32, hash: u64, laps: u8) {
-        let _ = self.commands.send(Command::Restart { track, hash, laps });
+    pub fn restart(&self, track: u32, hash: u64, laps: u8, retail: RetailBots) {
+        let _ = self.commands.send(Command::Restart {
+            track,
+            hash,
+            laps,
+            retail,
+        });
     }
 
     /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host
@@ -483,6 +510,12 @@ impl Session {
         let _ = self.commands.send(Command::Lock(locked));
     }
 
+    /// Tells everyone in the lobby, in [`Event::Lobby`], what bots our races are filled with, if
+    /// we host it.
+    pub fn show_bots(&self, bots: LobbyBots) {
+        let _ = self.commands.send(Command::ShowBots(bots));
+    }
+
     /// Changes whether we only watch, for the race that has not started yet (a guest's to do;
     /// the host always plays). The lobby's [`Event::Lobby`] follows.
     pub fn set_spectator(&self, spectator: bool) {
@@ -512,6 +545,20 @@ impl Session {
     /// played, from [`Event::Go`] on.
     pub fn input(&self, pad: Pad) {
         let _ = self.commands.send(Command::Input(pad));
+    }
+
+    /// The host's: the pads of its bots for the tick being played, one for each in the order of
+    /// their slots (see [`Event::Started`]). They go out with our own pad of the tick, so they
+    /// come before its [`input`](Self::input).
+    pub fn bot_input(&self, pads: Vec<Pad>) {
+        let _ = self.commands.send(Command::BotInput(pads));
+    }
+
+    /// The host's: the races started from now on have bots after the players, up to
+    /// [`MAX_PLAYERS`], of these characters (as many of the first of them as it takes). None, to
+    /// race without.
+    pub fn set_bots(&self, characters: Vec<u8>) {
+        let _ = self.commands.send(Command::Bots(characters));
     }
 
     /// Tells the session that the race is over, which the game decides (a win, a stop): players

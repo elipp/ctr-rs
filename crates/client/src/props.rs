@@ -47,7 +47,7 @@ pub struct Sim {
 impl Sim {
     pub fn new(level: &Level, objects: Objects, specs: &[KartSpec]) -> Sim {
         Sim {
-            race: Sim::rollback(level, objects.clone(), specs, 0, None, false),
+            race: Sim::rollback(level, objects.clone(), specs, 0, None, false, None, None),
             start: objects,
             own: 0,
         }
@@ -55,7 +55,9 @@ impl Sim {
 
     /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the laps of
     /// a race of a lobby, even if we are alone in it (None for a free drive). A `spectator`
-    /// drives none: `own` is the kart it is following, and no pad of it is waited for.
+    /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
+    /// race after the players; the `band` is the learned bots' rubber band.
+    #[allow(clippy::too_many_arguments)]
     fn rollback(
         level: &Level,
         objects: Objects,
@@ -63,8 +65,14 @@ impl Sim {
         own: usize,
         online: Option<u8>,
         spectator: bool,
+        bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
+        band: Option<race::Band>,
     ) -> Rollback<Race> {
         let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
+        race.band = band;
+        if let Some((setup, bots)) = bots.filter(|(_, bots)| !bots.is_empty()) {
+            race.add_bots(level, setup, bots);
+        }
         // An online race starts with the ceremony; offline the kart drives off at once.
         if let Some(laps) = online {
             race.laps = laps;
@@ -78,7 +86,7 @@ impl Sim {
             (!specs.is_empty() && !spectator).then_some(own),
             ROLLBACK_WINDOW,
         );
-        // Nobody to compare with alone, or offline (the dummy karts of `/debug spawn-karts`).
+        // Nobody to compare with alone (the bots are in our sim alone), or offline.
         if specs.len() > 1 && online.is_some() {
             rollback.check_every(CHECK_EVERY)
         } else {
@@ -88,6 +96,7 @@ impl Sim {
 
     /// Puts the race back to tick 0 with the karts `specs`, ours being kart `own` (or, for a
     /// `spectator`, the one that is followed); every object is as it was at the start.
+    #[allow(clippy::too_many_arguments)]
     pub fn restart(
         &mut self,
         level: &Level,
@@ -95,8 +104,19 @@ impl Sim {
         own: usize,
         online: Option<u8>,
         spectator: bool,
+        bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
+        band: Option<race::Band>,
     ) {
-        self.race = Sim::rollback(level, self.start.clone(), specs, own, online, spectator);
+        self.race = Sim::rollback(
+            level,
+            self.start.clone(),
+            specs,
+            own,
+            online,
+            spectator,
+            bots,
+            band,
+        );
         self.own = own;
     }
 

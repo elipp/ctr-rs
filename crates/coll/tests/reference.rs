@@ -480,6 +480,8 @@ fn needs_reference_matches_reference_on_random_triangles() {
             rot: SVec3::default(),
         }; 8],
         restart_points: Vec::new(),
+        restart_point_past_end: None,
+        nav_paths: Default::default(),
         water: Default::default(),
         scenery: Default::default(),
         config_flags: 0,

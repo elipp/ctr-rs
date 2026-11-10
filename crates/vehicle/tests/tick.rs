@@ -1066,6 +1066,7 @@ fn needs_disc_needs_reference_matches_reference_on_tracks() {
                     start_tick(&mut racers, &mut random_number);
                     tick_all(
                         &mut racers,
+                        &mut [],
                         &level,
                         env,
                         &mut Pickups(&mut objects),

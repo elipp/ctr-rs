@@ -4,10 +4,12 @@
 //!
 //! The original walks the thread list: the sibling threads of the driver's, the drivers that tick
 //! after it. So each pair is looked at once, by the driver that ticks first, which moves both.
-//! [`Others`] is that list. Only human drivers are ported: there are no bots, so no
-//! `VehPhysCrash_AI` and no `BOTS_*`. The shield bubble's hit in `Attack` is left out too (the
-//! bubble does not hurt the kart it bumps).
+//! [`Others`] is that list, and then every bot (the `ROBOT` bucket): a bot that is bumped is
+//! pushed off its path (`VehPhysCrash_AI`, see [`crate::bot`]). Two bots bump each other in the
+//! bot's own tick ([`bump_bots`]). The shield bubble's hit in `Attack` is left out (the bubble
+//! does not hurt the kart it bumps).
 
+use loader::lev::NavPath;
 use math::mips;
 
 use crate::calc::map_to_range;
@@ -58,26 +60,30 @@ pub struct Feedback {
     pub last_frame: i32,
 }
 
-/// The drivers a driver can bump into, in the order of the thread list after its own.
-pub struct Others<'a, 'b> {
+/// The drivers a driver can bump into, in the order of the thread list after its own, and the
+/// bots (in the order of their bucket, the last born first), with the level's paths they follow.
+pub struct Others<'a, 'b, 'c> {
     pub drivers: &'a mut [&'b mut Driver],
+    pub bots: &'a mut [&'c mut Driver],
+    pub nav_paths: &'a [NavPath],
     pub feedback: &'a mut Feedback,
 }
 
 /// `struct DriverCollisionSearch`: the closest driver in reach.
 struct Search {
-    /// Index into [`Others::drivers`].
+    /// Index into the drivers searched.
     other: usize,
     best_dist_sq: i32,
     /// `bucket.dist`: from the other kart's instance to ours.
     dist: [i16; 3],
 }
 
-/// `PROC_CollidePointWithBucket` over the drivers: the closest one, the first on a tie.
-fn closest(d: &Driver, others: &[&mut Driver]) -> Option<Search> {
+/// `PROC_CollidePointWithBucket` over the drivers: the closest one, the first on a tie, and
+/// none closer than `best_dist_sq` (what an earlier bucket found).
+fn closest(d: &Driver, others: &[&mut Driver], best_dist_sq: i32) -> Option<Search> {
     let pos = [d.pos_curr.x, d.pos_curr.y, d.pos_curr.z].map(|v| mips::sra(v, 8) as i16 as i32);
     let mut best: Option<Search> = None;
-    let mut best_dist_sq = BEST_DIST_INIT;
+    let mut best_dist_sq = best_dist_sq;
 
     for (n, other) in others.iter().enumerate() {
         if other.collision_disabled {
@@ -119,14 +125,152 @@ pub fn collide(d: &mut Driver, others: &mut Others, env: &Env, effects: &mut Vec
     if !env.kart_collisions || d.collision_disabled {
         return;
     }
-    let Some(search) = closest(d, others.drivers) else {
-        return;
+    // The drivers after ours, then the bots: one closer than all of those is the one bumped.
+    let driver = closest(d, others.drivers, BEST_DIST_INIT);
+    let bot = closest(
+        d,
+        others.bots,
+        driver.as_ref().map_or(BEST_DIST_INIT, |s| s.best_dist_sq),
+    );
+    let (search, other) = match (driver, bot) {
+        (_, Some(search)) => {
+            let other = &mut *others.bots[search.other];
+            (search, other)
+        }
+        (Some(search), None) => {
+            let other = &mut *others.drivers[search.other];
+            (search, other)
+        }
+        (None, None) => return,
     };
     let radius_sum = mips::add_lo(HIT_RADIUS, HIT_RADIUS);
     if search.best_dist_sq < mips::mul_lo(radius_sum, radius_sum) {
-        let other = &mut *others.drivers[search.other];
-        any_two_cars(d, other, &search, env, others.feedback, effects);
+        any_two_cars(
+            d,
+            other,
+            &search,
+            env,
+            others.nav_paths,
+            others.feedback,
+            effects,
+        );
     }
+}
+
+/// `hitDir` of a bump: the unit vector from the other kart to ours, and how far they overlap
+/// (`hitStrength`), if they do.
+fn hit(search: &Search) -> Option<([i16; 3], i32)> {
+    let distance = math::fast_sqrt(search.best_dist_sq as u32, 0);
+    let mut hit_dir = [0i16, 0, UNIT_VECTOR_SCALE as i16];
+    if distance != 0 {
+        let toward = |v: i16| mips::div(mips::sll(v as i32, MATRIX_FRAC_SHIFT), distance) as i16;
+        hit_dir = [
+            toward(search.dist[0]),
+            toward(search.dist[1]),
+            toward(search.dist[2]),
+        ];
+    }
+    let hit_strength = mips::sub_lo(mips::add_lo(HIT_RADIUS, HIT_RADIUS), distance);
+    (hit_strength > 0).then_some((hit_dir, hit_strength))
+}
+
+/// The bounce of a bump (the part of `VehPhysCrash_AnyTwoCars` every pair has): both karts go
+/// away at the speed of the pair, weighted by how heavy they are, and are pushed apart. The
+/// result is the impact.
+fn bounce(
+    hit_dir: [i16; 3],
+    hit_strength: i32,
+    weights: (i32, i32),
+    self_vel: &mut [i32; 3],
+    other_vel: &mut [i32; 3],
+) -> i32 {
+    let mut impact = 0;
+    let (weight, other_weight) = weights;
+    let weighted = [0, 1, 2].map(|i| {
+        mips::div(
+            mips::add_lo(
+                mips::mul_lo(self_vel[i], weight),
+                mips::mul_lo(other_vel[i], other_weight),
+            ),
+            mips::add_lo(weight, other_weight),
+        )
+    });
+    if bounce_self(hit_dir, weighted, other_vel, true, &mut impact) < 0 {
+        impact = 0;
+    }
+    if bounce_self(hit_dir, weighted, self_vel, false, &mut impact) > 0 {
+        impact = 0;
+    }
+    let push = |n: i16| mips::sra(mips::mul_lo(n as i32, hit_strength), VECTOR_SPEED_SHIFT);
+    for i in 0..3 {
+        self_vel[i] = mips::add_lo(self_vel[i], push(hit_dir[i]));
+        other_vel[i] = mips::sub_lo(other_vel[i], push(hit_dir[i]));
+    }
+    impact
+}
+
+/// How a bot moves, as a bump takes it (`xSpeed` and the rest, with the push it has).
+fn bot_velocity(d: &Driver) -> [i32; 3] {
+    let accel = d
+        .bot
+        .as_ref()
+        .map_or(math::Vec3::default(), |b| b.phys.accel);
+    [
+        mips::add_lo(d.x_speed, accel.x),
+        mips::add_lo(d.y_speed, accel.y),
+        mips::add_lo(d.z_speed, accel.z),
+    ]
+}
+
+/// The bot's part of `VehPhysForce_CollideDrivers` (in `BOTS_ThTick_Drive`): the bot `d` (its
+/// [`crate::bot::BotData`] in `b`) bumps into the closest of `siblings`, the bots that tick
+/// after it. Both are pushed off their paths, and the one behind slows down
+/// (`BOTS_CollideWithOtherAI`).
+pub fn bump_bots(
+    d: &Driver,
+    b: &mut crate::bot::BotData,
+    siblings: &mut [&mut Driver],
+    nav_paths: &[NavPath],
+) {
+    if d.collision_disabled {
+        return;
+    }
+    let Some(search) = closest(d, siblings, BEST_DIST_INIT) else {
+        return;
+    };
+    let radius_sum = mips::add_lo(HIT_RADIUS, HIT_RADIUS);
+    if search.best_dist_sq >= mips::mul_lo(radius_sum, radius_sum) {
+        return;
+    }
+    let Some((hit_dir, hit_strength)) = hit(&search) else {
+        return;
+    };
+    let other = &mut *siblings[search.other];
+    let Some(mut other_bot) = other.bot.take() else {
+        return;
+    };
+    let accel = b.phys.accel;
+    let mut self_vel = [
+        mips::add_lo(d.x_speed, accel.x),
+        mips::add_lo(d.y_speed, accel.y),
+        mips::add_lo(d.z_speed, accel.z),
+    ];
+    let mut other_vel = bot_velocity(other);
+    let weights = (
+        d.stats.collision_weight as i32,
+        other.stats.collision_weight as i32,
+    );
+    bounce(
+        hit_dir,
+        hit_strength,
+        weights,
+        &mut self_vel,
+        &mut other_vel,
+    );
+    crate::bot::crash_ai(&mut other_bot, nav_paths, other_vel);
+    crate::bot::crash_ai(b, nav_paths, self_vel);
+    crate::bot::collide_with_other_ai((d, b), (other, &mut other_bot), nav_paths);
+    other.bot = Some(other_bot);
 }
 
 /// `VehPhysCrash_BounceSelf`: takes the part of `vel` (relative to `origin`) that goes into the
@@ -177,65 +321,45 @@ fn bounce_self(
     0
 }
 
-/// `VehPhysCrash_AnyTwoCars`, for two human drivers: `d` is the one whose procedure runs.
+/// `VehPhysCrash_AnyTwoCars`, for a human driver `d` (the one whose procedure runs) and another
+/// driver, a human or a bot.
 fn any_two_cars(
     d: &mut Driver,
     other: &mut Driver,
     search: &Search,
     env: &Env,
+    nav_paths: &[NavPath],
     feedback: &mut Feedback,
     effects: &mut Vec<Effect>,
 ) {
-    let distance = math::fast_sqrt(search.best_dist_sq as u32, 0);
-
-    let mut hit_dir = [0i16, 0, UNIT_VECTOR_SCALE as i16];
-    if distance != 0 {
-        let toward = |v: i16| mips::div(mips::sll(v as i32, MATRIX_FRAC_SHIFT), distance) as i16;
-        hit_dir = [
-            toward(search.dist[0]),
-            toward(search.dist[1]),
-            toward(search.dist[2]),
-        ];
-    }
-
-    let hit_strength = mips::sub_lo(mips::add_lo(HIT_RADIUS, HIT_RADIUS), distance);
-    if hit_strength <= 0 {
+    let Some((hit_dir, hit_strength)) = hit(search) else {
         return;
-    }
+    };
 
-    let mut impact = 0;
-
-    // Both go away at the speed of the pair, weighted by how heavy they are.
-    let (weight, other_weight) = (
+    let weights = (
         d.stats.collision_weight as i32,
         other.stats.collision_weight as i32,
     );
     let mut self_vel = [d.velocity.x, d.velocity.y, d.velocity.z];
-    let mut other_vel = [other.velocity.x, other.velocity.y, other.velocity.z];
-    let weighted = [0, 1, 2].map(|i| {
-        mips::div(
-            mips::add_lo(
-                mips::mul_lo(self_vel[i], weight),
-                mips::mul_lo(other_vel[i], other_weight),
-            ),
-            mips::add_lo(weight, other_weight),
-        )
-    });
-    if bounce_self(hit_dir, weighted, &mut other_vel, true, &mut impact) < 0 {
-        impact = 0;
-    }
-    if bounce_self(hit_dir, weighted, &mut self_vel, false, &mut impact) > 0 {
-        impact = 0;
-    }
-
-    let push = |n: i16| mips::sra(mips::mul_lo(n as i32, hit_strength), VECTOR_SPEED_SHIFT);
-    for i in 0..3 {
-        self_vel[i] = mips::add_lo(self_vel[i], push(hit_dir[i]));
-        other_vel[i] = mips::sub_lo(other_vel[i], push(hit_dir[i]));
-    }
+    let mut other_vel = match other.bot {
+        Some(_) => bot_velocity(other),
+        None => [other.velocity.x, other.velocity.y, other.velocity.z],
+    };
+    let impact = bounce(
+        hit_dir,
+        hit_strength,
+        weights,
+        &mut self_vel,
+        &mut other_vel,
+    );
     (d.velocity.x, d.velocity.y, d.velocity.z) = (self_vel[0], self_vel[1], self_vel[2]);
-    (other.velocity.x, other.velocity.y, other.velocity.z) =
-        (other_vel[0], other_vel[1], other_vel[2]);
+    match &mut other.bot {
+        Some(bot) => crate::bot::crash_ai(bot, nav_paths, other_vel),
+        None => {
+            (other.velocity.x, other.velocity.y, other.velocity.z) =
+                (other_vel[0], other_vel[1], other_vel[2]);
+        }
+    }
 
     // The bump is heard and felt, no more often than every few frames.
     let current_frame = env.timer as i32;

@@ -34,7 +34,7 @@ pub(crate) struct HostState {
     /// `guests` when the next race starts.
     pub(crate) gone: HashSet<EndpointId>,
     /// The track, its hash and the laps of a start that waits for the Hellos.
-    pub(crate) start_wanted: Option<(u32, u64, u8)>,
+    pub(crate) start_wanted: Option<(u32, u64, u8, crate::RetailBots)>,
     /// The maps being sent.
     pub(crate) transfers: Transfers,
     /// Who is ready, before tick 0.
@@ -43,6 +43,8 @@ pub(crate) struct HostState {
     pub(crate) racing: bool,
     /// No change of character is taken (`Session::lock_characters`).
     pub(crate) locked: bool,
+    /// The bots the races are filled with, for the lobby to show (`Session::show_bots`).
+    pub(crate) shown_bots: crate::LobbyBots,
     /// The players that left the race, whose pads are still being settled, by slot.
     pub(crate) departures: HashMap<usize, Departure>,
     /// The listing of the lobby in the realm, if it is public.
@@ -51,6 +53,9 @@ pub(crate) struct HostState {
     pub(crate) public: Option<Public>,
     /// The lobby is being handed over to a guest that has not yet answered.
     pub(crate) handoff: Option<Handoff>,
+    /// The characters of the bots that fill a race up to [`MAX_PLAYERS`], as many of them as
+    /// it takes (`Session::set_bots`); none, to race without.
+    pub(crate) bots: Vec<u8>,
 }
 
 /// A handover of the lobby that waits for the guest to say it is ready.
@@ -113,14 +118,39 @@ pub(crate) struct Guest {
 /// The race as agreed at the start.
 pub(crate) struct Plan {
     /// The endpoint of each slot. The host is 0, and the spectators come after the players.
+    /// The host's bots are the last of the players, with the host's endpoint.
     pub(crate) roster: Vec<EndpointId>,
     /// How many of the roster race: the slots from here on are spectators.
     pub(crate) players: usize,
+    /// How many of the players are the host's bots (the last of them).
+    pub(crate) bots: usize,
 }
 
 impl Plan {
+    /// The slot of `id`: its own, not one of its bots'.
     pub(crate) fn slot_of(&self, id: EndpointId) -> Option<usize> {
         self.roster.iter().position(|&r| r == id)
+    }
+
+    /// The slot of the host's bot `bot` (from 0).
+    pub(crate) fn bot_slot(&self, bot: usize) -> Option<usize> {
+        (bot < self.bots).then(|| self.players - self.bots + bot)
+    }
+
+    /// Whether `slot` is one of the host's bots: it makes no pads of its own, nor says what it
+    /// holds of another's.
+    pub(crate) fn is_bot(&self, slot: usize) -> bool {
+        (self.players - self.bots..self.players).contains(&slot)
+    }
+
+    /// The bot streams of a link of `me` to `id`: the ones it sends and the ones it takes. The
+    /// host sends its bots' pads to everyone, and only the host's are taken.
+    pub(crate) fn bot_streams(&self, me: EndpointId, id: EndpointId) -> (usize, usize) {
+        match self.roster.first() {
+            Some(&host) if host == me => (self.bots, 0),
+            Some(&host) if host == id => (0, self.bots),
+            _ => (0, 0),
+        }
     }
 
     /// Whether `id` is in the roster as a spectator: it sends no pads, so nothing is waited for
@@ -165,10 +195,17 @@ pub(crate) struct Link {
     pub(crate) epoch: u32,
     /// When its pads last went further (or the link began).
     pub(crate) advanced: Instant,
+    /// The host's: the pads of each of its bots until the peer confirms them, and the first tick
+    /// of each it has not.
+    pub(crate) bot_senders: Vec<(InputSender, Tick)>,
+    /// A link to the host: the pads of each of its bots, as far as they have come in.
+    pub(crate) bot_receivers: Vec<InputReceiver>,
 }
 
 impl Link {
-    pub(crate) fn new(connection: Connection, epoch: u32) -> Link {
+    /// A link that sends the pads of `sends` bots of ours and takes those of `receives` of its
+    /// (see [`Plan::bot_streams`]).
+    pub(crate) fn new(connection: Connection, epoch: u32, (sends, receives): (usize, usize)) -> Link {
         Link {
             epoch,
             connection,
@@ -176,14 +213,27 @@ impl Link {
             receiver: InputReceiver::default(),
             peer_has: 0,
             advanced: Instant::now(),
+            bot_senders: (0..sends).map(|_| (InputSender::default(), 0)).collect(),
+            bot_receivers: (0..receives).map(|_| InputReceiver::default()).collect(),
         }
     }
 
-    /// Sends the pads it lacks of ours, and what we have of its.
+    /// Sends the pads it lacks of ours, and of our bots', and what we have of its.
     pub(crate) fn send(&mut self) {
         let mut packet = self.sender.packet(self.peer_has, self.receiver.next());
         packet.epoch = self.epoch;
+        packet.bot_acks = self.bot_receivers.iter().map(InputReceiver::next).collect();
         send_datagram(&self.connection, &Message::Inputs(packet));
+        for (bot, (sender, peer_has)) in self.bot_senders.iter_mut().enumerate() {
+            let packet = sender.packet(*peer_has, 0);
+            let message = Message::Bot {
+                epoch: self.epoch,
+                bot: bot as u8,
+                first: packet.first,
+                pads: packet.pads,
+            };
+            send_datagram(&self.connection, &message);
+        }
     }
 }
 
@@ -207,6 +257,8 @@ pub(crate) fn to_dial(
         .enumerate()
         .filter(|&(i, id)| {
             *id != me
+                // (The host's bots have its id: it is dialed once.)
+                && roster.iter().position(|r| r == id) == Some(i)
                 && !linked(id)
                 && match (hard_of(mine), hard_of(i)) {
                     (true, false) => true,
@@ -249,11 +301,11 @@ pub(crate) fn stalled(
         .collect()
 }
 
-/// Starts the links over for the race of `epoch`: nothing sent or received yet, on the
-/// connections that are up.
-pub(crate) fn start_over(links: &mut HashMap<EndpointId, Link>, epoch: u32) {
-    for link in links.values_mut() {
-        *link = Link::new(link.connection.clone(), epoch);
+/// Starts the links of `me` over for the race of `epoch` that `plan` is: nothing sent or
+/// received yet, on the connections that are up.
+pub(crate) fn start_over(links: &mut HashMap<EndpointId, Link>, epoch: u32, plan: &Plan, me: EndpointId) {
+    for (&id, link) in links.iter_mut() {
+        *link = Link::new(link.connection.clone(), epoch, plan.bot_streams(me, id));
     }
 }
 

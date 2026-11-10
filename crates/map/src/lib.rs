@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 const MAGIC: &[u8; 8] = b"CTRMAP\0\0";
 
 /// The version of the format: changes with the structs that are saved in it.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 9;
 
 /// zstd's level for a map file: it is made once and sent many times.
 const COMPRESSION: i32 = 19;
@@ -241,6 +241,8 @@ mod tests {
                 bsp: Vec::new(),
                 driver_spawns: [spawn; 8],
                 restart_points: Vec::new(),
+                restart_point_past_end: None,
+                nav_paths: Default::default(),
                 water: Default::default(),
                 scenery: Default::default(),
                 config_flags: 7,

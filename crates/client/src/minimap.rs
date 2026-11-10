@@ -1,7 +1,8 @@
 //! The minimap at the bottom right, as retail draws it with one player (`UI_Map_DrawMap`,
 //! `UI_Map_DrawDrivers`): the level's picture of the track (`render::minimap`), and a dot on it
-//! for each kart. A bot's dot is its character's colour; a player's flashes between that and
-//! white. Ours is on top of the others. The speedometer can take its place (`speedometer.rs`).
+//! for each kart. Ours (the one the camera follows) is a player's dot, which flashes between its
+//! character's colour and white, on top of the others; every other kart, a player's or a bot's,
+//! has the smaller dot that retail gives its bots, in its character's colour. The speedometer can take its place (`speedometer.rs`).
 //!
 //! The picture blends as the PS1 draws it: its texels with the STP bit (the grey edge of the
 //! track) add to the scene behind, the others cover it. The UI's images are alpha blended, so the
@@ -191,7 +192,9 @@ fn show(
     for (slot, kart) in karts.iter().enumerate() {
         let d = &kart.driver;
         let character = (d.character as usize).min(CHARACTER_COLORS.len() - 1);
-        let image = if d.actions_flag_set & vehicle::actions::BOT != 0 {
+        // (Retail's one player has the player's dot and the bots the others: here the others are
+        // the other players too.)
+        let image = if slot != sim.own {
             &images.bot[character]
         } else if flash {
             &images.player[character]

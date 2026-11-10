@@ -58,6 +58,9 @@ pub struct Inputs {
     /// as far as it can tell. The latency is in it, as it is in the receiver's own figure, so
     /// half the difference of the two is how far ahead the receiver's clock is.
     pub lead: i32,
+    /// To the host: for each of its bots (see [`Message::Bot`]), the first tick the sender has
+    /// no pad of, as `ack` is for the host's own. Empty to anyone else.
+    pub bot_acks: Vec<Tick>,
 }
 
 /// Where a cup stands after one of its races, as the host scored it: the clients show it as they
@@ -77,6 +80,31 @@ pub struct Standings {
     /// The next race, if one follows: the track (its level id) and its name, as the host knows
     /// it (a guest may not have a custom track yet).
     pub next: Option<(u32, String)>,
+}
+
+/// The retail bots of a race (`vehicle::bot`), which every client adds after the players and
+/// drives itself: they take no pads. (The other kind, the host's brain bots, are players of the
+/// host's: see [`Message::Start`].) A race has one kind or the other.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub struct RetailBots {
+    /// The character of each bot, in the slots after the players'.
+    pub characters: Vec<u8>,
+    /// How hard they race (`gGT->arcadeDifficulty`, `vehicle::bot::difficulty_level`).
+    pub difficulty: u16,
+    /// The race is one of a cup.
+    pub cup: bool,
+}
+
+/// The bots the host's races are filled with, as the lobby shows them before a race
+/// ([`Message::Lobby`]): what `/bots` says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub struct LobbyBots {
+    /// The most (a race has as many as there is room for); 0 for none.
+    pub count: u8,
+    /// Retail's bots, else the host's brain bots.
+    pub retail: bool,
+    /// `vehicle::bot::difficulty_level`.
+    pub difficulty: u16,
 }
 
 /// A player's points in [`Standings`].
@@ -120,6 +148,8 @@ pub enum Message {
     /// game's own), which a client that lacks it asks for with [`Message::Want`]. `roster` is the endpoint id of each slot (the host is 0), which the
     /// clients connect to each other by. `characters` has the players only: a slot past them is a
     /// spectator's, which plays no kart and sends no pads.
+    /// The last `bots` of the players are bots that the host drives: their slots in `roster` are
+    /// the host's id, and their pads come from it in [`Message::Bot`].
     Start {
         /// Which race this is (see [`Message::Restart`]): 0 for the first of the lobby. A start
         /// after a race that is over takes new players in, and the ones that left out.
@@ -130,9 +160,12 @@ pub enum Message {
         hash: u64,
         /// The laps of the race.
         laps: u8,
+        /// The retail bots, after the players (and before the spectators).
+        retail: RetailBots,
         roster: Vec<[u8; 32]>,
         /// Whether each of the roster is behind a NAT of the hard kind (see [`Message::Nat`]).
         hard: Vec<bool>,
+        bots: u8,
     },
     /// Reliable, client to host, after the Hello: whether the client's NAT gives it another
     /// public address for each peer it talks to (`hard`), which makes it unreachable unless it is
@@ -145,6 +178,16 @@ pub enum Message {
     Go,
     /// Unreliable, between any two players.
     Inputs(Inputs),
+    /// Unreliable, host to each client, along with its [`Message::Inputs`]: the pads of its bot
+    /// `bot` (counted from the first of them, see [`Message::Start`]) from `first` on. They are
+    /// repeated until confirmed (in [`Inputs::bot_acks`]), as the host's own are, each bot in a
+    /// datagram of its own so that a full window of them fits.
+    Bot {
+        epoch: u32,
+        bot: u8,
+        first: Tick,
+        pads: Vec<Pad>,
+    },
     /// Reliable, host to each client: the race starts again, on `track`. The same players, on
     /// the same connections; `epoch` counts the races and tells their packets apart.
     Restart {
@@ -152,6 +195,7 @@ pub enum Message {
         track: u32,
         hash: u64,
         laps: u8,
+        retail: RetailBots,
     },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
@@ -177,6 +221,9 @@ pub enum Message {
         public: Option<([u8; 32], String, String)>,
         /// The host takes no change of character (a cup is on).
         locked: bool,
+        /// How many bots the host's races are filled with, as many as there is room for
+        /// (`Session::show_bots`).
+        bots: LobbyBots,
     },
     /// Reliable, host to each client: a message for the players to read.
     Announce { text: String },
@@ -287,6 +334,7 @@ impl InputSender {
             pads: self.pads.iter().copied().collect(),
             ack: ours_to_ack,
             lead: self.tick() as i32 - ours_to_ack as i32,
+            bot_acks: Vec::new(),
         }
     }
 }
@@ -315,15 +363,21 @@ impl InputReceiver {
 
     /// Takes in a packet, in whatever order and however often it arrives.
     pub fn accept(&mut self, packet: &Inputs) -> Result<(), Gap> {
+        self.accept_pads(packet.first, &packet.pads)
+    }
+
+    /// Takes in the pads of the ticks from `first` on, as [`accept`](Self::accept) does a
+    /// packet's (a bot's, of [`Message::Bot`]).
+    pub fn accept_pads(&mut self, first: Tick, pads: &[Pad]) -> Result<(), Gap> {
         let next = self.next();
-        if packet.first > next {
+        if first > next {
             return Err(Gap {
                 have_until: next,
-                packet_starts: packet.first,
+                packet_starts: first,
             });
         }
-        let known = (next - packet.first) as usize;
-        self.pads.extend(packet.pads.iter().skip(known));
+        let known = (next - first) as usize;
+        self.pads.extend(pads.iter().skip(known));
         Ok(())
     }
 
@@ -414,8 +468,14 @@ mod tests {
                 track: 4,
                 hash: 0,
                 laps: 5,
+                retail: RetailBots {
+                    characters: vec![1, 2],
+                    difficulty: 0xa0,
+                    cup: true,
+                },
                 roster: vec![[1; 32], [2; 32], [3; 32]],
                 hard: vec![false, true, false],
+                bots: 1,
             },
             Message::Ready,
             Message::Handoff { to: [9; 32] },
@@ -426,6 +486,7 @@ mod tests {
                 track: 7,
                 hash: 0xfeed,
                 laps: 3,
+                retail: RetailBots::default(),
             },
             Message::Want {
                 track: 0x8000_0001,
@@ -445,6 +506,11 @@ mod tests {
                 watching: vec![([3; 32], "Eyes".into())],
                 public: Some(([6; 32], "Friday cup".into(), "Coco Park".into())),
                 locked: true,
+                bots: LobbyBots {
+                    count: 3,
+                    retail: true,
+                    difficulty: 0xa0,
+                },
             },
             Message::Announce {
                 text: "Restarting in 5".into(),
@@ -476,7 +542,14 @@ mod tests {
                 pads: vec![pad(1), Pad::default()],
                 ack: 5,
                 lead: -3,
+                bot_acks: vec![4, 5],
             }),
+            Message::Bot {
+                epoch: 1,
+                bot: 2,
+                first: 6,
+                pads: vec![pad(2)],
+            },
             Message::Checksum {
                 epoch: 3,
                 tick: 90,
@@ -531,6 +604,7 @@ mod tests {
             pads: (first..first + n).map(pad).collect(),
             ack: 0,
             lead: 0,
+            bot_acks: Vec::new(),
         };
         receiver.accept(&packet(0, 5)).unwrap();
         receiver.accept(&packet(3, 5)).unwrap();

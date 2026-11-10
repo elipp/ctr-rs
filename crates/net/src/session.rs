@@ -21,7 +21,7 @@ use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MESH_ALPN, PeerInfo, Player,
+    ALPN, Command, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MAX_PLAYERS, MESH_ALPN, PeerInfo, Player,
     Public, RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
 
@@ -126,6 +126,7 @@ pub(crate) async fn tell_lobby(
             .as_ref()
             .map(|p| (*p.realm.as_bytes(), p.name.clone(), p.track.clone())),
         locked: host.locked,
+        bots: host.shown_bots,
     };
     for guest in &guests {
         let _ = send_reliably(&guest.connection, &message).await;
@@ -135,6 +136,7 @@ pub(crate) async fn tell_lobby(
         spectators,
         you: Some(0),
         locked: host.locked,
+        bots: host.shown_bots,
     });
 }
 
@@ -252,9 +254,10 @@ pub(crate) async fn run(
     let mut running = false;
     // The players that left the race on the way (everyone learns of it from the host).
     let mut departed: HashSet<EndpointId> = HashSet::new();
-    // Which race this is, counted from 0, and our slot and the characters in it.
+    // Which race this is, counted from 0, and our slot, the characters, the roster and the bots
+    // in it.
     let mut epoch: u32 = 0;
-    let mut race_info: Option<(usize, Vec<u8>, Vec<EndpointId>)> = None;
+    let mut race_info: Option<(usize, Vec<u8>, Vec<EndpointId>, usize)> = None;
     let mut timer = send_interval();
     // The last round trip to each player, from the pings.
     let mut pings: HashMap<EndpointId, Duration> = HashMap::new();
@@ -357,9 +360,9 @@ pub(crate) async fn run(
             }
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
-                Command::Start { track, hash, laps } => if let Some(host) = &mut host {
+                Command::Start { track, hash, laps, retail } => if let Some(host) = &mut host {
                     if host.handoff.is_none() {
-                        host.start_wanted = Some((track, hash, laps));
+                        host.start_wanted = Some((track, hash, laps, retail));
                     }
                 },
                 Command::Promote(to) => if let Some(host) = &mut host {
@@ -391,18 +394,24 @@ pub(crate) async fn run(
                     let text = "A player left the race: start a new one instead of restarting".to_string();
                     io.event(Event::Announce(text));
                 }
-                Command::Restart { track, hash, laps } => if plan.is_some()
+                Command::Restart { track, hash, laps, mut retail } => if plan.is_some()
                     && let Some(host) = &mut host
-                    && let Some((slot, characters, players)) = race_info.clone()
+                    && let Some((slot, characters, players, bots)) = race_info.clone()
                 {
                     epoch += 1;
+                    // The same players, so the brain bots of the race before, and retail bots only
+                    // where they were (a race has one kind or the other), as many as fit.
+                    retail.characters.truncate(if bots > 0 { 0 } else { MAX_PLAYERS.saturating_sub(characters.len()) });
                     for guest in &host.guests {
-                        let _ = send_reliably(&guest.connection, &Message::Restart { epoch, track, hash, laps }).await;
+                        let restart = Message::Restart { epoch, track, hash, laps, retail: retail.clone() };
+                        let _ = send_reliably(&guest.connection, &restart).await;
                     }
-                    start_over(&mut links, epoch);
+                    if let Some(plan) = &plan {
+                        start_over(&mut links, epoch, plan, me);
+                    }
                     (running, game_ready, ready_sent) = (false, false, false);
                     host.ready_from.clear();
-                    io.event(Event::Started { slot, characters, players, track, hash, laps });
+                    io.event(Event::Started { slot, characters, players, track, hash, laps, bots, retail });
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -449,6 +458,12 @@ pub(crate) async fn run(
                     && host.locked != locked
                 {
                     host.locked = locked;
+                    tell_lobby(me, character, &nick, host, &io).await;
+                },
+                Command::ShowBots(bots) => if let Some(host) = &mut host
+                    && host.shown_bots != bots
+                {
+                    host.shown_bots = bots;
                     tell_lobby(me, character, &nick, host, &io).await;
                 },
                 Command::Spectate(watch) => if watch != spectator && let Some(connection) = &host_connection {
@@ -529,6 +544,17 @@ pub(crate) async fn run(
                         link.sender.push(pad);
                         link.send();
                     }
+                },
+                // (They go with our own pad, which follows.)
+                Command::BotInput(pads) => if running {
+                    for link in links.values_mut() {
+                        for ((sender, _), &pad) in link.bot_senders.iter_mut().zip(&pads) {
+                            sender.push(pad);
+                        }
+                    }
+                },
+                Command::Bots(characters) => if let Some(host) = &mut host {
+                    host.bots = characters;
                 },
                 Command::Checksum { tick, hash } => if running {
                     let message = Message::Checksum { epoch, tick, hash };
@@ -652,7 +678,7 @@ pub(crate) async fn run(
                         (running, game_ready, ready_sent) = (false, false, false);
                         io.event(Event::Announce(format!("{name} is now the lobby host")));
                     }
-                    Message::Lobby { players, watching, public, locked } if from == host_id && host.is_none() => {
+                    Message::Lobby { players, watching, public, locked, bots } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
                             .iter()
                             .map(|(bytes, character, nick)| {
@@ -684,9 +710,9 @@ pub(crate) async fn run(
                         heirs.dead.clear();
                         heirs.heard.clear();
                         heirs.handed_over = false;
-                        io.event(Event::Lobby { players, spectators, you, locked });
+                        io.event(Event::Lobby { players, spectators, you, locked, bots });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, laps, roster, hard }
+                    Message::Start { epoch: new, slot, characters, track, hash, laps, retail, roster, hard, bots }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -694,26 +720,30 @@ pub(crate) async fn run(
                             .map(EndpointId::from_bytes)
                             .collect::<Result<_, _>>()?;
                         let slot = slot as usize;
+                        let bots = (bots as usize).min(characters.len().saturating_sub(1));
                         epoch = new;
                         race_on = true;
                         departed.clear();
+                        let new_plan = Plan { roster: roster.clone(), players: characters.len(), bots };
                         // The players that were in the race before this one are linked already.
                         links.retain(|id, _| roster.contains(id));
-                        start_over(&mut links, epoch);
+                        start_over(&mut links, epoch, &new_plan, me);
                         (running, game_ready, ready_sent) = (false, false, false);
                         dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
-                        race_info = Some((slot, characters.clone(), roster.clone()));
-                        plan = Some(Plan { roster: roster.clone(), players: characters.len() });
-                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps });
+                        race_info = Some((slot, characters.clone(), roster.clone(), bots));
+                        plan = Some(new_plan);
+                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps, bots, retail });
                     }
-                    Message::Restart { epoch: new, track, hash, laps }
+                    Message::Restart { epoch: new, track, hash, laps, retail }
                         if plan.is_some() && from == host_id && host.is_none() =>
                     {
-                        if let Some((slot, characters, players)) = race_info.clone() {
+                        if let Some((slot, characters, players, bots)) = race_info.clone()
+                            && let Some(plan) = &plan
+                        {
                             epoch = new;
-                            start_over(&mut links, epoch);
+                            start_over(&mut links, epoch, plan, me);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, players, track, hash, laps });
+                            io.event(Event::Started { slot, characters, players, track, hash, laps, bots, retail });
                         }
                     }
                     Message::Announce { text } => {
@@ -769,6 +799,9 @@ pub(crate) async fn run(
                             // The tail of the race before.
                         } else if let (Some(plan), Some(link)) = (&plan, links.get_mut(&from)) {
                             link.peer_has = link.peer_has.max(inputs.ack);
+                            for ((_, has), &ack) in link.bot_senders.iter_mut().zip(&inputs.bot_acks) {
+                                *has = (*has).max(ack);
+                            }
                             let before = link.receiver.next();
                             link.receiver.accept(&inputs).map_err(|gap| {
                                 format!("lost pads of player {}: {gap:?}", plan.slot_of(from).unwrap_or(0))
@@ -788,6 +821,27 @@ pub(crate) async fn run(
                             if let Some(slot) = plan.slot_of(from).filter(|_| !plan.is_spectator(from)) {
                                 let ours = link.sender.tick() as i32 - link.receiver.next() as i32;
                                 io.event(Event::Lead { slot, ahead: (ours - inputs.lead) as f32 / 2.0 });
+                            }
+                        }
+                    }
+                    // The pads of a bot of the host's.
+                    Message::Bot { epoch: sent, bot, first, pads } => {
+                        if sent == epoch
+                            && let (Some(plan), Some(link)) = (&plan, links.get_mut(&from))
+                            && let Some(slot) = plan.bot_slot(bot as usize)
+                            && let Some(receiver) = link.bot_receivers.get_mut(bot as usize)
+                        {
+                            let before = receiver.next();
+                            receiver.accept_pads(first, &pads).map_err(|gap| {
+                                format!("lost pads of the bot of player {slot}: {gap:?}")
+                            })?;
+                            let after = receiver.next();
+                            if after > before {
+                                let pads = (before..after)
+                                    .map(|t| receiver.get(t).expect("just accepted"))
+                                    .collect();
+                                receiver.forget(after);
+                                io.event(Event::Pads { slot, first: before, pads });
                             }
                         }
                     }
@@ -963,8 +1017,9 @@ pub(crate) async fn run(
                                     d.waiting.remove(&slot);
                                 }
                                 let plan = plan.as_ref().expect("the slot came from it");
+                                // (The host speaks for its bots.)
                                 let waiting = (0..plan.roster.len())
-                                    .filter(|&s| s != slot && !departed.contains(&plan.roster[s]))
+                                    .filter(|&s| s != slot && !plan.is_bot(s) && !departed.contains(&plan.roster[s]))
                                     .collect();
                                 host.departures.insert(slot, Departure { waiting, first: 0, pads: Vec::new() });
                                 let gone = Message::Gone { epoch, slot: slot as u8 };
@@ -1169,11 +1224,10 @@ pub(crate) async fn run(
 
         // The host starts the race once every guest has said what it drives.
         if let Some(host) = &mut host
-            && let Some((track, hash, laps)) = host
+            && let Some((track, hash, laps, mut retail)) = host
                 .start_wanted
-                .filter(|_| host.guests.iter().all(|g| g.hello.is_some()))
+                .take_if(|_| host.guests.iter().all(|g| g.hello.is_some()))
         {
-            host.start_wanted = None;
             // A race after another is a new one, with the players who are here now.
             host.guests.retain(|g| !host.gone.contains(&g.id));
             host.gone.clear();
@@ -1182,49 +1236,61 @@ pub(crate) async fn run(
             }
             departed.clear();
             host.departures.clear();
-            // The players take the slots after ours, in the order they joined, and the spectators
-            // the ones after them.
-            let mut ordered: Vec<&Guest> = host.guests.iter().filter(|g| !g.spectator).collect();
-            let players = 1 + ordered.len();
-            ordered.extend(host.guests.iter().filter(|g| g.spectator));
+            // The players take the slots after ours, in the order they joined, then our bots fill
+            // the race up (they are ours, with our id), and the spectators take the slots after.
+            let racers: Vec<&Guest> = host.guests.iter().filter(|g| !g.spectator).collect();
+            let watchers: Vec<&Guest> = host.guests.iter().filter(|g| g.spectator).collect();
+            // A race has one kind of bot: the retail ones, if it was started with any, else ours.
+            let room = MAX_PLAYERS.saturating_sub(1 + racers.len());
+            retail.characters.truncate(room);
+            let brains = if retail.characters.is_empty() { room } else { 0 };
+            let bot_characters: Vec<u8> = host.bots.iter().copied().take(brains).collect();
+            let bots = bot_characters.len();
+            let players = 1 + racers.len() + bots;
             let characters: Vec<u8> = std::iter::once(character)
-                .chain(
-                    ordered
-                        .iter()
-                        .take(players - 1)
-                        .filter_map(|g| g.hello.map(|(_, c)| c)),
-                )
+                .chain(racers.iter().filter_map(|g| g.hello.map(|(_, c)| c)))
+                .chain(bot_characters)
                 .collect();
+            let ours = hard_nat(&endpoint);
             let roster: Vec<EndpointId> = std::iter::once(me)
-                .chain(ordered.iter().map(|g| g.id))
+                .chain(racers.iter().map(|g| g.id))
+                .chain(std::iter::repeat_n(me, bots))
+                .chain(watchers.iter().map(|g| g.id))
                 .collect();
-            let hard: Vec<bool> = std::iter::once(hard_nat(&endpoint))
-                .chain(ordered.iter().map(|g| g.hard))
+            let hard: Vec<bool> = std::iter::once(ours)
+                .chain(racers.iter().map(|g| g.hard))
+                .chain(std::iter::repeat_n(ours, bots))
+                .chain(watchers.iter().map(|g| g.hard))
                 .collect();
-            for (i, guest) in ordered.iter().enumerate() {
+            let slots = (1..).zip(&racers).chain((players..).zip(&watchers));
+            for (slot, guest) in slots {
                 let start = Message::Start {
                     epoch,
-                    slot: i as u8 + 1,
+                    slot: slot as u8,
                     characters: characters.clone(),
                     track,
                     hash,
                     laps,
+                    retail: retail.clone(),
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                     hard: hard.clone(),
+                    bots: bots as u8,
                 };
                 let _ = send_reliably(&guest.connection, &start).await;
             }
+            let new_plan = Plan {
+                roster: roster.clone(),
+                players,
+                bots,
+            };
             links.retain(|id, _| roster.contains(id));
-            start_over(&mut links, epoch);
+            start_over(&mut links, epoch, &new_plan, me);
             dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
-            race_info = Some((0, characters.clone(), roster.clone()));
-            plan = Some(Plan {
-                roster: roster.clone(),
-                players,
-            });
+            race_info = Some((0, characters.clone(), roster.clone(), bots));
+            plan = Some(new_plan);
             io.event(Event::Started {
                 slot: 0,
                 characters,
@@ -1232,6 +1298,8 @@ pub(crate) async fn run(
                 track,
                 hash,
                 laps,
+                bots,
+                retail,
             });
         }
 
@@ -1244,7 +1312,7 @@ pub(crate) async fn run(
                 }
                 links
                     .entry(id)
-                    .or_insert_with(|| Link::new(connection.clone(), epoch));
+                    .or_insert_with(|| Link::new(connection.clone(), epoch, plan.bot_streams(me, id)));
                 false
             });
         }

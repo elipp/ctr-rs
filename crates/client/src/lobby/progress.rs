@@ -64,7 +64,8 @@ mod tests {
 
 /// Says who finished and in which place, as each crosses the line, and ends the race
 /// [`AFTERMATH_SECONDS`] after the last of the players who would score in a cup (the first four,
-/// or all there are if fewer) has: everyone goes back to a free drive (`drive_tick` puts the
+/// or all there are if fewer) has, or with bots, every player still in it (the bots that have
+/// not finished keep the places they are in): everyone goes back to a free drive (`drive_tick` puts the
 /// kart alone on the grid when there is no race). Both wait until the tick they happened on is
 /// settled, so that every client sees the same finishers whatever it predicted, and ends at the
 /// same tick. The lobby stays; the host scores the race for its cup and starts the next, or can
@@ -91,20 +92,36 @@ pub(super) fn finish(
         let Some(slot) = sim.race.karts.iter().position(finished) else {
             continue;
         };
-        let name = net.labels.get(slot).map_or("?", String::as_str);
-        let text = format!("{name} finished {}", ordinal(place));
+        let text = format!("{} finished {}", net.kart_label(slot), ordinal(place));
         debug!("{text} (tick {at})");
         toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
     }
     // The race is over when the players that score have crossed the line (the ones that left
     // will not, and are not waited for), and the aftermath has passed.
-    let present = net.gone.iter().filter(|gone| !**gone).count();
-    let waited_for = cup::places_waited_for(present);
-    let over_at = sim
-        .race
-        .finish_ticks
-        .get(waited_for.saturating_sub(1))
-        .map(|&at| at + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32);
+    let players = net.characters.len();
+    let bots = net.bots > 0 || !net.retail.characters.is_empty();
+    let finished =
+        |kart: &race::Kart| kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+    let finish_at = |slot: usize| {
+        let kart = &sim.race.karts[slot];
+        let rank = kart.driver.driver_rank as usize;
+        finished(kart)
+            .then(|| sim.race.finish_ticks.get(rank).copied())
+            .flatten()
+    };
+    let last_waited = if bots {
+        (0..players)
+            .filter(|&slot| !net.is_bot(slot) && !net.gone[slot])
+            .try_fold(0, |last: u32, slot| Some(last.max(finish_at(slot)?)))
+    } else {
+        let present = net.gone.iter().filter(|gone| !**gone).count();
+        let waited_for = cup::places_waited_for(present);
+        sim.race
+            .finish_ticks
+            .get(waited_for.saturating_sub(1))
+            .copied()
+    };
+    let over_at = last_waited.map(|at| at + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32);
     if !over_at.is_some_and(|at| at < settled) {
         return;
     }
@@ -115,7 +132,7 @@ pub(super) fn finish(
             .karts
             .iter()
             .enumerate()
-            .filter(|(_, kart)| kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
+            .filter(|&(_, kart)| bots || finished(kart))
             .map(|(slot, kart)| (kart.driver.driver_rank, slot))
             .collect();
         order.sort();
@@ -123,13 +140,12 @@ pub(super) fn finish(
             .into_iter()
             .filter_map(|(_, slot)| {
                 Some(Finisher {
-                    id: *net.ids.get(slot)?,
-                    name: net.labels.get(slot)?.clone(),
+                    who: net.who(slot)?,
+                    name: net.kart_label(slot).to_string(),
                 })
             })
             .collect()
     };
-    let players = net.characters.len();
     lobby.end_race();
     if lobby.is_host() {
         lobby.race_over(players, &finishers, time.elapsed_secs());

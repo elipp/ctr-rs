@@ -74,7 +74,24 @@ impl Driver {
 /// track at spawn point `spawn_index`, facing along the track, standing still.
 pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: usize) {
     let spawn = &level.driver_spawns[spawn_index];
+    let rot = [
+        spawn.rot.x,
+        ((spawn.rot.y as i32 + 0x400) & 0xfff) as i16,
+        spawn.rot.z,
+    ];
+    place(d, coll, level, spawn.pos, rot);
+}
 
+/// [`spawn`] anywhere: on the track under `pos` (in level units), heading `angle` (as
+/// `Driver::angle`, 0x1000 a turn), level, standing still. Not a retail start: a kart dropped
+/// mid-track (to train a bot on every corner) starts its lap as one on the grid does, so its lap
+/// count means nothing.
+pub fn spawn_at(d: &mut Driver, coll: &mut Collision, level: &Level, pos: SVec3, angle: i16) {
+    place(d, coll, level, pos, [0, angle & 0xfff, 0]);
+}
+
+/// The body of [`spawn`]: the kart on the track under `pos`, rotated `rot` (x, y, z).
+fn place(d: &mut Driver, coll: &mut Collision, level: &Level, pos: SVec3, rot: [i16; 3]) {
     d.actions_flag_set |= actions::BEHIND_START_LINE;
     d.distance_to_finish_checkpoint = level
         .restart_points
@@ -82,15 +99,13 @@ pub fn spawn(d: &mut Driver, coll: &mut Collision, level: &Level, spawn_index: u
         .map_or(0, |p| (p.dist_to_finish as u32) << 3);
 
     let bottom = SVec3 {
-        x: spawn.pos.x,
-        y: (spawn.pos.y as i32 + SPAWN_BOTTOM_Y_OFFSET) as i16,
-        z: spawn.pos.z,
+        x: pos.x,
+        y: (pos.y as i32 + SPAWN_BOTTOM_Y_OFFSET) as i16,
+        z: pos.z,
     };
     probe_track(d, coll, level, bottom, 0);
 
-    d.rot_curr_x = spawn.rot.x;
-    d.rot_curr_y = ((spawn.rot.y as i32 + 0x400) & 0xfff) as i16;
-    d.rot_curr_z = spawn.rot.z;
+    [d.rot_curr_x, d.rot_curr_y, d.rot_curr_z] = rot;
     reset_after_teleport(d);
 
     d.num_wumpas = 0;
@@ -359,6 +374,8 @@ pub fn tick_with(
         instances,
         &mut Others {
             drivers: &mut [],
+            bots: &mut [],
+            nav_paths: &level.nav_paths,
             feedback: &mut feedback,
         },
         effects,
@@ -422,9 +439,11 @@ pub fn start_tick(racers: &mut [Racer], random_number: &mut i32) {
 /// One 30 Hz tick of all the drivers (after [`start_tick`], without [`after_logic`]), in
 /// `MainFrame`'s order: each stage over every driver, in the thread list's order, before the next
 /// stage. A driver bumps into the ones after it in the list (the original's sibling threads), which
-/// have run the stages before it and not those after. `feedback` times the bump sounds.
+/// have run the stages before it and not those after, and into the `bots` (in their bucket's
+/// order), which tick after all of them. `feedback` times the bump sounds.
 pub fn tick_all(
     racers: &mut [Racer],
+    bots: &mut [&mut Driver],
     level: &Level,
     env: &Env,
     instances: &mut dyn Instances,
@@ -442,6 +461,8 @@ pub fn tick_all(
             r.driver,
             &mut Others {
                 drivers: &mut later,
+                bots: &mut *bots,
+                nav_paths: &level.nav_paths,
                 feedback,
             },
             env,
@@ -626,7 +647,7 @@ fn tick_from_coll_fixed(
     }
 
     // The mask's own thread.
-    stuck::mask_tick(d, env);
+    stuck::mask_tick(d, env.elapsed_time_ms);
 
     // The shield's.
     crate::shield::tick(d, env.timer, effects);

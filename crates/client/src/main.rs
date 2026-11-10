@@ -5,9 +5,9 @@
 //! disc image is `CTR_BIN`, the `iso` of the config, or `assets/ctr-u.bin`
 //! in a debug build; without one a file dialog asks for it (see `disc.rs`).
 //!
-//! The viewer: a collision probe from the camera is drawn and described on screen; see
-//! `probe.rs` for its keys. Hold the right mouse button to look, WASD to move, Space/Shift
-//! up/down, Ctrl to go fast.
+//! The viewer: a collision probe from the camera is drawn and described on screen (see
+//! `probe.rs` for its keys), and so are the bot paths (`nav.rs`). Hold the right mouse button to
+//! look, WASD to move, Space/Shift up/down, Ctrl to go fast.
 
 // A release build on Windows has no console window; `crash.rs` tells of a panic instead.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -53,6 +53,7 @@ mod heat;
 mod hud;
 mod kart;
 mod laps;
+mod learned;
 mod leaderboard;
 mod lights;
 mod loading;
@@ -64,6 +65,7 @@ mod mesh_stats;
 mod mesh_write;
 mod minimap;
 mod names;
+mod nav;
 mod paths;
 mod pause;
 mod place;
@@ -305,8 +307,12 @@ fn main() {
         race: vec![
             world.register_system(drive::spawn_hud),
             world.register_system(lobby::spawn_waiting),
+            world.register_system(nav::spawn_race_text),
         ],
-        viewer: vec![world.register_system(probe::spawn_text)],
+        viewer: vec![
+            world.register_system(probe::spawn_text),
+            world.register_system(nav::spawn_text),
+        ],
     };
     // The systems of both modes are there all the time: the race's run with the `Drive` resource
     // (`drive::driving`), the viewer's without it, and `/debug viewer` takes it away or gives it
@@ -324,6 +330,7 @@ fn main() {
         hud::HudPlugins,
         config::ConfigPlugin,
         probe::ProbePlugin,
+        nav::NavPlugin,
     ));
     app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
     app.add_systems(Update, fly.run_if(not(drive::driving)))

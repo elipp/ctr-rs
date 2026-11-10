@@ -26,6 +26,8 @@ fn specs(players: usize) -> Vec<KartSpec> {
         .map(|slot| KartSpec {
             character: slot * 3 % 16,
             anim_num_frames: [0; 8],
+            bot: false,
+            line: None,
         })
         .collect()
 }

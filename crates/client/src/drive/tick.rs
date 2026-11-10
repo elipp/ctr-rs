@@ -79,9 +79,9 @@ pub(super) fn drive_tick(
     mut hold: crate::fx::Hold,
     mut lobby: ResMut<crate::lobby::Lobby>,
     config: Res<crate::config::Config>,
-    dummies: Res<crate::remote::DummyKarts>,
     shown: Shown,
     mut memory: Local<Memory>,
+    mut brains: ResMut<crate::learned::Brains>,
 ) {
     let Shown {
         mut particles,
@@ -129,9 +129,8 @@ pub(super) fn drive_tick(
     // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = picked && !online;
-    // The lobby closed, or the race failed: back to the grid with our kart alone (and the dummy
-    // karts of `/debug spawn-karts`, which also start it over when they change).
-    if !online && sim.race.karts.len() != 1 + dummies.0.len() {
+    // The lobby closed, or the race failed: back to the grid with our kart alone.
+    if !online && sim.race.karts.len() != 1 {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
@@ -142,26 +141,46 @@ pub(super) fn drive_tick(
     if restart {
         let (specs, own, spectator) = match &lobby.online {
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
-            None => (
-                std::iter::once(drive.spec())
-                    .chain(dummies.0.iter().copied())
-                    .collect(),
-                0,
-                false,
-            ),
+            None => (vec![drive.spec()], 0, false),
         };
+        let bots = lobby.online.as_ref().map(|net| {
+            let setup = vehicle::bot::Setup {
+                difficulty: net.retail.difficulty as i16,
+                // A custom track has the rubber band of the first.
+                track: (net.track < race::RACING_TRACKS).then_some(net.track as u8),
+                cup: net.retail.cup,
+                players: net.characters.len(),
+            };
+            (setup, net.retail_specs.as_slice())
+        });
+        // The host's brain bots are players to the race: it rubber-bands them (at the difficulty
+        // of `/bots`, which comes with the retail bots' even when there are none).
+        let band = lobby
+            .online
+            .as_ref()
+            .filter(|net| net.bots > 0)
+            .map(|net| race::Band::new(net.bot_slots(), net.retail.difficulty as i16));
         sim.restart(
             &track.0,
             &specs,
             own,
             lobby.online.as_ref().map(|net| net.laps),
             spectator,
+            bots,
+            band,
         );
-        // The dummies have left from tick 0: a neutral pad, and nothing to wait for.
-        if !online {
-            for slot in 1..sim.race.players() {
-                sim.race.leave(slot);
+        // Online, the host's bots are the policy's too: their pads are made here, and go to the
+        // others as ours do.
+        if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots()) {
+            match brains.load() {
+                Ok(name) => info!("online bots: the policy {name}"),
+                // (They hold a neutral pad then, below: the race does not wait for them.)
+                Err(e) => {
+                    error!("online bots: {e}");
+                    toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                }
             }
+            brains.start(&track.0, &sim.race, &specs, net.bot_slots());
         }
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
@@ -261,7 +280,7 @@ pub(super) fn drive_tick(
                 .collect();
             net.watches()
         }
-        None => false,
+        None => spectating,
     };
     // Each client runs its own 30 Hz clock, so one that is ahead would stay ahead (up to the
     // rollback window) and predict the others further and further. It waits for them instead.
@@ -280,9 +299,12 @@ pub(super) fn drive_tick(
             .as_ref()
             .is_some_and(|net| net.finished.get(slot).copied().unwrap_or(false))
     };
+    let ours = |slot: usize| lobby.online.as_ref().is_some_and(|net| net.drives(slot));
     let late: Vec<usize> = if online {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
+            // (Our bots' pads are made below.)
+            .filter(|&slot| !ours(slot))
             .filter(|&slot| !(watches && finished_slot(slot)))
             .filter(|&slot| {
                 let until = sim.race.confirmed_until(slot);
@@ -346,6 +368,32 @@ pub(super) fn drive_tick(
         let taps = held & !waits.1;
         waits.1 = held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
+    }
+    // Online, the host's bots: from the race as it is now, the others' pads predicted, as a
+    // player sees it. They go to the others before our own pad, in the same packet.
+    if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots())
+        && net.bot_slots().any(|slot| sim.race.confirmed_until(slot) <= tick)
+    {
+        let mut pads = brains.pads(&track.0, &sim.race);
+        // No policy (it could not be read): they hold still, as a player that left does.
+        if pads.is_empty() {
+            pads = net.bot_slots().map(|slot| (slot, Pad::default())).collect();
+        }
+        for &(slot, pad) in &pads {
+            sim.race
+                .confirm(slot, tick, pad)
+                .expect("the bots' pads come in order");
+        }
+        lobby.send_bots(
+            pads.iter()
+                .map(|(_, pad)| net::Pad {
+                    held: pad.held,
+                    lx: pad.lx,
+                    ly: pad.ly,
+                    ry: pad.ry,
+                })
+                .collect(),
+        );
     }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
     // others get it as well. (A tick that waits plays the pad it already has.) Once we have
@@ -480,18 +528,33 @@ pub(super) fn drive_tick(
                 step(net, if cycle == 0 { 1 } else { cycle });
             }
         } else {
-            if !finished || net.watching >= players || net.gone[net.watching] {
+            // After our finish, R1 goes to the kart one place behind the watched one in the race
+            // and L1 to the one ahead (wrapping round), the retail bots' included.
+            let karts = sim.race.karts.len();
+            let here = |net: &crate::lobby::Online, slot: usize| !net.gone.get(slot).copied().unwrap_or(false);
+            if !finished || net.watching >= karts || !here(net, net.watching) {
                 net.watching = own;
             }
             if finished && cycle != 0 {
-                step(net, cycle);
+                let mut by_rank: Vec<(i16, usize)> = (0..karts)
+                    .filter(|&slot| here(net, slot))
+                    .map(|slot| (sim.race.karts[slot].driver.driver_rank, slot))
+                    .collect();
+                by_rank.sort();
+                if let Some(at) = by_rank.iter().position(|&(_, slot)| slot == net.watching) {
+                    let next = (at as i32 + cycle).rem_euclid(by_rank.len() as i32) as usize;
+                    net.watching = by_rank[next].1;
+                }
             }
         }
         if net.watching != before {
             drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
         }
     }
-    let watching = lobby.online.as_ref().map_or(own, |net| net.watching);
+    let watching = lobby
+        .online
+        .as_ref()
+        .map_or(own, |net| net.watching);
     // The HUD and the sounds follow the kart the spectator watches, as they follow ours.
     if spectating {
         sim.own = watching;

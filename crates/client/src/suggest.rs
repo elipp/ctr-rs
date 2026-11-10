@@ -240,6 +240,19 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("stop", "End the race for everyone"),
         ],
     ),
+    Spec {
+        name: "bots",
+        about: "Bots in the lobby's races (host only)",
+        options: &[
+            leaf("off", "No bots"),
+            leaf("easy", "Easy bots"),
+            leaf("medium", "Medium bots (the default)"),
+            leaf("hard", "Hard bots"),
+            leaf("brain", "Bots the learned policy drives (the default)"),
+            leaf("retail", "Retail's bots, on the bot paths"),
+        ],
+        arg: Some("[0 to 7]"),
+    },
     node(
         "cup",
         "A series of races with points",
@@ -485,7 +498,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
             leaf("ranking", "Random ranking (host)"),
-            takes("spawn-karts", "Dummy karts on the grid, offline", "<0 to 7>"),
+            leaf("navpaths", "Draw the bot paths in the race too (toggle)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             takes(
                 "loading-screen",
@@ -625,6 +638,7 @@ mod tests {
             [
                 "lobby",
                 "race",
+                "bots",
                 "cup",
                 "promote",
                 "track",

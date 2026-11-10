@@ -22,6 +22,7 @@ pub(super) fn report(
 ) {
     if !lobby.joined {
         lobby.tell_lock();
+        lobby.tell_bots();
     }
     let Some(session) = &lobby.session else {
         return;
@@ -66,7 +67,8 @@ pub(super) fn report(
                 spectators,
                 you,
                 locked,
-            } => roster = Some((players, spectators, you, locked)),
+                bots,
+            } => roster = Some((players, spectators, you, locked, bots)),
             Event::Announce(text) => announce(&mut toasts, text),
             Event::Standings(standings) => {
                 cup_next = standings.next.as_ref().map(|(track, _)| *track);
@@ -98,9 +100,11 @@ pub(super) fn report(
                 track,
                 hash,
                 laps,
+                bots,
+                retail,
             } => {
                 debug!(
-                    "race started: you are player {slot} of {}, characters {characters:?}, track {track:#x}",
+                    "race started: you are player {slot} of {} ({bots} brain bots), characters {characters:?}, retail bots {retail:?}, track {track:#x}",
                     characters.len()
                 );
                 // The host chose a map we do not have: it sends it, and the race waits.
@@ -112,6 +116,10 @@ pub(super) fn report(
                 sums.clear();
                 leads.clear();
                 let characters_len = characters.len();
+                let mut retail = retail;
+                retail
+                    .characters
+                    .truncate(race::MAX_KARTS.saturating_sub(characters_len));
                 stopped = false;
                 let names: Vec<String> = players
                     .iter()
@@ -120,6 +128,7 @@ pub(super) fn report(
                 started = Some(Online {
                     slot,
                     characters,
+                    bots,
                     // (Named after the nicknames below.)
                     labels: names.clone(),
                     names,
@@ -133,6 +142,8 @@ pub(super) fn report(
                     built: false,
                     go: false,
                     specs: Vec::new(),
+                    retail,
+                    retail_specs: Vec::new(),
                     corrections: 0,
                     replayed: 0,
                     ahead: vec![0.0; characters_len],
@@ -218,6 +229,8 @@ pub(super) fn report(
     // The host left, and the lobby is ours now (the session listed it, if it was public).
     if let Some((ticket, public)) = promoted {
         lobby.joined = false;
+        // (The lobby shows the bots of ours now.)
+        lobby.bots_told = None;
         lobby.public = public.map(|public| public.name);
         copy_to_clipboard(format!("/lobby join {ticket}"));
         lobby.list("");
@@ -301,8 +314,9 @@ pub(super) fn report(
         lobby.close();
         return;
     }
-    if let Some((players, spectators, you, locked)) = roster {
+    if let Some((players, spectators, you, locked, bots)) = roster {
         lobby.characters_locked = locked;
+        lobby.lobby_bots = bots;
         // The names are told apart among everyone in the lobby, those who only watch too.
         let mut labels = net::display_names(
             &players
