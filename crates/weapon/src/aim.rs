@@ -1,6 +1,6 @@
 //! Who a bomb or a missile goes for (`VehPickupItem_MissileGetTargetDriver`).
 //!
-//! DIVERGENCE: retail projects every kart onto the shooter's own screen and takes the nearest one
+//! DEVIATION: retail projects every kart onto the shooter's own screen and takes the nearest one
 //! that lands inside it (`pushBuffer`, so it depends on the camera, which the sim does not have and
 //! which two clients would not share). This takes the nearest kart inside a cone ahead of the
 //! shooter instead. The cone is [`HALF_ANGLE_TAN`], about what a one-player screen sees.

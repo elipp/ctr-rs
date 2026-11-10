@@ -92,7 +92,7 @@ const RNG_SHIFT: u32 = 3;
 /// The item set of a driver in `place` (0 for the leader) of `racers` on `lap`, as
 /// `VehPhysGeneral_SetHeldItem` picks it for a race: 0 to 3 for `RACE1` to `RACE4`.
 ///
-/// DIVERGENCE: retail has no set for 7 racers or for 1, which leaves the roulette without an
+/// DEVIATION: retail has no set for 7 racers or for 1, which leaves the roulette without an
 /// item. 7 or more go by the table for 8 here, and 2 or fewer give the leader `RACE1` and the
 /// rest `RACE2`. (Retail's 2 is a boss race, which is not here.)
 fn item_set(racers: usize, place: usize, lap: u8, random_number: &mut i32) -> usize {
@@ -292,7 +292,7 @@ pub fn request_fire(d: &mut Driver, tapped_fire: bool, actions_flag_set: u32) ->
     if crate::shield::shoot(d) {
         return actions_flag_set;
     }
-    // DIVERGENCE (for testing): a weapon that is not ported yet is thrown away by the button, to
+    // DEVIATION (for testing): a weapon that is not ported yet is thrown away by the button, to
     // make room for another one. Retail has no such thing.
     if d.item_roll_timer == 0
         && !fireable(d.held_item_id)

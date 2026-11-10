@@ -5,8 +5,8 @@
 //! bursting close to the camera flashes it as well, by how close (`RB_Burst_DrawAll`, see
 //! [`Flash::proximity`]).
 //!
-//! DIVERGENCE: retail adds the white to what is under it; this lays it over, which is the same
-//! on the dark parts and a little less bright on the light ones (docs/notes/DIVERGENCE.md).
+//! DEVIATION: retail adds the white to what is under it; this lays it over, which is the same
+//! on the dark parts and a little less bright on the light ones (docs/notes/DEVIATIONS.md).
 
 use bevy::prelude::*;
 
