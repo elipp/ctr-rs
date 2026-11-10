@@ -6,16 +6,24 @@
 //! - `iters` (1000): rollouts and updates.
 //! - `hidden` (256): the width of the actor's and the critic's two layers.
 //! - `tracks` (all): the `LevelId`s to train on, as `0,3,7`.
+//! - `weights` (none): how often the episodes are on some of them against the rest (1), as
+//!   `11:3,12:3,5:2`.
 //! - `out` (`target/brain`): where the checkpoints and `log.csv` go.
 //! - `load`: a checkpoint (`.safetensors`) to go on from.
 //! - `save_every` (25): iterations between checkpoints.
 //! - `seed` (1).
 //! - `reserves` (0.01): the reward for each millisecond of reserves gained.
 //! - `drift_boost` (15): the reward for each drift boost fired.
-//! - `reserves_fade` (none): `start,end` iterations over which those two rewards fade to 0, as
-//!   `500,1500` (full until 500, none from 1500).
+//! - `reserves_fade` (none): `start,end` iterations over which the reserves' reward fades to 0,
+//!   as `500,1500` (full until 500, none from 1500).
+//! - `boost_fade` (none): the same for the drift boosts' reward.
 //! - `air_heading` (0.2), `steer_change` (0.05): the costs of facing away from the path in a
 //!   long flight, and of moving the stick ([`race::nn::Weights`]).
+//! - `wall` (0.3): the cost of each tick against a wall.
+//! - `stall` (0.5): the cost of each tick getting nowhere, after the first second of it.
+//! - `jump_starts` (0.25), `run_up` (1200): the share of the episodes that start this far
+//!   (level units) before a jump ([`brain::env::Rules`]).
+//! - `turned_starts` (0.15): the share of the episodes that start turned by a random angle.
 //! - `stuck_penalty` (30): the cost of getting nowhere ([`brain::env::Rules`]).
 //! - `gamma` 0.995 is worth it for drifts (their boost pays off seconds after the hop).
 //! - the [`brain::ppo::Config`] ones: `steps`, `gamma`, `lambda`, `clip`, `epochs`, `minibatch`,
@@ -78,15 +86,36 @@ fn main() -> Result<(), Error> {
     let drift_boost: f32 = parse(take("drift_boost"), rules.weights.drift_boost)?;
     rules.weights.air_heading = parse(take("air_heading"), rules.weights.air_heading)?;
     rules.weights.steer_change = parse(take("steer_change"), rules.weights.steer_change)?;
+    rules.weights.wall = parse(take("wall"), rules.weights.wall)?;
+    rules.weights.stall = parse(take("stall"), rules.weights.stall)?;
     rules.stuck_penalty = parse(take("stuck_penalty"), rules.stuck_penalty)?;
-    let fade: Option<(usize, usize)> = match take("reserves_fade") {
-        Some(v) => {
-            let (a, b) = v
-                .split_once(',')
-                .ok_or_else(|| format!("reserves_fade: expected start,end, got {v:?}"))?;
-            Some((a.trim().parse()?, b.trim().parse()?))
+    rules.jump_starts = parse(take("jump_starts"), rules.jump_starts)?;
+    rules.run_up = parse(take("run_up"), rules.run_up)?;
+    rules.turned_starts = parse(take("turned_starts"), rules.turned_starts)?;
+    let mut fade = |key: &str| -> Result<Option<(usize, usize)>, Error> {
+        match take(key) {
+            Some(v) => {
+                let (a, b) = v
+                    .split_once(',')
+                    .ok_or_else(|| format!("{key}: expected start,end, got {v:?}"))?;
+                Ok(Some((a.trim().parse()?, b.trim().parse()?)))
+            }
+            None => Ok(None),
         }
-        None => None,
+    };
+    let reserves_fade = fade("reserves_fade")?;
+    let boost_fade = fade("boost_fade")?;
+    let weights: Vec<(u32, f32)> = match take("weights") {
+        Some(list) => list
+            .split(',')
+            .map(|s| {
+                let (id, w) = s
+                    .split_once(':')
+                    .ok_or_else(|| format!("weights: expected id:weight, got {s:?}"))?;
+                Ok::<_, Error>((id.trim().parse()?, w.trim().parse()?))
+            })
+            .collect::<Result<_, _>>()?,
+        None => Vec::new(),
     };
     let ids: Vec<u32> = match take("tracks") {
         Some(list) => list
@@ -100,9 +129,26 @@ fn main() -> Result<(), Error> {
     }
 
     let disc = brain::tracks::disc_path();
-    let tracks = brain::tracks::load(&disc, ids)
+    let mut tracks = brain::tracks::load(&disc, ids)
         .map_err(|e| format!("reading the tracks off {}: {e}", disc.display()))?;
+    for &(id, w) in &weights {
+        match tracks.iter_mut().find(|t| t.id.0 == id) {
+            Some(track) => track.weight = w,
+            None => return Err(format!("weights: track {id} is not among the ones trained on").into()),
+        }
+    }
     println!("{} tracks, {envs} envs, {config:?}, {rules:?}", tracks.len());
+    // The launches the jump starts are before (`brain::tracks::Track::jumps`), as path:frame.
+    for track in &tracks {
+        let jumps: Vec<String> = track.jumps.iter().map(|(p, f)| format!("{p}:{f}")).collect();
+        println!(
+            "  track {:2}: weight {}, {} jumps {}",
+            track.id.0,
+            track.weight,
+            jumps.len(),
+            jumps.join(" ")
+        );
+    }
 
     let device = ppo::device();
     let mut vars = VarMap::new();
@@ -123,18 +169,19 @@ fn main() -> Result<(), Error> {
         .open(out.join("log.csv"))?;
     writeln!(
         log,
-        "iter,episodes,ep_reward,ep_ticks,units_per_tick,grabs_per_min,boosts_per_min,hops_per_min,r1_pct,drift_pct,drifts_per_min,drift_len,early_per_drift,boosts_per_drift,outs_per_drift,air_misalign,steer_change,cut_time,cut_grabs,\
+        "iter,episodes,ep_reward,ep_ticks,units_per_tick,grabs_per_min,taken_back_per_grab,boosts_per_min,hops_per_min,r1_pct,drift_pct,wall_pct,air_pct,askew_pct,drifts_per_min,drift_len,early_per_drift,boosts_per_drift,outs_per_drift,air_misalign,steer_change,cut_time,cut_grabs,\
          cut_stuck,mean_reward,policy_loss,value_loss,entropy,approx_kl,clip_frac,updates,\
          rollout_secs,update_secs"
     )?;
 
     for iter in 1..=iters {
-        let f = match fade {
+        // How much of a reward is left at this iteration, of its fade.
+        let left = |fade: Option<(usize, usize)>| match fade {
             Some((_, end)) if iter >= end => 0.0,
             Some((start, end)) if iter > start => (end - iter) as f32 / (end - start) as f32,
             _ => 1.0,
         };
-        trainer.set_bonuses(reserves * f, drift_boost * f);
+        trainer.set_bonuses(reserves * left(reserves_fade), drift_boost * left(boost_fade));
         let s = trainer.iterate()?;
         let n = s.episodes.len().max(1) as f32;
         let sum = |f: &dyn Fn(&brain::env::Episode) -> f32| {
@@ -169,10 +216,17 @@ fn main() -> Result<(), Error> {
             .zip(&ends)
             .map(|(name, pct)| format!("{name} {pct:.0}%"))
             .collect();
+        let wall = sum(&|e| e.wall as f32) / ticks.max(1.0) * 100.0;
+        // What a grab took back of the progress made in the air before it, on average.
+        let taken_back = sum(&|e| e.taken_back as f32) / sum(&|e| e.grabs as f32).max(1.0);
+        // Long flights: their share of the ticks, and the share of those more than 45° off.
+        let air_ticks = sum(&|e| e.air_ticks as f32);
+        let air_pct = air_ticks / ticks.max(1.0) * 100.0;
+        let askew_pct = sum(&|e| e.air_askew as f32) / air_ticks.max(1.0) * 100.0;
         let cuts = |d: Done| s.episodes.iter().filter(|(c, _)| *c == d).count();
         println!(
             "{iter:5} | eps {:4} reward {ep_reward:7.1} | {units_per_tick:5.1} u/tick, \
-             {grabs_per_min:4.2} grabs/min, {boosts_per_min:5.1} boosts/min, {hops_per_min:4.0} hops/min, R1 {r1:3.0}% drift {drifting:3.0}% | {drifts_per_min:4.1} drifts/min of {drift_len:4.1} ticks: early {early:4.2} boost {in_time:4.2} out {outs:4.2} | ended: {} | air {air_misalign:4.2} steer {steer_change:4.2} | cut T/G/S {}/{}/{} | ent {:.2} kl {:.4} clip {:.2} \
+             {grabs_per_min:4.2} grabs/min ({taken_back:4.0} u back each), {boosts_per_min:5.1} boosts/min, {hops_per_min:4.0} hops/min, R1 {r1:3.0}% drift {drifting:3.0}% wall {wall:3.1}% | {drifts_per_min:4.1} drifts/min of {drift_len:4.1} ticks: early {early:4.2} boost {in_time:4.2} out {outs:4.2} | ended: {} | air {air_pct:3.1}% of ticks, {air_misalign:4.2} off, {askew_pct:3.0}% >45° | steer {steer_change:4.2} | cut T/G/S {}/{}/{} | ent {:.2} kl {:.4} clip {:.2} \
              vloss {:.3} | {} upd, {:.1}s + {:.1}s",
             s.episodes.len(),
             ends_text.join(" "),
@@ -189,7 +243,7 @@ fn main() -> Result<(), Error> {
         );
         writeln!(
             log,
-            "{iter},{},{ep_reward},{},{units_per_tick},{grabs_per_min},{boosts_per_min},{hops_per_min},{r1},{drifting},{drifts_per_min},{drift_len},{early},{in_time},{outs},{air_misalign},{steer_change},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{iter},{},{ep_reward},{},{units_per_tick},{grabs_per_min},{taken_back},{boosts_per_min},{hops_per_min},{r1},{drifting},{wall},{air_pct},{askew_pct},{drifts_per_min},{drift_len},{early},{in_time},{outs},{air_misalign},{steer_change},{},{},{},{},{},{},{},{},{},{},{},{}",
             s.episodes.len(),
             ticks / n,
             cuts(Done::Time),

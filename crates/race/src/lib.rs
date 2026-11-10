@@ -125,15 +125,17 @@ impl Kart {
 }
 
 impl Kart {
-    /// The kart of `spec` at frame `frame` of bot path `path`, facing the next frame, standing
-    /// still: anywhere on the track rather than the grid (to train a bot on every part of it).
-    /// None if the level has no such frame, or it is over a kill plane (a gap).
+    /// The kart of `spec` at frame `frame` of bot path `path`, facing the next frame turned by
+    /// `turn` (as `Driver::angle`, 0x1000 a turn), standing still: anywhere on the track rather
+    /// than the grid (to train a bot on every part of it, and on getting out of where it faces a
+    /// wall). None if the level has no such frame, or it is over a kill plane (a gap).
     pub fn birth_on_path(
         level: &Level,
         slot: usize,
         spec: &KartSpec,
         path: usize,
         frame: usize,
+        turn: i32,
     ) -> Option<Kart> {
         let frames = &level.nav_paths.get(path)?.frames;
         let here = frames.get(frame)?;
@@ -141,10 +143,11 @@ impl Kart {
             return None;
         }
         let next = &frames[(frame + 1) % frames.len()];
-        let angle = math::ratan2(
+        let angle = (math::ratan2(
             next.pos.x as i32 - here.pos.x as i32,
             next.pos.z as i32 - here.pos.z as i32,
-        );
+        ) + turn)
+            & 0xfff;
         let mut coll = Collision::default();
         let mut driver = Driver::new(slot as u8, spec.character);
         driver.anim_num_frames = spec.anim_num_frames;
@@ -331,8 +334,9 @@ impl Race {
         spec: &KartSpec,
         path: usize,
         frame: usize,
+        turn: i32,
     ) -> bool {
-        match Kart::birth_on_path(level, slot, spec, path, frame) {
+        match Kart::birth_on_path(level, slot, spec, path, frame, turn) {
             Some(kart) => {
                 self.karts[slot] = kart;
                 true

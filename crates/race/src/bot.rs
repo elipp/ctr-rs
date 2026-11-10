@@ -397,7 +397,7 @@ impl Default for Steering {
 const RAMP_FRAMES: usize = 4;
 
 /// `NavFrame::special_bits`: the frame launches retail's bots by `rampPhys`.
-pub(crate) const SPECIAL_RAMP: u8 = 0x10;
+pub const SPECIAL_RAMP: u8 = 0x10;
 
 /// How many frames back from the kart's frame [`Bot::fly`] looks for the lip of a gap it is over.
 const GAP_FRAMES: usize = 64;

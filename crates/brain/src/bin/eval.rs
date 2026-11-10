@@ -158,7 +158,7 @@ fn main() -> Result<(), Error> {
                     Err(e) => failed = Some(e),
                 }
             }
-            latch.pad(action)
+            latch.pad(action, kart.driver.kart_state == kart_state::DRIFTING)
         });
         if let Some(e) = failed {
             return Err(e.into());

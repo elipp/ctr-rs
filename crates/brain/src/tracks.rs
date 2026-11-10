@@ -22,6 +22,21 @@ pub struct Track {
     pub lengths: Vec<PathLength>,
     /// The paths a kart can be dropped on (two frames or more).
     pub paths: Vec<usize>,
+    /// The jumps on them, as (path, the frame it launches from): the last of each run of frames
+    /// that launch retail's bots (`race::bot::SPECIAL_RAMP`).
+    pub jumps: Vec<(usize, usize)>,
+    /// How often the episodes are on this track, against the others' (1 for each to begin with).
+    pub weight: f32,
+}
+
+/// The launches of `path` ([`Track::jumps`]).
+fn launches(path: &[loader::lev::NavFrame]) -> Vec<usize> {
+    let n = path.len();
+    let ramp = |i: usize| path[i % n].special_bits & race::bot::SPECIAL_RAMP != 0;
+    if n < 2 || (0..n).all(ramp) {
+        return Vec::new();
+    }
+    (0..n).filter(|&i| ramp(i) && !ramp(i + 1)).collect()
 }
 
 /// `CTR_BIN`, or `<repo>/assets/ctr-u.bin`.
@@ -42,8 +57,12 @@ pub fn load(disc: &Path, ids: impl IntoIterator<Item = u32>) -> std::io::Result<
             let level = Level::parse(&dram)?;
             let objects = Objects::new(&level, &dram);
             let lengths = race::nn::path_lengths(&level);
-            let paths = (0..level.nav_paths.len())
+            let paths: Vec<usize> = (0..level.nav_paths.len())
                 .filter(|&i| level.nav_paths[i].frames.len() >= 2)
+                .collect();
+            let jumps = paths
+                .iter()
+                .flat_map(|&p| launches(&level.nav_paths[p].frames).into_iter().map(move |f| (p, f)))
                 .collect();
             Ok(Track {
                 id,
@@ -51,6 +70,8 @@ pub fn load(disc: &Path, ids: impl IntoIterator<Item = u32>) -> std::io::Result<
                 objects,
                 lengths,
                 paths,
+                jumps,
+                weight: 1.0,
             })
         })
         .collect()

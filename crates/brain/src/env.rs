@@ -28,6 +28,15 @@ pub struct Rules {
     /// (`Progress::stalled`), which costs this (unscaled, like [`Rules::weights`]).
     pub stuck_ticks: u32,
     pub stuck_penalty: f32,
+    /// The share of the episodes that start before a jump (`Track::jumps`), this far up the path
+    /// from it (level units): a run-up to near the top speed, as a kart standing still at the lip
+    /// does not fly. Long flights are otherwise a sliver of the driving.
+    pub jump_starts: f32,
+    pub run_up: i64,
+    /// The share of the episodes that start turned by a random angle (up to backwards): facing a
+    /// wall, or the wrong way, to practise getting out. A stuck kart is otherwise rare, and cut
+    /// soon, and a policy that has hardly seen one does nothing at all when it is.
+    pub turned_starts: f32,
     pub weights: Weights,
     /// The reward the trainer sees is the sum of [`Rules::weights`]' over the held ticks, times
     /// this (for the critic's targets to be of a size of 1 or so).
@@ -44,6 +53,9 @@ impl Default for Rules {
             stuck_ticks: nn::STALL_TICKS,
             // As much as a mask grab.
             stuck_penalty: 30.0,
+            jump_starts: 0.25,
+            run_up: 1200,
+            turned_starts: 0.15,
             weights: Weights::DEFAULT,
             reward_scale: 0.1,
         }
@@ -75,10 +87,17 @@ pub struct Episode {
     /// Ticks spent drifting, and with R1 held.
     pub drifting: u32,
     pub r1: u32,
-    /// Ticks in the air past `nn::AIR_GRACE_TICKS`, and the sum of `Step::air_misalign` over
-    /// them.
+    /// Ticks in the air past `nn::AIR_GRACE_TICKS`, the sum of `Step::air_misalign` over them,
+    /// and the ones of them more than 45° off the path.
     pub air_ticks: u32,
     pub air_misalign: f32,
+    pub air_askew: u32,
+    /// It started before a jump ([`Rules::jump_starts`]).
+    pub jump_start: bool,
+    /// Ticks against a wall.
+    pub wall: u32,
+    /// The progress made in the air that mask grabs took back (`Step::taken_back`).
+    pub taken_back: i64,
     /// Drifts started; the boost tries in them (taps of R1 or L1 with the meter on) that came
     /// too early, while the meter was still over half; and the drifts whose meter ran out
     /// untouched (which ends their tries). The tries in time are [`Episode::boosts`].
@@ -156,19 +175,50 @@ impl<'a> Env<'a> {
         env
     }
 
+    /// A track, by their weights (`Track::weight`).
+    fn pick_track(&mut self) -> usize {
+        let total: f32 = self.tracks.iter().map(|t| t.weight.max(0.0)).sum();
+        if total <= 0.0 {
+            return self.rng.below(self.tracks.len());
+        }
+        let mut u = self.rng.unit() * total;
+        for (i, t) in self.tracks.iter().enumerate() {
+            u -= t.weight.max(0.0);
+            if u < 0.0 {
+                return i;
+            }
+        }
+        self.tracks.len() - 1
+    }
+
     fn reset(&mut self) {
+        let any_jumps = self.tracks.iter().any(|t| !t.jumps.is_empty());
         loop {
-            self.track = self.rng.below(self.tracks.len());
+            let jump_start = any_jumps && self.rng.unit() < self.rules.jump_starts;
+            self.track = self.pick_track();
             let track = &self.tracks[self.track];
-            if track.paths.is_empty() {
+            if track.paths.is_empty() || (jump_start && track.jumps.is_empty()) {
                 continue;
             }
-            self.path = track.paths[self.rng.below(track.paths.len())];
+            let frame = if jump_start {
+                let (path, lip) = track.jumps[self.rng.below(track.jumps.len())];
+                self.path = path;
+                run_up_frame(&track.lengths[path], lip, self.rules.run_up)
+            } else {
+                self.path = track.paths[self.rng.below(track.paths.len())];
+                self.rng.below(track.level.nav_paths[self.path].frames.len())
+            };
             let frames = &track.level.nav_paths[self.path].frames;
             let spec = spec(self.rng.below(vehicle::stats::CHARACTER_ENGINES.len()));
             let mut race = Race::new(&track.level, track.objects.clone(), &[spec], false);
             race.laps = race::FREE_DRIVE_LAPS;
-            if !race.place_on_path(&track.level, 0, &spec, self.path, self.rng.below(frames.len())) {
+            // (Not before a jump: those are for flying.)
+            let turn = if !jump_start && self.rng.unit() < self.rules.turned_starts {
+                self.rng.below(0x1000) as i32 - 0x800
+            } else {
+                0
+            };
+            if !race.place_on_path(&track.level, 0, &spec, self.path, frame, turn) {
                 continue;
             }
             self.race = race;
@@ -176,7 +226,10 @@ impl<'a> Env<'a> {
             self.tracker = Tracker::find(frames, driver.pos_curr);
             self.progress = Progress::new(frames, &track.lengths[self.path], &self.tracker, driver);
             self.latch = Latch::default();
-            self.episode = Episode::default();
+            self.episode = Episode {
+                jump_start,
+                ..Episode::default()
+            };
             return;
         }
     }
@@ -194,11 +247,11 @@ impl<'a> Env<'a> {
         self.episode.choices += 1;
         for _ in 0..self.rules.repeat {
             let pressed = self.latch.r1;
-            let pad: Pad = self.latch.pad(action);
             let (was_drifting, attempted) = {
                 let d = &self.race.karts[0].driver;
                 (d.kart_state == vehicle::kart_state::DRIFTING, d.num_boosts_attempted)
             };
+            let pad: Pad = self.latch.pad(action, was_drifting);
             self.race.tick(&track.level, &[pad]);
             let driver = &self.race.karts[0].driver;
             let drifting = driver.kart_state == vehicle::kart_state::DRIFTING;
@@ -215,6 +268,8 @@ impl<'a> Env<'a> {
             e.progress += step.progress;
             e.grabs += step.grabbed as u32;
             e.boosts += step.boosts as u32;
+            e.wall += step.wall as u32;
+            e.taken_back += step.taken_back;
             // A tap is one try (`powerslide::update`), and the meter running out takes all three.
             let tries = driver.num_boosts_attempted as i32 - attempted as i32;
             if drifting && !was_drifting {
@@ -231,6 +286,8 @@ impl<'a> Env<'a> {
             // (The ones `Step::air_misalign` counts.)
             e.air_ticks += (self.progress.airborne > nn::AIR_GRACE_TICKS) as u32;
             e.air_misalign += step.air_misalign;
+            // (`1 - cos 45°`.)
+            e.air_askew += (step.air_misalign > 0.293) as u32;
             e.steer_change += step.steer_change as u32;
         }
         let e = self.episode;
@@ -258,6 +315,20 @@ impl<'a> Env<'a> {
             cut,
         }
     }
+}
+
+/// The frame `run_up` (level units, along the path) before frame `lip`, going back round the
+/// loop.
+fn run_up_frame(lengths: &race::bot::PathLength, lip: usize, run_up: i64) -> usize {
+    let n = lengths.start.len();
+    let mut frame = lip;
+    for _ in 0..n {
+        if lengths.delta(lengths.start[frame], lengths.start[lip]) >= run_up {
+            break;
+        }
+        frame = (frame + n - 1) % n;
+    }
+    frame
 }
 
 /// A kart of `character`, driven by the pads it is given.

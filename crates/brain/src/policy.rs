@@ -21,6 +21,15 @@ pub const HEAD_START: [usize; N_HEADS] = {
     start
 };
 
+/// The boost's head (L1) among [`HEADS`].
+const BOOST_HEAD: usize = 3;
+
+/// A fresh policy's logit of pressing L1 (against 0 for not): about 10%. At an even chance
+/// nearly every drift has its three tries tapped away before its meter is ready (each too
+/// early a tap fails, and the meter starts over), and so never boosts; at this, most drifts
+/// get to the meter's window and a tap by chance often lands in it.
+const BOOST_START_LOGIT: f32 = -2.2;
+
 /// Linear layers with tanh between them.
 struct Mlp {
     layers: Vec<Linear>,
@@ -65,15 +74,21 @@ pub struct Choice {
 
 impl Policy {
     /// A fresh policy in `vars`, `hidden` wide. The actor's last layer is scaled down, so that it
-    /// starts out choosing about evenly.
+    /// starts out choosing about evenly, but for the boost: [`BOOST_START_LOGIT`].
     pub fn new(vars: &VarMap, hidden: usize, device: &Device) -> Result<Policy> {
         let vb = VarBuilder::from_varmap(vars, DType::F32, device);
         let actor = Mlp::new(vb.pp("actor"), &[OBS_LEN, hidden, hidden, LOGITS])?;
         let critic = Mlp::new(vb.pp("critic"), &[OBS_LEN, hidden, hidden, 1])?;
-        let last = format!("actor.l{}.weight", actor.layers.len() - 1);
+        let last = actor.layers.len() - 1;
+        let (weight, bias) = (format!("actor.l{last}.weight"), format!("actor.l{last}.bias"));
         for (name, var) in vars.data().lock().unwrap().iter() {
-            if *name == last {
+            if *name == weight {
                 var.set(&(var.as_tensor() * 0.01)?)?;
+            } else if *name == bias {
+                let mut b: Vec<f32> = var.as_tensor().to_vec1()?;
+                b[HEAD_START[BOOST_HEAD]] = 0.0;
+                b[HEAD_START[BOOST_HEAD] + 1] = BOOST_START_LOGIT;
+                var.set(&Tensor::from_vec(b, LOGITS, device)?)?;
             }
         }
         Ok(Policy {

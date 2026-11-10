@@ -1063,7 +1063,7 @@ fn needs_disc_karts_placed_on_paths_drive_on() {
             let mut race = Race::new(level, objects.clone(), &[spec], false);
             race.laps = race::FREE_DRIVE_LAPS;
             for frame in (0..path.len()).step_by(PLACE_EVERY) {
-                if !race.place_on_path(level, 0, &spec, line, frame) {
+                if !race.place_on_path(level, 0, &spec, line, frame, 0) {
                     skipped += 1;
                     continue;
                 }
