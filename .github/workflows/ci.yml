@@ -33,14 +33,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev gcc-multilib
-      - run: cargo test --workspace --locked --no-run
+      # `brain` (and candle under it) has its own job below: nothing here depends on it.
+      - run: cargo test --workspace --exclude brain --locked --no-run
       # Compiled in the step above, so the 15 minutes only count the tests running: a hung test fails here.
       # The disc can't be in CI, so its tests are skipped by name; the reference must be there, so
       # CTR_REQUIRE_REFERENCE makes a missing one a failure, not a skip that passes.
-      - run: cargo test --workspace --locked -- --skip needs_disc
+      - run: cargo test --workspace --exclude brain --locked -- --skip needs_disc
         timeout-minutes: 15
         env:
           CTR_REQUIRE_REFERENCE: 1
+
+  # Apart from `test`, as candle takes long to build: the parity of `race::infer` with the candle
+  # policy it was trained as. No disc, reference or system libraries needed.
+  brain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Dependencies at 16 codegen units here, not the one of `Cargo.toml`: the big ones (`gemm` under
+      # candle) would build on one core each. The same on both `cargo test`s, or the second rebuilds.
+      - run: cargo test -p brain --locked --no-run --config 'profile.dev.package."*".codegen-units=16'
+      - run: cargo test -p brain --locked --config 'profile.dev.package."*".codegen-units=16'
+        timeout-minutes: 15
 
   wasm:
     runs-on: ubuntu-latest
