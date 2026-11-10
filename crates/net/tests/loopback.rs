@@ -72,8 +72,10 @@ fn a_host_and_two_peers_race_over_a_mesh() {
                 track,
                 hash,
                 laps,
+                bots,
             } => {
                 assert_eq!(hash, 0);
+                assert_eq!(bots, 0);
                 assert_eq!(laps, 3);
                 assert_eq!(characters, [4, 9, 11]);
                 assert_eq!(players.len(), 3);
@@ -715,5 +717,106 @@ fn a_handover_is_turned_down_in_a_race() {
             !matches!(event, Event::Promoted { .. } | Event::Joined(_)),
             "{event:?}"
         );
+    }
+}
+
+#[test]
+fn the_hosts_bots_fill_the_race_and_their_pads_reach_the_guests() {
+    let host = net::host(3, "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
+    std::thread::sleep(Duration::from_secs(2));
+    let sessions = [&host, &guest];
+    for s in sessions {
+        s.poll();
+    }
+    // More characters than it takes: the race is filled up to `MAX_PLAYERS`, no further.
+    host.set_bots((0..10).collect());
+    host.start(5, 0, 3);
+    let players = net::MAX_PLAYERS;
+    let bots = players - 2;
+    for (i, session) in sessions.into_iter().enumerate() {
+        wait_for(session, "the start", |e| match e {
+            Event::Started {
+                slot,
+                characters,
+                players: roster,
+                bots: b,
+                ..
+            } => {
+                assert_eq!(slot, i);
+                assert_eq!(b, bots);
+                assert_eq!(characters.len(), players);
+                assert_eq!(characters[..2], [3, 7]);
+                assert_eq!(characters[2..], (0..bots as u8).collect::<Vec<_>>());
+                // (The bots are the host's.)
+                assert!(roster[2..].iter().all(|&id| id == roster[0]));
+                true
+            }
+            _ => false,
+        });
+        session.ready();
+    }
+    let mut early: [Vec<(usize, u32, Vec<Pad>)>; 2] = Default::default();
+    for (i, session) in sessions.into_iter().enumerate() {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut go = false;
+        while !go {
+            assert!(Instant::now() < deadline, "timed out waiting for tick 0");
+            for event in session.poll() {
+                match event {
+                    Event::Go => go = true,
+                    Event::Pads { slot, first, pads } => early[i].push((slot, first, pads)),
+                    Event::Failed(why) => panic!("tick 0: failed: {why}"),
+                    _ => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    // The host makes its bots' pads with its own, and the guest gets every one of them in order;
+    // the host gets only the guest's.
+    let mut got = [[0u32; net::MAX_PLAYERS]; 2];
+    let mut made = 0;
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let done = |got: &[[u32; net::MAX_PLAYERS]; 2]| {
+        got[0][1] >= 60 && (0..players).all(|s| s == 1 || got[1][s] >= 60)
+    };
+    while !done(&got) {
+        assert!(Instant::now() < deadline, "stalled at {got:?}");
+        if made < 90 {
+            host.bot_input((2..players).map(|slot| pad(slot, made)).collect());
+            host.input(pad(0, made));
+            guest.input(pad(1, made));
+        }
+        for (me, session) in sessions.into_iter().enumerate() {
+            let events = std::mem::take(&mut early[me])
+                .into_iter()
+                .map(|(slot, first, pads)| Event::Pads { slot, first, pads })
+                .chain(session.poll());
+            for event in events {
+                if let Event::Pads { slot, first, pads } = event {
+                    assert_ne!(slot, me);
+                    assert!(me == 1 || slot == 1, "the host got pads of {slot}");
+                    assert_eq!(first, got[me][slot], "pads of {slot} for {me} out of order");
+                    for (i, p) in pads.iter().enumerate() {
+                        assert_eq!(*p, pad(slot, first + i as u32));
+                    }
+                    got[me][slot] += pads.len() as u32;
+                }
+            }
+        }
+        made += 1;
+        std::thread::sleep(Duration::from_millis(33));
     }
 }

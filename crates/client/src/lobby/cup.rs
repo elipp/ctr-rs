@@ -7,7 +7,7 @@
 //! race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
 //! ([`standings_text`]).
 
-use net::{EndpointId, Score};
+use net::Score;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -128,10 +128,11 @@ pub fn points(players: usize, place: usize) -> u32 {
     }
 }
 
-/// A player of a race in the order they finished, and what they are called.
+/// A player of a race in the order they finished, and what they are called. The id is the
+/// player's endpoint id, or a bot's (`Online::score_id`).
 #[derive(Clone)]
 pub struct Finisher {
-    pub id: EndpointId,
+    pub id: [u8; 32],
     pub name: String,
 }
 
@@ -146,8 +147,8 @@ pub struct Series {
     /// Whether the races give points (a cup's do).
     pub scored: bool,
     /// The points of every player so far, in the order they were first scored.
-    points: Vec<(EndpointId, u32)>,
-    names: HashMap<EndpointId, String>,
+    points: Vec<([u8; 32], u32)>,
+    names: HashMap<[u8; 32], String>,
 }
 
 impl Series {
@@ -200,7 +201,7 @@ impl Series {
             }
             if place < places_waited_for(players) {
                 gained.push(Score {
-                    id: *finisher.id.as_bytes(),
+                    id: finisher.id,
                     name: finisher.name.clone(),
                     points: won,
                 });
@@ -215,7 +216,7 @@ impl Series {
             .points
             .iter()
             .map(|(id, total)| Score {
-                id: *id.as_bytes(),
+                id: *id,
                 name: self.names.get(id).cloned().unwrap_or_default(),
                 points: *total,
             })
@@ -257,7 +258,7 @@ mod tests {
     fn finishers(n: u8) -> Vec<Finisher> {
         (0..n)
             .map(|i| Finisher {
-                id: net::SecretKey::from_bytes(&[i + 1; 32]).public(),
+                id: [i + 1; 32],
                 name: format!("p{i}"),
             })
             .collect()

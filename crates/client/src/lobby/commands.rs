@@ -169,6 +169,21 @@ pub(super) fn run(
                 lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
                 continue;
             }
+            Action::LobbyBots(n) => {
+                if let Some(n) = *n {
+                    lobby.max_bots = n as usize;
+                }
+                let text = match lobby.max_bots {
+                    0 => "The races you host have no bots".to_string(),
+                    n => format!(
+                        "Up to {n} bot{} fill the races you host (up to {} karts)",
+                        if n == 1 { "" } else { "s" },
+                        net::MAX_PLAYERS
+                    ),
+                };
+                toasts.write(Toast::new(text, 2500));
+                continue;
+            }
             Action::CupCreate { name, tracks, laps } => {
                 let cup = CupDef {
                     name: name.clone(),
@@ -273,14 +288,12 @@ pub(super) fn run(
             Action::DebugRanking => {
                 // The others are told the race stopped; the host scores it like a finished one.
                 let Some(net) = &lobby.online else { continue };
-                let mut finishers: Vec<Finisher> = net
-                    .ids
-                    .iter()
-                    .zip(&net.labels)
-                    .take(net.characters.len())
-                    .map(|(id, name)| Finisher {
-                        id: *id,
-                        name: name.clone(),
+                let mut finishers: Vec<Finisher> = (0..net.characters.len())
+                    .filter_map(|slot| {
+                        Some(Finisher {
+                            id: net.score_id(slot)?,
+                            name: net.labels.get(slot)?.clone(),
+                        })
                     })
                     .collect();
                 shuffle(&mut finishers);

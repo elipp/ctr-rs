@@ -57,6 +57,10 @@ pub enum Action {
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
     ToggleSpectator,
     CloseLobby,
+    /// Fill the races we host with up to that many bots that the learned policy drives
+    /// (`learned.rs`), as many as there is room for (up to `net::MAX_PLAYERS` karts); `None` says
+    /// how many. Kept until the game closes, not in the config.
+    LobbyBots(Option<u8>),
     /// Hand the lobby over to the player called that (a nickname or the short key): they host it
     /// from now on, and we are a guest of theirs (the host only, between races).
     Promote(String),
@@ -173,8 +177,7 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
-const LOBBY_USAGE: &str =
-    "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
+const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close | bots [0 to 7]";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
@@ -262,6 +265,17 @@ impl Action {
                 .map(Action::SpectateLobby)
                 .map_err(|e| format!("Not a lobby address: {e}")),
             "close" => Ok(Action::CloseLobby),
+            "bots" => match rest {
+                "" => Ok(Action::LobbyBots(None)),
+                "off" => Ok(Action::LobbyBots(Some(0))),
+                n => match n.parse::<u8>() {
+                    Ok(n) if (n as usize) < net::MAX_PLAYERS => Ok(Action::LobbyBots(Some(n))),
+                    _ => Err(format!(
+                        "Usage: /lobby bots <0 to {}>, the most bots to fill the races you host with",
+                        net::MAX_PLAYERS - 1
+                    )),
+                },
+            },
             "" => Err(LOBBY_USAGE.into()),
             _ => Err(format!("Unknown command: /lobby {sub}\n{LOBBY_USAGE}")),
         }

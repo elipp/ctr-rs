@@ -176,6 +176,19 @@ pub(super) fn drive_tick(
                 }
             }
         }
+        // Online, the host's bots are the policy's too: their pads are made here, and go to the
+        // others as ours do.
+        if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots()) {
+            match brains.load(None) {
+                Ok(name) => info!("online bots: the policy {name}"),
+                // (They hold a neutral pad then, below: the race does not wait for them.)
+                Err(e) => {
+                    error!("online bots: {e}");
+                    toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                }
+            }
+            brains.start(&track.0, &sim.race, &specs, net.bot_slots());
+        }
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         drive.weather = crate::weather::WeatherView::new(&track.0);
@@ -296,9 +309,12 @@ pub(super) fn drive_tick(
             .as_ref()
             .is_some_and(|net| net.finished.get(slot).copied().unwrap_or(false))
     };
+    let ours = |slot: usize| lobby.online.as_ref().is_some_and(|net| net.drives(slot));
     let late: Vec<usize> = if online {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
+            // (Our bots' pads are made below.)
+            .filter(|&slot| !ours(slot))
             .filter(|&slot| !(watches && finished_slot(slot)))
             .filter(|&slot| {
                 let until = sim.race.confirmed_until(slot);
@@ -371,6 +387,32 @@ pub(super) fn drive_tick(
                 .confirm(slot, tick, pad)
                 .expect("the policy's pads come in order");
         }
+    }
+    // Online, the host's bots: from the race as it is now, the others' pads predicted, as a
+    // player sees it. They go to the others before our own pad, in the same packet.
+    if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots())
+        && net.bot_slots().any(|slot| sim.race.confirmed_until(slot) <= tick)
+    {
+        let mut pads = brains.pads(&track.0, &sim.race);
+        // No policy (it could not be read): they hold still, as a player that left does.
+        if pads.is_empty() {
+            pads = net.bot_slots().map(|slot| (slot, Pad::default())).collect();
+        }
+        for &(slot, pad) in &pads {
+            sim.race
+                .confirm(slot, tick, pad)
+                .expect("the bots' pads come in order");
+        }
+        lobby.send_bots(
+            pads.iter()
+                .map(|(_, pad)| net::Pad {
+                    held: pad.held,
+                    lx: pad.lx,
+                    ly: pad.ly,
+                    ry: pad.ry,
+                })
+                .collect(),
+        );
     }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
     // others get it as well. (A tick that waits plays the pad it already has.) Once we have

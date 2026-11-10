@@ -93,6 +93,12 @@ pub struct Lobby {
     chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
+    /// The characters of the bots that fill our races (`/lobby bots`), drawn once for the lobby
+    /// so that each bot keeps its own from one race of a cup to the next.
+    bot_characters: Vec<u8>,
+    /// The most bots to fill the races we host with (`/lobby bots`). It outlasts the lobby, not
+    /// the game.
+    pub(crate) max_bots: usize,
     pub online: Option<Online>,
 }
 
@@ -263,7 +269,10 @@ impl Lobby {
 
     /// Leaves the lobby, ours or another's, and the race in it.
     pub fn close(&mut self) {
-        *self = Lobby::default();
+        *self = Lobby {
+            max_bots: self.max_bots,
+            ..Lobby::default()
+        };
     }
 
     /// Joins the lobby at `ticket`.
@@ -363,15 +372,24 @@ impl Lobby {
         said(name, crate::console::DIM_COLOR)
     }
 
-    /// Names the slots of the race after the nicknames known now.
+    /// Names the slots of the race after the nicknames known now, and the bots after their
+    /// characters.
     fn refresh_labels(&mut self) {
         if let Some(online) = &mut self.online {
-            let players: Vec<(EndpointId, &str)> = online
-                .ids
-                .iter()
-                .map(|id| (*id, self.nicks.get(id).map_or("", String::as_str)))
+            let players: Vec<(EndpointId, &str)> = (online.ids.iter().enumerate())
+                .filter(|&(slot, _)| !online.is_bot(slot))
+                .map(|(_, id)| (*id, self.nicks.get(id).map_or("", String::as_str)))
                 .collect();
-            online.labels = net::display_names(&players);
+            let mut names = net::display_names(&players).into_iter();
+            online.labels = (0..online.ids.len())
+                .map(|slot| match online.characters.get(slot) {
+                    Some(&c) if online.is_bot(slot) => {
+                        let character = crate::CHARACTERS.get(c as usize).unwrap_or(&"?");
+                        format!("{character} (bot)")
+                    }
+                    _ => names.next().unwrap_or_default(),
+                })
+                .collect();
         }
     }
 
@@ -411,12 +429,33 @@ impl Lobby {
         }
     }
 
-    /// Starts the race on `track` (the host only).
-    fn start(&self, track: u32, laps: u8) {
+    /// Starts the race on `track` (the host only), filled up with as many as `bots` bots as
+    /// there is room for.
+    fn start(&mut self, track: u32, laps: u8, bots: usize) {
+        if bots > 0 && self.bot_characters.is_empty() {
+            // Every character once, in a random order (the std hasher is random enough).
+            use std::hash::BuildHasher;
+            let random = std::collections::hash_map::RandomState::new();
+            let mut characters: Vec<u8> = (0..crate::CHARACTERS.len() as u8).collect();
+            for i in (1..characters.len()).rev() {
+                characters.swap(i, random.hash_one(i) as usize % (i + 1));
+            }
+            self.bot_characters = characters;
+        }
         if let Some(session) = &self.session {
             self.provide(session, track);
+            // (The session takes as many of them as there is room for.)
+            session.set_bots(self.bot_characters.iter().copied().take(bots).collect());
             session.start(track, Self::hash_of(track), laps);
             self.list(&maps::name(track));
+        }
+    }
+
+    /// The pads of our bots for the tick being played, in the order of their slots (see
+    /// [`Online::bot_slots`]). They go before ours ([`send`](Self::send)).
+    pub fn send_bots(&self, pads: Vec<Pad>) {
+        if let Some(session) = &self.session {
+            session.bot_input(pads);
         }
     }
 

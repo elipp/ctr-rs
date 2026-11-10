@@ -193,7 +193,7 @@ pub fn spawn_dummies(
             && count > 0
         {
             match brains.load(path.as_deref()) {
-                Ok(path) => info!("learned bots: the policy {}", path.display()),
+                Ok(name) => info!("learned bots: the policy {name}"),
                 Err(e) => {
                     toasts.write(
                         crate::toast::Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)),

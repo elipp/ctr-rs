@@ -96,9 +96,10 @@ pub(super) fn report(
                 track,
                 hash,
                 laps,
+                bots,
             } => {
                 debug!(
-                    "race started: you are player {slot} of {}, characters {characters:?}, track {track:#x}",
+                    "race started: you are player {slot} of {} ({bots} bots), characters {characters:?}, track {track:#x}",
                     characters.len()
                 );
                 // The host chose a map we do not have: it sends it, and the race waits.
@@ -118,6 +119,7 @@ pub(super) fn report(
                 started = Some(Online {
                     slot,
                     characters,
+                    bots,
                     // (Named after the nicknames below.)
                     labels: names.clone(),
                     names,

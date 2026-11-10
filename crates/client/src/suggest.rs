@@ -229,6 +229,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "[address]",
             ),
             leaf("close", "Leave the lobby, or close it if ours"),
+            takes(
+                "bots",
+                "The most bots to fill the races we host with",
+                "[0 to 7]",
+            ),
         ],
     ),
     node(

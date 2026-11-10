@@ -10,6 +10,8 @@ pub struct Online {
     pub slot: usize,
     /// The character each slot drives, which sets its kart's stats.
     pub characters: Vec<u8>,
+    /// How many of the players are the host's bots, the last of them (see [`Online::is_bot`]).
+    pub bots: usize,
     /// The short form of each slot's iroh key (`fmt_short`), which keys the pings.
     pub names: Vec<String>,
     /// The endpoint of each slot.
@@ -83,6 +85,39 @@ pub struct Desync {
 }
 
 impl Online {
+    /// The slots of the host's bots: the last of the players. Their pads are the host's to make
+    /// (`learned.rs`), and come to everyone else as a player's do.
+    pub fn bot_slots(&self) -> std::ops::Range<usize> {
+        self.characters.len() - self.bots..self.characters.len()
+    }
+
+    /// Whether `slot` is one of the host's bots.
+    pub fn is_bot(&self, slot: usize) -> bool {
+        self.bot_slots().contains(&slot)
+    }
+
+    /// Whether the race has bots and they are ours: we host (the host is slot 0).
+    pub fn hosts_bots(&self) -> bool {
+        self.slot == 0 && self.bots > 0
+    }
+
+    /// Whether we make the pads of `slot`: one of our bots.
+    pub fn drives(&self, slot: usize) -> bool {
+        self.slot == 0 && self.is_bot(slot)
+    }
+
+    /// What a cup scores the kart of `slot` by: the player's endpoint id, or the bot's place
+    /// among the bots.
+    pub fn score_id(&self, slot: usize) -> Option<[u8; 32]> {
+        if self.is_bot(slot) {
+            let mut id = [0; 32];
+            id[..4].copy_from_slice(b"bot ");
+            id[4] = (slot - self.bot_slots().start) as u8;
+            return Some(id);
+        }
+        self.ids.get(slot).map(|id| *id.as_bytes())
+    }
+
     /// Whether we only watch: the slot is past the players', and there is no kart of ours.
     pub fn spectating(&self) -> bool {
         self.slot >= self.characters.len()

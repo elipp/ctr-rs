@@ -1,7 +1,9 @@
-//! (Debug) The dummy karts of `/debug spawn-karts <n> brain`: driven by a policy the `brain`
-//! crate trained, as its `eval` drives one. Their pads are made here and go into the race like
-//! ours (`drive_tick`), which offline are all known before the tick plays: nothing to predict.
-//! (Online the host would make them the same way, and send them out as a player's.)
+//! The karts a policy the `brain` crate trained drives, as its `eval` drives one: the dummy
+//! karts of `/debug spawn-karts <n> brain` offline, and the bots that fill the races of a host
+//! (`/lobby bots`). Their pads are made here and go into the race like ours (`drive_tick`).
+//! Offline they are all known before the tick plays: nothing to predict. Online the host makes
+//! them from the race as it predicts it, and sends them out with its own (`net::Session::bot_input`):
+//! to everyone else they are a player's.
 //!
 //! The policy runs on [`race::infer`], without candle: the `brain` crate only trains it.
 
@@ -26,9 +28,11 @@ fn fire_wait(rng: &mut Rng) -> u32 {
     FIRE_EVERY.start() + rng.below(span as usize) as u32
 }
 
-/// Where the policy is read from when none is given: `BRAIN_POLICY`, or else this (where `train`
-/// saves it, from the workspace).
-const DEFAULT_POLICY: &str = "target/brain/policy.safetensors";
+/// The policy when none is given (nor `BRAIN_POLICY`): built in, so it works without a file
+/// system (wasm). `bots/BOTS.md` has how it was trained.
+const DEFAULT_POLICY: &[u8] = include_bytes!("../../../bots/policy/switch-v4-01000.safetensors");
+/// The name of [`DEFAULT_POLICY`], for the log.
+const DEFAULT_POLICY_NAME: &str = "switch-v4-01000 (built in)";
 
 /// The policy (its actor: what drives), and the karts it drives in the race.
 #[derive(Resource)]
@@ -70,18 +74,30 @@ struct Driven {
 
 impl Brains {
     /// Reads the policy (again, it may have been trained further) from `path`, or the last one
-    /// given, or `BRAIN_POLICY`, or [`DEFAULT_POLICY`]. Returns the file read.
-    pub fn load(&mut self, path: Option<&str>) -> Result<PathBuf, String> {
+    /// given, or `BRAIN_POLICY`, or else takes [`DEFAULT_POLICY`]. Returns the name of the one
+    /// taken.
+    pub fn load(&mut self, path: Option<&str>) -> Result<String, String> {
         if let Some(path) = path {
             self.given = Some(PathBuf::from(path));
         }
-        let path = self.given.clone().unwrap_or_else(|| {
-            PathBuf::from(std::env::var("BRAIN_POLICY").unwrap_or_else(|_| DEFAULT_POLICY.into()))
-        });
-        let policy = Actor::load(&path)
-            .map_err(|e| format!("Reading the policy {}: {e}", path.display()))?;
+        let path = self
+            .given
+            .clone()
+            .or_else(|| std::env::var_os("BRAIN_POLICY").map(PathBuf::from));
+        let (policy, name) = match path {
+            Some(path) => (
+                Actor::load(&path)
+                    .map_err(|e| format!("Reading the policy {}: {e}", path.display()))?,
+                path.display().to_string(),
+            ),
+            None => (
+                Actor::from_safetensors(DEFAULT_POLICY)
+                    .map_err(|e| format!("The built-in policy: {e}"))?,
+                DEFAULT_POLICY_NAME.to_string(),
+            ),
+        };
         self.policy = Some(policy);
-        Ok(path)
+        Ok(name)
     }
 
     /// The race starts at tick 0 (of `specs`): the policy drives the karts of `slots`, each by

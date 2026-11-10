@@ -123,7 +123,7 @@ pub(super) fn finish(
             .into_iter()
             .filter_map(|(_, slot)| {
                 Some(Finisher {
-                    id: *net.ids.get(slot)?,
+                    id: net.score_id(slot)?,
                     name: net.labels.get(slot)?.clone(),
                 })
             })
