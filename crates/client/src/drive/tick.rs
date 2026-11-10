@@ -79,7 +79,6 @@ pub(super) fn drive_tick(
     mut hold: crate::fx::Hold,
     mut lobby: ResMut<crate::lobby::Lobby>,
     config: Res<crate::config::Config>,
-    mut dummies: ResMut<crate::remote::DummyKarts>,
     shown: Shown,
     mut memory: Local<Memory>,
     mut brains: ResMut<crate::learned::Brains>,
@@ -130,10 +129,8 @@ pub(super) fn drive_tick(
     // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = picked && !online;
-    // The lobby closed, or the race failed: back to the grid with our kart alone (and the dummy
-    // karts of `/debug spawn-karts`, which also start it over when they change: in number, or
-    // in who they are and whether they drive).
-    if !online && (dummies.is_changed() || sim.race.karts.len() != 1 + dummies.0.len()) {
+    // The lobby closed, or the race failed: back to the grid with our kart alone.
+    if !online && sim.race.karts.len() != 1 {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
@@ -144,18 +141,7 @@ pub(super) fn drive_tick(
     if restart {
         let (specs, own, spectator) = match &lobby.online {
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
-            // (`/debug spectate`: ours is driven as the dummies are, and we watch.)
-            None => (
-                std::iter::once(race::KartSpec {
-                    bot: dummies.1.is_some() && !dummies.3,
-                    line: dummies.2.filter(|_| dummies.1.is_some()),
-                    ..drive.spec()
-                })
-                .chain(dummies.0.iter().copied())
-                .collect(),
-                dummies.1.unwrap_or(0),
-                dummies.1.is_some(),
-            ),
+            None => (vec![drive.spec()], 0, false),
         };
         let bots = lobby.online.as_ref().map(|net| {
             let setup = vehicle::bot::Setup {
@@ -183,22 +169,10 @@ pub(super) fn drive_tick(
             bots,
             band,
         );
-        // The dummies have left from tick 0: a neutral pad, and nothing to wait for. Unless the
-        // policy drives them: then their pads are made here, each tick (below).
-        if !online {
-            let first = if dummies.1.is_some() { 0 } else { 1 };
-            if dummies.3 {
-                brains.start(&track.0, &sim.race, &specs, first..sim.race.players());
-            } else {
-                for slot in first..sim.race.players() {
-                    sim.race.leave(slot);
-                }
-            }
-        }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.
         if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots()) {
-            match brains.load(None) {
+            match brains.load() {
                 Ok(name) => info!("online bots: the policy {name}"),
                 // (They hold a neutral pad then, below: the race does not wait for them.)
                 Err(e) => {
@@ -228,10 +202,7 @@ pub(super) fn drive_tick(
 
     let tick = sim.race.tick();
     let own = sim.own;
-    let spectating = match &lobby.online {
-        Some(net) => net.spectating(),
-        None => dummies.1.is_some(),
-    };
+    let spectating = lobby.online.as_ref().is_some_and(|net| net.spectating());
     let mut reports = Vec::new();
     if let Some(net) = lobby.online.as_mut() {
         // The pads of the others that came in since the last tick.
@@ -397,15 +368,6 @@ pub(super) fn drive_tick(
         let taps = held & !waits.1;
         waits.1 = held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
-    }
-    // The pads of the karts the policy drives (`/debug spawn-karts <n> brain`), from the race as
-    // it is now. Offline every pad is in before the tick plays: nothing is predicted.
-    if !online && dummies.3 {
-        for (slot, pad) in brains.pads(&track.0, &sim.race) {
-            sim.race
-                .confirm(slot, tick, pad)
-                .expect("the policy's pads come in order");
-        }
     }
     // Online, the host's bots: from the race as it is now, the others' pads predicted, as a
     // player sees it. They go to the others before our own pad, in the same packet.
@@ -588,19 +550,11 @@ pub(super) fn drive_tick(
         if net.watching != before {
             drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
         }
-    } else if let Some(watched) = dummies.1
-        && cycle != 0
-    {
-        // (`/debug spectate`: any kart, ours too. Not a change that starts the race over.)
-        let players = sim.race.players() as i32;
-        dummies.bypass_change_detection().1 =
-            Some((watched as i32 + cycle).rem_euclid(players) as usize);
-        drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
     }
     let watching = lobby
         .online
         .as_ref()
-        .map_or(dummies.1.unwrap_or(own), |net| net.watching);
+        .map_or(own, |net| net.watching);
     // The HUD and the sounds follow the kart the spectator watches, as they follow ours.
     if spectating {
         sim.own = watching;

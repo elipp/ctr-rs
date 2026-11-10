@@ -612,7 +612,6 @@ impl Plugin for LobbyPlugin {
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()
             .init_resource::<lag::FakeLag>()
-            .init_resource::<crate::remote::DummyKarts>()
             .add_systems(Startup, spawn_waiting)
             .add_systems(
                 Update,
@@ -621,9 +620,6 @@ impl Plugin for LobbyPlugin {
                     countdown,
                     report,
                     crate::remote::build,
-                    crate::remote::spawn_dummies,
-                    crate::remote::dump_bots,
-                    crate::remote::bot_line,
                     finish,
                     placing,
                     rollback_toasts,

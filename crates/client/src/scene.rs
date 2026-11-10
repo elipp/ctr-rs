@@ -359,12 +359,6 @@ pub(crate) fn despawn(world: &mut World, entities: Vec<Entity>) {
 /// The kart on the grid of the level shown, and what it is driven with, when driving; in the
 /// viewer there is no `Drive`.
 pub(crate) fn restart_drive(world: &mut World, options: Options) {
-    // The scene they were in is gone (`/debug spawn-karts`).
-    if let Some(mut dummies) = world.get_resource_mut::<crate::remote::DummyKarts>() {
-        dummies.0.clear();
-        dummies.1 = None;
-        dummies.3 = false;
-    }
     if options.driving {
         let drive = new_drive(
             world.resource::<Track>(),

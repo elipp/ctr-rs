@@ -118,18 +118,6 @@ pub enum Action {
     DebugCrateBias(Option<f32>),
     /// (Debug) Try a visual effect, or open the panel of them (`fx.rs`).
     DebugFx(crate::fx::Fx),
-    /// (Debug) Put that many karts on the grid with ours, of random characters, offline
-    /// (`remote.rs`); 0 takes them away. Of `kind`: how they drive, if at all.
-    DebugSpawnKarts { count: u8, kind: DummyKind },
-    /// (Debug, temporary) Watch the dummy karts, offline: ours turns bot too (`remote.rs`).
-    /// A toggle.
-    DebugSpectate,
-    /// (Debug, temporary) Print to stdout what replays the offline race of bots up to now, for
-    /// `race`'s test `needs_disc_replay_dump` (`remote.rs`).
-    DebugDumpBots,
-    /// (Debug) The bot path every bot drives (`race::KartSpec::line`), or each its slot's
-    /// (`None`), offline (`remote.rs`). The race starts over from the grid.
-    DebugBotLine(Option<u8>),
     /// (Debug) Draw the bot paths in the race too, not only in the viewer (`nav.rs`). A toggle.
     DebugNavPaths,
     /// Toast how each peer is connected: direct or by relay, the round trip time, losses.
@@ -149,19 +137,6 @@ pub enum Action {
 }
 
 /// How the level's mesh is built (`/debug level`).
-/// What drives the dummy karts of `/debug spawn-karts`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DummyKind {
-    /// The race itself (`race::bot`).
-    Bot,
-    /// Nothing: they stand.
-    Static,
-    /// A learned policy (`learned.rs`): the one saved at that path, or else
-    /// at `BRAIN_POLICY`, or `target/brain/policy.safetensors`. A path given is kept for the
-    /// next.
-    Brain(Option<String>),
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum MeshSetting {
     /// Keep the blocks without textures and the faces with a pure red corner.
@@ -190,12 +165,9 @@ const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | spawn-karts <0 to 7> [bot|static|brain [file]] | spectate | dump-bots | bot-line <0 to 2|auto> | navpaths";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
-
-/// The most dummy karts there can be: the grid has 8 places, and ours is one.
-const DUMMY_KARTS_MAX: u8 = 7;
 
 /// The longest stall that can be set.
 const STALL_MAX_MS: f64 = 60_000.0;
@@ -569,37 +541,6 @@ impl Action {
             "toast" => Err("Usage: /debug toast <text>".into()),
             "level" => Action::level(rest),
             "fx" => Action::fx(rest).map(Action::DebugFx),
-            "spawn-karts" => {
-                let (count, kind) = word(rest);
-                let count = count.parse::<u8>().ok().filter(|&n| n <= DUMMY_KARTS_MAX);
-                let (kind, path) = word(kind);
-                let kind = match (kind, path) {
-                    ("" | "bot", "") => Some(DummyKind::Bot),
-                    ("static", "") => Some(DummyKind::Static),
-                    ("brain", "") => Some(DummyKind::Brain(None)),
-                    ("brain", path) => Some(DummyKind::Brain(Some(path.to_string()))),
-                    _ => None,
-                };
-                count
-                    .zip(kind)
-                    .map(|(count, kind)| Action::DebugSpawnKarts { count, kind })
-                    .ok_or_else(|| {
-                        format!(
-                            "Usage: /debug spawn-karts <0 to {DUMMY_KARTS_MAX}> [bot|static|brain [policy file]]"
-                        )
-                    })
-            }
-            "spectate" => Ok(Action::DebugSpectate),
-            "dump-bots" => Ok(Action::DebugDumpBots),
-            "bot-line" => match rest {
-                "auto" => Ok(Action::DebugBotLine(None)),
-                _ => rest
-                    .parse::<u8>()
-                    .ok()
-                    .filter(|&n| (n as usize) < loader::lev::NAV_PATH_COUNT)
-                    .map(|n| Action::DebugBotLine(Some(n)))
-                    .ok_or_else(|| "Usage: /debug bot-line <0 to 2|auto>".to_string()),
-            },
             "navpaths" => Ok(Action::DebugNavPaths),
             "crate" => {
                 const USAGE: &str = "Usage: /debug crate bias [number]";
@@ -1795,62 +1736,9 @@ mod tests {
         assert!(Action::parse("debug stall 61s").is_err());
         assert!(Action::parse("debug netinfo").is_err());
         assert!(matches!(
-            Action::parse("debug spawn-karts 7"),
-            Ok(Action::DebugSpawnKarts {
-                count: 7,
-                kind: DummyKind::Bot
-            })
-        ));
-        assert!(matches!(
-            Action::parse("debug spawn-karts 3 bot"),
-            Ok(Action::DebugSpawnKarts {
-                count: 3,
-                kind: DummyKind::Bot
-            })
-        ));
-        assert!(matches!(
-            Action::parse("debug spawn-karts 3 static"),
-            Ok(Action::DebugSpawnKarts {
-                count: 3,
-                kind: DummyKind::Static
-            })
-        ));
-        assert!(matches!(
-            Action::parse("debug spawn-karts 7 brain"),
-            Ok(Action::DebugSpawnKarts {
-                count: 7,
-                kind: DummyKind::Brain(None)
-            })
-        ));
-        assert!(matches!(
-            Action::parse("debug spawn-karts 2 brain runs/a b.safetensors"),
-            Ok(Action::DebugSpawnKarts {
-                count: 2,
-                kind: DummyKind::Brain(Some(path))
-            }) if path == "runs/a b.safetensors"
-        ));
-        assert!(Action::parse("debug spawn-karts 3 parked").is_err());
-        assert!(Action::parse("debug spawn-karts 3 static x").is_err());
-        assert!(matches!(
-            Action::parse("debug dump-bots"),
-            Ok(Action::DebugDumpBots)
-        ));
-        assert!(matches!(
-            Action::parse("debug bot-line 2"),
-            Ok(Action::DebugBotLine(Some(2)))
-        ));
-        assert!(matches!(
-            Action::parse("debug bot-line auto"),
-            Ok(Action::DebugBotLine(None))
-        ));
-        assert!(Action::parse("debug bot-line 3").is_err());
-        assert!(Action::parse("debug bot-line").is_err());
-        assert!(matches!(
             Action::parse("debug navpaths"),
             Ok(Action::DebugNavPaths)
         ));
-        assert!(Action::parse("debug spawn-karts 8").is_err());
-        assert!(Action::parse("debug spawn-karts").is_err());
         let fx = |line| match Action::parse(line) {
             Ok(Action::DebugFx(fx)) => Some(fx),
             _ => None,

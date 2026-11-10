@@ -87,7 +87,7 @@ pub struct KartSpec {
     /// The race drives the kart itself ([`bot::Bot`]), and takes no pad for it.
     pub bot: bool,
     /// The bot path (into `Level::nav_paths`) a bot drives, instead of the one of its slot
-    /// ([`bot::Bot::new`]). (Debug: `/debug bot-line`.)
+    /// ([`bot::Bot::new`]).
     pub line: Option<u8>,
 }
 

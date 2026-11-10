@@ -498,19 +498,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 &[takes("bias", "Depth bias of the crates, live", "[number]")],
             ),
             leaf("ranking", "Random ranking (host)"),
-            takes(
-                "spawn-karts",
-                "Dummy karts on the grid, offline",
-                "<0 to 7> [kind]",
-            ),
-            leaf("spectate", "Watch the dummy karts, offline (toggle)"),
-            leaf("dump-bots", "Print the bots' race to stdout, for a test"),
-            Spec {
-                name: "bot-line",
-                about: "The bot path every bot drives, offline",
-                options: &[leaf("auto", "Each its slot's")],
-                arg: Some("<0 to 2>"),
-            },
             leaf("navpaths", "Draw the bot paths in the race too (toggle)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
             Spec {

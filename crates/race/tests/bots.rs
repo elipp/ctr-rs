@@ -706,7 +706,7 @@ fn needs_disc_gap_takeoffs() {
     }
 }
 
-/// A race of bots that the client printed with `/debug dump-bots` (offline, spectating): the
+/// A race of bots that the client printed with its former `/debug dump-bots` (offline, spectating): the
 /// `BOT_DUMP ...` line rebuilds it.
 struct Dump {
     level: LevelId,
@@ -759,7 +759,7 @@ impl Dump {
     }
 }
 
-/// Replays a race of bots from the client (`/debug dump-bots`), and traces the kart that was
+/// Replays a race of bots from the client (its former `/debug dump-bots`), and traces the kart that was
 /// watched, tick by tick, from `BOT_TRACE_BEFORE` ticks (90) before the dump to
 /// `BOT_TRACE_AFTER` (300) after it. `BOT_DUMP` is the dump's `BOT_DUMP ...` line, or a file
 /// with it. Run with

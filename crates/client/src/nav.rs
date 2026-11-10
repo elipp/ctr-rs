@@ -1,6 +1,5 @@
 //! The bot paths (`Level::nav_paths`) drawn, for working on the bots (`race::bot`): always in the
-//! viewer (`/debug viewer`), and in the race with `/debug navpaths` (a toggle; handiest with
-//! `/debug spectate`).
+//! viewer (`/debug viewer`), and in the race with `/debug navpaths` (a toggle).
 //!
 //! * `N` (in the viewer) cycles what is shown: every path, each one alone, none.
 //!

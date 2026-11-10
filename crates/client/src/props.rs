@@ -86,8 +86,7 @@ impl Sim {
             (!specs.is_empty() && !spectator).then_some(own),
             ROLLBACK_WINDOW,
         );
-        // Nobody to compare with alone (the bots are in our sim alone), or offline (the dummy
-        // karts of `/debug spawn-karts`).
+        // Nobody to compare with alone (the bots are in our sim alone), or offline.
         if specs.len() > 1 && online.is_some() {
             rollback.check_every(CHECK_EVERY)
         } else {
