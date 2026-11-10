@@ -82,7 +82,7 @@ pub(super) fn drive_tick(
     mut dummies: ResMut<crate::remote::DummyKarts>,
     shown: Shown,
     mut memory: Local<Memory>,
-    #[cfg(feature = "brain")] mut brains: ResMut<crate::learned::Brains>,
+    mut brains: ResMut<crate::learned::Brains>,
 ) {
     let Shown {
         mut particles,
@@ -169,7 +169,6 @@ pub(super) fn drive_tick(
         if !online {
             let first = if dummies.1.is_some() { 0 } else { 1 };
             if dummies.3 {
-                #[cfg(feature = "brain")]
                 brains.start(&track.0, &sim.race, &specs, first..sim.race.players());
             } else {
                 for slot in first..sim.race.players() {
@@ -366,7 +365,6 @@ pub(super) fn drive_tick(
     }
     // The pads of the karts the policy drives (`/debug spawn-karts <n> brain`), from the race as
     // it is now. Offline every pad is in before the tick plays: nothing is predicted.
-    #[cfg(feature = "brain")]
     if !online && dummies.3 {
         for (slot, pad) in brains.pads(&track.0, &sim.race) {
             sim.race

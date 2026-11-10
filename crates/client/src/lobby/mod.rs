@@ -463,7 +463,6 @@ pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(feature = "brain")]
         app.init_resource::<crate::learned::Brains>();
         app.init_resource::<Lobby>()
             .init_resource::<crate::kart::Smoothing>()

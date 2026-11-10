@@ -148,7 +148,7 @@ pub enum DummyKind {
     Bot,
     /// Nothing: they stand.
     Static,
-    /// A learned policy (`brain.rs`, `--features brain`): the one saved at that path, or else
+    /// A learned policy (`learned.rs`): the one saved at that path, or else
     /// at `BRAIN_POLICY`, or `target/brain/policy.safetensors`. A path given is kept for the
     /// next.
     Brain(Option<String>),

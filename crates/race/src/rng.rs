@@ -1,4 +1,5 @@
-//! A small random number generator (SplitMix64): the trainer needs no more, and no dependency.
+//! A small random number generator (SplitMix64), for the learned bots: the trainer and the host
+//! that runs them need no more, and no dependency.
 
 #[derive(Clone, Debug)]
 pub struct Rng(u64);

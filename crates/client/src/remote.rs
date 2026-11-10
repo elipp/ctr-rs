@@ -131,7 +131,7 @@ pub fn spawn_dummies(
     drive: Option<Res<crate::drive::Drive>>,
     mut builder: KartBuilder,
     mut toasts: MessageWriter<crate::toast::Toast>,
-    #[cfg(feature = "brain")] mut brains: ResMut<crate::learned::Brains>,
+    mut brains: ResMut<crate::learned::Brains>,
 ) {
     use crate::command::{Action, DummyKind};
     use std::hash::BuildHasher;
@@ -192,14 +192,7 @@ pub fn spawn_dummies(
         if let DummyKind::Brain(path) = &kind
             && count > 0
         {
-            #[cfg(feature = "brain")]
-            let loaded = brains.load(path.as_deref());
-            #[cfg(not(feature = "brain"))]
-            let loaded: Result<std::path::PathBuf, String> = {
-                let _ = path;
-                Err("This build has no learned bots: build it with --features brain".into())
-            };
-            match loaded {
+            match brains.load(path.as_deref()) {
                 Ok(path) => info!("learned bots: the policy {}", path.display()),
                 Err(e) => {
                     toasts.write(

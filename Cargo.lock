@@ -2451,7 +2451,6 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "bevy",
- "brain",
  "camera",
  "coll",
  "console_error_panic_hook",

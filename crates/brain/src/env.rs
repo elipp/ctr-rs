@@ -50,7 +50,7 @@ pub struct Rules {
 impl Default for Rules {
     fn default() -> Rules {
         Rules {
-            repeat: 2,
+            repeat: race::nn::REPEAT,
             // A minute at 30 ticks a second.
             max_ticks: 30 * 60,
             max_grabs: 3,

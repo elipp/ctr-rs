@@ -8,7 +8,9 @@
 
 pub mod bot;
 pub mod desync;
+pub mod infer;
 pub mod nn;
+pub mod rng;
 pub mod rollback;
 
 use coll::Collision;

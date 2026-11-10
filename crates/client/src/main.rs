@@ -53,7 +53,6 @@ mod heat;
 mod hud;
 mod kart;
 mod laps;
-#[cfg(feature = "brain")]
 mod learned;
 mod leaderboard;
 mod lights;

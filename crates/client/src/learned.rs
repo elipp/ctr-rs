@@ -3,27 +3,37 @@
 //! ours (`drive_tick`), which offline are all known before the tick plays: nothing to predict.
 //! (Online the host would make them the same way, and send them out as a player's.)
 //!
-//! Only with `--features brain`.
+//! The policy runs on [`race::infer`], without candle: the `brain` crate only trains it.
 
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use brain::policy::Policy;
-use brain::rng::Rng;
 use loader::lev::Level;
 use race::bot::{Bot, PathLength, Tracker};
+use race::infer::Actor;
 use race::nn::{self, Action, Latch, Progress};
+use race::rng::Rng;
 use race::rollback::Rollback;
 use race::{KartSpec, Pad, Race};
+
+/// A policy kart taps Circle (fires its item, if it has one) every this many ticks or so, drawn
+/// anew each time: 0.5 to 5 s. Not the policy's choice: it was trained without weapons.
+const FIRE_EVERY: std::ops::RangeInclusive<u32> = 15..=150;
+
+/// A wait to the next tap of Circle, in [`FIRE_EVERY`].
+fn fire_wait(rng: &mut Rng) -> u32 {
+    let span = FIRE_EVERY.end() - FIRE_EVERY.start() + 1;
+    FIRE_EVERY.start() + rng.below(span as usize) as u32
+}
 
 /// Where the policy is read from when none is given: `BRAIN_POLICY`, or else this (where `train`
 /// saves it, from the workspace).
 const DEFAULT_POLICY: &str = "target/brain/policy.safetensors";
 
-/// The policy, and the karts it drives in the race.
+/// The policy (its actor: what drives), and the karts it drives in the race.
 #[derive(Resource)]
 pub struct Brains {
-    policy: Option<Policy>,
+    policy: Option<Actor>,
     /// The file of the policy last given on the console: the next spawn reads it again.
     given: Option<PathBuf>,
     karts: Vec<Driven>,
@@ -54,6 +64,8 @@ struct Driven {
     latch: Latch,
     /// The choice it holds.
     action: Action,
+    /// The ticks to its next tap of Circle ([`FIRE_EVERY`]).
+    fire_in: u32,
 }
 
 impl Brains {
@@ -66,7 +78,7 @@ impl Brains {
         let path = self.given.clone().unwrap_or_else(|| {
             PathBuf::from(std::env::var("BRAIN_POLICY").unwrap_or_else(|_| DEFAULT_POLICY.into()))
         });
-        let policy = Policy::load(&path, &brain::ppo::device())
+        let policy = Actor::load(&path)
             .map_err(|e| format!("Reading the policy {}: {e}", path.display()))?;
         self.policy = Some(policy);
         Ok(path)
@@ -95,13 +107,14 @@ impl Brains {
                     tracker: bot.tracker,
                     latch: Latch::default(),
                     action: Action::default(),
+                    fire_in: fire_wait(&mut self.rng),
                 })
             })
             .collect();
     }
 
     /// The pads of the karts for the next tick of `race`, by slot, unless they are in already.
-    /// A new choice every `Rules::repeat` ticks, as in training: one forward pass for them all.
+    /// A new choice every [`nn::REPEAT`] ticks, as in training.
     pub fn pads(&mut self, level: &Level, race: &Rollback<Race>) -> Vec<(usize, Pad)> {
         let tick = race.tick();
         let Some(policy) = &self.policy else {
@@ -114,11 +127,8 @@ impl Brains {
         {
             return Vec::new();
         }
-        let decide = tick % brain::env::Rules::default().repeat == 0;
-        // The likeliest choices, and the drawn ones (`nn::draw_choices`).
-        let mut obs: [Vec<nn::Obs>; 2] = [Vec::new(), Vec::new()];
-        let mut deciding: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
-        for (i, k) in self.karts.iter_mut().enumerate() {
+        let decide = tick % nn::REPEAT == 0;
+        for k in &mut self.karts {
             let frames = &level.nav_paths[k.path].frames;
             if frames.len() < 2 {
                 continue;
@@ -140,25 +150,13 @@ impl Brains {
             }
             let frames = &level.nav_paths[k.path].frames;
             if decide {
-                let drawn = nn::draw_choices(&k.progress) as usize;
-                obs[drawn].push(nn::observe(frames, &k.tracker, &k.progress, kart, &k.latch));
-                deciding[drawn].push(i);
+                // The likeliest choice, or a drawn one (`nn::draw_choices`).
+                let greedy = !nn::draw_choices(&k.progress);
+                let obs = nn::observe(frames, &k.tracker, &k.progress, kart, &k.latch);
+                k.action = policy.act(&obs, greedy, &mut self.rng);
             }
         }
-        for (drawn, (obs, deciding)) in obs.iter().zip(deciding).enumerate() {
-            if obs.is_empty() {
-                continue;
-            }
-            match policy.act(obs, drawn == 0, &mut self.rng) {
-                Ok(choices) => {
-                    for (i, choice) in deciding.into_iter().zip(choices) {
-                        self.karts[i].action = choice.action;
-                    }
-                }
-                // (They hold the choices they had.)
-                Err(e) => error!("the policy's forward pass: {e}"),
-            }
-        }
+        let rng = &mut self.rng;
         self.karts
             .iter_mut()
             .map(|k| {
@@ -166,11 +164,19 @@ impl Brains {
                 let d = &race.karts[k.slot].driver;
                 let drifting = d.kart_state == vehicle::kart_state::DRIFTING;
                 let tried = d.num_boosts_attempted > 0;
-                let pad = if has_path {
+                let mut pad = if has_path {
                     k.latch.pad(k.action, drifting, tried)
                 } else {
                     Pad::default()
                 };
+                // A tap: held for this tick only (the next has it released, the fire is on the
+                // press).
+                if k.fire_in == 0 {
+                    pad.held |= vehicle::buttons::CIRCLE;
+                    k.fire_in = fire_wait(rng);
+                } else {
+                    k.fire_in -= 1;
+                }
                 (k.slot, pad)
             })
             .collect()

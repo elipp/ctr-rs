@@ -9,5 +9,5 @@
 pub mod env;
 pub mod policy;
 pub mod ppo;
-pub mod rng;
+pub use race::rng;
 pub mod tracks;

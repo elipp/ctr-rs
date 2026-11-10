@@ -3,23 +3,10 @@
 
 use candle_core::{D, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module, VarBuilder, VarMap, linear};
+pub use race::nn::{HEAD_START, LOGITS};
 use race::nn::{Action, HEADS, N_HEADS, OBS_LEN, Obs};
 
 use crate::rng::Rng;
-
-/// The actor's outputs: all of the heads' logits, one after the other.
-pub const LOGITS: usize = HEAD_START[N_HEADS - 1] + HEADS[N_HEADS - 1];
-
-/// Where each head's logits start among the [`LOGITS`].
-pub const HEAD_START: [usize; N_HEADS] = {
-    let mut start = [0; N_HEADS];
-    let mut h = 1;
-    while h < N_HEADS {
-        start[h] = start[h - 1] + HEADS[h - 1];
-        h += 1;
-    }
-    start
-};
 
 /// The boost's head (L1) among [`HEADS`].
 const BOOST_HEAD: usize = 3;

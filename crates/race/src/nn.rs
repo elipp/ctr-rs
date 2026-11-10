@@ -207,6 +207,23 @@ pub const HEADS: [usize; N_HEADS] = [STEER_BINS, 3, 3, 2];
 
 pub const N_HEADS: usize = 4;
 
+/// The actor's outputs: all of the heads' logits, one after the other.
+pub const LOGITS: usize = HEAD_START[N_HEADS - 1] + HEADS[N_HEADS - 1];
+
+/// Where each head's logits start among the [`LOGITS`].
+pub const HEAD_START: [usize; N_HEADS] = {
+    let mut start = [0; N_HEADS];
+    let mut h = 1;
+    while h < N_HEADS {
+        start[h] = start[h - 1] + HEADS[h - 1];
+        h += 1;
+    }
+    start
+};
+
+/// A learned bot makes a choice every this many ticks, and holds it in between.
+pub const REPEAT: u32 = 2;
+
 /// The positions of the stick: full left to full right, the middle one centred.
 pub const STEER_BINS: usize = 9;
 
