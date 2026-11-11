@@ -115,11 +115,11 @@
 <div id="drop">
   <h1><a href="../">CTR-RS</a></h1>
   <div class="panel">
-    <p id="status">Drop Crash Team Racing (USA) .bin</p>
+    <p id="status">Drop Crash Team Racing (USA) .bin or .chd</p>
     <pre id="detail" hidden></pre>
     <ul id="menu" role="menu"></ul>
     <small id="note">It stays on this device.</small>
-    <input type="file" accept=".bin">
+    <input type="file" accept=".bin,.chd">
   </div>
 </div>
 <script>
@@ -684,7 +684,7 @@ addEventListener("drop", async (e) => {
 });
 
 function fresh() {
-  offer("Drop Crash Team Racing (USA) .bin", [["Or pick it", pick]]);
+  offer("Drop Crash Team Racing (USA) .bin or .chd", [["Or pick it", pick]]);
 }
 
 async function pick() {
@@ -692,7 +692,7 @@ async function pick() {
   let handle;
   try {
     [handle] = await showOpenFilePicker({
-      types: [{ description: "Disc image", accept: { "application/octet-stream": [".bin"] } }],
+      types: [{ description: "Disc image", accept: { "application/octet-stream": [".bin", ".chd"] } }],
     });
   } catch {
     return;

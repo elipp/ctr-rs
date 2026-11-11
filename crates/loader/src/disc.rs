@@ -88,7 +88,7 @@ mod tests {
     }
 }
 
-/// A `.bin` disc image opened for reading `BIGFILE.BIG`.
+/// A `.bin` (or CHD) disc image opened for reading `BIGFILE.BIG`.
 pub type Disc = RawSectorReader<FileDisc>;
 
 /// Reads `buf.len()` bytes of a disc image from byte `at` on: how [`keep_external`] reads it.
@@ -121,16 +121,106 @@ pub fn release_external() {
     RELEASED.store(true, Ordering::Relaxed);
 }
 
-/// A disc image opened: the file, or the image [read externally](keep_external) at its path.
+/// A disc image opened: the file, or the image [read externally](keep_external) at its path. Either
+/// may be a CHD, which is then read as the `.bin` it was made from.
 pub enum FileDisc {
     File(BufReader<File>),
     External { pos: u64, len: u64, read: ReadAt },
+    Chd(Box<ChdDisc<FileDisc>>),
+}
+
+/// The first bytes of a CHD.
+const CHD_MAGIC: &[u8; 8] = b"MComprHD";
+
+/// The bytes a CHD keeps of each CD sector: the raw sector and its 96 bytes of subcode.
+const CHD_FRAME_SIZE: u64 = RAW_SECTOR_SIZE + 96;
+
+/// A CHD of a CD, read as the `.bin` it was made from: the raw 2352-byte sectors, one after
+/// another, without their subcode. The hunks are decompressed as they are read, the last one kept.
+///
+/// Only the first track is read correctly to its end: a CHD pads each track to a multiple of 4
+/// sectors, so the sectors of any after it are not where they are in a `.bin` (the game's
+/// files are all in the first).
+pub struct ChdDisc<R: Read + Seek> {
+    chd: chd::Chd<R>,
+    hunk_size: u64,
+    /// The hunk in `hunk`, if one is.
+    current: Option<u32>,
+    hunk: Vec<u8>,
+    /// The compressed hunk, as it is read.
+    compressed: Vec<u8>,
+    pos: u64,
+    len: u64,
+}
+
+impl<R: Read + Seek> ChdDisc<R> {
+    pub fn new(inner: R) -> io::Result<Self> {
+        let chd = chd::Chd::open(inner, None).map_err(|e| invalid(format!("not a CHD: {e}")))?;
+        let hunk_count = chd.header().hunk_count() as u64;
+        let hunk_size = chd.header().hunk_size() as u64;
+        if hunk_size == 0 || hunk_size % CHD_FRAME_SIZE != 0 {
+            return Err(invalid(format!(
+                "not a CHD of a CD: its hunks are {hunk_size} bytes, not whole sectors of {CHD_FRAME_SIZE}"
+            )));
+        }
+        let hunk = chd.get_hunksized_buffer();
+        Ok(Self {
+            chd,
+            hunk_size,
+            current: None,
+            hunk,
+            compressed: Vec::new(),
+            pos: 0,
+            len: hunk_count * hunk_size / CHD_FRAME_SIZE * RAW_SECTOR_SIZE,
+        })
+    }
+}
+
+impl<R: Read + Seek> Read for ChdDisc<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut done = 0;
+        while done < buf.len() && self.pos < self.len {
+            let sector = self.pos / RAW_SECTOR_SIZE;
+            let within = self.pos % RAW_SECTOR_SIZE;
+            // A hunk holds whole sectors, so a sector is never split between two.
+            let at = sector * CHD_FRAME_SIZE + within;
+            let hunk = (at / self.hunk_size) as u32;
+            let offset = (at % self.hunk_size) as usize;
+            if self.current != Some(hunk) {
+                self.current = None;
+                self.chd
+                    .hunk(hunk)
+                    .and_then(|mut h| h.read_hunk_in(&mut self.compressed, &mut self.hunk))
+                    .map_err(|e| invalid(format!("CHD hunk {hunk}: {e}")))?;
+                self.current = Some(hunk);
+            }
+            let n = ((RAW_SECTOR_SIZE - within) as usize).min(buf.len() - done);
+            buf[done..done + n].copy_from_slice(&self.hunk[offset..offset + n]);
+            self.pos += n as u64;
+            done += n;
+        }
+        Ok(done)
+    }
+}
+
+impl<R: Read + Seek> Seek for ChdDisc<R> {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        let new = match from {
+            SeekFrom::Start(p) => Some(p),
+            SeekFrom::End(d) => self.len.checked_add_signed(d),
+            SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
+        self.pos = new;
+        Ok(new)
+    }
 }
 
 impl Read for FileDisc {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             FileDisc::File(file) => file.read(buf),
+            FileDisc::Chd(chd) => chd.read(buf),
             FileDisc::External { pos, len, read } => {
                 if RELEASED.load(Ordering::Relaxed) {
                     return Err(io::Error::new(
@@ -151,6 +241,7 @@ impl Seek for FileDisc {
     fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
         match self {
             FileDisc::File(file) => file.seek(from),
+            FileDisc::Chd(chd) => chd.seek(from),
             FileDisc::External { pos, len, .. } => {
                 let new = match from {
                     SeekFrom::Start(p) => Some(p),
@@ -165,10 +256,24 @@ impl Seek for FileDisc {
     }
 }
 
+/// Opens the disc image at `path` (a `.bin`, or a CHD, told by its first bytes) as the bytes of a
+/// `.bin`.
 pub fn open_file(path: &Path) -> io::Result<FileDisc> {
-    match EXTERNAL.get() {
-        Some(&(ref at, len, read)) if at == path => Ok(FileDisc::External { pos: 0, len, read }),
-        _ => File::open(path).map(|file| FileDisc::File(BufReader::new(file))),
+    let mut disc = match EXTERNAL.get() {
+        Some(&(ref at, len, read)) if at == path => FileDisc::External { pos: 0, len, read },
+        _ => FileDisc::File(BufReader::new(File::open(path)?)),
+    };
+    let mut magic = [0; CHD_MAGIC.len()];
+    let is_chd = match disc.read_exact(&mut magic) {
+        Ok(()) => &magic == CHD_MAGIC,
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => false,
+        Err(e) => return Err(e),
+    };
+    disc.seek(SeekFrom::Start(0))?;
+    if is_chd {
+        Ok(FileDisc::Chd(Box::new(ChdDisc::new(disc)?)))
+    } else {
+        Ok(disc)
     }
 }
 
