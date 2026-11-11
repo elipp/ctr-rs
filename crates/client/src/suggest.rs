@@ -250,6 +250,17 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("hard", "Hard bots"),
             leaf("brain", "Bots the learned policy drives (the default)"),
             leaf("retail", "Retail's bots, on the bot paths"),
+            // (The web has no files to read a policy from: `lobby::commands::refusal`.)
+            #[cfg(not(target_arch = "wasm32"))]
+            Spec {
+                name: "policy",
+                about: "The policy brain bots drive with: a .safetensors file, or default",
+                options: &[leaf(
+                    "default",
+                    "BRAIN_POLICY, or else the built-in one",
+                )],
+                arg: Some("[<file>]"),
+            },
         ],
         arg: Some("[0 to 7]"),
     },

@@ -36,6 +36,9 @@ const DEFAULT_POLICY_NAME: &str = "switch-v4-01000 (built in)";
 #[derive(Resource)]
 pub struct Brains {
     policy: Option<Actor>,
+    /// The policy file `/bots policy` asked for, over `BRAIN_POLICY`; none, for that (or the
+    /// built-in one).
+    path: Option<PathBuf>,
     karts: Vec<Driven>,
     /// For the choices of the karts that are stuck, or just put back by the mask
     /// (`nn::draw_choices`).
@@ -46,6 +49,7 @@ impl Default for Brains {
     fn default() -> Brains {
         Brains {
             policy: None,
+            path: None,
             karts: Vec::new(),
             rng: Rng::new(1),
         }
@@ -68,11 +72,32 @@ struct Driven {
 }
 
 impl Brains {
-    /// Reads the policy (again, it may have been trained further) from `BRAIN_POLICY`, or else
-    /// takes [`DEFAULT_POLICY`]. Returns the name of the one taken.
+    /// The policy file to read: the one `/bots policy` asked for, or `BRAIN_POLICY`; none, for
+    /// [`DEFAULT_POLICY`].
+    fn path(&self) -> Option<PathBuf> {
+        self.path
+            .clone()
+            .or_else(|| std::env::var_os("BRAIN_POLICY").map(PathBuf::from))
+    }
+
+    /// The name of the policy [`Brains::load`] takes.
+    pub fn name(&self) -> String {
+        self.path()
+            .map_or(DEFAULT_POLICY_NAME.to_string(), |p| p.display().to_string())
+    }
+
+    /// Drives with the policy at `path` from now on (`/bots policy`), or with `BRAIN_POLICY` or
+    /// the built-in one for none. Read now, to say at once what is wrong with it: if it does
+    /// not read, the one before stays. Returns the name of the one taken.
+    pub fn set_path(&mut self, path: Option<PathBuf>) -> Result<String, String> {
+        let before = std::mem::replace(&mut self.path, path);
+        self.load().inspect_err(|_| self.path = before)
+    }
+
+    /// Reads the policy (again, it may have been trained further) from the file of
+    /// [`Brains::path`], or else takes [`DEFAULT_POLICY`]. Returns the name of the one taken.
     pub fn load(&mut self) -> Result<String, String> {
-        let path = std::env::var_os("BRAIN_POLICY").map(PathBuf::from);
-        let (policy, name) = match path {
+        let (policy, name) = match self.path() {
             Some(path) => (
                 Actor::load(&path)
                     .map_err(|e| format!("Reading the policy {}: {e}", path.display()))?,
