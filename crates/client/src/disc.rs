@@ -129,7 +129,7 @@ fn ask() -> Option<PathBuf> {
         }
         let file = rfd::FileDialog::new()
             .set_title("Select your Crash Team Racing (USA) disc image")
-            .add_filter("Disc image", &["bin", "iso"])
+            .add_filter("Disc image", &["bin", "iso", "chd"])
             .pick_file()?;
         match open_bigfile(&file) {
             Ok(_) => return Some(file),
