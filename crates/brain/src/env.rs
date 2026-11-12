@@ -109,6 +109,8 @@ pub struct Episode {
     pub boosts: u32,
     /// The sum of `Step::boost_timing` over them: how late in the window each was tapped.
     pub boost_timing: f32,
+    /// The sum of `Step::fire_tier` over the ticks: how far up the drift boosts' fire it burned.
+    pub fire_tier: f32,
     /// R1 pressed (a hop, when the kart can).
     pub hops: u32,
     /// Ticks spent drifting, and with R1 held.
@@ -444,6 +446,7 @@ impl<'a> Env<'a> {
             }
             e.boosts += step.boosts as u32;
             e.boost_timing += step.boost_timing;
+            e.fire_tier += step.fire_tier;
             e.wall += step.wall as u32;
             e.braking += step.braking as u32;
             e.taken_back += step.taken_back;

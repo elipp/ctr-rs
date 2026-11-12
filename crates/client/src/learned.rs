@@ -33,9 +33,9 @@ const OWN_REV: Skill = Skill::of(vehicle::bot::difficulty_level::HARD);
 
 /// The policy when none is given (nor `BRAIN_POLICY`): built in, so it works without a file
 /// system (wasm). `bots/BOTS.md` has how it was trained.
-const DEFAULT_POLICY: &[u8] = include_bytes!("../../../bots/policy/switch-v4-01000.safetensors");
+const DEFAULT_POLICY: &[u8] = include_bytes!("../../../bots/policy/no-chain-boost-v1.safetensors");
 /// The name of [`DEFAULT_POLICY`], for the log.
-const DEFAULT_POLICY_NAME: &str = "switch-v4-01000 (built in)";
+const DEFAULT_POLICY_NAME: &str = "no-chain-boost-v1 (built in)";
 
 /// The policy (its actor: what drives), and the karts it drives in the race.
 #[derive(Resource)]

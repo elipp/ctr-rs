@@ -588,6 +588,14 @@ pub struct Step {
     /// moment before the meter runs out all but gets), 0 to 1; else 0. (On a turbo pad too,
     /// unlike [`Step::reserves_gained`].)
     pub boost_timing: f32,
+    /// How far up the drift boosts' fire the kart's boost burns this tick: the speed its
+    /// `Driver::fire_speed_cap` adds over a first boost's (`single_turbo_speed`), as a share of
+    /// what a drift's third adds (half the way to `sacred_fire_speed`), 0 to 1. A drift's k-th
+    /// boost fires at level `(k - 1) << 6` (`powerslide::update`): 0, 0.5, 1. The cap only goes
+    /// up while there are reserves (`fire::increment`), so a third boost's holds for as long as
+    /// they never run out, whatever tops them up after. 0 without reserves, and on a turbo pad
+    /// (whose cap is higher still: paid for by the progress, and parking there would pay).
+    pub fire_tier: f32,
     /// How many steering bins the stick moved for this tick's pad ([`Latch::steer_change`]).
     /// [`Progress::step`] knows nothing of the pads: the caller puts it in.
     pub steer_change: u8,
@@ -1040,6 +1048,13 @@ impl Progress {
                 0.0
             },
             boost_number: driver.num_boosts_success.max(0) as u8,
+            fire_tier: if driver.reserves > 0 && !on_pad {
+                let single = driver.stats.single_turbo_speed as i32;
+                let third = ((driver.stats.sacred_fire_speed as i32 - single) / 2).max(1);
+                ((driver.fire_speed_cap as i32 - single) as f32 / third as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             steer_change: 0,
         }
     }
@@ -1088,6 +1103,11 @@ pub struct Weights {
     /// See [`Weights::boost_timed`]: 1 pays in proportion to the lateness, more pays the last
     /// ticks of the window most.
     pub boost_timing_power: f32,
+    /// Each tick, times [`Step::fire_tier`]: for the speed of a chained drift boost's fire, which
+    /// lasts as long as the reserves do. The reserves pay the same for a drift's every boost,
+    /// and the progress pays for the speed only by the bit, so this is what tells a chain (and
+    /// keeping its reserves topped up) from as many single boosts. 0 for none.
+    pub fire_tier: f32,
     /// For each unit of [`Step::air_misalign`], each tick: a jump from a gap's lip flies toward
     /// its landing, and holding a heading off it costs for as long as it lasts. 30 ticks a
     /// quarter turn off is about as much as 6 ticks at top speed.
@@ -1127,6 +1147,9 @@ impl Weights {
         // half way through the window, a quarter.
         boost_timed: 10.0,
         boost_timing_power: 2.0,
+        // A third boost's fire is some 7% faster than a first's: about 0.07 a tick at top speed.
+        // Some three times that, held for a full bar's reserves (~58 ticks), is about 12.
+        fire_tier: 0.2,
         // A short scrape (a few ticks) is about as much as a tick or three at top speed.
         wall: 0.3,
         // Half what a tick at top speed earns, and more than a turbo pad tops up a tick (some
@@ -1166,6 +1189,7 @@ impl Weights {
             - self.time
             + step.reserves_gained as f32 * self.reserves
             + self.drift_boosts(step)
+            + step.fire_tier * self.fire_tier
             - step.air_misalign * self.air_heading
             + if step.gap_cleared { self.gap_cleared } else { 0.0 }
             + step.gap_apex * self.gap_apex

@@ -25,6 +25,9 @@
 //!   of `drift_boost` and grown by `boost_growth` as it is, times how late in the meter's window
 //!   the tap came (0 to 1: the reserves it gained, of a full bar's) to this power. With
 //!   `boost_fade`, what is left of the boosts' reward once the flat one has gone.
+//! - `fire_tier` (0.2): the reward for each tick the boost burns with a chained drift boost's
+//!   fire (0.5 of it for a drift's second boost's, all of it for a third's), as long as the
+//!   reserves last ([`race::nn::Step::fire_tier`]). The `tier` statistic is its average a tick.
 //! - `air_heading` (0.2), `steer_change` (0.05): the costs of turning away from the landing's heading
 //!   in a jump from a ramp lip (by the tick), and of moving the stick ([`race::nn::Weights`]).
 //! - `gap_cleared` (20): the reward for a jump from a ramp lip that made it to the ground.
@@ -115,6 +118,7 @@ fn main() -> Result<(), Error> {
     rules.weights.boost_timed = parse(take("boost_timed"), rules.weights.boost_timed)?;
     rules.weights.boost_timing_power =
         parse(take("boost_timing_power"), rules.weights.boost_timing_power)?;
+    rules.weights.fire_tier = parse(take("fire_tier"), rules.weights.fire_tier)?;
     rules.weights.air_heading = parse(take("air_heading"), rules.weights.air_heading)?;
     rules.weights.steer_change = parse(take("steer_change"), rules.weights.steer_change)?;
     rules.weights.gap_cleared = parse(take("gap_cleared"), rules.weights.gap_cleared)?;
@@ -235,7 +239,7 @@ fn main() -> Result<(), Error> {
         log,
         "iter,episodes,ep_reward,ep_ticks,units_per_tick,grabs_per_min,taken_back_per_grab,boosts_per_min,reserves_lost_per_min,hops_per_min,r1_pct,drift_pct,wall_pct,brake_pct,air_pct,askew_pct,drifts_per_min,drift_len,early_per_drift,boosts_per_drift,outs_per_drift,air_misalign,steer_change,cut_time,cut_grabs,\
          cut_stuck,mean_reward,policy_loss,value_loss,entropy,approx_kl,clip_frac,updates,\
-         rollout_secs,update_secs,gaps_made,gap_takeoffs,gap_hops,gaps_short,gaps_fell,speed_made,speed_short,speed_fell,air_steer,gap_apex,boost_timing"
+         rollout_secs,update_secs,gaps_made,gap_takeoffs,gap_hops,gaps_short,gaps_fell,speed_made,speed_short,speed_fell,air_steer,gap_apex,boost_timing,fire_tier"
     )?;
 
     // The flights from each ramp lip since the last checkpoint, and the file of the same.
@@ -282,6 +286,8 @@ fn main() -> Result<(), Error> {
         let in_time = sum(&|e| e.boosts as f32) / drifts;
         // How late in the meter's window the boosts were tapped, on average (1 the last moment).
         let boost_timing = sum(&|e| e.boost_timing) / sum(&|e| e.boosts as f32).max(1.0);
+        // How far up the drift boosts' fire it burned, on average a tick (1 a third boost's).
+        let fire_tier = sum(&|e| e.fire_tier) / ticks.max(1.0);
         let outs = sum(&|e| e.meter_outs as f32) / drifts;
         let drifts_per_min = sum(&|e| e.drifts as f32) / minutes;
         // The share of the drifts that ended each way, in percent.
@@ -324,7 +330,7 @@ fn main() -> Result<(), Error> {
         let cuts = |d: Done| s.episodes.iter().filter(|(c, _)| *c == d).count();
         println!(
             "{iter:5} | eps {:4} reward {ep_reward:7.1} | {units_per_tick:5.1} u/tick, \
-             {grabs_per_min:4.2} grabs/min ({taken_back:4.0} u back each), {boosts_per_min:5.1} boosts/min ({lost:4.1}s lost/min), {hops_per_min:4.0} hops/min, R1 {r1:3.0}% drift {drifting:3.0}% wall {wall:3.1}% brake {braking:3.1}% | {drifts_per_min:4.1} drifts/min of {drift_len:4.1} ticks: early {early:4.2} boost {in_time:4.2} (late {boost_timing:4.2}) out {outs:4.2} | ended: {} | air {air_pct:3.1}% of ticks, {air_misalign:4.2} turned away/jump, stick {air_steer:4.2}, {askew_pct:3.0}% >45° | steer {steer_change:4.2} | gaps made {gaps_cleared:.0}/{gap_flights:.0} ({gaps_pct:3.0}%), short {gaps_short:.0}, fell {gaps_fell:.0}, hopped {gap_hops:.0}, apex {gap_apex:.0}u, speed at takeoff made/short/fell {speed_made:.0}/{speed_short:.0}/{speed_fell:.0}% | starts J/L/G {}/{}/{} switches {switches:.2}/min | cut T/G/S {}/{}/{} | ent {:.2} kl {:.4} clip {:.2} \
+             {grabs_per_min:4.2} grabs/min ({taken_back:4.0} u back each), {boosts_per_min:5.1} boosts/min ({lost:4.1}s lost/min), {hops_per_min:4.0} hops/min, R1 {r1:3.0}% drift {drifting:3.0}% wall {wall:3.1}% brake {braking:3.1}% | {drifts_per_min:4.1} drifts/min of {drift_len:4.1} ticks: early {early:4.2} boost {in_time:4.2} (late {boost_timing:4.2}) tier {fire_tier:4.2} out {outs:4.2} | ended: {} | air {air_pct:3.1}% of ticks, {air_misalign:4.2} turned away/jump, stick {air_steer:4.2}, {askew_pct:3.0}% >45° | steer {steer_change:4.2} | gaps made {gaps_cleared:.0}/{gap_flights:.0} ({gaps_pct:3.0}%), short {gaps_short:.0}, fell {gaps_fell:.0}, hopped {gap_hops:.0}, apex {gap_apex:.0}u, speed at takeoff made/short/fell {speed_made:.0}/{speed_short:.0}/{speed_fell:.0}% | starts J/L/G {}/{}/{} switches {switches:.2}/min | cut T/G/S {}/{}/{} | ent {:.2} kl {:.4} clip {:.2} \
              vloss {:.3} | {} upd, {:.1}s + {:.1}s",
             s.episodes.len(),
             ends_text.join(" "),
@@ -344,7 +350,7 @@ fn main() -> Result<(), Error> {
         );
         writeln!(
             log,
-            "{iter},{},{ep_reward},{},{units_per_tick},{grabs_per_min},{taken_back},{boosts_per_min},{lost},{hops_per_min},{r1},{drifting},{wall},{braking},{air_pct},{askew_pct},{drifts_per_min},{drift_len},{early},{in_time},{outs},{air_misalign},{steer_change},{},{},{},{},{},{},{},{},{},{},{},{},{gaps_cleared},{gap_flights},{gap_hops},{gaps_short},{gaps_fell},{speed_made},{speed_short},{speed_fell},{air_steer},{gap_apex},{boost_timing}",
+            "{iter},{},{ep_reward},{},{units_per_tick},{grabs_per_min},{taken_back},{boosts_per_min},{lost},{hops_per_min},{r1},{drifting},{wall},{braking},{air_pct},{askew_pct},{drifts_per_min},{drift_len},{early},{in_time},{outs},{air_misalign},{steer_change},{},{},{},{},{},{},{},{},{},{},{},{},{gaps_cleared},{gap_flights},{gap_hops},{gaps_short},{gaps_fell},{speed_made},{speed_short},{speed_fell},{air_steer},{gap_apex},{boost_timing},{fire_tier}",
             s.episodes.len(),
             ticks / n,
             cuts(Done::Time),
