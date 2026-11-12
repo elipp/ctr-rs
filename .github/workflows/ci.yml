@@ -10,7 +10,13 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded PR runs: a cancelled run saves no cache, and the PRs restore main's.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # CI needs no debuginfo, and it makes up most of `target/`: smaller caches, fewer evicted by the
+  # 10 GB limit. Line tables keep the file:line in panic backtraces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   test:
@@ -20,6 +26,9 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --no-self-update
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only main saves: the PRs restore its caches, which theirs would otherwise evict.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The C reference the `needs_reference_` tests compare with, at the commit they expect.
       - id: ctr-native
         run: echo "rev=$(cat docs/ctr-native.rev)" >> "$GITHUB_OUTPUT"
@@ -52,6 +61,9 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --no-self-update
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only main saves: the PRs restore its caches, which theirs would otherwise evict.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Dependencies at 16 codegen units here, not the one of `Cargo.toml`: the big ones (`gemm` under
       # candle) would build on one core each. The same on both `cargo test`s, or the second rebuilds.
       - run: cargo test -p brain --locked --no-run --config 'profile.dev.package."*".codegen-units=16'
@@ -65,6 +77,9 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --no-self-update --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only main saves: the PRs restore its caches, which theirs would otherwise evict.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # `ring` (under iroh) compiles C for wasm32, which needs clang and llvm-ar.
       - name: clang
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang llvm
