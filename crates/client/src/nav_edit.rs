@@ -11,7 +11,7 @@
 //!   takes away the other.
 //! * `Backspace`: the frame under the cursor and those that go along back where the level has
 //!   them. `Z`: undoes the last drag or reset.
-//! * `Ctrl+S` (or `Cmd+S`): saves every track's moves to `nav_amendments.txt` (compiled in, see
+//! * `Ctrl+S` (or `Cmd+S`): saves every track's moves to `nav_amendments.ron` (compiled in, see
 //!   `loader::nav_amend`).
 //!
 //! Each frame keeps how high it was above the ground. Where the level has a frame is drawn in

@@ -1,5 +1,5 @@
 //! Our own changes to the bot paths (`Level::nav_paths`): frames moved from where the level has
-//! them, mostly to take tight corners wider. They are kept in `nav_amendments.txt` next to this
+//! them, mostly to take tight corners wider. They are kept in `nav_amendments.ron` next to this
 //! file, compiled in ([`Amendments::builtin`]), and the viewer edits and saves them (`nav.rs` of
 //! the client).
 //!
@@ -16,24 +16,27 @@
 //! A frame's flags (`NavFrame::flags`: jump, drift, turbo) can be changed the same way: what they
 //! were is checked, and they are set to what they become.
 //!
-//! The file has a change on each line, `#` starts a comment:
+//! The file is RON, a frame to a line, by track (`IMPLICIT_SOME` is on: no `Some(..)`):
 //!
 //! ```text
-//! # track path frame   was x y z   ->   to x y z
-//! 3 0 212   -1234 56 789   ->   -1300 56 800
-//! # track path frame   flags was   ->   to
-//! 3 0 215   flags 0x0000   ->   0x0400
+//! {
+//!     3: [
+//!         (path: 0, frame: 212, pos: (was: (-1234, 56, 789), to: (-1300, 56, 800))),
+//!         (path: 0, frame: 215, flags: (was: 0x0000, to: 0x0400)),
+//!     ],
+//! }
 //! ```
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
 use crate::lev::{NavPath, SVec3};
 
 /// The file the viewer saves to: the one [`Amendments::builtin`] is compiled from.
-pub const SOURCE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/nav_amendments.txt");
+pub const SOURCE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/nav_amendments.ron");
 
-const BUILTIN: &str = include_str!("nav_amendments.txt");
+const BUILTIN: &str = include_str!("nav_amendments.ron");
 
 /// One frame moved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +48,23 @@ pub struct Move {
     /// Where the level has the frame.
     pub was: SVec3,
     pub to: SVec3,
+}
+
+/// A frame's line in the file.
+#[derive(serde::Deserialize)]
+struct Entry {
+    path: usize,
+    frame: usize,
+    #[serde(default)]
+    pos: Option<Change<(i16, i16, i16)>>,
+    #[serde(default)]
+    flags: Option<Change<u16>>,
+}
+
+#[derive(serde::Deserialize)]
+struct Change<T> {
+    was: T,
+    to: T,
 }
 
 /// One frame's flags changed.
@@ -71,89 +91,81 @@ impl Amendments {
     pub fn builtin() -> &'static Amendments {
         static BUILT: OnceLock<Amendments> = OnceLock::new();
         BUILT.get_or_init(|| {
-            Amendments::parse(BUILTIN).unwrap_or_else(|e| panic!("nav_amendments.txt: {e}"))
+            Amendments::parse(BUILTIN).unwrap_or_else(|e| panic!("nav_amendments.ron: {e}"))
         })
     }
 
     pub fn parse(text: &str) -> Result<Amendments, String> {
+        let file: BTreeMap<u32, Vec<Entry>> = ron::Options::default()
+            .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
+            .from_str(text)
+            .map_err(|e| e.to_string())?;
         let mut a = Amendments::default();
-        for (n, line) in text.lines().enumerate() {
-            let line = line.split('#').next().unwrap_or_default();
-            let words: Vec<&str> = line.split_whitespace().filter(|w| *w != "->").collect();
-            if words.is_empty() {
-                continue;
-            }
-            let bad = |what: &str| format!("line {}: {what}: {}", n + 1, line.trim());
-            if words.len() != 9 {
-                return Err(bad("wants track, path, frame, was x y z, to x y z"));
-            }
-            let int = |i: usize| words[i].parse::<i64>().map_err(|_| bad("not a number"));
-            let frame = |i: usize| -> Result<usize, String> {
-                usize::try_from(int(i)?).map_err(|_| bad("out of range"))
-            };
-            let track = || u32::try_from(int(0)?).map_err(|_| bad("out of range"));
-            if words.get(3) == Some(&"flags") {
-                if words.len() != 6 {
-                    return Err(bad("wants track, path, frame, flags, was, to"));
+        for (track, entries) in file {
+            for e in entries {
+                if let Some(Change { was, to }) = e.pos {
+                    let v = |(x, y, z)| SVec3 { x, y, z };
+                    a.set(Move {
+                        track,
+                        path: e.path,
+                        frame: e.frame,
+                        was: v(was),
+                        to: v(to),
+                    });
                 }
-                let hex = |i: usize| {
-                    let w = words[i];
-                    u16::from_str_radix(w.strip_prefix("0x").unwrap_or(w), 16)
-                        .map_err(|_| bad("not a hex number"))
-                };
-                a.set_flags(Flags {
-                    track: track()?,
-                    path: frame(1)?,
-                    frame: frame(2)?,
-                    was: hex(4)?,
-                    to: hex(5)?,
-                });
-                continue;
+                if let Some(Change { was, to }) = e.flags {
+                    a.set_flags(Flags {
+                        track,
+                        path: e.path,
+                        frame: e.frame,
+                        was,
+                        to,
+                    });
+                }
             }
-            let short = |i: usize| -> Result<i16, String> {
-                i16::try_from(int(i)?).map_err(|_| bad("out of range"))
-            };
-            let at = |i: usize| -> Result<SVec3, String> {
-                Ok(SVec3 {
-                    x: short(i)?,
-                    y: short(i + 1)?,
-                    z: short(i + 2)?,
-                })
-            };
-            a.set(Move {
-                track: track()?,
-                path: frame(1)?,
-                frame: frame(2)?,
-                was: at(3)?,
-                to: at(6)?,
-            });
         }
         Ok(a)
     }
 
+    /// The file: written here, not by `ron`, for a frame to a line and the flags in hex.
     pub fn to_text(&self) -> String {
         let mut s = String::from(
-            "# Bot path frames moved from where the level has them (see `loader::nav_amend`).\n\
-             # Edited in the viewer: `/debug viewer`, `E`.\n\
-             # track path frame   was x y z   ->   to x y z\n",
+            "// Bot path frames changed from where the level has them (see `loader::nav_amend`).\n\
+             // Edited in the viewer: `/debug viewer`, `E`. By track (`LevelId` or map id).\n\
+             {\n",
         );
+        // Every frame that has a change, in order, with its move and its flags.
+        let mut frames: BTreeMap<(u32, usize, usize), (Option<&Move>, Option<&Flags>)> =
+            BTreeMap::new();
         for m in &self.moves {
-            let _ = writeln!(
-                s,
-                "{} {} {}   {} {} {}   ->   {} {} {}",
-                m.track, m.path, m.frame, m.was.x, m.was.y, m.was.z, m.to.x, m.to.y, m.to.z
-            );
-        }
-        if !self.flags.is_empty() {
-            s += "# track path frame   flags was   ->   to\n";
+            frames.entry((m.track, m.path, m.frame)).or_default().0 = Some(m);
         }
         for f in &self.flags {
-            let _ = writeln!(
-                s,
-                "{} {} {}   flags {:#06x}   ->   {:#06x}",
-                f.track, f.path, f.frame, f.was, f.to
-            );
+            frames.entry((f.track, f.path, f.frame)).or_default().1 = Some(f);
         }
+        let mut track = None;
+        for ((t, path, frame), (m, f)) in frames {
+            if track != Some(t) {
+                if track.is_some() {
+                    s += "    ],\n";
+                }
+                let _ = writeln!(s, "    {t}: [");
+                track = Some(t);
+            }
+            let _ = write!(s, "        (path: {path}, frame: {frame}");
+            if let Some(m) = m {
+                let v = |p: SVec3| format!("({}, {}, {})", p.x, p.y, p.z);
+                let _ = write!(s, ", pos: (was: {}, to: {})", v(m.was), v(m.to));
+            }
+            if let Some(f) = f {
+                let _ = write!(s, ", flags: (was: {:#06x}, to: {:#06x})", f.was, f.to);
+            }
+            s += "),\n";
+        }
+        if track.is_some() {
+            s += "    ],\n";
+        }
+        s += "}\n";
         s
     }
 
@@ -322,6 +334,17 @@ mod tests {
         });
         assert_eq!(Amendments::parse(&a.to_text()).unwrap(), a);
         assert!(Amendments::parse(Amendments::builtin().to_text().as_str()).is_ok());
+    }
+
+    #[test]
+    fn the_file_is_as_it_is_written() {
+        assert_eq!(Amendments::builtin().to_text(), BUILTIN);
+        let example = "{ 3: [
+            (path: 0, frame: 212, pos: (was: (-1234, 56, 789), to: (-1300, 56, 800))),
+            (path: 0, frame: 215, flags: (was: 0x0000, to: 0x0400)),
+        ] }";
+        let a = Amendments::parse(example).unwrap();
+        assert_eq!((a.of(3).count(), a.flags_of(3).count()), (1, 1));
     }
 
     #[test]

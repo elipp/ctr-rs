@@ -8,4 +8,5 @@ hadris-iso = "2.5.0"
 gte = { path = "../gte" }
 math = { path = "../math" }
 serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12"
 chd = "0.4.0"
