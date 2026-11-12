@@ -260,7 +260,7 @@ impl Brains {
                 let drifting = d.kart_state == vehicle::kart_state::DRIFTING;
                 let tried = d.num_boosts_attempted > 0;
                 let mut pad = if has_path {
-                    k.latch.pad(k.action, drifting, tried, k.progress.in_gap_flight())
+                    k.latch.pad(k.action, drifting, tried, nn::air_steer(&k.progress, d))
                 } else {
                     Pad::default()
                 };

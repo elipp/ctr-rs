@@ -343,11 +343,11 @@ impl Latch {
     /// regardless, the one way out of a drift whose corner ends sooner would be Square, which
     /// throws the reserves away.
     ///
-    /// In a `flying` kart (a flight from a gap's lip, [`Progress::in_gap_flight`]) the stick is
-    /// left at the centre, whatever is chosen: nothing a jump needs is steered for in the air.
-    pub fn pad(&mut self, mut action: Action, drifting: bool, tried: bool, flying: bool) -> Pad {
-        if flying {
-            action.steer = STEER_STEPS as u8;
+    /// In a flight from a gap's lip the stick is `air_steer` ([`air_steer`]), whatever is
+    /// chosen: the correction toward the landing is scripted, as the rev is.
+    pub fn pad(&mut self, mut action: Action, drifting: bool, tried: bool, air_steer: Option<u8>) -> Pad {
+        if let Some(steer) = air_steer {
+            action.steer = steer;
         }
         self.steer_change = self.steer.abs_diff(action.steer);
         self.steer = action.steer;
@@ -376,6 +376,38 @@ impl Latch {
         self.r1 = pad.held & buttons::R1 != 0;
         pad
     }
+}
+
+/// From this far off [`Progress::flight_heading`] (1/0x1000 of a turn) on, [`air_steer`] turns the
+/// stick all the way.
+pub const AIR_FULL_ERROR: i32 = 0x40;
+
+/// Up to this far off [`Progress::flight_heading`], [`air_steer`] leaves the stick centred.
+const AIR_DEAD_ERROR: i32 = 4;
+
+/// The ticks ahead [`air_steer`] counts the turn the kart is already making (`amp_turn_state`,
+/// which turns its way of travel by itself / 256 a tick): steering against it before it overshoots.
+const AIR_PREDICT_TICKS: i32 = 3;
+
+/// The steering bin ([`Action::steer`]) for the kart of `driver` in a flight from a gap's lip
+/// ([`Progress::in_gap_flight`]); None out of one.
+///
+/// In the air the stick turns the way the kart goes, not only its nose: the steering's rotation
+/// turns `Driver::axis_rotation_x` (`vehicle::angular`), and the next tick's velocity is the speed
+/// along that (`VehPhysForce_ConvertSpeedToVec`). So a takeoff askew is saved as a player saves
+/// it, by steering the way of travel ([`travel_angle`]) onto [`Progress::flight_heading`]: from
+/// where the kart is to a point past the landing. In proportion to how far off it goes, all the
+/// way from [`AIR_FULL_ERROR`] on.
+pub fn air_steer(progress: &Progress, driver: &Driver) -> Option<u8> {
+    let heading = progress.flight_heading.filter(|_| progress.in_gap_flight())?;
+    let mut error = ((heading - travel_angle(driver) + 0x800) & 0xfff) - 0x800;
+    error -= driver.amp_turn_state as i32 * AIR_PREDICT_TICKS >> 8;
+    if error.abs() <= AIR_DEAD_ERROR {
+        return Some(STEER_STEPS as u8);
+    }
+    // (Rounded; a raise of the angle is to the left, below the middle.)
+    let steps = (error * STEER_STEPS + error.signum() * AIR_FULL_ERROR / 2) / AIR_FULL_ERROR;
+    Some((STEER_STEPS - steps.clamp(-STEER_STEPS, STEER_STEPS)) as u8)
 }
 
 const STICK_CENTER: i32 = 0x80;
@@ -508,7 +540,7 @@ pub struct Step {
     pub air_misalign: f32,
     /// In a flight from a gap's lip, past its takeoff tick: the kart goes less far off
     /// [`Progress::flight_heading`] than it did the tick before. A turn that brings it round
-    /// toward the landing is free of [`Weights::air_steer`].
+    /// toward the landing (for the trainer's stick statistic).
     pub air_closing: bool,
     /// The kart took off from the lip of a gap (a ramp frame of the path, [`gap_heading`]) this
     /// tick.
@@ -540,9 +572,8 @@ pub struct Step {
     /// The ramp, the speed and a hop at the lip all lift it, and the higher it goes the further
     /// it flies.
     pub gap_apex: f32,
-    /// In a flight from a gap's lip, on a tick that is not [`Step::air_closing`], how far the
-    /// stick was from the centre ([`Latch::stick`]); else 0. [`Progress::step`] knows nothing of
-    /// the pads: the caller puts it in.
+    /// Always 0: the stick in a flight from a gap's lip is scripted ([`air_steer`]), nothing the
+    /// policy is to answer for. (Kept for [`Weights::air_steer`]'s key.)
     pub air_steer: f32,
     /// The kart scraped a wall (`DRIVING_AGAINST_WALL`).
     pub wall: bool,
@@ -1071,9 +1102,8 @@ pub struct Weights {
     /// the takeoff, rather than for the hop itself: it pays for how well the hop was timed (a
     /// late one, off the lip, lifts it less), and for whatever else lifts it (the speed up the ramp).
     pub gap_apex: f32,
-    /// Each tick in a flight from a gap's lip, for each unit of [`Step::air_steer`]: a turn in
-    /// the air that does not bring the kart round toward the landing (one that does is free, and
-    /// [`Weights::air_heading`] pays for it). Full lock for 40 ticks is about 12 ticks at top speed.
+    /// For each unit of [`Step::air_steer`], which is 0 since the stick in a gap flight is
+    /// scripted ([`air_steer`]): moot.
     pub air_steer: f32,
     /// For a move of the stick from one end to the other ([`Step::steer_change`], in
     /// `STEER_BINS - 1` bins), less for less: enough to settle the choice between near bins,
@@ -1187,12 +1217,44 @@ mod tests {
         let mut latch = Latch::default();
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
         let release = Action::default();
-        assert!(latch.pad(long, false, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(long, false, false, None).held & buttons::R1 != 0);
         for _ in 1..HOLD_TICKS {
-            assert!(latch.pad(release, false, false, false).held & buttons::R1 != 0);
+            assert!(latch.pad(release, false, false, None).held & buttons::R1 != 0);
         }
         assert_eq!(latch.hold_left, 0);
-        assert_eq!(latch.pad(release, false, false, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(release, false, false, None).held & buttons::R1, 0);
+    }
+
+    #[test]
+    fn air_steer_turns_the_way_of_travel_toward_the_flight_heading() {
+        // Going +z (angle 0), and the heading a little up from it: steer left, below the middle.
+        let mut driver = Driver::default();
+        driver.velocity = Vec3 { x: 0, y: 0, z: 1000 };
+        let mut progress = Progress { airborne: 3, flight_heading: Some(0x20), ..Progress::default() };
+        let left = air_steer(&progress, &driver).unwrap();
+        assert!(left < STEER_STEPS as u8);
+        // Further off: full lock; the other way: right.
+        progress.flight_heading = Some(AIR_FULL_ERROR * 2);
+        assert_eq!(air_steer(&progress, &driver), Some(0));
+        progress.flight_heading = Some(-AIR_FULL_ERROR * 2 & 0xfff);
+        assert_eq!(air_steer(&progress, &driver), Some(STEER_BINS as u8 - 1));
+        // On it: centred. Already turning toward it fast enough: let go, or steer back.
+        progress.flight_heading = Some(0);
+        assert_eq!(air_steer(&progress, &driver), Some(STEER_STEPS as u8));
+        progress.flight_heading = Some(0x20);
+        driver.amp_turn_state = (0x20 << 8) / AIR_PREDICT_TICKS as i16;
+        assert!(air_steer(&progress, &driver).unwrap() >= STEER_STEPS as u8);
+        // On the ground, or in a flight that is no gap's: the policy's.
+        progress.airborne = 0;
+        assert_eq!(air_steer(&progress, &driver), None);
+        progress.airborne = 3;
+        progress.flight_heading = None;
+        assert_eq!(air_steer(&progress, &driver), None);
+        // The pad takes it whatever was chosen.
+        let mut latch = Latch::default();
+        let right = Action { steer: STEER_BINS as u8 - 1, ..Action::default() };
+        latch.pad(right, false, false, Some(left));
+        assert_eq!(latch.steer, left);
     }
 
     #[test]
@@ -1200,12 +1262,12 @@ mod tests {
         let mut latch = Latch::default();
         let left = Action { steer: 0, ..Action::default() };
         assert_eq!(latch.steer, STEER_STEPS as u8);
-        latch.pad(left, false, false, false);
+        latch.pad(left, false, false, None);
         assert_eq!(latch.steer_change, STEER_STEPS as u8);
         // Held for another tick: no move.
-        latch.pad(left, false, false, false);
+        latch.pad(left, false, false, None);
         assert_eq!(latch.steer_change, 0);
-        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() }, false, false, false);
+        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() }, false, false, None);
         assert_eq!(latch.steer_change, STEER_BINS as u8 - 1);
     }
 
@@ -1214,9 +1276,9 @@ mod tests {
         let mut latch = Latch::default();
         let hold = Action { hop: Hop::Hold, ..Action::default() };
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
-        assert!(latch.pad(hold, true, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(hold, true, false, None).held & buttons::R1 != 0);
         for _ in 0..HOLD_TICKS {
-            assert!(latch.pad(long, true, false, false).held & buttons::R1 != 0);
+            assert!(latch.pad(long, true, false, None).held & buttons::R1 != 0);
         }
     }
 
@@ -1225,13 +1287,13 @@ mod tests {
         let mut latch = Latch::default();
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
         let release = Action::default();
-        assert!(latch.pad(long, false, false, false).held & buttons::R1 != 0);
-        assert!(latch.pad(release, true, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(long, false, false, None).held & buttons::R1 != 0);
+        assert!(latch.pad(release, true, false, None).held & buttons::R1 != 0);
         // Tried: the choice lets go.
-        assert_eq!(latch.pad(release, true, true, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(release, true, true, None).held & buttons::R1, 0);
         assert_eq!(latch.hold_left, 0);
         // And a long hold chosen then is a plain hold.
-        assert!(latch.pad(long, true, true, false).held & buttons::R1 != 0);
+        assert!(latch.pad(long, true, true, None).held & buttons::R1 != 0);
         assert_eq!(latch.hold_left, 0);
     }
 
@@ -1239,8 +1301,8 @@ mod tests {
     fn l1_only_in_a_drift() {
         let mut latch = Latch::default();
         let boost = Action { boost: true, ..Action::default() };
-        assert_eq!(latch.pad(boost, false, false, false).held & buttons::L1, 0);
-        assert!(latch.pad(boost, true, false, false).held & buttons::L1 != 0);
+        assert_eq!(latch.pad(boost, false, false, None).held & buttons::L1, 0);
+        assert!(latch.pad(boost, true, false, None).held & buttons::L1 != 0);
     }
 
     #[test]
@@ -1248,11 +1310,11 @@ mod tests {
         let mut latch = Latch::default();
         let hold = Action { hop: Hop::Hold, ..Action::default() };
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
-        assert!(latch.pad(hold, false, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(hold, false, false, None).held & buttons::R1 != 0);
         // Let go, then pressed and held on (the choice repeated, as the env holds it).
-        assert_eq!(latch.pad(long, false, false, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(long, false, false, None).held & buttons::R1, 0);
         for _ in 0..HOLD_TICKS {
-            assert!(latch.pad(long, false, false, false).held & buttons::R1 != 0);
+            assert!(latch.pad(long, false, false, None).held & buttons::R1 != 0);
         }
         assert_eq!(latch.hold_left, 0);
     }

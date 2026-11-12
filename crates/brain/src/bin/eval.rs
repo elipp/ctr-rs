@@ -356,7 +356,7 @@ fn main() -> Result<(), Error> {
                     action,
                     d.kart_state == kart_state::DRIFTING,
                     d.num_boosts_attempted > 0,
-                    progress.in_gap_flight(),
+                    nn::air_steer(&progress, d),
                 );
                 match rev.gas(race, 0, &mut rng) {
                     Some(gas) => race::rev::with_gas(pad, gas),

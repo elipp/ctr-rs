@@ -395,7 +395,8 @@ impl<'a> Env<'a> {
                     (d.speed_approx as i32) * 4 > d.stats.speed_class_stat as i32,
                 )
             };
-            let mut pad: Pad = self.latch.pad(action, was_drifting, attempted > 0, self.progress.in_gap_flight());
+            let air_steer = nn::air_steer(&self.progress, &self.race.karts[0].driver);
+            let mut pad: Pad = self.latch.pad(action, was_drifting, attempted > 0, air_steer);
             if let Some(gas) = self.rev.gas(&self.race, 0, &mut self.rng) {
                 pad = race::rev::with_gas(pad, gas);
             }
@@ -411,14 +412,12 @@ impl<'a> Env<'a> {
             let drifting = driver.kart_state == vehicle::kart_state::DRIFTING;
             let relocated = nn::track(&mut self.tracker, frames, driver);
             let mut step = nn::Step {
-                steer_change: self.latch.steer_change,
+                // (The script's stick in a gap flight is none of the policy's doing.)
+                steer_change: if air_steer.is_some() { 0 } else { self.latch.steer_change },
                 braking,
                 ..self.progress.step(frames, lengths, &self.tracker, relocated, driver)
             };
             step.gap_hop = step.gap_takeoff && !drifting && self.since_hop <= nn::GAP_HOP_TICKS;
-            if self.progress.in_gap_flight() && !step.air_closing {
-                step.air_steer = self.latch.stick();
-            }
             if let Some(lip) = step.gap_lip {
                 let s = self.lips.entry((track.id.0, self.path, lip)).or_default();
                 s.takeoffs += step.gap_takeoff as u32;
@@ -465,7 +464,11 @@ impl<'a> Env<'a> {
             // (The ones `Step::air_misalign` counts.)
             e.air_ticks += (self.progress.airborne > 0 && self.progress.flight_heading.is_some()) as u32;
             e.air_misalign += step.air_misalign;
-            e.air_steer += step.air_steer;
+            // (The stick in a gap flight is scripted (`nn::air_steer`): no cost to the policy,
+            // only how much it took, while not yet closing on the heading.)
+            if self.progress.in_gap_flight() && !step.air_closing {
+                e.air_steer += self.latch.stick();
+            }
             // (0x200 of 0x1000 to a turn: 45°.)
             e.air_askew +=
                 (self.progress.flight_heading.is_some() && self.progress.air_error > 0x200) as u32;

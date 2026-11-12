@@ -28,8 +28,9 @@
 //! - `air_heading` (0.2), `steer_change` (0.05): the costs of turning away from the landing's heading
 //!   in a jump from a ramp lip (by the tick), and of moving the stick ([`race::nn::Weights`]).
 //! - `gap_cleared` (20): the reward for a jump from a ramp lip that made it to the ground.
-//! - `air_steer` (0.3): the cost of each tick in a jump from a ramp lip, times how far the stick
-//!   is from the centre (0 to 1).
+//! - `air_steer` (0.3): moot; the stick in a jump from a ramp lip is scripted
+//!   (`race::nn::air_steer`). The `stick` statistic is how far the script turns it while the
+//!   kart is not yet closing on the landing's heading.
 //! - `gap_apex` (0.15): the reward for each level unit a jump from a ramp lip rises above its
 //!   takeoff, made or not, times how well it took off toward the landing (0 to 1); paid at the
 //!   top of the flight. (A hop alone rises some 45.)
