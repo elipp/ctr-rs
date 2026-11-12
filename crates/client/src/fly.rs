@@ -15,10 +15,14 @@ pub(crate) fn fly(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
+    edit: Res<crate::nav_edit::NavEdit>,
     mut cameras: Query<(&mut Transform, &mut FlyCamera)>,
 ) {
     for (mut transform, mut cam) in &mut cameras {
-        if buttons.any_pressed([MouseButton::Left, MouseButton::Right]) {
+        // (The left button is the bot path editor's while it is on.)
+        if buttons.pressed(MouseButton::Right)
+            || (buttons.pressed(MouseButton::Left) && !edit.takes_left_button())
+        {
             cam.yaw -= motion.delta.x * 0.003;
             cam.pitch = (cam.pitch - motion.delta.y * 0.003).clamp(-1.55, 1.55);
         }

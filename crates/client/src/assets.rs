@@ -118,8 +118,12 @@ pub(crate) fn load_level(id: u32) -> LevelData {
         vram.upload(img).expect("upload VRAM image");
     }
     upload_shared(&mut vram, &crate::disc::source());
+    let mut level = map.level.clone();
+    for why in loader::nav_amend::Amendments::builtin().apply(id, &mut level.nav_paths) {
+        warn!("level {id:#x}: a bot path amendment is left out: {why}");
+    }
     LevelData {
-        level: map.level.clone(),
+        level,
         dram: map.dram.clone(),
         vram,
     }
