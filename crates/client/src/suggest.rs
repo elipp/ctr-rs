@@ -211,23 +211,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "create",
                 "Open a lobby for others to join",
                 &[
-                    leaf(
-                        "private",
-                        "Join by address only (the default)",
-                    ),
-                    takes(
-                        "public",
-                        "Listed for anyone to find",
-                        "[name, Up/Down]",
-                    ),
+                    leaf("private", "Join by address only (the default)"),
+                    takes("public", "Listed for anyone to find", "[name, Up/Down]"),
                 ],
             ),
             takes("join", "Join a lobby", "<address>"),
-            takes(
-                "spectate",
-                "Watch a lobby's races",
-                "[address]",
-            ),
+            takes("spectate", "Watch a lobby's races", "[address]"),
             leaf("close", "Leave the lobby, or close it if ours"),
         ],
     ),
@@ -254,11 +243,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
             #[cfg(not(target_arch = "wasm32"))]
             Spec {
                 name: "policy",
-                about: "The policy brain bots drive with: a .safetensors file, or default",
-                options: &[leaf(
-                    "default",
-                    "BRAIN_POLICY, or else the built-in one",
-                )],
+                about: "The \"brain\" bots drive with: file or default",
+                options: &[leaf("default", "BRAIN_POLICY, or else the built-in one")],
                 arg: Some("[<file>]"),
             },
         ],
@@ -267,41 +253,26 @@ pub(crate) const COMMANDS: &[Spec] = &[
     Spec {
         name: "autopilot",
         about: "Have the brain bots' policy drive our kart",
-        options: &[
-            leaf("on", "The policy drives"),
-            leaf("off", "We drive"),
-        ],
+        options: &[leaf("on", "The policy drives"), leaf("off", "We drive")],
         arg: None,
     },
     node(
         "cup",
         "A series of races with points",
         &[
-            takes(
-                "create",
-                "Make and keep a cup",
-                "<name> <tracks> <laps>",
-            ),
+            takes("create", "Make and keep a cup", "<name> <tracks> <laps>"),
             takes("start", "Count down to a cup's first race", "<name>"),
             takes("delete", "Forget a cup", "<name>"),
         ],
     ),
-    takes(
-        "promote",
-        "Make a player the host (host only)",
-        "<player>",
-    ),
+    takes("promote", "Make a player the host (host only)", "<player>"),
     Spec {
         name: "track",
         about: "Go to a track",
         options: &[leaf("list", "Print the tracks")],
         arg: Some("[name, Up/Down]"),
     },
-    takes(
-        "character",
-        "Who to drive",
-        "[name, Up/Down]",
-    ),
+    takes("character", "Who to drive", "[name, Up/Down]"),
     node(
         "config",
         "Change a setting",
@@ -309,11 +280,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             "set",
             "Change a setting",
             &[
-                takes(
-                    "nickname",
-                    "The name others see (12 at most)",
-                    "<name>",
-                ),
+                takes("nickname", "The name others see (12 at most)", "<name>"),
                 // (A browser has none of these three: see `config.rs`.)
                 #[cfg(not(target_arch = "wasm32"))]
                 node(
@@ -325,11 +292,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ],
                 ),
                 #[cfg(not(target_arch = "wasm32"))]
-                takes(
-                    "fps-max",
-                    "Frame limit, 0 for none",
-                    "<frames a second>",
-                ),
+                takes("fps-max", "Frame limit, 0 for none", "<frames a second>"),
                 #[cfg(not(target_arch = "wasm32"))]
                 takes(
                     "pixel-scale",
@@ -356,10 +319,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 node(
                     "shader-effects",
                     "Heat shimmer and the clock's trail",
-                    &[
-                        leaf("on", "Draw them"),
-                        leaf("off", "Skip them (faster)"),
-                    ],
+                    &[leaf("on", "Draw them"), leaf("off", "Skip them (faster)")],
                 ),
                 node(
                     "global-voices",
@@ -373,21 +333,9 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "volume",
                     "Music, effects and voices",
                     &[
-                        takes(
-                            "music",
-                            "Music volume, 100 is the game's",
-                            "<0-100>",
-                        ),
-                        takes(
-                            "sfx",
-                            "Effects volume, 100 is the game's",
-                            "<0-100>",
-                        ),
-                        takes(
-                            "voice",
-                            "Voice volume, 100 is the game's",
-                            "<0-100>",
-                        ),
+                        takes("music", "Music volume, 100 is the game's", "<0-100>"),
+                        takes("sfx", "Effects volume, 100 is the game's", "<0-100>"),
+                        takes("voice", "Voice volume, 100 is the game's", "<0-100>"),
                     ],
                 ),
             ],
@@ -418,11 +366,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 "relay",
                 "Relays besides the public ones",
                 &[
-                    takes(
-                        "add",
-                        "Use this relay too, from the next lobby",
-                        "<url>",
-                    ),
+                    takes("add", "Use this relay too, from the next lobby", "<url>"),
                     leaf("clear", "Drop added relays, from the next lobby"),
                     #[cfg(not(target_arch = "wasm32"))]
                     node(
@@ -502,10 +446,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                 ],
             ),
-            leaf(
-                "viewer",
-                "Race or fly-through viewer",
-            ),
+            leaf("viewer", "Race or fly-through viewer"),
             node(
                 "hud",
                 "The race's dev text (alone: toggle)",
@@ -719,7 +660,10 @@ mod tests {
     #[test]
     fn offers_narrow_down_to_what_is_typed() {
         let named = |typed| -> Vec<&str> {
-            matching(typed, characters()).iter().map(|o| o.name).collect()
+            matching(typed, characters())
+                .iter()
+                .map(|o| o.name)
+                .collect()
         };
         assert_eq!(named("").len(), CHARACTERS.len());
         assert_eq!(named("n. t"), ["N. Tropy"]);
@@ -734,14 +678,23 @@ mod tests {
         assert_eq!(rest_of_name("/character ", "", "Penta").unwrap(), "Penta");
         assert_eq!(rest_of_name("/character pe", "pe", "Penta").unwrap(), "nta");
         assert_eq!(rest_of_name("/character penta", "penta", "Penta"), None);
-        assert_eq!(rest_of_name("/cup create a b,", "", "Penta").unwrap(), "Penta");
+        assert_eq!(
+            rest_of_name("/cup create a b,", "", "Penta").unwrap(),
+            "Penta"
+        );
 
         assert_eq!(cup_track_typed("/cup create"), None);
         assert_eq!(cup_track_typed("/cup create fast"), None);
         assert_eq!(cup_track_typed("/cup create fast "), Some(""));
-        assert_eq!(cup_track_typed("/cup create fast Crash Cove"), Some("Crash Cove"));
+        assert_eq!(
+            cup_track_typed("/cup create fast Crash Cove"),
+            Some("Crash Cove")
+        );
         assert_eq!(cup_track_typed("/cup create fast Crash Cove,"), Some(""));
-        assert_eq!(cup_track_typed("/cup create fast Crash Cove, Pa"), Some("Pa"));
+        assert_eq!(
+            cup_track_typed("/cup create fast Crash Cove, Pa"),
+            Some("Pa")
+        );
         assert_eq!(cup_track_typed("/cup start fast "), None);
     }
 
