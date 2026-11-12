@@ -218,14 +218,34 @@ pub(super) fn run(
                 };
                 match set {
                     Ok(name) => {
-                        let mut text = format!("Brain bots drive with the policy {name}");
+                        let mut text = format!("Brain bots drive with the policy\n{name}");
                         if *choice != PolicyChoice::Show
                             && (lobby.online.is_some() || lobby.series.is_some())
                         {
-                            text += " (from the next race you start)";
+                            text += "\n(from the next race you start)";
                         }
                         console!("{text}");
                         toasts.write(Toast::new(text, 3000));
+                    }
+                    Err(e) => {
+                        console!("{e}");
+                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    }
+                }
+                continue;
+            }
+            Action::Autopilot(on) => {
+                let on = on.unwrap_or(!brains.autopilot);
+                // (The policy is read now, to say at once what is wrong with it.)
+                match on.then(|| brains.ensure_loaded()).transpose() {
+                    Ok(name) => {
+                        brains.autopilot = on;
+                        let text = match name {
+                            Some(name) => format!("Autopilot on, the policy\n{name}"),
+                            None => "Autopilot off".to_string(),
+                        };
+                        console!("{text}");
+                        toasts.write(Toast::new(text, 2500));
                     }
                     Err(e) => {
                         console!("{e}");

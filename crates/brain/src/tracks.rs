@@ -20,7 +20,7 @@ pub struct Track {
     pub objects: Objects,
     /// By `Level::nav_paths`.
     pub lengths: Vec<PathLength>,
-    /// The paths a kart can be dropped on (two frames or more).
+    /// The paths a kart can be dropped on (two frames or more, not `race::nn::BANNED_PATHS`).
     pub paths: Vec<usize>,
     /// The jumps on them, as (path, the frame it launches from): the last of each run of frames
     /// that launch retail's bots (`race::bot::SPECIAL_RAMP`).
@@ -88,6 +88,9 @@ pub fn keep_paths(tracks: &mut [Track], list: &str) -> Result<(), String> {
                 .ok_or_else(|| format!("paths: track {id} has no middle of three paths"))?,
             p => p.parse().map_err(|e| format!("paths: {p:?}: {e}"))?,
         };
+        if race::nn::path_banned(track.id, path) {
+            return Err(format!("paths: track {id}'s path {path} is banned (race::nn::BANNED_PATHS)"));
+        }
         if !track.paths.contains(&path) {
             return Err(format!("paths: track {id} has no path {path}"));
         }
@@ -135,9 +138,7 @@ pub fn load(disc: &Path, ids: impl IntoIterator<Item = u32>) -> std::io::Result<
             let level = Level::parse(&dram)?;
             let objects = Objects::new(&level, &dram);
             let lengths = race::nn::path_lengths(&level);
-            let paths: Vec<usize> = (0..level.nav_paths.len())
-                .filter(|&i| level.nav_paths[i].frames.len() >= 2)
-                .collect();
+            let paths = race::nn::learned_paths(&level, id);
             let jumps = paths
                 .iter()
                 .flat_map(|&p| launches(&level.nav_paths[p].frames).into_iter().map(move |f| (p, f)))

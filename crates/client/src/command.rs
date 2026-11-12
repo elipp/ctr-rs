@@ -80,6 +80,9 @@ pub enum Action {
     },
     /// The policy the brain bots drive with (`/bots policy`), from the next race on.
     BotPolicy(PolicyChoice),
+    /// Our own kart driven by the brain bots' policy (`/autopilot`): on, off, or the other of
+    /// the two for none given. Kept until the game closes.
+    Autopilot(Option<bool>),
     RestartRace,
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
     CupCreate {
@@ -179,6 +182,7 @@ const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
+const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
@@ -213,6 +217,12 @@ impl Action {
             "lobby" => Action::lobby(rest),
             "race" => Action::race(rest),
             "bots" => Action::bots(rest),
+            "autopilot" => match rest {
+                "" => Ok(Action::Autopilot(None)),
+                "on" => Ok(Action::Autopilot(Some(true))),
+                "off" => Ok(Action::Autopilot(Some(false))),
+                _ => Err(AUTOPILOT_USAGE.into()),
+            },
             "cup" => Action::cup(rest),
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
             "promote" => Ok(Action::Promote(rest.into())),
@@ -1703,6 +1713,18 @@ mod tests {
             policy("bots policy  target/my run/policy-00500.safetensors "),
             Some(PolicyChoice::File("target/my run/policy-00500.safetensors".into()))
         );
+    }
+
+    #[test]
+    fn autopilot_is_on_off_or_toggled() {
+        let parsed = |line| match Action::parse(line) {
+            Ok(Action::Autopilot(on)) => Some(on),
+            _ => None,
+        };
+        assert_eq!(parsed("autopilot"), Some(None));
+        assert_eq!(parsed("autopilot on"), Some(Some(true)));
+        assert_eq!(parsed("autopilot off"), Some(Some(false)));
+        assert_eq!(parsed("autopilot maybe"), None);
     }
 
     #[test]

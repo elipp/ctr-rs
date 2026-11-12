@@ -1,6 +1,7 @@
 //! The text on the screen of a race: wumpa, checkpoint split (a toast), boost reserves, readouts.
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
@@ -45,7 +46,30 @@ pub(super) struct ReservesHud;
 #[derive(Component)]
 pub(super) struct NetHud;
 
+/// `/autopilot`'s reward so far, with `/debug hud`: click it to start over from 0.
+#[derive(Component)]
+pub(super) struct RewardHud;
+
 pub(crate) fn spawn_hud(mut commands: Commands) {
+    commands
+        .spawn((
+            RewardHud,
+            Text::new(""),
+            TextLayout::justify(Justify::Right),
+            Node {
+                position_type: PositionType::Absolute,
+                top: hud::y(64.0),
+                right: Val::Px(8.0),
+                ..default()
+            },
+        ))
+        .observe(
+            |click: On<PointerClick>, mut brains: ResMut<crate::learned::Brains>| {
+                if click.button == PointerButton::Primary {
+                    brains.reset_own_reward();
+                }
+            },
+        );
     // The counter: a small "x" and the count in the big orange digits, level with the middle of
     // the fruit, right of it. The "x" is orange too, and its middle is the digits' (retail draws
     // it 4 lines down from their top, 8 tall, on digits 16 tall).
@@ -107,6 +131,23 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
     ));
+}
+
+/// The autopilot's reward so far, as a line of the development text.
+pub(super) fn reward_hud(
+    brains: Res<crate::learned::Brains>,
+    config: Res<crate::config::Config>,
+    mut text: Query<&mut Text, With<RewardHud>>,
+) {
+    for mut text in &mut text {
+        let line = match brains.own_reward() {
+            Some(reward) if config.debug_hud => format!("Brain reward: {reward:.1} (click to reset)"),
+            _ => String::new(),
+        };
+        if text.0 != line {
+            text.0 = line;
+        }
+    }
 }
 
 /// The wumpa count.

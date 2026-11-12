@@ -10,6 +10,7 @@ pub mod bot;
 pub mod desync;
 pub mod infer;
 pub mod nn;
+pub mod rev;
 pub mod rng;
 pub mod rollback;
 
@@ -493,6 +494,24 @@ impl Race {
             .iter()
             .take_while(|k| k.driver.bot.is_none())
             .count()
+    }
+
+    /// How many more ticks the engine rev of the kart of `slot` takes its pad for: the ones
+    /// before the tick that ends it (the green light, or the mask lowering the kart onto the
+    /// track). None if it is not revving.
+    pub fn rev_ticks_left(&self, slot: usize) -> Option<u32> {
+        let d = &self.karts.get(slot)?.driver;
+        if d.kart_state != vehicle::kart_state::ENGINE_REVVING {
+            return None;
+        }
+        if let Some(left) = vehicle::stuck::mask_rev_ticks_left(d) {
+            return Some(left);
+        }
+        // The lights count down 32 a tick once the fly-in is over (`Race::tick`), and the tick
+        // that takes them to 0 ends the rev.
+        let fly_in = self.intro_ticks.saturating_sub(self.tick);
+        let counting = (self.lights_ms.max(0) as u32).div_ceil(32);
+        Some((fly_in + counting).saturating_sub(1))
     }
 
     /// Starts the race with the ceremony: the camera flies in (if the level has the fly-in), then

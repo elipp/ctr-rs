@@ -9,9 +9,11 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use loader::lev::Level;
+use loader::level::LevelId;
 use race::bot::{Bot, PathLength, Tracker};
 use race::infer::Actor;
 use race::nn::{self, Action, Latch, Progress};
+use race::rev::{self, Rev, Skill};
 use race::rng::Rng;
 use race::rollback::Rollback;
 use race::{KartSpec, Pad, Race};
@@ -25,6 +27,9 @@ fn fire_wait(rng: &mut Rng) -> u32 {
     let span = FIRE_EVERY.end() - FIRE_EVERY.start() + 1;
     FIRE_EVERY.start() + rng.below(span as usize) as u32
 }
+
+/// How our own kart revs while the policy drives it (`/autopilot`): as on hard.
+const OWN_REV: Skill = Skill::of(vehicle::bot::difficulty_level::HARD);
 
 /// The policy when none is given (nor `BRAIN_POLICY`): built in, so it works without a file
 /// system (wasm). `bots/BOTS.md` has how it was trained.
@@ -40,6 +45,12 @@ pub struct Brains {
     /// built-in one).
     path: Option<PathBuf>,
     karts: Vec<Driven>,
+    /// The level [`Brains::karts`] are on: their paths are into its `nav_paths`.
+    level: Option<LevelId>,
+    /// Whether our own kart is to be driven too (`/autopilot`).
+    pub autopilot: bool,
+    /// The slot of our kart in [`Brains::karts`], while the policy drives it.
+    own: Option<usize>,
     /// For the choices of the karts that are stuck, or just put back by the mask
     /// (`nn::draw_choices`).
     rng: Rng,
@@ -51,6 +62,9 @@ impl Default for Brains {
             policy: None,
             path: None,
             karts: Vec::new(),
+            level: None,
+            autopilot: false,
+            own: None,
             rng: Rng::new(1),
         }
     }
@@ -59,16 +73,24 @@ impl Default for Brains {
 /// A kart the policy drives.
 struct Driven {
     slot: usize,
-    /// Into `Level::nav_paths`: the path it steers by, as a scripted bot of its slot would.
+    /// Into `Level::nav_paths`: the path it steers by, as a scripted bot of its slot would
+    /// (unless that one is banned, `nn::BANNED_PATHS`).
     path: usize,
+    /// The paths it may steer by (`nn::learned_paths`), for a switch to another when stuck.
+    paths: Vec<usize>,
     lengths: PathLength,
     tracker: Tracker,
     progress: Progress,
     latch: Latch,
     /// The choice it holds.
     action: Action,
+    /// Its gas while its engine revs (on the grid, and as the mask lowers it): not the policy's.
+    rev: Rev,
     /// The ticks to its next tap of Circle ([`FIRE_EVERY`]).
     fire_in: u32,
+    /// What its steps have been worth so far ([`nn::Weights::reward`], unscaled), for the debug
+    /// HUD; `Brains::reset_own_reward` starts it over.
+    reward: f32,
 }
 
 impl Brains {
@@ -114,32 +136,74 @@ impl Brains {
     }
 
     /// The race starts at tick 0 (of `specs`): the policy drives the karts of `slots`, each by
-    /// the path of its slot, or of its `KartSpec::line`.
+    /// the path of its slot, or of its `KartSpec::line`. They rev their engines as well as
+    /// `difficulty` (`vehicle::bot::difficulty_level`) has them.
     pub fn start(
         &mut self,
         level: &Level,
+        id: LevelId,
         race: &Race,
         specs: &[KartSpec],
         slots: impl Iterator<Item = usize>,
+        difficulty: i16,
     ) {
+        self.own = None;
+        self.level = Some(id);
+        let skill = Skill::of(difficulty);
         self.karts = slots
             .filter_map(|slot| {
-                let driver = &race.karts.get(slot)?.driver;
-                let bot = Bot::new(level, slot, driver, specs[slot].line);
-                let frames = &level.nav_paths[bot.path as usize].frames;
-                let lengths = PathLength::of(frames);
-                Some(Driven {
-                    slot,
-                    path: bot.path as usize,
-                    progress: Progress::new(frames, &lengths, &bot.tracker, driver),
-                    lengths,
-                    tracker: bot.tracker,
-                    latch: Latch::default(),
-                    action: Action::default(),
-                    fire_in: fire_wait(&mut self.rng),
-                })
+                driven(level, id, race, slot, specs[slot].line, skill, &mut self.rng)
             })
             .collect();
+    }
+
+    /// Whether the policy is read, and so can drive.
+    pub fn loaded(&self) -> bool {
+        self.policy.is_some()
+    }
+
+    /// Reads the policy unless it is read already. Returns the name of the one taken.
+    pub fn ensure_loaded(&mut self) -> Result<String, String> {
+        if self.loaded() { Ok(self.name()) } else { self.load() }
+    }
+
+    /// Has the policy drive our kart, `own` of `race`, from this tick if `on` (wherever the race
+    /// is: it takes the kart where it is), or gives it back. Call it each tick; it does
+    /// nothing when it is as it was. [`Brains::start`] gives it back.
+    pub fn drive_own(&mut self, level: &Level, id: LevelId, race: &Race, own: usize, on: bool) {
+        // Another level (offline, without a `Brains::start`): the karts' paths are of the one
+        // before, and so is our kart's if driven; it is taken again on this one below.
+        if self.level != Some(id) {
+            self.level = Some(id);
+            self.karts.clear();
+            self.own = None;
+        }
+        if self.own.is_some_and(|slot| !on || slot != own) {
+            let slot = self.own.take();
+            self.karts.retain(|k| Some(k.slot) != slot);
+        }
+        if on
+            && self.own.is_none()
+            && let Some(kart) = driven(level, id, race, own, None, OWN_REV, &mut self.rng)
+        {
+            self.karts.push(kart);
+            self.own = Some(own);
+        }
+    }
+
+    /// The reward our kart has earned from the policy's driving since it took over (or since
+    /// [`Brains::reset_own_reward`]); none while it does not drive.
+    pub fn own_reward(&self) -> Option<f32> {
+        let slot = self.own?;
+        self.karts.iter().find(|k| k.slot == slot).map(|k| k.reward)
+    }
+
+    /// Starts [`Brains::own_reward`] over from 0.
+    pub fn reset_own_reward(&mut self) {
+        let slot = self.own;
+        for k in self.karts.iter_mut().filter(|k| Some(k.slot) == slot) {
+            k.reward = 0.0;
+        }
     }
 
     /// The pads of the karts for the next tick of `race`, by slot, unless they are in already.
@@ -164,12 +228,14 @@ impl Brains {
             }
             let kart = &race.karts[k.slot];
             let relocated = nn::track(&mut k.tracker, frames, &kart.driver);
-            k.progress
+            let step = k
+                .progress
                 .step(frames, &k.lengths, &k.tracker, relocated, &kart.driver);
+            k.reward += nn::Weights::DEFAULT.reward(&step);
             // Stuck: try another path, as in training.
             if k.progress.switch_due(&kart.driver)
                 && let Some((path, tracker)) =
-                    nn::next_path(level, k.path, kart.driver.pos_curr)
+                    nn::next_path_of(level, k.path, kart.driver.pos_curr, &k.paths)
             {
                 k.path = path;
                 k.tracker = tracker;
@@ -194,10 +260,13 @@ impl Brains {
                 let drifting = d.kart_state == vehicle::kart_state::DRIFTING;
                 let tried = d.num_boosts_attempted > 0;
                 let mut pad = if has_path {
-                    k.latch.pad(k.action, drifting, tried)
+                    k.latch.pad(k.action, drifting, tried, k.progress.in_gap_flight())
                 } else {
                     Pad::default()
                 };
+                if let Some(gas) = k.rev.gas(race, k.slot, rng) {
+                    pad = rev::with_gas(pad, gas);
+                }
                 // A tap: held for this tick only (the next has it released, the fire is on the
                 // press).
                 if k.fire_in == 0 {
@@ -210,4 +279,41 @@ impl Brains {
             })
             .collect()
     }
+}
+
+/// The kart of `slot` as the policy drives it from now, by the path of its slot or of `line`; by
+/// the next one if that is banned (`nn::BANNED_PATHS`). None if the level (of id `id`) has none
+/// it may drive.
+fn driven(
+    level: &Level,
+    id: LevelId,
+    race: &Race,
+    slot: usize,
+    line: Option<u8>,
+    skill: Skill,
+    rng: &mut Rng,
+) -> Option<Driven> {
+    let driver = &race.karts.get(slot)?.driver;
+    let bot = Bot::new(level, slot, driver, line);
+    let paths = nn::learned_paths(level, id);
+    let (path, tracker) = if paths.contains(&(bot.path as usize)) {
+        (bot.path as usize, bot.tracker)
+    } else {
+        nn::next_path_of(level, bot.path as usize, driver.pos_curr, &paths)?
+    };
+    let frames = &level.nav_paths[path].frames;
+    let lengths = PathLength::of(frames);
+    Some(Driven {
+        slot,
+        path,
+        paths,
+        progress: Progress::new(frames, &lengths, &tracker, driver),
+        lengths,
+        tracker,
+        latch: Latch::default(),
+        action: Action::default(),
+        rev: Rev::new(skill),
+        fire_in: fire_wait(rng),
+        reward: 0.0,
+    })
 }

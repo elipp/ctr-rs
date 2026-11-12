@@ -32,6 +32,7 @@ use crate::calc::{interp_by_speed, map_to_range};
 use crate::fire;
 use crate::sim::{driving_init, teleport_self};
 use crate::spin::lose_wumpa;
+use crate::stats::Stats;
 use crate::{Driver, Effect, Env, PhysState, actions, kart_state};
 
 /// How long a mask grab holds the driver (`VEH_STUCK_MASK_GRAB_INITIAL_TIMER`).
@@ -122,14 +123,14 @@ const REV_SQUISH_MAX: i16 = 0x400;
 const REV_MODEL_BASE_SCALE: i32 = 3276;
 
 /// `RevEngineChargeState`
-mod charge {
+pub mod charge {
     pub const IDLE: u8 = 0;
     pub const RELEASED_ABOVE_ACCEL: u8 = 1;
     pub const ACTIVE: u8 = 2;
 }
 
 /// `RevEngineLockoutFlags`
-mod lockout {
+pub mod lockout {
     pub const PEDAL_HELD: u8 = 0x1;
     pub const REV_DECAY: u8 = 0x2;
     pub const ALL: u8 = PEDAL_HELD | REV_DECAY;
@@ -743,26 +744,13 @@ pub fn rev_engine_update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
         mask.duration = 0;
     }
 
-    let accel = d.stats.accel_speed_class_stat as i32;
-    if accel < d.rev.fire_level && d.rev.lockout_flags & lockout::ALL == 0 {
-        // Revved a lot: the big boost, else the small one.
-        if mips::add_lo(accel, d.stats.sacred_fire_speed as i32) <= d.rev.boost_meter {
-            fire::increment(
-                d,
-                REV_START_BOOST_RESERVES,
-                0,
-                REV_BIG_BOOST_FIRE_LEVEL,
-                effects,
-            );
-        } else {
-            fire::increment(
-                d,
-                REV_START_BOOST_RESERVES,
-                0,
-                REV_SMALL_BOOST_FIRE_LEVEL,
-                effects,
-            );
-        }
+    let fire_level = match rev_boost(&d.rev, &d.stats) {
+        RevBoost::Big => Some(REV_BIG_BOOST_FIRE_LEVEL),
+        RevBoost::Small => Some(REV_SMALL_BOOST_FIRE_LEVEL),
+        RevBoost::None => None,
+    };
+    if let Some(fire_level) = fire_level {
+        fire::increment(d, REV_START_BOOST_RESERVES, 0, fire_level, effects);
     }
 
     d.turbo_meter_room_left = 0;
@@ -771,14 +759,18 @@ pub fn rev_engine_update(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
 
 /// `VehStuckProc_RevEngine_PhysLinear`, before the usual: the cooldowns count down.
 pub fn rev_engine_before_phys_linear(d: &mut Driver, env: &Env) {
+    rev_cool_down(&mut d.rev, env.elapsed_time_ms);
+}
+
+fn rev_cool_down(r: &mut RevEngine, elapsed_time_ms: i32) {
     let count_down = |timer: &mut i16| {
-        *timer = (*timer as u16).wrapping_sub(env.elapsed_time_ms as u16) as i16;
+        *timer = (*timer as u16).wrapping_sub(elapsed_time_ms as u16) as i16;
         if *timer < 0 {
             *timer = 0;
         }
     };
-    count_down(&mut d.rev.release_cooldown_timer_ms);
-    count_down(&mut d.rev.empty_cooldown_timer_ms);
+    count_down(&mut r.release_cooldown_timer_ms);
+    count_down(&mut r.empty_cooldown_timer_ms);
 }
 
 /// `VehStuckProc_RevEngine_PhysLinear`, after the usual: a kart the mask carries is lowered.
@@ -792,15 +784,15 @@ pub fn rev_engine_after_phys_linear(d: &mut Driver) {
     }
 }
 
-/// `VehStuckProc_RevEngine_Animate`: holding the gas revs the engine up towards the boost meter
-/// (and over it, which locks the pedal); letting go lets it fall. The rev level shows in the
-/// speedometer and the turbo meter, and squashes the kart.
-pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
-    let accel = d.stats.accel_speed_class_stat as i32;
-    let sacred = d.stats.sacred_fire_speed as i32;
-    let r = &mut d.rev;
+/// The meters of a rev a tick on, the gas held (`fire_speed > 0`) or not: the middle of
+/// `VehStuckProc_RevEngine_Animate`, without what is only shown. Whether the engine gave out
+/// (revved too long at the top) this tick.
+fn rev_meters(r: &mut RevEngine, stats: &Stats, gas: bool, elapsed_time_ms: i32) -> bool {
+    let accel = stats.accel_speed_class_stat as i32;
+    let sacred = stats.sacred_fire_speed as i32;
+    let mut over_revved = false;
 
-    if d.fire_speed > 0 && r.release_cooldown_timer_ms == 0 && r.lockout_flags & lockout::ALL == 0 {
+    if gas && r.release_cooldown_timer_ms == 0 && r.lockout_flags & lockout::ALL == 0 {
         // Revving: the meter fills fast when it is far from the boost meter.
         let mut delta = mips::sub_lo(r.fire_level, r.boost_meter);
         if delta < 0 {
@@ -819,15 +811,12 @@ pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) 
 
         if r.boost_meter <= r.fire_level {
             r.over_rev_timer_ms =
-                (r.over_rev_timer_ms as u16).wrapping_add(env.elapsed_time_ms as u16) as i16;
+                (r.over_rev_timer_ms as u16).wrapping_add(elapsed_time_ms as u16) as i16;
             if REV_OVERREV_TIMEOUT < r.over_rev_timer_ms {
                 // Revved too long at the top: the engine gives out.
                 r.charge_state = charge::IDLE;
                 r.lockout_flags |= lockout::ALL;
-                effects.push(Effect::Sound {
-                    id: REV_OVERREV_SFX,
-                    echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
-                });
+                over_revved = true;
             }
         } else {
             r.over_rev_timer_ms = 0;
@@ -873,10 +862,66 @@ pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) 
             r.boost_meter = accel + sacred / 3;
         }
 
-        if d.fire_speed < 1 {
+        if !gas {
             r.lockout_flags &= !lockout::PEDAL_HELD;
         }
     }
+    over_revved
+}
+
+/// What a rev gives as it ends (`VehStuckProc_RevEngine_Update`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RevBoost {
+    None,
+    Small,
+    Big,
+}
+
+/// The boost rev `r` gives if it ends now: the big one for a rev over the class's acceleration
+/// with the boost meter pumped up to the sacred fire's, the small one for a rev over it alone.
+pub fn rev_boost(r: &RevEngine, stats: &Stats) -> RevBoost {
+    let accel = stats.accel_speed_class_stat as i32;
+    if accel >= r.fire_level || r.lockout_flags & lockout::ALL != 0 {
+        RevBoost::None
+    } else if mips::add_lo(accel, stats.sacred_fire_speed as i32) <= r.boost_meter {
+        RevBoost::Big
+    } else {
+        RevBoost::Small
+    }
+}
+
+/// Rev `r` a tick on, the gas held or not, as the sim takes it on (the cooldowns of
+/// `VehStuckProc_RevEngine_PhysLinear`, then the meters of `_Animate`): for a bot to plan its rev.
+pub fn rev_preview(r: &mut RevEngine, stats: &Stats, gas: bool, elapsed_time_ms: i32) {
+    rev_cool_down(r, elapsed_time_ms);
+    rev_meters(r, stats, gas, elapsed_time_ms);
+}
+
+/// How many more ticks a mask's rev of `d` takes the pad for: the ones before the tick whose
+/// update (`VehStuckProc_RevEngine_Update`) finds the kart lowered close enough to the track,
+/// as it is lowered [`REV_MASK_DESCENT_STEP`] a tick. None for a rev of the race start.
+pub fn mask_rev_ticks_left(d: &Driver) -> Option<u32> {
+    if !d.rev.bool_mask_grab {
+        return None;
+    }
+    let above = mips::sub_lo(d.pos_curr.y, mips::add_lo(d.quad_block_height, REV_MASK_RELEASE_HEIGHT));
+    Some(if above < 0 { 0 } else { (above / REV_MASK_DESCENT_STEP) as u32 + 1 })
+}
+
+/// `VehStuckProc_RevEngine_Animate`: holding the gas revs the engine up towards the boost meter
+/// (and over it, which locks the pedal); letting go lets it fall. The rev level shows in the
+/// speedometer and the turbo meter, and squashes the kart.
+pub fn rev_engine_animate(d: &mut Driver, env: &Env, effects: &mut Vec<Effect>) {
+    let gas = d.fire_speed > 0;
+    if rev_meters(&mut d.rev, &d.stats, gas, env.elapsed_time_ms) {
+        effects.push(Effect::Sound {
+            id: REV_OVERREV_SFX,
+            echo: d.actions_flag_set & actions::ENGINE_ECHO != 0,
+        });
+    }
+    let accel = d.stats.accel_speed_class_stat as i32;
+    let sacred = d.stats.sacred_fire_speed as i32;
+    let r = &d.rev;
 
     // (`revEngineState`, which the HUD reads, is not kept.)
     d.speedometer_needle_value = r.fire_level as i16;
