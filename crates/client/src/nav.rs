@@ -6,13 +6,14 @@
 //! Each path is a loop of its own color (0 green, 1 cyan, 2 magenta), with a dot on every frame
 //! and a bigger white one on frame 0. Frames with flags get a mark: a yellow tick sideways for
 //! `DRIFT_LEFT` / `DRIFT_RIGHT` (on the side the drift turns to), an orange post for `TURBO`, a
-//! taller red-orange one for `SUPER_TURBO`, a white post for `JUMP` and a red cross for
-//! `KILL_PLANE`. One frame is circled in white and its fields written at the bottom left (in the race, above the place): in the
+//! taller red-orange one for `SUPER_TURBO`, a white post for `JUMP`, a red cross for
+//! `KILL_PLANE` and a violet ring on the ground for the ramp bit (`nav_special::RAMP_PHYS`: the
+//! frame launches retail's bots with the path's `ramp_phys` speeds). One frame is circled in white and its fields written at the bottom left (in the race, above the place): in the
 //! viewer the one nearest the camera, in the race the one the watched bot's tracker is on. In the
 //! race every other bot's tracker frame is circled in its path's color.
 
 use bevy::prelude::*;
-use loader::lev::{NAV_PATH_COUNT, NavFrame, NavPath};
+use loader::lev::{NAV_PATH_COUNT, NavFrame, NavPath, nav_special};
 use render::mesh::{SCALE, to_world};
 
 use crate::Track;
@@ -266,7 +267,16 @@ fn describe(p: usize, i: usize, path: &NavPath) -> String {
         f.path_change_opcode,
         f.go_back_count,
         f.special_bits,
-    )
+    ) + &if f.special_bits & nav_special::RAMP_PHYS != 0 {
+        let index = (f.special_bits & nav_special::INDEX_MASK) as usize;
+        format!(
+            "  (ramp {index}: xz {}, y {})",
+            path.ramp_phys_xz.get(index).copied().unwrap_or_default(),
+            path.ramp_phys_y.get(index).copied().unwrap_or_default(),
+        )
+    } else {
+        String::new()
+    }
 }
 
 fn draw_path(gizmos: &mut Gizmos, path: &NavPath, color: Color) {
@@ -298,6 +308,10 @@ fn draw_path(gizmos: &mut Gizmos, path: &NavPath, color: Color) {
         }
         if f.flags & NavFrame::JUMP != 0 {
             gizmos.line(a, a + up * 1.5, Color::WHITE);
+        }
+        if f.special_bits & nav_special::RAMP_PHYS != 0 {
+            let flat = Isometry3d::new(a, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+            gizmos.circle(flat, mark * 0.6, Color::srgb(0.65, 0.35, 1.0));
         }
         if f.flags & NavFrame::KILL_PLANE != 0 {
             let fwd = (b - a).normalize_or_zero() * mark * 0.5;

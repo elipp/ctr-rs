@@ -81,7 +81,7 @@ impl Force {
 pub const SPEED_RANGE: (f32, f32) = (0.05, 4.0);
 
 /// The speeds a click on the panel goes through.
-const SPEEDS: [f32; 4] = [1.0, 0.5, 0.25, 0.1];
+const SPEEDS: [f32; 6] = [1.0, 0.5, 0.25, 0.1, 4.0, 2.0];
 
 /// What the effects are set to.
 #[derive(Resource)]

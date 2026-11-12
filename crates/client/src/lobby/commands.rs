@@ -4,7 +4,7 @@ use super::countdown::Then;
 use super::cup::{CupDef, Finisher, Series};
 use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, BotKind, Lobby};
-use crate::command::Action;
+use crate::command::{Action, PolicyChoice};
 use crate::console::{Log, console};
 use crate::maps;
 use crate::toast::Toast;
@@ -88,7 +88,12 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             net::NOT_NOW
         }
         Action::StartRace if lobby.series.is_some() => net::NOT_NOW,
-        Action::Bots { .. } if lobby.joined => "Only the host of a lobby can do that",
+        Action::Bots { .. } | Action::BotPolicy(_) if lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::BotPolicy(_) if cfg!(target_arch = "wasm32") => {
+            "Not on the web: the brain bots drive with the built-in policy"
+        }
         _ => return None,
     })
 }
@@ -113,6 +118,7 @@ pub(super) fn run(
     mut rollbacks: ResMut<RollbackToasts>,
     mut lag: ResMut<super::lag::FakeLag>,
     mut config: ResMut<crate::config::Config>,
+    mut brains: ResMut<crate::learned::Brains>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -202,6 +208,50 @@ pub(super) fn run(
                     text += " (from the next race you start)";
                 }
                 toasts.write(Toast::new(text, 3000));
+                continue;
+            }
+            Action::BotPolicy(choice) => {
+                let set = match choice {
+                    PolicyChoice::Show => Ok(brains.name()),
+                    PolicyChoice::Default => brains.set_path(None),
+                    PolicyChoice::File(path) => brains.set_path(Some(path.into())),
+                };
+                match set {
+                    Ok(name) => {
+                        let mut text = format!("Brain bots drive with the policy\n{name}");
+                        if *choice != PolicyChoice::Show
+                            && (lobby.online.is_some() || lobby.series.is_some())
+                        {
+                            text += "\n(from the next race you start)";
+                        }
+                        console!("{text}");
+                        toasts.write(Toast::new(text, 3000));
+                    }
+                    Err(e) => {
+                        console!("{e}");
+                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    }
+                }
+                continue;
+            }
+            Action::Autopilot(on) => {
+                let on = on.unwrap_or(!brains.autopilot);
+                // (The policy is read now, to say at once what is wrong with it.)
+                match on.then(|| brains.ensure_loaded()).transpose() {
+                    Ok(name) => {
+                        brains.autopilot = on;
+                        let text = match name {
+                            Some(name) => format!("Autopilot on, the policy\n{name}"),
+                            None => "Autopilot off".to_string(),
+                        };
+                        console!("{text}");
+                        toasts.write(Toast::new(text, 2500));
+                    }
+                    Err(e) => {
+                        console!("{e}");
+                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    }
+                }
                 continue;
             }
             Action::CupCreate { name, tracks, laps } => {

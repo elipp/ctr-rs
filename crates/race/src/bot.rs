@@ -884,6 +884,13 @@ fn unit(a: P, b: P) -> P {
 /// Whether `p` is past frame `j` of `path`: on the far side of the plane through it that halves
 /// the turn there. (Past it along the segment to it would not do: a kart that cuts the inside of a
 /// corner never gets there.)
+///
+/// The plane stands upright: its normal is the halved turn on the ground plane only. Tilted (the
+/// turn in 3D), the straight drop off a gap's lip into the kill plane, some 16000 units down,
+/// tips the plane of the frame at its foot over by about 45°, and a kart flying over the gap
+/// would be past that frame only once it was further on than it was high above it: the tracker
+/// would sit on the lip for the whole flight, and the kart be searched for once it landed. (A
+/// frame between two straight drops, with no turn on the ground plane, keeps the tilted plane.)
 fn passed(path: &[NavFrame], j: usize, p: P) -> bool {
     let n = path.len();
     let here = frame_pos(&path[j]);
@@ -891,7 +898,9 @@ fn passed(path: &[NavFrame], j: usize, p: P) -> bool {
     let after = frame_pos(&path[(j + 1) % n]);
     let a = unit(before, here);
     let b = unit(here, after);
-    dot(sub(p, here), [a[0] + b[0], a[1] + b[1], a[2] + b[2]]) >= 0
+    let normal = [a[0] + b[0], 0, a[2] + b[2]];
+    let normal = if normal == [0; 3] { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] } else { normal };
+    dot(sub(p, here), normal) >= 0
 }
 
 /// The frame of `path` among `frames` that is nearest to `p`, and the square of its distance.
@@ -1084,6 +1093,40 @@ mod tests {
         // Not a lip.
         assert_eq!(gap_landing(&path, 0), None);
         assert_eq!(gap_landing(&path, 3), None);
+    }
+
+    #[test]
+    fn follows_over_a_gap() {
+        // A lip at x 400, straight down into the kill plane, under the gap, and up to the
+        // landing at x 2000.
+        let at = |x: i16, y: i16| NavFrame {
+            pos: SVec3 { x, y, z: 0 },
+            ..Default::default()
+        };
+        let path = vec![
+            at(0, 0),
+            at(400, 0),
+            at(402, -16000),
+            at(1200, -16000),
+            at(1998, -16000),
+            at(2000, 0),
+            at(3000, 0),
+            at(3000, 3000),
+            at(0, 3000),
+        ];
+        let lengths = PathLength::of(&path);
+        let mut t = Tracker::find(&path, world(390, 0, 0));
+        assert_eq!(t.frame, 0);
+        // Over the gap, high above the kill plane: past the foot of the drop, and on along it.
+        t.follow(&path, world(800, 200, 0));
+        assert_eq!(t.frame, 2);
+        assert_eq!(t.arc(&path, &lengths, world(800, 200, 0)), 800);
+        t.follow(&path, world(1500, 100, 0));
+        assert_eq!(t.frame, 3);
+        assert_eq!(t.arc(&path, &lengths, world(1500, 100, 0)), 1500);
+        // Down on the landing: no search.
+        assert!(!t.update(&path, world(2100, 0, 0)));
+        assert_eq!((t.frame, t.relocations), (5, 0));
     }
 
     #[test]

@@ -16,6 +16,7 @@
 //!   moving the stick from choice to choice.
 
 use loader::lev::{Level, NavFrame};
+use loader::level::LevelId;
 use math::Vec3;
 use vehicle::{Driver, actions, buttons, kart_state};
 
@@ -46,7 +47,8 @@ pub const OBS_LEN: usize = AHEAD.len() * 3 // the points ahead
     + 4 // the buttons held last tick: gas, reverse, hop, boost
     + 1 // the ticks a long hold of R1 has left ([`Latch`])
     + 1 // the stick of the last choice ([`Latch::steer`]), for what moving it costs
-    + 1; // the ticks it has got no further along ([`Progress::stalled`])
+    + 1 // the ticks it has got no further along ([`Progress::stalled`])
+    + 1; // in a flight from a gap's lip ([`Progress::flight_heading`]), not a hop or a fall
 
 pub type Obs = [f32; OBS_LEN];
 
@@ -135,11 +137,17 @@ pub fn observe(
 
     // (The way the path goes over a stretch, not the segment's: see `path_heading`.)
     let (offset, _) = tracker.offset(path, pos);
-    let heading = progress
+    // (Against the way the kart goes, not its nose, for a gap: the nose does not decide where a
+    // flight goes.)
+    let (heading, facing) = match progress
         .flight_heading
-        .unwrap_or_else(|| path_heading(path, tracker, pos));
+        .or_else(|| gap_heading_ahead(path, tracker.frame as usize))
+    {
+        Some(heading) => (heading, travel_angle(d)),
+        None => (path_heading(path, tracker, pos), d.angle as i32),
+    };
     o.push(offset as f32 / DISTANCE_SCALE);
-    let error = (heading - d.angle as i32) as f32 * ANGLE_TO_RAD;
+    let error = (heading - facing) as f32 * ANGLE_TO_RAD;
     o.push(error.sin());
     o.push(error.cos());
 
@@ -184,6 +192,9 @@ pub fn observe(
     o.push(latch.hold_left as f32 / HOLD_TICKS as f32);
     o.push((latch.steer as f32 - STEER_STEPS as f32) / STEER_STEPS as f32);
     o.push((progress.stalled as f32 / STALL_TICKS as f32).min(1.0));
+    // (What the heading error above is against: the way to a gap's landing in the flight, the
+    // lip-to-landing heading on the run-up to it, not the path's.)
+    o.flag(progress.in_gap_flight());
 
     debug_assert_eq!(o.at, OBS_LEN, "an observation is filled in full");
     o.obs
@@ -312,6 +323,12 @@ impl Default for Latch {
 }
 
 impl Latch {
+    /// How far the stick of the last pad is from the centre, 0 to 1 (full lock).
+    pub fn stick(&self) -> f32 {
+        (self.steer as f32 - STEER_STEPS as f32).abs() / STEER_STEPS as f32
+    }
+
+
     /// The pad of this tick, the bot having chosen `action` (this tick, or one before that it
     /// still holds), its kart `drifting` as the tick starts.
     ///
@@ -325,7 +342,13 @@ impl Latch {
     /// meter ran out), it is over, and the hop's choice holds R1 or lets go again. Held on
     /// regardless, the one way out of a drift whose corner ends sooner would be Square, which
     /// throws the reserves away.
-    pub fn pad(&mut self, action: Action, drifting: bool, tried: bool) -> Pad {
+    ///
+    /// In a flight from a gap's lip the stick is `air_steer` ([`air_steer`]), whatever is
+    /// chosen: the correction toward the landing is scripted, as the rev is.
+    pub fn pad(&mut self, mut action: Action, drifting: bool, tried: bool, air_steer: Option<u8>) -> Pad {
+        if let Some(steer) = air_steer {
+            action.steer = steer;
+        }
         self.steer_change = self.steer.abs_diff(action.steer);
         self.steer = action.steer;
         let mut pad = action.pad();
@@ -353,6 +376,38 @@ impl Latch {
         self.r1 = pad.held & buttons::R1 != 0;
         pad
     }
+}
+
+/// From this far off [`Progress::flight_heading`] (1/0x1000 of a turn) on, [`air_steer`] turns the
+/// stick all the way.
+pub const AIR_FULL_ERROR: i32 = 0x40;
+
+/// Up to this far off [`Progress::flight_heading`], [`air_steer`] leaves the stick centred.
+const AIR_DEAD_ERROR: i32 = 4;
+
+/// The ticks ahead [`air_steer`] counts the turn the kart is already making (`amp_turn_state`,
+/// which turns its way of travel by itself / 256 a tick): steering against it before it overshoots.
+const AIR_PREDICT_TICKS: i32 = 3;
+
+/// The steering bin ([`Action::steer`]) for the kart of `driver` in a flight from a gap's lip
+/// ([`Progress::in_gap_flight`]); None out of one.
+///
+/// In the air the stick turns the way the kart goes, not only its nose: the steering's rotation
+/// turns `Driver::axis_rotation_x` (`vehicle::angular`), and the next tick's velocity is the speed
+/// along that (`VehPhysForce_ConvertSpeedToVec`). So a takeoff askew is saved as a player saves
+/// it, by steering the way of travel ([`travel_angle`]) onto [`Progress::flight_heading`]: from
+/// where the kart is to a point past the landing. In proportion to how far off it goes, all the
+/// way from [`AIR_FULL_ERROR`] on.
+pub fn air_steer(progress: &Progress, driver: &Driver) -> Option<u8> {
+    let heading = progress.flight_heading.filter(|_| progress.in_gap_flight())?;
+    let mut error = ((heading - travel_angle(driver) + 0x800) & 0xfff) - 0x800;
+    error -= driver.amp_turn_state as i32 * AIR_PREDICT_TICKS >> 8;
+    if error.abs() <= AIR_DEAD_ERROR {
+        return Some(STEER_STEPS as u8);
+    }
+    // (Rounded; a raise of the angle is to the left, below the middle.)
+    let steps = (error * STEER_STEPS + error.signum() * AIR_FULL_ERROR / 2) / AIR_FULL_ERROR;
+    Some((STEER_STEPS - steps.clamp(-STEER_STEPS, STEER_STEPS)) as u8)
 }
 
 const STICK_CENTER: i32 = 0x80;
@@ -428,10 +483,20 @@ pub fn path_heading(path: &[NavFrame], tracker: &Tracker, pos: Vec3) -> i32 {
     math::ratan2((b.x - a.x) >> 8, (b.z - a.z) >> 8)
 }
 
-/// Ticks in the air before [`Step::air_misalign`] counts: a hop (about 10) is free, as a drift
-/// starts with one, steered, which turns the kart in the air; a long jump (30 to 60) is not. A
-/// turn made in these ticks still costs for the rest of the flight.
-pub const AIR_GRACE_TICKS: u32 = 15;
+/// A flight off a gap's lip that ends on the ground without the mask having had the kart counts as
+/// a cleared gap ([`Step::gap_cleared`]) if it made at least this much progress in the air (level
+/// units): the gap is at least `bot::MIN_GAP` (256) across, so a hop off the lip that lands short
+/// does not.
+pub const GAP_CLEARED_PROGRESS: i64 = 200;
+
+/// A hop pressed this many ticks or fewer before a takeoff from a gap's lip is the takeoff's
+/// ([`Step::gap_hop`]): a hop lasts about 10, and the takeoff is the first tick in the air.
+pub const GAP_HOP_TICKS: u32 = 6;
+
+/// The most height above its takeoff (level units) a flight from a gap's lip is paid for
+/// ([`Step::gap_apex`]): a hop off a ramp at speed tops out some way under it, and what goes
+/// higher is something else (a bounce off the geometry).
+pub const MAX_APEX: i32 = 400;
 
 /// The reserves a boost spends a tick (`vehicle::linear`'s count-down, by `Env::elapsed_time_ms`):
 /// what they drop by more than this is lost ([`Step::reserves_lost`]).
@@ -468,10 +533,48 @@ pub struct Step {
     pub braking: bool,
     /// It has got no further along for more than [`STALL_GRACE_TICKS`] ([`Progress::stalled`]).
     pub stalled: bool,
-    /// In the air (and not carried by the mask) for more than [`AIR_GRACE_TICKS`], how far the
-    /// kart faces away from the path: `1 - cos` of the angle, 0 straight along it, 1 sideways, 2
-    /// backwards. 0 on the ground, where a drift faces away on purpose, and in a hop.
+    /// In a flight from a gap's lip ([`Progress::flight_heading`]), how far off the way to the
+    /// landing (from where it is) the kart goes this tick: `1 - cos` of the angle off it (0 straight on, 1 a quarter
+    /// turn off, 2 backwards), 0 on the takeoff tick. 0 on the ground, where a drift faces away on purpose, and in any other flight
+    /// (a hop, a fall): there is no telling a turn that is wanted from one that is not.
     pub air_misalign: f32,
+    /// In a flight from a gap's lip, past its takeoff tick: the kart goes less far off
+    /// [`Progress::flight_heading`] than it did the tick before. A turn that brings it round
+    /// toward the landing (for the trainer's stick statistic).
+    pub air_closing: bool,
+    /// The kart took off from the lip of a gap (a ramp frame of the path, [`gap_heading`]) this
+    /// tick.
+    pub gap_takeoff: bool,
+    /// The kart came down on the ground this tick after a flight from a gap's lip that made
+    /// [`GAP_CLEARED_PROGRESS`] or more, without the mask: it made the jump.
+    pub gap_cleared: bool,
+    /// The kart came down after a flight from a gap's lip with less than
+    /// [`GAP_CLEARED_PROGRESS`] made (not grabbed): short of the gap, or on something below it.
+    pub gap_short: bool,
+    /// The mask grabbed the kart in a flight from a gap's lip: it fell.
+    pub gap_fell: bool,
+    /// On the tick one of [`Step::gap_cleared`], [`Step::gap_short`] and [`Step::gap_fell`] is
+    /// set, the speed the flight took off with (`Driver::speed_approx`); else 0.
+    pub gap_speed: i32,
+    /// On the tick of a [`Step::gap_takeoff`] and on the ones that set [`Step::gap_cleared`],
+    /// [`Step::gap_short`] or [`Step::gap_fell`], the frame of the gap's lip.
+    pub gap_lip: Option<usize>,
+    /// It took off from a gap's lip ([`Step::gap_takeoff`]) with a hop it pressed R1 for within
+    /// [`GAP_HOP_TICKS`] before, and not in a drift. [`Progress::step`] knows nothing of the
+    /// pads: the caller puts it in.
+    pub gap_hop: bool,
+    /// On the tick of a [`Step::gap_takeoff`], how well the kart's way of travel matches the lip-to-landing heading:
+    /// the cosine of the angle off it, 0 from a quarter turn off on (1 straight on); else 0.
+    pub gap_aim: f32,
+    /// On the tick a flight from a gap's lip tops out (the first it is lower than it has been),
+    /// or ends before that, how high above its takeoff it went (level units, at most
+    /// [`MAX_APEX`]), times how well it took off toward the landing (as [`Step::gap_aim`]); else 0.
+    /// The ramp, the speed and a hop at the lip all lift it, and the higher it goes the further
+    /// it flies.
+    pub gap_apex: f32,
+    /// Always 0: the stick in a flight from a gap's lip is scripted ([`air_steer`]), nothing the
+    /// policy is to answer for. (Kept for [`Weights::air_steer`]'s key.)
+    pub air_steer: f32,
     /// The kart scraped a wall (`DRIVING_AGAINST_WALL`).
     pub wall: bool,
     /// Drift boosts fired this tick: taps of L1 in time, each of a drift's three
@@ -480,6 +583,19 @@ pub struct Step {
     /// Of the drift's boosts, the number of the last fired this tick (1 for its first; with
     /// [`Step::boosts`], for [`Weights::boost_growth`]).
     pub boost_number: u8,
+    /// On a tick a drift boost fired, how late in its meter's window the tap came: the reserves
+    /// it gained as a share of a full bar's (`turbo_full_bar_reserve_gain << 5`, which the last
+    /// moment before the meter runs out all but gets), 0 to 1; else 0. (On a turbo pad too,
+    /// unlike [`Step::reserves_gained`].)
+    pub boost_timing: f32,
+    /// How far up the drift boosts' fire the kart's boost burns this tick: the speed its
+    /// `Driver::fire_speed_cap` adds over a first boost's (`single_turbo_speed`), as a share of
+    /// what a drift's third adds (half the way to `sacred_fire_speed`), 0 to 1. A drift's k-th
+    /// boost fires at level `(k - 1) << 6` (`powerslide::update`): 0, 0.5, 1. The cap only goes
+    /// up while there are reserves (`fire::increment`), so a third boost's holds for as long as
+    /// they never run out, whatever tops them up after. 0 without reserves, and on a turbo pad
+    /// (whose cap is higher still: paid for by the progress, and parking there would pay).
+    pub fire_tier: f32,
     /// How many steering bins the stick moved for this tick's pad ([`Latch::steer_change`]).
     /// [`Progress::step`] knows nothing of the pads: the caller puts it in.
     pub steer_change: u8,
@@ -518,21 +634,103 @@ pub struct Progress {
     /// some way along the path from where the kart is, which past a landing with a corner right
     /// after it bends into the corner while the kart is
     /// still in the air: the cost and the observation would have it turn mid-air.
+    ///
+    /// Taken at the takeoff, then each tick of the flight the way from where the kart is to
+    /// [`Progress::flight_target`]: a kart that took off askew or has drifted aside is to turn
+    /// toward the landing from where it is, not back to the lip's heading, which would carry it
+    /// past alongside the landing.
     pub flight_heading: Option<i32>,
+    /// In a flight with a [`Progress::flight_heading`]: the lip it took off from and the point
+    /// [`FLIGHT_AIM_PAST`] beyond the landing that it aims at (level units, `x`, `z`).
+    pub flight_lip_pos: [i64; 2],
+    pub flight_target: [i64; 2],
+    /// In a flight with a [`Progress::flight_heading`], how far the kart faced off it last tick
+    /// (1/0x1000 of a turn, 0 to 0x800).
+    pub air_error: i32,
+    /// The kart's `Driver::speed_approx` when it took off on a flight with a
+    /// [`Progress::flight_heading`].
+    pub takeoff_speed: i32,
+    /// The frame of the lip the kart took off from on a flight with a
+    /// [`Progress::flight_heading`].
+    pub flight_lip: usize,
+    /// In a flight with a [`Progress::flight_heading`]: the kart's height when it took off, the
+    /// most it has been since (level units), whether [`Step::gap_apex`] has been paid for it, and
+    /// how far off the heading it took off (as [`Progress::air_error`]).
+    pub takeoff_y: i32,
+    pub apex_y: i32,
+    pub apex_paid: bool,
+    pub takeoff_error: i32,
 }
+
+/// How far beyond a gap's landing (level units, on along the lip-to-landing way) a flight aims
+/// ([`Progress::flight_target`]): the way to a point the kart passes over swings round as it
+/// gets near, and one past the landing keeps it steady up to the touchdown.
+pub const FLIGHT_AIM_PAST: i64 = 256;
+
+/// Closer than this (level units, along the lip-to-landing way) to [`Progress::flight_target`],
+/// [`Progress::flight_heading`] stays as it was: the way to the target swings round there.
+const FLIGHT_AIM_HOLD: i64 = 128;
 
 /// The way from the lip of the gap the kart at `frame` of `path` is taking off from (within a
 /// couple of frames of it) to the gap's landing (`bot::gap_landing`), if it is at one.
 pub fn gap_heading(path: &[NavFrame], frame: usize) -> Option<i32> {
+    let (lip, landing) = gap_lip(path, frame)?;
+    let (a, b) = (&path[lip].pos, &path[landing].pos);
+    Some(math::ratan2(b.x as i32 - a.x as i32, b.z as i32 - a.z as i32))
+}
+
+/// The way `driver` goes on the ground plane (1/0x1000 of a turn), or the way it faces if it is
+/// standing still. A flight goes the way the kart took off, whatever the nose does in the air.
+pub fn travel_angle(driver: &Driver) -> i32 {
+    let v = driver.velocity;
+    if v.x == 0 && v.z == 0 {
+        driver.angle as i32
+    } else {
+        math::ratan2(v.x, v.z)
+    }
+}
+
+/// How far ahead along `path` (level units) [`gap_heading_ahead`] looks for a gap's lip: the
+/// run-up the env starts its jump episodes with.
+pub const GAP_LOOKAHEAD: i64 = 1200;
+
+/// [`gap_heading`] for the kart at `frame`, or else for the first gap's lip within
+/// [`GAP_LOOKAHEAD`] ahead of it: the heading to be at on the run-up, known before the takeoff.
+pub fn gap_heading_ahead(path: &[NavFrame], frame: usize) -> Option<i32> {
+    if let Some(heading) = gap_heading(path, frame) {
+        return Some(heading);
+    }
+    let n = path.len();
+    if n < 2 {
+        return None;
+    }
+    let mut distance = 0.0f32;
+    for k in 1..n {
+        let (a, b) = (&path[(frame + k - 1) % n].pos, &path[(frame + k) % n].pos);
+        let (dx, dz) = ((b.x as i32 - a.x as i32) as f32, (b.z as i32 - a.z as i32) as f32);
+        distance += (dx * dx + dz * dz).sqrt();
+        if distance > GAP_LOOKAHEAD as f32 {
+            break;
+        }
+        let lip = (frame + k) % n;
+        if let Some(landing) = crate::bot::gap_landing(path, lip) {
+            let (a, b) = (&path[lip].pos, &path[landing].pos);
+            return Some(math::ratan2(b.x as i32 - a.x as i32, b.z as i32 - a.z as i32));
+        }
+    }
+    None
+}
+
+/// The lip and the landing (frames of `path`) of the gap the kart at `frame` is taking off from
+/// (it is within a couple of frames of the lip), if it is at one.
+pub fn gap_lip(path: &[NavFrame], frame: usize) -> Option<(usize, usize)> {
     let n = path.len();
     if n < 2 {
         return None;
     }
     (0..5).find_map(|k| {
         let lip = (frame + n + k - 2) % n;
-        let landing = crate::bot::gap_landing(path, lip)?;
-        let (a, b) = (&path[lip].pos, &path[landing].pos);
-        Some(math::ratan2(b.x as i32 - a.x as i32, b.z as i32 - a.z as i32))
+        Some((lip, crate::bot::gap_landing(path, lip)?))
     })
 }
 
@@ -549,15 +747,58 @@ pub const SWITCH_AFTER_STALLED: u32 = 60;
 /// line it steers by leading off the same edge again.
 pub const GRAB_LOOP_TICKS: u32 = 30 * 20;
 
+/// A bot path the learned bots never drive: not in training, not in eval, not in a race (a kart
+/// whose slot steers by it takes another, [`learned_paths`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BannedPath {
+    pub level: LevelId,
+    /// Into `Level::nav_paths`.
+    pub path: usize,
+    /// Why, for whoever reads the list.
+    pub why: &'static str,
+}
+
+/// The bot paths the learned bots never drive ([`BannedPath`]): one more is one more line.
+pub const BANNED_PATHS: &[BannedPath] = &[BannedPath {
+    level: LevelId::HOT_AIR_SKYWAY,
+    path: 2,
+    why: "the gap at lip 142 is too long for all but the Speed class, and for that only with a \
+          flawless run-up, takeoff and hop: what a policy learns there is mostly to fall",
+}];
+
+/// Whether `path` of level `level` is one of the [`BANNED_PATHS`].
+pub fn path_banned(level: LevelId, path: usize) -> bool {
+    BANNED_PATHS.iter().any(|b| b.level == level && b.path == path)
+}
+
+/// The paths of `level` (of id `id`) a learned bot may drive, in order: those of two frames or
+/// more that are not [`BANNED_PATHS`].
+pub fn learned_paths(level: &Level, id: LevelId) -> Vec<usize> {
+    (0..level.nav_paths.len())
+        .filter(|&p| level.nav_paths[p].frames.len() >= 2 && !path_banned(id, p))
+        .collect()
+}
+
 /// The path a stuck bot at `pos` switches to: the level's next one after `path` (two frames or
 /// more), round them in turn, and where on it the bot is. In turn, not the nearest: with three
 /// lines side by side the nearest to one is often the one it came from, and the third would
 /// never be tried. None if there is no other.
 pub fn next_path(level: &Level, path: usize, pos: Vec3) -> Option<(usize, Tracker)> {
+    let all: Vec<usize> = (0..level.nav_paths.len()).collect();
+    next_path_of(level, path, pos, &all)
+}
+
+/// [`next_path`] among only the paths `of` (indices, in order) that are one of the level's.
+pub fn next_path_of(
+    level: &Level,
+    path: usize,
+    pos: Vec3,
+    of: &[usize],
+) -> Option<(usize, Tracker)> {
     let n = level.nav_paths.len();
     (1..n)
         .map(|k| (path + k) % n)
-        .find(|&i| level.nav_paths[i].frames.len() >= 2)
+        .find(|i| of.contains(i) && level.nav_paths[*i].frames.len() >= 2)
         .map(|i| (i, Tracker::find(&level.nav_paths[i].frames, pos)))
 }
 
@@ -571,6 +812,11 @@ pub fn draw_choices(progress: &Progress) -> bool {
 }
 
 impl Progress {
+    /// The kart is in a flight from a gap's lip ([`Progress::flight_heading`]), not a hop or a fall.
+    pub fn in_gap_flight(&self) -> bool {
+        self.airborne > 0 && self.flight_heading.is_some()
+    }
+
     /// Whether the bot of `driver` should try another path now ([`next_path`]): on the
     /// ground, after each [`SWITCH_AFTER_STALLED`] ticks of a stall, or once put back by the mask
     /// after a loop of grabs ([`Progress::loop_switch`], which this clears). The line it steers
@@ -610,6 +856,15 @@ impl Progress {
             since_respawn: u32::MAX,
             loop_switch: false,
             flight_heading: None,
+            flight_lip_pos: [0; 2],
+            flight_target: [0; 2],
+            air_error: 0,
+            takeoff_speed: 0,
+            flight_lip: 0,
+            takeoff_y: 0,
+            apex_y: 0,
+            apex_paid: false,
+            takeoff_error: 0,
         }
     }
 
@@ -642,6 +897,9 @@ impl Progress {
         } else {
             self.since_respawn.saturating_add(1)
         };
+        // (Before the ground resets them: the flight this tick may end.)
+        let flown = self.air_progress + progress;
+        let was_gap_flight = self.flight_heading.is_some();
         let mut taken_back = 0;
         if grabbed {
             taken_back = self.air_progress;
@@ -662,6 +920,8 @@ impl Progress {
         };
         let reserves_lost =
             (self.reserves as i32 - driver.reserves as i32 - RESERVES_SPENT_PER_TICK).max(0);
+        // (What a boost spends of them this tick too, back.)
+        let boost_reserves = driver.reserves as i32 - self.reserves as i32 + RESERVES_SPENT_PER_TICK;
         self.reserves = driver.reserves;
         self.total += progress;
         // Carried by the mask, or put somewhere else: where it ends up is the new furthest, not
@@ -680,32 +940,121 @@ impl Progress {
         self.airborne = if airborne { self.airborne + 1 } else { 0 };
         match self.airborne {
             0 => self.flight_heading = None,
-            1 => self.flight_heading = gap_heading(path, tracker.frame as usize),
+            1 => {
+                self.flight_heading = gap_heading(path, tracker.frame as usize);
+                self.takeoff_speed = driver.speed_approx as i32;
+                if let Some((lip, landing)) = gap_lip(path, tracker.frame as usize) {
+                    self.flight_lip = lip;
+                    let (a, b) = (&path[lip].pos, &path[landing].pos);
+                    let (a, b) = ([a.x as i64, a.z as i64], [b.x as i64, b.z as i64]);
+                    let d = [b[0] - a[0], b[1] - a[1]];
+                    let len = ((d[0] * d[0] + d[1] * d[1]) as f64).sqrt().max(1.0);
+                    let past = |i: usize| b[i] + (d[i] as f64 * FLIGHT_AIM_PAST as f64 / len) as i64;
+                    self.flight_lip_pos = a;
+                    self.flight_target = [past(0), past(1)];
+                }
+            }
+            _ if self.flight_heading.is_some() => {
+                // The way to the target from here, short of where it swings round.
+                let pos = crate::bot::level_pos(driver.pos_curr);
+                let (t, a) = (self.flight_target, self.flight_lip_pos);
+                let to = [t[0] - pos[0], t[1] - pos[2]];
+                let axis = [t[0] - a[0], t[1] - a[1]];
+                let len = ((axis[0] * axis[0] + axis[1] * axis[1]) as f64).sqrt().max(1.0);
+                let ahead = (to[0] * axis[0] + to[1] * axis[1]) as f64 / len;
+                if ahead > FLIGHT_AIM_HOLD as f64 {
+                    self.flight_heading = Some(math::ratan2(to[0] as i32, to[1] as i32));
+                }
+            }
             _ => {}
         }
+        let gap_takeoff = self.airborne == 1 && self.flight_heading.is_some();
+        let landed = was_gap_flight
+            && self.airborne == 0
+            && !grabbed
+            && !relocated
+            && driver.kart_state != kart_state::MASK_GRABBED;
+        let gap_cleared = landed && flown >= GAP_CLEARED_PROGRESS;
+        let gap_short = landed && !gap_cleared;
+        let gap_fell = was_gap_flight && grabbed;
+        let gap_speed = if gap_cleared || gap_short || gap_fell { self.takeoff_speed } else { 0 };
         // (A drift that ends puts it back to 0: no boost.)
         let boosts = (driver.num_boosts_success as i32 - self.boosts_success as i32).max(0) as u8;
         self.boosts_success = driver.num_boosts_success;
-        let air_misalign = if self.airborne > AIR_GRACE_TICKS {
-            let heading = self
-                .flight_heading
-                .unwrap_or_else(|| path_heading(path, tracker, driver.pos_curr));
-            1.0 - ((heading - driver.angle as i32) as f32 * ANGLE_TO_RAD).cos()
-        } else {
-            0.0
+        // (A flight from a gap's lip only: a hop is no jump, and the other flights are not told
+        // apart from it by their length, which is what this once went by.) The turn the takeoff
+        // itself makes is free, a bad one is for the run-up to answer for.
+        let mut gap_aim = 0.0;
+        let mut air_closing = false;
+        let air_misalign = match self.flight_heading {
+            Some(heading) if self.airborne > 0 => {
+                let mut error = (heading - travel_angle(driver)) & 0xfff;
+                if error > 0x800 {
+                    error = 0x1000 - error;
+                }
+                let off = |e: i32| 1.0 - (e as f32 * ANGLE_TO_RAD).cos();
+                air_closing = self.airborne > 1 && error < self.air_error;
+                self.air_error = error;
+                if self.airborne == 1 {
+                    gap_aim = (1.0 - off(error)).max(0.0);
+                }
+                // (The takeoff tick is free; after it, every tick off the heading costs.)
+                if self.airborne > 1 { off(error) } else { 0.0 }
+            }
+            _ => 0.0,
         };
+        let y = driver.pos_curr.y >> 8;
+        let mut gap_apex = 0.0;
+        if gap_takeoff {
+            self.takeoff_y = y;
+            self.apex_y = y;
+            self.apex_paid = false;
+            self.takeoff_error = self.air_error;
+        } else if self.in_gap_flight() && !self.apex_paid && y >= self.apex_y {
+            self.apex_y = y;
+        } else if was_gap_flight && !self.apex_paid && (self.airborne == 0 || y < self.apex_y) {
+            // Topped out, or came down (or was grabbed) before: what this tick's height is then
+            // does not count.
+            self.apex_paid = true;
+            let aim = (self.takeoff_error as f32 * ANGLE_TO_RAD).cos().max(0.0);
+            gap_apex = (self.apex_y - self.takeoff_y).clamp(0, MAX_APEX) as f32 * aim;
+        }
         Step {
             progress,
+            gap_apex,
             grabbed,
             reserves_gained,
             air_misalign,
+            air_closing,
+            gap_aim,
+            gap_takeoff,
+            gap_cleared,
+            gap_short,
+            gap_fell,
+            gap_speed,
+            gap_lip: (gap_takeoff || gap_cleared || gap_short || gap_fell).then_some(self.flight_lip),
+            gap_hop: false,
+            air_steer: 0.0,
             stalled: self.stalled > STALL_GRACE_TICKS,
             braking: false,
             reserves_lost,
             taken_back,
             wall: driver.actions_flag_set & actions::DRIVING_AGAINST_WALL != 0,
             boosts,
+            boost_timing: if boosts > 0 {
+                let full = (driver.stats.turbo_full_bar_reserve_gain as i32) << 5;
+                (boost_reserves as f32 / full.max(1) as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             boost_number: driver.num_boosts_success.max(0) as u8,
+            fire_tier: if driver.reserves > 0 && !on_pad {
+                let single = driver.stats.single_turbo_speed as i32;
+                let third = ((driver.stats.sacred_fire_speed as i32 - single) / 2).max(1);
+                ((driver.fire_speed_cap as i32 - single) as f32 / third as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             steer_change: 0,
         }
     }
@@ -743,9 +1092,39 @@ pub struct Weights {
     /// k-th pays `drift_boost * boost_growth^(k - 1)`, for a policy to find out about chaining
     /// them (they fire hotter as well, which the progress pays for, later). 1 for none.
     pub boost_growth: f32,
-    /// Each tick in the air, for each unit of [`Step::air_misalign`]: a long jump flies
-    /// straight, or turns with the path.
+    /// For each drift boost fired, on top of [`Weights::drift_boost`] (and grown by
+    /// [`Weights::boost_growth`] as it is), times [`Step::boost_timing`] to the power
+    /// [`Weights::boost_timing_power`]: for tapping at the last moment of the meter's window,
+    /// not the first. The flat [`Weights::drift_boost`] pays a tap anywhere in the window, more
+    /// than the reserves of a late one make up for the risk of the meter running out (which
+    /// ends the drift's boosts); it gets a policy drifting, and can then fade (`train`'s
+    /// `boost_fade`), this one staying. 0 for none.
+    pub boost_timed: f32,
+    /// See [`Weights::boost_timed`]: 1 pays in proportion to the lateness, more pays the last
+    /// ticks of the window most.
+    pub boost_timing_power: f32,
+    /// Each tick, times [`Step::fire_tier`]: for the speed of a chained drift boost's fire, which
+    /// lasts as long as the reserves do. The reserves pay the same for a drift's every boost,
+    /// and the progress pays for the speed only by the bit, so this is what tells a chain (and
+    /// keeping its reserves topped up) from as many single boosts. 0 for none.
+    pub fire_tier: f32,
+    /// For each unit of [`Step::air_misalign`], each tick: a jump from a gap's lip flies toward
+    /// its landing, and holding a heading off it costs for as long as it lasts. 30 ticks a
+    /// quarter turn off is about as much as 6 ticks at top speed.
     pub air_heading: f32,
+    /// For a gap cleared ([`Step::gap_cleared`]), on top of the progress its flight made: the
+    /// payoff of a jump comes ticks after the run-up that made it, and a fall takes the flight's
+    /// progress back, so without this a policy can do as well by never trying.
+    pub gap_cleared: f32,
+    /// For each level unit of a gap flight's apex ([`Step::gap_apex`]), cleared or not: a hop at
+    /// the lip, and the speed, carry the kart higher and so much further, and a policy that has
+    /// never made the jump would not find that out. Paid at the top of the flight, ticks after
+    /// the takeoff, rather than for the hop itself: it pays for how well the hop was timed (a
+    /// late one, off the lip, lifts it less), and for whatever else lifts it (the speed up the ramp).
+    pub gap_apex: f32,
+    /// For each unit of [`Step::air_steer`], which is 0 since the stick in a gap flight is
+    /// scripted ([`air_steer`]): moot.
+    pub air_steer: f32,
     /// For a move of the stick from one end to the other ([`Step::steer_change`], in
     /// `STEER_BINS - 1` bins), less for less: enough to settle the choice between near bins,
     /// which otherwise flips from choice to choice (the wiggles), not enough to stop a turn.
@@ -764,6 +1143,13 @@ impl Weights {
         // As much as 15 ticks at top speed; with a full bar's reserves, about 34.
         drift_boost: 15.0,
         boost_growth: 1.0,
+        // A tap at the last choice of the window (some 0.9 of a full bar) gets about 0.8 of it;
+        // half way through the window, a quarter.
+        boost_timed: 10.0,
+        boost_timing_power: 2.0,
+        // A third boost's fire is some 7% faster than a first's: about 0.07 a tick at top speed.
+        // Some three times that, held for a full bar's reserves (~58 ticks), is about 12.
+        fire_tier: 0.2,
         // A short scrape (a few ticks) is about as much as a tick or three at top speed.
         wall: 0.3,
         // Half what a tick at top speed earns, and more than a turbo pad tops up a tick (some
@@ -775,6 +1161,13 @@ impl Weights {
         // A flight of 30 ticks sideways is as much as 6 ticks at top speed; within 15° of the
         // path, next to nothing.
         air_heading: 0.2,
+        // As much as the best drift boost (15) and a bit: a grab costs 30 and the flight's progress.
+        gap_cleared: 20.0,
+        // A hop alone tops out some 45 units up (`jump_force` 4596 against `gravity` 900): with a
+        // ramp's lift at speed, a long jump's apex of 100 is about 15, most of what clearing it
+        // pays.
+        gap_apex: 0.15,
+        air_steer: 0.3,
         // Swinging end to end at every choice is about 2.5% of what top speed earns.
         steer_change: 0.05,
     };
@@ -783,10 +1176,11 @@ impl Weights {
     fn drift_boosts(&self, step: &Step) -> f32 {
         let last = step.boost_number as i32;
         let first = last + 1 - step.boosts as i32;
+        let timed = self.boost_timed * step.boost_timing.clamp(0.0, 1.0).powf(self.boost_timing_power);
         (first.max(1)..=last)
             .map(|k| self.boost_growth.powi(k - 1))
             .sum::<f32>()
-            * self.drift_boost
+            * (self.drift_boost + timed)
     }
 
     pub fn reward(&self, step: &Step) -> f32 {
@@ -795,7 +1189,11 @@ impl Weights {
             - self.time
             + step.reserves_gained as f32 * self.reserves
             + self.drift_boosts(step)
+            + step.fire_tier * self.fire_tier
             - step.air_misalign * self.air_heading
+            + if step.gap_cleared { self.gap_cleared } else { 0.0 }
+            + step.gap_apex * self.gap_apex
+            - step.air_steer * self.air_steer
             - if step.wall { self.wall } else { 0.0 }
             - if step.stalled { self.stall } else { 0.0 }
             - step.reserves_lost as f32 * self.reserves_lost
@@ -843,12 +1241,44 @@ mod tests {
         let mut latch = Latch::default();
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
         let release = Action::default();
-        assert!(latch.pad(long, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(long, false, false, None).held & buttons::R1 != 0);
         for _ in 1..HOLD_TICKS {
-            assert!(latch.pad(release, false, false).held & buttons::R1 != 0);
+            assert!(latch.pad(release, false, false, None).held & buttons::R1 != 0);
         }
         assert_eq!(latch.hold_left, 0);
-        assert_eq!(latch.pad(release, false, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(release, false, false, None).held & buttons::R1, 0);
+    }
+
+    #[test]
+    fn air_steer_turns_the_way_of_travel_toward_the_flight_heading() {
+        // Going +z (angle 0), and the heading a little up from it: steer left, below the middle.
+        let mut driver = Driver::default();
+        driver.velocity = Vec3 { x: 0, y: 0, z: 1000 };
+        let mut progress = Progress { airborne: 3, flight_heading: Some(0x20), ..Progress::default() };
+        let left = air_steer(&progress, &driver).unwrap();
+        assert!(left < STEER_STEPS as u8);
+        // Further off: full lock; the other way: right.
+        progress.flight_heading = Some(AIR_FULL_ERROR * 2);
+        assert_eq!(air_steer(&progress, &driver), Some(0));
+        progress.flight_heading = Some(-AIR_FULL_ERROR * 2 & 0xfff);
+        assert_eq!(air_steer(&progress, &driver), Some(STEER_BINS as u8 - 1));
+        // On it: centred. Already turning toward it fast enough: let go, or steer back.
+        progress.flight_heading = Some(0);
+        assert_eq!(air_steer(&progress, &driver), Some(STEER_STEPS as u8));
+        progress.flight_heading = Some(0x20);
+        driver.amp_turn_state = (0x20 << 8) / AIR_PREDICT_TICKS as i16;
+        assert!(air_steer(&progress, &driver).unwrap() >= STEER_STEPS as u8);
+        // On the ground, or in a flight that is no gap's: the policy's.
+        progress.airborne = 0;
+        assert_eq!(air_steer(&progress, &driver), None);
+        progress.airborne = 3;
+        progress.flight_heading = None;
+        assert_eq!(air_steer(&progress, &driver), None);
+        // The pad takes it whatever was chosen.
+        let mut latch = Latch::default();
+        let right = Action { steer: STEER_BINS as u8 - 1, ..Action::default() };
+        latch.pad(right, false, false, Some(left));
+        assert_eq!(latch.steer, left);
     }
 
     #[test]
@@ -856,12 +1286,12 @@ mod tests {
         let mut latch = Latch::default();
         let left = Action { steer: 0, ..Action::default() };
         assert_eq!(latch.steer, STEER_STEPS as u8);
-        latch.pad(left, false, false);
+        latch.pad(left, false, false, None);
         assert_eq!(latch.steer_change, STEER_STEPS as u8);
         // Held for another tick: no move.
-        latch.pad(left, false, false);
+        latch.pad(left, false, false, None);
         assert_eq!(latch.steer_change, 0);
-        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() }, false, false);
+        latch.pad(Action { steer: STEER_BINS as u8 - 1, ..Action::default() }, false, false, None);
         assert_eq!(latch.steer_change, STEER_BINS as u8 - 1);
     }
 
@@ -870,9 +1300,9 @@ mod tests {
         let mut latch = Latch::default();
         let hold = Action { hop: Hop::Hold, ..Action::default() };
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
-        assert!(latch.pad(hold, true, false).held & buttons::R1 != 0);
+        assert!(latch.pad(hold, true, false, None).held & buttons::R1 != 0);
         for _ in 0..HOLD_TICKS {
-            assert!(latch.pad(long, true, false).held & buttons::R1 != 0);
+            assert!(latch.pad(long, true, false, None).held & buttons::R1 != 0);
         }
     }
 
@@ -881,13 +1311,13 @@ mod tests {
         let mut latch = Latch::default();
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
         let release = Action::default();
-        assert!(latch.pad(long, false, false).held & buttons::R1 != 0);
-        assert!(latch.pad(release, true, false).held & buttons::R1 != 0);
+        assert!(latch.pad(long, false, false, None).held & buttons::R1 != 0);
+        assert!(latch.pad(release, true, false, None).held & buttons::R1 != 0);
         // Tried: the choice lets go.
-        assert_eq!(latch.pad(release, true, true).held & buttons::R1, 0);
+        assert_eq!(latch.pad(release, true, true, None).held & buttons::R1, 0);
         assert_eq!(latch.hold_left, 0);
         // And a long hold chosen then is a plain hold.
-        assert!(latch.pad(long, true, true).held & buttons::R1 != 0);
+        assert!(latch.pad(long, true, true, None).held & buttons::R1 != 0);
         assert_eq!(latch.hold_left, 0);
     }
 
@@ -895,8 +1325,8 @@ mod tests {
     fn l1_only_in_a_drift() {
         let mut latch = Latch::default();
         let boost = Action { boost: true, ..Action::default() };
-        assert_eq!(latch.pad(boost, false, false).held & buttons::L1, 0);
-        assert!(latch.pad(boost, true, false).held & buttons::L1 != 0);
+        assert_eq!(latch.pad(boost, false, false, None).held & buttons::L1, 0);
+        assert!(latch.pad(boost, true, false, None).held & buttons::L1 != 0);
     }
 
     #[test]
@@ -904,11 +1334,11 @@ mod tests {
         let mut latch = Latch::default();
         let hold = Action { hop: Hop::Hold, ..Action::default() };
         let long = Action { hop: Hop::HoldLong, ..Action::default() };
-        assert!(latch.pad(hold, false, false).held & buttons::R1 != 0);
+        assert!(latch.pad(hold, false, false, None).held & buttons::R1 != 0);
         // Let go, then pressed and held on (the choice repeated, as the env holds it).
-        assert_eq!(latch.pad(long, false, false).held & buttons::R1, 0);
+        assert_eq!(latch.pad(long, false, false, None).held & buttons::R1, 0);
         for _ in 0..HOLD_TICKS {
-            assert!(latch.pad(long, false, false).held & buttons::R1 != 0);
+            assert!(latch.pad(long, false, false, None).held & buttons::R1 != 0);
         }
         assert_eq!(latch.hold_left, 0);
     }

@@ -5,7 +5,7 @@ use candle_core::{D, Device, Result, Tensor, Var};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
 use race::nn::{Action, N_HEADS, OBS_LEN, Obs};
 
-use crate::env::{Done, Env, Episode};
+use crate::env::{Done, Env, Episode, LipKey, LipStats};
 use crate::policy::Policy;
 use crate::rng::Rng;
 
@@ -61,6 +61,8 @@ struct Rollout {
 #[derive(Clone, Debug, Default)]
 pub struct Stats {
     pub episodes: Vec<(Done, Episode)>,
+    /// The flights from each ramp lip, over the rollout's envs.
+    pub lips: std::collections::BTreeMap<LipKey, LipStats>,
     pub mean_reward: f32,
     pub policy_loss: f32,
     pub value_loss: f32,
@@ -81,6 +83,17 @@ pub struct Trainer<'a> {
     obs: Vec<Obs>,
     rng: Rng,
     threads: usize,
+    /// The takeoffs and the failed flights (not made) from each ramp lip, over all the envs,
+    /// fading by [`Trainer::lip_memory`] an iteration: what [`Env::set_lip_odds`] is fed.
+    lip_tally: std::collections::BTreeMap<LipKey, (f32, f32)>,
+    /// What is left of the tally after an iteration (0.97: half of it is gone in some 23).
+    pub lip_memory: f32,
+}
+
+/// A lip's weight for the lip starts (`Rules::lip_starts`), of its takeoffs and failed flights:
+/// its share of failures, as if it had failed one in two more (a lip seen once is not 0 or 1).
+pub fn lip_weight(takeoffs: f32, failed: f32) -> f32 {
+    (failed + 1.0) / (takeoffs + 2.0)
 }
 
 impl<'a> Trainer<'a> {
@@ -110,6 +123,8 @@ impl<'a> Trainer<'a> {
             obs,
             rng: Rng::new(seed),
             threads,
+            lip_tally: Default::default(),
+            lip_memory: 0.97,
         })
     }
 
@@ -120,6 +135,36 @@ impl<'a> Trainer<'a> {
             env.rules.weights.reserves = reserves;
             env.rules.weights.drift_boost = drift_boost;
         }
+    }
+
+    /// Adds flights to the lip tally (as from an earlier run's `lips.csv`), and hands the odds to
+    /// the envs.
+    pub fn add_lips(&mut self, lips: &std::collections::BTreeMap<LipKey, LipStats>) {
+        for (&key, lip) in lips {
+            let t = self.lip_tally.entry(key).or_default();
+            t.0 += lip.takeoffs as f32;
+            t.1 += lip.takeoffs.saturating_sub(lip.made) as f32;
+        }
+        let odds = std::sync::Arc::new(self.lip_weights());
+        for env in &mut self.envs {
+            env.set_lip_odds(odds.clone());
+        }
+    }
+
+    /// Each lip's weight ([`lip_weight`]) by the tally.
+    fn lip_weights(&self) -> Vec<(LipKey, f32)> {
+        self.lip_tally
+            .iter()
+            .filter(|(_, t)| t.0 > 0.0)
+            .map(|(&key, &(takeoffs, failed))| (key, lip_weight(takeoffs, failed)))
+            .collect()
+    }
+
+    /// Each lip's share of the lip starts, in percent, by the tally.
+    pub fn lip_odds(&self) -> std::collections::BTreeMap<LipKey, f32> {
+        let weights = self.lip_weights();
+        let total: f32 = weights.iter().map(|(_, w)| w).sum::<f32>().max(f32::MIN_POSITIVE);
+        weights.into_iter().map(|(key, w)| (key, w / total * 100.0)).collect()
     }
 
     /// Steps every env by its action, on the threads.
@@ -224,6 +269,22 @@ impl<'a> Trainer<'a> {
         let mut stats = Stats::default();
         let start = std::time::Instant::now();
         let (r, last_values) = self.rollout(&mut stats)?;
+        for env in &mut self.envs {
+            for (key, lip) in env.take_lips() {
+                let total = stats.lips.entry(key).or_default();
+                total.takeoffs += lip.takeoffs;
+                total.hopped += lip.hopped;
+                total.made += lip.made;
+                total.short += lip.short;
+                total.fell += lip.fell;
+            }
+        }
+        for t in self.lip_tally.values_mut() {
+            t.0 *= self.lip_memory;
+            t.1 *= self.lip_memory;
+        }
+        let lips = stats.lips.clone();
+        self.add_lips(&lips);
         stats.rollout_secs = start.elapsed().as_secs_f32();
         stats.mean_reward = r.rewards.iter().sum::<f32>() / r.rewards.len() as f32;
         let (adv, returns) = self.advantages(&r, &last_values);
@@ -378,7 +439,8 @@ fn clip_grads(grads: &mut candle_core::backprop::GradStore, vars: &[Var], max: f
     Ok(())
 }
 
-/// The device the trainer runs on.
+/// The device the trainer runs on: the CPU. The nets are small and the batches are many, and
+/// Metal's launches and copies cost more than the maths they spare (it was slower).
 pub fn device() -> Device {
     Device::Cpu
 }

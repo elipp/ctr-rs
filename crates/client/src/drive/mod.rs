@@ -34,7 +34,7 @@ use vehicle::Driver;
 
 use crate::Track;
 use follow::{View, chase, view_of};
-use overlay::{hud, reserves_hud, split_toast, wumpa_hud};
+use overlay::{hud, reserves_hud, reward_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
 pub use follow::ChaseCamera;
@@ -155,6 +155,7 @@ impl Plugin for DrivePlugin {
                     wumpa_hud,
                     split_toast,
                     reserves_hud,
+                    reward_hud,
                 )
                     .chain()
                     .distributive_run_if(driving),

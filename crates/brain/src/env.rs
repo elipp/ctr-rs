@@ -10,6 +10,7 @@
 
 use race::bot::Tracker;
 use race::nn::{self, Action, Latch, Obs, Progress, Weights};
+use race::rev::{Rev, Skill};
 use race::{KartSpec, Pad, Race};
 
 use crate::rng::Rng;
@@ -41,6 +42,10 @@ pub struct Rules {
     /// kart was grabbed at lately (the last [`GRAB_SPOTS`]): practice where the policy fails,
     /// on whatever track, without a list of them. A spot it no longer falls at drops out.
     pub grab_starts: f32,
+    /// The share of the episodes that start [`Rules::run_up`] before a ramp lip (a gap's, as
+    /// [`LipStats`] count them), picked by how often the flights from it fail, over all the envs
+    /// lately ([`Env::set_lip_odds`]). Before any are known, these are jump starts.
+    pub lip_starts: f32,
     pub weights: Weights,
     /// The reward the trainer sees is the sum of [`Rules::weights`]' over the held ticks, times
     /// this (for the critic's targets to be of a size of 1 or so).
@@ -61,6 +66,7 @@ impl Default for Rules {
             run_up: 1200,
             turned_starts: 0.15,
             grab_starts: 0.15,
+            lip_starts: 0.2,
             weights: Weights::DEFAULT,
             reward_scale: 0.1,
         }
@@ -76,6 +82,20 @@ pub enum Done {
 }
 
 
+/// A ramp lip of a track: (the level's id, the bot path, the lip's frame).
+pub type LipKey = (u32, usize, usize);
+
+/// How the flights from one lip went.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LipStats {
+    pub takeoffs: u32,
+    /// With a hop (`Step::gap_hop`).
+    pub hopped: u32,
+    pub made: u32,
+    pub short: u32,
+    pub fell: u32,
+}
+
 /// The sums of an episode, for the stats.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Episode {
@@ -87,20 +107,43 @@ pub struct Episode {
     pub grabs: u32,
     /// Drift boosts fired (the meter turned into reserves in time), each of a drift's.
     pub boosts: u32,
+    /// The sum of `Step::boost_timing` over them: how late in the window each was tapped.
+    pub boost_timing: f32,
+    /// The sum of `Step::fire_tier` over the ticks: how far up the drift boosts' fire it burned.
+    pub fire_tier: f32,
     /// R1 pressed (a hop, when the kart can).
     pub hops: u32,
     /// Ticks spent drifting, and with R1 held.
     pub drifting: u32,
     pub r1: u32,
-    /// Ticks in the air past `nn::AIR_GRACE_TICKS`, the sum of `Step::air_misalign` over them,
-    /// and the ones of them more than 45° off the path.
+    /// Ticks in a flight from a gap's lip, the sum of `Step::air_misalign` over them (the turns
+    /// away from the landing's heading), and the ones of them more than 45° off it.
     pub air_ticks: u32,
     pub air_misalign: f32,
+    /// The sum of `Step::air_steer` over those ticks.
+    pub air_steer: f32,
     pub air_askew: u32,
+    /// Takeoffs from a gap's lip, and the ones that made it (`Step::gap_takeoff`, `gap_cleared`).
+    pub gap_flights: u32,
+    pub gaps_cleared: u32,
+    /// The takeoffs from a gap's lip that came off a hop (`Step::gap_hop`).
+    pub gap_hops: u32,
+    /// The sum of `Step::gap_apex` (level units, by the takeoff's aim): one a flight.
+    pub gap_apex: f32,
+    /// How the other flights from a gap's lip ended (`Step::gap_short`, `gap_fell`), and the sums
+    /// of the takeoff speeds, as shares of the top speed, of the ones that made it, fell short,
+    /// and fell.
+    pub gaps_short: u32,
+    pub gaps_fell: u32,
+    pub speed_made: f32,
+    pub speed_short: f32,
+    pub speed_fell: f32,
     /// It started before a jump ([`Rules::jump_starts`]), or a spot of a grab
     /// ([`Rules::grab_starts`]).
     pub jump_start: bool,
     pub grab_start: bool,
+    /// It started before a ramp lip ([`Rules::lip_starts`]).
+    pub lip_start: bool,
     /// Times a stuck kart tried another path (`Progress::switch_due`).
     pub switches: u32,
     /// Ticks against a wall, and braking (`Step::braking`).
@@ -163,6 +206,8 @@ pub struct Env<'a> {
     race: Race,
     tracker: Tracker,
     latch: Latch,
+    /// The gas while the engine revs (after a mask grab), not the policy's: as on [`REV_SKILL`].
+    rev: Rev,
     progress: Progress,
     episode: Episode,
     /// Where the kart was grabbed lately, as (track, path, frame): the frame it last had the
@@ -170,7 +215,16 @@ pub struct Env<'a> {
     spots: std::collections::VecDeque<(usize, usize, usize)>,
     /// The tracker's frame the last tick the kart touched the ground.
     ground_frame: usize,
+    /// The ticks since R1 was last pressed (not held): a hop.
+    since_hop: u32,
+    /// How the flights from each lip went since [`Env::take_lips`].
+    lips: std::collections::BTreeMap<LipKey, LipStats>,
+    /// The lips [`Rules::lip_starts`] are before, and their weights ([`Env::set_lip_odds`]).
+    lip_odds: std::sync::Arc<Vec<(LipKey, f32)>>,
 }
+
+/// How the kart revs as the mask lowers it, in training: as the bots on hard.
+const REV_SKILL: Skill = Skill::of(vehicle::bot::difficulty_level::HARD);
 
 /// How many grab spots an env keeps ([`Rules::grab_starts`]).
 pub const GRAB_SPOTS: usize = 32;
@@ -188,13 +242,47 @@ impl<'a> Env<'a> {
             race,
             tracker: Tracker::default(),
             latch: Latch::default(),
+            rev: Rev::new(REV_SKILL),
             progress: Progress::default(),
             episode: Episode::default(),
             spots: std::collections::VecDeque::with_capacity(GRAB_SPOTS),
             ground_frame: 0,
+            since_hop: u32::MAX,
+            lips: Default::default(),
+            lip_odds: Default::default(),
         };
         env.reset();
         env
+    }
+
+    /// How the flights from each ramp lip went since the last call, and starts the count over.
+    pub fn take_lips(&mut self) -> std::collections::BTreeMap<LipKey, LipStats> {
+        std::mem::take(&mut self.lips)
+    }
+
+    /// Sets the lips [`Rules::lip_starts`] are before, each by its weight (any scale).
+    pub fn set_lip_odds(&mut self, odds: std::sync::Arc<Vec<(LipKey, f32)>>) {
+        self.lip_odds = odds;
+    }
+
+    /// A lip of [`Env::lip_odds`], by their weights, as (track, path, frame): None if there are
+    /// none, or the one picked is not on a track or path the env drives.
+    fn pick_lip(&mut self) -> Option<(usize, usize, usize)> {
+        let total: f32 = self.lip_odds.iter().map(|(_, w)| w.max(0.0)).sum();
+        if total <= 0.0 {
+            return None;
+        }
+        let mut u = self.rng.unit() * total;
+        let &((level, path, lip), _) = self
+            .lip_odds
+            .iter()
+            .find(|(_, w)| {
+                u -= w.max(0.0);
+                u < 0.0
+            })
+            .unwrap_or(self.lip_odds.last()?);
+        let track = self.tracks.iter().position(|t| t.id.0 == level)?;
+        self.tracks[track].paths.contains(&path).then_some((track, path, lip))
     }
 
     /// A track, by their weights (`Track::weight`).
@@ -217,11 +305,24 @@ impl<'a> Env<'a> {
         let any_jumps = self.tracks.iter().any(|t| !t.jumps.is_empty());
         loop {
             let u = self.rng.unit();
-            let jump_start = any_jumps && u < self.rules.jump_starts;
-            let grab_start = !jump_start
+            let r = self.rules;
+            let lip_share = u < r.lip_starts;
+            let lip = if lip_share { self.pick_lip() } else { None };
+            let lip_start = lip.is_some();
+            // (A lip start without a lip known is a jump start.)
+            let jump_start = !lip_start
+                && any_jumps
+                && (lip_share || (r.lip_starts..r.lip_starts + r.jump_starts).contains(&u));
+            let grab_start = !lip_start
+                && !jump_start
                 && !self.spots.is_empty()
-                && u < self.rules.jump_starts + self.rules.grab_starts;
-            let spot = grab_start.then(|| self.spots[self.rng.below(self.spots.len())]);
+                && u >= r.lip_starts + r.jump_starts
+                && u < r.lip_starts + r.jump_starts + r.grab_starts;
+            let spot = if grab_start {
+                Some(self.spots[self.rng.below(self.spots.len())])
+            } else {
+                lip
+            };
             self.track = match spot {
                 Some((track, _, _)) => track,
                 None => self.pick_track(),
@@ -245,8 +346,8 @@ impl<'a> Env<'a> {
             let spec = spec(self.rng.below(vehicle::stats::CHARACTER_ENGINES.len()));
             let mut race = Race::new(&track.level, track.objects.clone(), &[spec], false);
             race.laps = race::FREE_DRIVE_LAPS;
-            // (Not before a jump or a grab's spot: those are for getting over it.)
-            let turn = if !jump_start && !grab_start && self.rng.unit() < self.rules.turned_starts
+            // (Not before a jump, a lip or a grab's spot: those are for getting over it.)
+            let turn = if !jump_start && !grab_start && !lip_start && self.rng.unit() < self.rules.turned_starts
             {
                 self.rng.below(0x1000) as i32 - 0x800
             } else {
@@ -260,10 +361,13 @@ impl<'a> Env<'a> {
             self.tracker = Tracker::find(frames, driver.pos_curr);
             self.progress = Progress::new(frames, &track.lengths[self.path], &self.tracker, driver);
             self.latch = Latch::default();
+            self.rev = Rev::new(REV_SKILL);
+            self.since_hop = u32::MAX;
             self.ground_frame = self.tracker.frame as usize;
             self.episode = Episode {
                 jump_start,
                 grab_start,
+                lip_start,
                 ..Episode::default()
             };
             return;
@@ -293,18 +397,37 @@ impl<'a> Env<'a> {
                     (d.speed_approx as i32) * 4 > d.stats.speed_class_stat as i32,
                 )
             };
-            let pad: Pad = self.latch.pad(action, was_drifting, attempted > 0);
+            let air_steer = nn::air_steer(&self.progress, &self.race.karts[0].driver);
+            let mut pad: Pad = self.latch.pad(action, was_drifting, attempted > 0, air_steer);
+            if let Some(gas) = self.rev.gas(&self.race, 0, &mut self.rng) {
+                pad = race::rev::with_gas(pad, gas);
+            }
             let braking =
                 fast && pad.held & (vehicle::buttons::SQUARE | vehicle::buttons::DOWN) != 0;
+            self.since_hop = if !pressed && pad.held & vehicle::buttons::R1 != 0 {
+                0
+            } else {
+                self.since_hop.saturating_add(1)
+            };
             self.race.tick(&track.level, &[pad]);
             let driver = &self.race.karts[0].driver;
             let drifting = driver.kart_state == vehicle::kart_state::DRIFTING;
             let relocated = nn::track(&mut self.tracker, frames, driver);
-            let step = nn::Step {
-                steer_change: self.latch.steer_change,
+            let mut step = nn::Step {
+                // (The script's stick in a gap flight is none of the policy's doing.)
+                steer_change: if air_steer.is_some() { 0 } else { self.latch.steer_change },
                 braking,
                 ..self.progress.step(frames, lengths, &self.tracker, relocated, driver)
             };
+            step.gap_hop = step.gap_takeoff && !drifting && self.since_hop <= nn::GAP_HOP_TICKS;
+            if let Some(lip) = step.gap_lip {
+                let s = self.lips.entry((track.id.0, self.path, lip)).or_default();
+                s.takeoffs += step.gap_takeoff as u32;
+                s.hopped += step.gap_hop as u32;
+                s.made += step.gap_cleared as u32;
+                s.short += step.gap_short as u32;
+                s.fell += step.gap_fell as u32;
+            }
             let r = self.rules.weights.reward(&step);
             reward += r;
             let e = &mut self.episode;
@@ -322,6 +445,8 @@ impl<'a> Env<'a> {
                 self.spots.push_back((self.track, self.path, self.ground_frame));
             }
             e.boosts += step.boosts as u32;
+            e.boost_timing += step.boost_timing;
+            e.fire_tier += step.fire_tier;
             e.wall += step.wall as u32;
             e.braking += step.braking as u32;
             e.taken_back += step.taken_back;
@@ -340,14 +465,34 @@ impl<'a> Env<'a> {
             e.r1 += (pad.held & vehicle::buttons::R1 != 0) as u32;
             e.hops += (!pressed && pad.held & vehicle::buttons::R1 != 0) as u32;
             // (The ones `Step::air_misalign` counts.)
-            e.air_ticks += (self.progress.airborne > nn::AIR_GRACE_TICKS) as u32;
+            e.air_ticks += (self.progress.airborne > 0 && self.progress.flight_heading.is_some()) as u32;
             e.air_misalign += step.air_misalign;
-            // (`1 - cos 45°`.)
-            e.air_askew += (step.air_misalign > 0.293) as u32;
+            // (The stick in a gap flight is scripted (`nn::air_steer`): no cost to the policy,
+            // only how much it took, while not yet closing on the heading.)
+            if self.progress.in_gap_flight() && !step.air_closing {
+                e.air_steer += self.latch.stick();
+            }
+            // (0x200 of 0x1000 to a turn: 45°.)
+            e.air_askew +=
+                (self.progress.flight_heading.is_some() && self.progress.air_error > 0x200) as u32;
+            e.gap_flights += step.gap_takeoff as u32;
+            e.gaps_cleared += step.gap_cleared as u32;
+            e.gap_hops += step.gap_hop as u32;
+            e.gap_apex += step.gap_apex;
+            e.gaps_short += step.gap_short as u32;
+            e.gaps_fell += step.gap_fell as u32;
+            let share = step.gap_speed as f32 / (driver.stats.speed_class_stat as f32).max(1.0);
+            if step.gap_cleared {
+                e.speed_made += share;
+            } else if step.gap_short {
+                e.speed_short += share;
+            } else if step.gap_fell {
+                e.speed_fell += share;
+            }
             e.steer_change += step.steer_change as u32;
             if self.progress.switch_due(driver)
                 && let Some((path, tracker)) =
-                    nn::next_path(&track.level, self.path, driver.pos_curr)
+                    nn::next_path_of(&track.level, self.path, driver.pos_curr, &track.paths)
             {
                 self.path = path;
                 self.tracker = tracker;

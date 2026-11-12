@@ -171,7 +171,8 @@ pub(super) fn drive_tick(
         );
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.
-        if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots()) {
+        let hosted = lobby.online.as_ref().filter(|net| net.hosts_bots());
+        if hosted.is_some() {
             match brains.load() {
                 Ok(name) => info!("online bots: the policy {name}"),
                 // (They hold a neutral pad then, below: the race does not wait for them.)
@@ -180,8 +181,19 @@ pub(super) fn drive_tick(
                     toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
                 }
             }
-            brains.start(&track.0, &sim.race, &specs, net.bot_slots());
         }
+        // (Also with none: the karts of the race before are not driven any more. Our own, if
+        // `/autopilot` is on, is taken again below.)
+        brains.start(
+            &track.0,
+            track.1,
+            &sim.race,
+            &specs,
+            hosted.map_or(0..0, |net| net.bot_slots()),
+            hosted.map_or(vehicle::bot::difficulty_level::MEDIUM, |net| {
+                net.retail.difficulty as i16
+            }),
+        );
         particles.list.clear();
         drive.camera = camera::CameraDc::default();
         drive.weather = crate::weather::WeatherView::new(&track.0);
@@ -371,10 +383,26 @@ pub(super) fn drive_tick(
     }
     // Online, the host's bots: from the race as it is now, the others' pads predicted, as a
     // player sees it. They go to the others before our own pad, in the same packet.
-    if let Some(net) = lobby.online.as_ref().filter(|net| net.hosts_bots())
-        && net.bot_slots().any(|slot| sim.race.confirmed_until(slot) <= tick)
+    // Our own kart too, if `/autopilot` is on, made by the same policy. Not once we watch: a
+    // spectator has no kart, and a finished one takes no pad.
+    let auto = brains.autopilot && !spectating && !watches;
+    brains.drive_own(&track.0, track.1, &sim.race, own, auto);
+    let own_due = auto && sim.race.confirmed_until(own) <= tick;
+    let bots_due = lobby
+        .online
+        .as_ref()
+        .is_some_and(|net| net.hosts_bots() && net.bot_slots().any(|slot| sim.race.confirmed_until(slot) <= tick));
+    let mut pads = if bots_due || own_due {
+        brains.pads(&track.0, &sim.race)
+    } else {
+        Vec::new()
+    };
+    // (Ours goes below, with the controller's taps.)
+    let auto_pad = pads.iter().find(|(slot, _)| *slot == own && own_due).map(|&(_, pad)| pad);
+    pads.retain(|(slot, _)| *slot != own || !own_due);
+    if bots_due
+        && let Some(net) = lobby.online.as_ref()
     {
-        let mut pads = brains.pads(&track.0, &sim.race);
         // No policy (it could not be read): they hold still, as a player that left does.
         if pads.is_empty() {
             pads = net.bot_slots().map(|slot| (slot, Pad::default())).collect();
@@ -406,16 +434,21 @@ pub(super) fn drive_tick(
         } else if online && hold.menu.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
-        } else if online {
-            Pad::of_input(&controller.read(held))
+        } else if let Some(pad) = auto_pad {
+            pad
         } else {
             Pad::of_input(&controller.read(held))
         };
         if !watches {
-            let taps = pad.held & !held;
+            // (The taps are the controller's even when the policy drives: its pad is not ours.)
+            let buttons_held = match auto_pad {
+                Some(_) => controller.read(waits.1).buttons_held,
+                None => pad.held,
+            };
+            let taps = buttons_held & !if auto_pad.is_some() { waits.1 } else { held };
             cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
             // (So that an R1 held over the line is not taken for a tap once we watch.)
-            waits.1 = pad.held;
+            waits.1 = buttons_held;
         }
         sim.race
             .confirm(own, tick, pad)

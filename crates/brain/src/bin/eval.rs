@@ -20,6 +20,9 @@
 //! - `escapes` (true): with `greedy`, whether to draw them while stuck and after a respawn; false
 //!   takes the likeliest always (a stuck kart stays stuck, a fall at a spot repeats).
 //! - `seed` (1): for `greedy=false`.
+//! - `difficulty` (`hard`): `easy`, `medium` or `hard`: how well the kart revs its engine as the
+//!   mask lowers it (`race::rev`). The `revs` column has how those ended: the big boost, the
+//!   small one, none.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,6 +32,7 @@ use brain::rng::Rng;
 use brain::tracks::Track;
 use race::bot::Tracker;
 use race::nn::{self, Latch};
+use race::rev::{Rev, Skill};
 use race::{KartSpec, Pad, Race};
 use vehicle::kart_state;
 
@@ -47,6 +51,8 @@ struct Run {
     finished: bool,
     grabs: u32,
     boosts: u32,
+    /// The engine revs that ended, by the boost they gave ([`RevBoost`] order: none, small, big).
+    revs: [u32; 3],
     ticks: u32,
     stuck: u32,
     slow: u32,
@@ -79,6 +85,12 @@ impl Run {
         format!("{:.1}s", self.stuck as f32 / 30.0)
     }
 
+    /// The revs by how they ended, as `big/small/none`.
+    fn revs(&self) -> String {
+        let [none, small, big] = self.revs;
+        format!("{big}/{small}/{none}")
+    }
+
     /// The share of the ticks slow, as `4%`.
     fn slow(&self) -> String {
         format!("{:.0}%", self.slow as f32 / self.ticks.max(1) as f32 * 100.0)
@@ -109,6 +121,7 @@ fn drive(
         finished: false,
         grabs: 0,
         boosts: 0,
+        revs: [0; 3],
         ticks: 0,
         stuck: 0,
         slow: 0,
@@ -123,6 +136,11 @@ fn drive(
             let d = &race.karts[0].driver;
             (d.kart_state, d.num_boosts_success)
         };
+        // A rev that ends this tick: the boost it gives (`vehicle::stuck::rev_engine_update`).
+        if race.rev_ticks_left(0) == Some(0) {
+            let d = &race.karts[0].driver;
+            run.revs[vehicle::stuck::rev_boost(&d.rev, &d.stats) as usize] += 1;
+        }
         race.tick(&track.level, &[p]);
         let d = &race.karts[0].driver;
         run.grabs += (d.kart_state == kart_state::MASK_GRABBED
@@ -221,6 +239,15 @@ fn main() -> Result<(), Error> {
     let greedy: bool = take("greedy").map_or(Ok(true), |v| v.parse())?;
     let escapes: bool = take("escapes").map_or(Ok(true), |v| v.parse())?;
     let seed: u64 = take("seed").map_or(Ok(1), |v| v.parse())?;
+    let difficulty = {
+        use vehicle::bot::difficulty_level::{EASY, HARD, MEDIUM};
+        match take("difficulty").as_deref() {
+            None | Some("hard") => HARD,
+            Some("medium") => MEDIUM,
+            Some("easy") => EASY,
+            Some(other) => return Err(format!("difficulty: easy, medium or hard, not {other:?}").into()),
+        }
+    };
     let ids: Vec<u32> = match take("tracks") {
         Some(list) => list
             .split(',')
@@ -253,13 +280,14 @@ fn main() -> Result<(), Error> {
         },
     );
     println!(
-        "{:>5} {:>4} | {:>9} {:>9} {:>6} {:>6} {:>7} {:>5} | {:>9} {:>6} {:>7} {:>5} | {:>7}",
+        "{:>5} {:>4} | {:>9} {:>9} {:>6} {:>6} {:>8} {:>7} {:>5} | {:>9} {:>6} {:>7} {:>5} | {:>7}",
         "track",
         "path",
         "policy",
         "best lap",
         "grabs",
         "boosts",
+        "revs",
         "stuck",
         "slow",
         "scripted",
@@ -296,6 +324,7 @@ fn main() -> Result<(), Error> {
             let mut progress =
                 nn::Progress::new(frames0, &track.lengths[path], &tracker, &race.karts[0].driver);
             let mut latch = Latch::default();
+            let mut rev = Rev::new(Skill::of(difficulty));
             let mut action = nn::Action::default();
             let mut failed = None;
             let learned = drive(track, path, race, laps, |race| {
@@ -306,7 +335,7 @@ fn main() -> Result<(), Error> {
                 progress.step(frames, lengths, &tracker, relocated, &kart.driver);
                 if progress.switch_due(&kart.driver)
                     && let Some((other, t)) =
-                        nn::next_path(&track.level, steer_path, kart.driver.pos_curr)
+                        nn::next_path_of(&track.level, steer_path, kart.driver.pos_curr, &track.paths)
                 {
                     steer_path = other;
                     tracker = t;
@@ -323,7 +352,16 @@ fn main() -> Result<(), Error> {
                     }
                 }
                 let d = &kart.driver;
-                latch.pad(action, d.kart_state == kart_state::DRIFTING, d.num_boosts_attempted > 0)
+                let pad = latch.pad(
+                    action,
+                    d.kart_state == kart_state::DRIFTING,
+                    d.num_boosts_attempted > 0,
+                    nn::air_steer(&progress, d),
+                );
+                match rev.gas(race, 0, &mut rng) {
+                    Some(gas) => race::rev::with_gas(pad, gas),
+                    None => pad,
+                }
             });
             if let Some(e) = failed {
                 return Err(e.into());
@@ -342,13 +380,14 @@ fn main() -> Result<(), Error> {
                 _ => "-".into(),
             };
             println!(
-                "{:>5} {:>4} | {:>9} {:>9} {:>6} {:>6} {:>7} {:>5} | {:>9} {:>6} {:>7} {:>5} | {:>7}",
+                "{:>5} {:>4} | {:>9} {:>9} {:>6} {:>6} {:>8} {:>7} {:>5} | {:>9} {:>6} {:>7} {:>5} | {:>7}",
                 track.id.0,
                 path,
                 fmt_ms(learned.total()),
                 fmt_ms(learned.laps.iter().copied().min()),
                 learned.grabs,
                 learned.boosts,
+                learned.revs(),
                 learned.stuck(),
                 learned.slow(),
                 fmt_ms(scripted.total()),
