@@ -7,6 +7,7 @@ pub mod icons;
 pub mod lev;
 pub mod level;
 pub mod model;
+pub mod nav_amend;
 pub mod scenery;
 pub mod source;
 pub mod texture;

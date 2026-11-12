@@ -33,7 +33,7 @@ const COLORS: [Color; NAV_PATH_COUNT] = [
 
 /// Which paths the viewer draws: all of them, one (by its index), or none.
 #[derive(Resource, Clone, Copy, PartialEq, Eq)]
-enum Shown {
+pub(crate) enum Shown {
     All,
     One(usize),
     None,
@@ -49,7 +49,7 @@ impl Shown {
         }
     }
 
-    fn shows(self, path: usize) -> bool {
+    pub(crate) fn shows(self, path: usize) -> bool {
         match self {
             Shown::All => true,
             Shown::One(i) => i == path,
@@ -63,7 +63,7 @@ impl Shown {
 struct InRace(bool);
 
 #[derive(Component)]
-struct NavText;
+pub(crate) struct NavText;
 
 pub struct NavPlugin;
 
@@ -130,7 +130,7 @@ fn toggle_in_race(
     }
 }
 
-fn at(f: &NavFrame) -> Vec3 {
+pub(crate) fn at(f: &NavFrame) -> Vec3 {
     Vec3::from(to_world(f.pos)) + Vec3::Y * LIFT * SCALE
 }
 
@@ -148,9 +148,10 @@ fn circle(gizmos: &mut Gizmos, f: &NavFrame, size: f32, color: Color) {
     );
 }
 
-fn draw_in_viewer(
+pub(crate) fn draw_in_viewer(
     track: Res<Track>,
     shown: Res<Shown>,
+    edit: Res<crate::nav_edit::NavEdit>,
     camera: Single<
         &Transform,
         (
@@ -186,7 +187,17 @@ fn draw_in_viewer(
             }
         }
     }
+    // While editing, the frame under the cursor instead.
+    let nearest = if edit.on {
+        edit.hover.map(|(p, i)| (p, i, 0.0))
+    } else {
+        nearest
+    };
     let Some((p, i, _)) = nearest else {
+        if edit.on {
+            text.0 = format!("bot paths (N)\n{}", edit.status());
+            return;
+        }
         text.0 = "bot paths: this one is empty (N)".into();
         return;
     };
@@ -197,8 +208,9 @@ fn draw_in_viewer(
         Shown::None => unreachable!(),
     };
     text.0 = format!(
-        "bot paths: {shown_label} (N)\n{}",
-        describe(p, i, &paths[p])
+        "bot paths: {shown_label} (N)\n{}\n{}",
+        describe(p, i, &paths[p]),
+        edit.status()
     );
 }
 

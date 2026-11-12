@@ -66,6 +66,7 @@ mod mesh_write;
 mod minimap;
 mod names;
 mod nav;
+mod nav_edit;
 mod paths;
 mod pause;
 mod place;
@@ -331,6 +332,7 @@ fn main() {
         config::ConfigPlugin,
         probe::ProbePlugin,
         nav::NavPlugin,
+        nav_edit::NavEditPlugin,
     ));
     app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
     app.add_systems(Update, fly.run_if(not(drive::driving)))

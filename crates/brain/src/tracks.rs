@@ -135,7 +135,10 @@ pub fn load(disc: &Path, ids: impl IntoIterator<Item = u32>) -> std::io::Result<
             let id = LevelId(id);
             let index = BigIndex::level(id, Lod::OnePlayer, LevFile::Lev);
             let dram = DramFile::parse(&big.read(&mut reader, index.get())?)?;
-            let level = Level::parse(&dram)?;
+            let mut level = Level::parse(&dram)?;
+            for why in loader::nav_amend::Amendments::builtin().apply(id.0, &mut level.nav_paths) {
+                eprintln!("track {}: a bot path amendment is left out: {why}", id.0);
+            }
             let objects = Objects::new(&level, &dram);
             let lengths = race::nn::path_lengths(&level);
             let paths = race::nn::learned_paths(&level, id);

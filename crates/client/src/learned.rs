@@ -32,10 +32,10 @@ fn fire_wait(rng: &mut Rng) -> u32 {
 const OWN_REV: Skill = Skill::of(vehicle::bot::difficulty_level::HARD);
 
 /// The policy when none is given (nor `BRAIN_POLICY`): built in, so it works without a file
-/// system (wasm). `bots/BOTS.md` has how it was trained.
-const DEFAULT_POLICY: &[u8] = include_bytes!("../../../bots/policy/no-chain-boost-v1.safetensors");
+/// system (wasm).
+const DEFAULT_POLICY: &[u8] = include_bytes!("../../../bots/policy/chain-boost-v1.safetensors");
 /// The name of [`DEFAULT_POLICY`], for the log.
-const DEFAULT_POLICY_NAME: &str = "no-chain-boost-v1 (built in)";
+const DEFAULT_POLICY_NAME: &str = "chain-boost-v1 (built in)";
 
 /// The policy (its actor: what drives), and the karts it drives in the race.
 #[derive(Resource)]
@@ -316,4 +316,19 @@ fn driven(
         fire_in: fire_wait(rng),
         reward: 0.0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The built-in policy still fits the race: it sees as many numbers as `nn::observe` gives
+    /// and gives as many logits as the heads take. A change to either retrains it, or this fails.
+    #[test]
+    fn default_policy_fits_the_race() {
+        let actor = Actor::from_safetensors(DEFAULT_POLICY)
+            .unwrap_or_else(|e| panic!("{DEFAULT_POLICY_NAME}: {e}"));
+        let logits = actor.logits(&[0.0; nn::OBS_LEN]);
+        assert!(logits.iter().all(|l| l.is_finite()), "{logits:?}");
+    }
 }
