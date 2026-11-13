@@ -441,6 +441,7 @@ fn spawn_body(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
+    wheel_materials: &mut Assets<crate::wheels::WheelMaterial>,
 ) -> Entity {
     let header = &model.headers[0];
     let frame = header
@@ -463,7 +464,7 @@ fn spawn_body(
             commands,
             images,
             meshes,
-            materials,
+            wheel_materials,
             wheel_icons,
             vram,
             root,
@@ -503,6 +504,12 @@ pub struct KartBuilder<'w, 's> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     subtract_materials: ResMut<'w, Assets<SubtractMaterial>>,
+    wheel_materials: ResMut<'w, Assets<crate::wheels::WheelMaterial>>,
+    skid_materials: ResMut<'w, Assets<crate::skid::SkidMaterial>>,
+    skid_subtract_materials: ResMut<'w, Assets<crate::skid::SkidSubtractMaterial>>,
+    streak_materials: ResMut<'w, Assets<crate::billboard::StreakMaterial>>,
+    billboard_materials: ResMut<'w, Assets<crate::billboard::BillboardMaterial>>,
+    billboard_subtract_materials: ResMut<'w, Assets<crate::billboard::BillboardSubtractMaterial>>,
     textures: Res<'w, crate::Textures>,
     shadow_icons: Res<'w, crate::ShadowIcons>,
     smoke_icon: Res<'w, crate::SmokeIcon>,
@@ -527,6 +534,21 @@ impl KartBuilder<'_, '_> {
         sim: Option<(usize, &race::Kart)>,
     ) -> Entity {
         let layer = if ours { crate::KART_LAYER } else { 0 };
+        self.spawn_in(model, wheel_icons, placement, ours, layer, sim)
+    }
+
+    /// [`spawn`](Self::spawn) with the kart (and what goes with it) in `layer`: the kart of a
+    /// local player that is not the first is in a layer of its own (`crate::player_layer`), which
+    /// the camera over that player's picture draws, and the other players' main cameras as well.
+    pub fn spawn_in(
+        &mut self,
+        model: &Model,
+        wheel_icons: &[Icon],
+        placement: Transform,
+        ours: bool,
+        layer: usize,
+        sim: Option<(usize, &race::Kart)>,
+    ) -> Entity {
         let vram = &self.textures.vram;
         let kart = spawn_body(
             model,
@@ -540,6 +562,7 @@ impl KartBuilder<'_, '_> {
             &mut self.meshes,
             &mut self.materials,
             &mut self.subtract_materials,
+            &mut self.wheel_materials,
         );
         if ours {
             self.commands.entity(kart).insert(Kart);
@@ -575,8 +598,8 @@ impl KartBuilder<'_, '_> {
                 &mut self.commands,
                 &mut self.images,
                 &mut self.meshes,
-                &mut self.materials,
-                &mut self.subtract_materials,
+                &mut self.skid_materials,
+                &mut self.skid_subtract_materials,
                 icon,
                 vram,
                 kart,
@@ -588,8 +611,9 @@ impl KartBuilder<'_, '_> {
                 &mut self.commands,
                 &mut self.images,
                 &mut self.meshes,
-                &mut self.materials,
-                &mut self.subtract_materials,
+                &mut self.streak_materials,
+                &mut self.billboard_materials,
+                &mut self.billboard_subtract_materials,
                 icon,
                 &water,
                 vram,
@@ -615,7 +639,7 @@ impl KartBuilder<'_, '_> {
                 shields,
                 vram,
                 kart,
-                if ours { crate::KART_LAYER } else { 0 },
+                layer,
                 &mut self.commands,
                 &mut self.images,
                 &mut self.meshes,

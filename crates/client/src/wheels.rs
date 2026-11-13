@@ -1,25 +1,86 @@
 //! The wheels of a kart as Bevy entities; the placement is `render::wheels`.
 
+use crate::billboard::view_extension;
 use crate::kart::{KartMotion, KartSlot};
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::image::ImageSampler;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{
+    Extent3d, ShaderType, TextureDimension, TextureFormat, VertexFormat,
+};
 use loader::icons::Icon;
 use loader::vram::Vram;
 use render::mesh::SCALE;
 use render::wheels::{
-    DRIVER_INSTANCE_SCALE, WHEEL_SIZE, WHEELS, radius, sprite_atlas, wheel_quads,
+    DRIVER_INSTANCE_SCALE, SPRITE_INDEX, WHEEL_SIZE, WHEELS, radius, sprite_atlas, wheel_poses,
 };
 
-/// One wheel of a kart: a mesh of a single square, rewritten every frame for the camera's
-/// position. The entity sits at the wheel's centre, so that Bevy sorts the wheels among
+/// A wheel's axle (xyz) and radius in world units (w, 0 when the wheel is hidden), the same on each
+/// of its vertices: `wheels.wesl` turns the square to the view.
+const ATTRIBUTE_AXLE: MeshVertexAttribute =
+    MeshVertexAttribute::new("WheelAxle", 0x77_68_61_78, VertexFormat::Float32x4);
+
+/// To which side of the kart a wheel is (xyz), and whether it is a right-hand one (w: 1 or 0).
+const ATTRIBUTE_SIDE: MeshVertexAttribute =
+    MeshVertexAttribute::new("WheelSide", 0x77_68_73_64, VertexFormat::Float32x4);
+
+/// What `wheels.wesl` needs to pick a picture: retail's table of them by the angle, and how many
+/// the atlas has.
+#[derive(ShaderType, Clone, Debug)]
+pub struct WheelSprites {
+    count: u32,
+    push: f32,
+    table: [UVec4; 33],
+}
+
+impl Default for WheelSprites {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl WheelSprites {
+    fn new(count: usize) -> Self {
+        let mut flat = [0u32; 132];
+        for (slot, picture) in flat.iter_mut().zip(SPRITE_INDEX) {
+            *slot = picture as u32;
+        }
+        WheelSprites {
+            count: count as u32,
+            push: NEAR_SIDE_PUSH,
+            table: std::array::from_fn(|i| UVec4::from_slice(&flat[i * 4..i * 4 + 4])),
+        }
+    }
+}
+
+view_extension!(
+    /// The wheels, turned to each view by the GPU.
+    Wheel => WheelMaterial,
+    shader: "wheels.wesl",
+    subtract: false,
+    attributes: [
+        Mesh::ATTRIBUTE_POSITION => 0,
+        Mesh::ATTRIBUTE_UV_0 => 2,
+        ATTRIBUTE_AXLE => 8,
+        ATTRIBUTE_SIDE => 9,
+    ],
+    uniform: sprites: WheelSprites,
+);
+pub struct WheelsPlugin;
+
+impl Plugin for WheelsPlugin {
+    fn build(&self, app: &mut App) {
+        embedded_asset!(app, "wheels.wesl");
+        app.add_plugins(MaterialPlugin::<WheelMaterial>::default());
+    }
+}
+
+/// One wheel of a kart: a mesh of a single square, turned to each view by the GPU. The entity sits at the wheel's centre, so that Bevy sorts the wheels among
 /// themselves (and the smoke) by their depth, as the ordering table does in retail.
 #[derive(Component)]
 pub struct Wheels {
-    uvs: Vec<[[f32; 2]; 4]>,
     /// Which wheel (`wheelLocal[wheel]`): front left, front right, rear left, rear right.
     wheel: usize,
     /// The kart entity, whose pose and [`KartMotion`] the wheels follow.
@@ -49,7 +110,7 @@ pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<WheelMaterial>,
     icons: &[Icon],
     vram: &Vram,
     kart: Entity,
@@ -70,14 +131,19 @@ pub fn spawn(
     image.sampler = ImageSampler::nearest();
 
     let image = images.add(image);
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(image),
-        unlit: true,
-        cull_mode: None,
-        double_sided: true,
-        alpha_mode: AlphaMode::Blend,
-        ..default()
+    let material = materials.add(WheelMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(image),
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        },
+        extension: Wheel {
+            sprites: WheelSprites::new(uvs.len()),
+        },
     });
     // A kart in the water draws the wheels that are under it in the world's layer, where the
     // surface tints them; the others stay in the kart's.
@@ -88,12 +154,17 @@ pub fn spawn(
                 RenderAssetUsages::default(),
             );
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4]);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4]);
+            // Which corner of its picture a vertex is: the shader finds the picture's rows.
+            mesh.insert_attribute(
+                Mesh::ATTRIBUTE_UV_0,
+                vec![[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            );
+            mesh.insert_attribute(ATTRIBUTE_AXLE, vec![[0.0f32; 4]; 4]);
+            mesh.insert_attribute(ATTRIBUTE_SIDE, vec![[0.0f32; 4]; 4]);
             // Corners are in UV order (top left, top right, bottom left, bottom right).
             mesh.insert_indices(Indices::U32(vec![0, 2, 1, 1, 2, 3]));
             commands.spawn((
                 Wheels {
-                    uvs: uvs.clone(),
                     wheel,
                     kart,
                     wheel_size: WHEEL_SIZE,
@@ -103,7 +174,7 @@ pub fn spawn(
                 MeshMaterial3d(material.clone()),
                 Transform::default(),
                 RenderLayers::layer(layer),
-                // The square moves with the camera; the mesh's bounds are those of its first
+                // The square moves with the view; the mesh's bounds are those of its first
                 // frame.
                 NoFrustumCulling,
             ));
@@ -111,27 +182,15 @@ pub fn spawn(
     }
 }
 
-/// Poses every wheel mesh for the camera, with the steering of its kart (a kart that stands
-/// still has none).
+/// Poses every wheel mesh, with the steering of its kart (a kart that stands still has none). The
+/// view it is turned to is the GPU's business.
 pub fn update(
     mut wheels: Query<(Entity, &Wheels, &Mesh3d, &mut Transform)>,
     karts: Query<(&Transform, Option<&KartMotion>, Option<&KartSlot>), Without<Wheels>>,
     sim: Option<Res<crate::props::Sim>>,
-    cameras: Query<
-        &Transform,
-        (
-            With<Camera3d>,
-            Without<Wheels>,
-            Without<crate::OverlayCamera>,
-            Without<crate::sky::SkyCamera>,
-        ),
-    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    let Some(eye) = cameras.iter().next().map(|t| t.translation) else {
-        return;
-    };
     for (entity, wheels, mesh, mut transform) in &mut wheels {
         let Ok((pose, motion, slot)) = karts.get(wheels.kart) else {
             // The kart is gone (another player left).
@@ -143,47 +202,39 @@ pub fn update(
             .map_or((0, 0, [DRIVER_INSTANCE_SCALE; 3]), |m| {
                 (m.wheel_rotation, m.hazard_timer, m.drawn_inst_scale())
             });
-        let quads = wheel_quads(
+        let poses = wheel_poses(
             pose.translation,
             Mat3::from_quat(pose.rotation),
             scale,
-            wheels.wheel_size,
             wheel_rotation,
             hazard_timer,
-            eye,
         );
         let in_water = slot
             .zip(sim.as_ref())
             .and_then(|(slot, sim)| sim.race.karts.get(slot.0))
             .is_some_and(|kart| kart.driver.split_line);
-        let radius = radius(wheels.wheel_size);
-        let quad = &quads[wheels.wheel];
+        let wheel = &poses[wheels.wheel];
         // The square is relative to the wheel's centre, which is what Bevy sorts it by.
-        transform.translation = quad.center;
-        // A wheel is whole in one of its two meshes (the other collapses it to a point).
-        let (positions, uvs) = if (in_water && quad.center.y <= WATERLINE) != wheels.under {
-            ([[0.0; 3]; 4], [[0.0; 2]; 4])
+        transform.translation = wheel.center;
+        // A wheel is whole in one of its two meshes (the other has no size).
+        let radius = if (in_water && wheel.center.y <= WATERLINE) != wheels.under {
+            0.0
         } else {
-            // Moving along the line of sight and shrinking about the eye by the same
-            // factor leaves the square looking the same.
-            let distance = (quad.center - eye).length();
-            let shrink = if quad.near_side && distance > 0.0 {
-                (1.0 - NEAR_SIDE_PUSH * radius / distance).max(0.1)
-            } else {
-                1.0
-            };
-            (
-                quad.corners
-                    .map(|c| (eye + (c - eye) * shrink - quad.center).to_array()),
-                wheels.uvs[quad.sprite.min(wheels.uvs.len() - 1)],
-            )
+            radius(wheels.wheel_size)
         };
+        let axle = [wheel.axle.x, wheel.axle.y, wheel.axle.z, radius];
+        let side = [
+            wheel.side.x,
+            wheel.side.y,
+            wheel.side.z,
+            wheel.right_hand as u32 as f32,
+        ];
         crate::mesh_write::set_attributes(
             &mut meshes,
             &mesh.0,
             [
-                (Mesh::ATTRIBUTE_POSITION, positions.to_vec().into()),
-                (Mesh::ATTRIBUTE_UV_0, uvs.to_vec().into()),
+                (ATTRIBUTE_AXLE, vec![axle; 4].into()),
+                (ATTRIBUTE_SIDE, vec![side; 4].into()),
             ],
         );
     }

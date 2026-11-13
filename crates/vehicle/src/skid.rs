@@ -42,7 +42,7 @@ const TIRE_BACK_Z: i32 = -0x14;
 const TIRE_FRONT_Z: i32 = 0x28;
 
 /// `VehGroundSkids_Main`'s `FULL_INTENSITY_DEPTH` and its brightness.
-const FULL_INTENSITY_DEPTH: i32 = 0x180;
+pub const FULL_INTENSITY_DEPTH: i32 = 0x180;
 const FULL_INTENSITY: i32 = 0x7f;
 const MIN_INTENSITY: i32 = 0x10;
 

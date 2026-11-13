@@ -29,6 +29,7 @@ mod accordion;
 mod animation;
 mod assets;
 mod banner;
+mod billboard;
 mod command;
 mod confetti;
 mod config;
@@ -332,8 +333,11 @@ fn main() {
         config::ConfigPlugin,
         probe::ProbePlugin,
         nav::NavPlugin,
+        billboard::BillboardPlugin,
+        skid::SkidPlugin,
         nav_edit::NavEditPlugin,
     ));
+    app.add_plugins(wheels::WheelsPlugin);
     app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
     app.add_systems(Update, fly.run_if(not(drive::driving)))
         .init_resource::<scene::Picked>()

@@ -8,6 +8,7 @@
 //! code (bobbing crates, anything that reacts) stands still. The fruit spin on their own
 //! axis and bob, at a speed of our own (DEVIATIONS.md).
 
+use crate::billboard::FacesView;
 use std::collections::HashMap;
 
 use bevy::prelude::*;
@@ -490,28 +491,17 @@ pub(crate) fn rest_pose(header: &ModelHeader) -> Option<&loader::model::Frame> {
         .or(header.static_frame.as_ref())
 }
 
-/// The entity a hazard's model hangs off, which the systems below move; `marker` says which.
-/// A placed model whose header points it to the camera (`ModelHeader::POINT_TO_CAMERA`).
+/// A placed model whose header points it to the camera (`ModelHeader::POINT_TO_CAMERA`). Its
+/// parts are drawn turned to each view (`FacesView`), so its own rotation is the identity.
 #[derive(Component)]
 pub struct FacesCamera;
 
-/// Turns the models that point to the camera to it, after whatever else turned them this frame
-/// (a fruit's spin, a hazard's pose) and before a reflection copies them.
-pub fn face_camera(
-    cameras: Query<
-        &Transform,
-        (
-            Or<(With<crate::drive::ChaseCamera>, With<crate::FlyCamera>)>,
-            Without<FacesCamera>,
-        ),
-    >,
-    mut bodies: Query<&mut Transform, With<FacesCamera>>,
-) {
-    let Some(camera) = cameras.iter().next().map(|c| c.rotation) else {
-        return;
-    };
+/// Clears the turn of the models that point to the camera, after whatever else turned them this
+/// frame (a fruit's spin, a hazard's pose) and before a reflection copies them: the GPU turns them
+/// to the view.
+pub fn face_camera(mut bodies: Query<&mut Transform, With<FacesCamera>>) {
     for mut transform in &mut bodies {
-        transform.rotation = camera;
+        transform.rotation = Quat::IDENTITY;
     }
 }
 
@@ -685,7 +675,7 @@ pub fn spawn(
             Some(&slot) if objects.pose(slot).is_some() => {
                 let parent = body(commands, transform, HazardBody(hazards.0.len()));
                 if header.points_to_camera() {
-                    commands.entity(parent).insert(FacesCamera);
+                    commands.entity(parent).insert((FacesCamera, FacesView));
                 }
                 let mut s = shown(slot);
                 s.parts = spawn_parts(
@@ -738,12 +728,12 @@ pub fn spawn(
         let (transform, parent) = match parent {
             _ if !header.points_to_camera() => (transform, parent),
             Some(parent) => {
-                commands.entity(parent).insert(FacesCamera);
+                commands.entity(parent).insert((FacesCamera, FacesView));
                 (transform, Some(parent))
             }
             None => (
                 Transform::default(),
-                Some(body(commands, transform, FacesCamera)),
+                Some(body(commands, transform, (FacesCamera, FacesView))),
             ),
         };
         // The level places crates at whatever height, so they sink into the ground; pull them
@@ -774,6 +764,9 @@ pub fn spawn(
                     Visibility::default(),
                 ))
                 .id();
+            if header.points_to_camera() {
+                commands.entity(root).insert(FacesView);
+            }
             spawn_parts(
                 parts,
                 &dimmed,

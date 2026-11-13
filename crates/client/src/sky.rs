@@ -48,18 +48,34 @@ pub fn spawn(
     };
     let [r, g, b] = clear.unwrap_or_default();
     projection.far = projection.far.max(radius * 2.0);
-    commands.spawn((
+    commands.spawn(camera(
+        0,
+        -1,
+        ClearColorConfig::Custom(Color::srgb_u8(r, g, b)),
+        Projection::Perspective(projection),
+    ));
+}
+
+/// A camera that draws the dome for local player `view`, at `order`.
+pub fn camera(
+    view: usize,
+    order: isize,
+    clear_color: ClearColorConfig,
+    projection: Projection,
+) -> impl Bundle {
+    (
         SkyCamera,
+        crate::drive::ViewOf(view),
         Camera3d::default(),
         Camera {
-            order: -1,
-            clear_color: ClearColorConfig::Custom(Color::srgb_u8(r, g, b)),
+            order,
+            clear_color,
             ..default()
         },
-        Projection::Perspective(projection),
+        projection,
         Transform::default(),
         RenderLayers::layer(SKY_LAYER),
-    ));
+    )
 }
 
 /// Spawns the sky mesh, in `layer`. Returns how far it reaches; none if it has nothing to draw.
@@ -116,14 +132,14 @@ pub fn spawn_dome(
     Some(radius)
 }
 
+/// Each sky camera turns as the main camera of its player does.
 fn follow(
-    main: Query<(&Camera, &GlobalTransform), (With<Camera3d>, Without<SkyCamera>)>,
-    mut sky: Query<&mut Transform, With<SkyCamera>>,
+    main: Query<(&crate::drive::MainView, &GlobalTransform), Without<SkyCamera>>,
+    mut sky: Query<(&crate::drive::ViewOf, &mut Transform), With<SkyCamera>>,
 ) {
-    let Some((_, at)) = main.iter().find(|(camera, _)| camera.order == 0) else {
-        return;
-    };
-    for mut transform in &mut sky {
-        transform.rotation = at.rotation();
+    for (view, mut transform) in &mut sky {
+        if let Some((_, at)) = main.iter().find(|(main, _)| main.0 == view.0) {
+            transform.rotation = at.rotation();
+        }
     }
 }

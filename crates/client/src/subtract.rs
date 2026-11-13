@@ -21,23 +21,28 @@ impl MaterialExtension for Subtract {
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let blend = BlendState {
-            color: BlendComponent {
-                src_factor: BlendFactor::SrcAlpha,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::ReverseSubtract,
-            },
-            alpha: BlendComponent::OVER,
-        };
-        for target in descriptor
-            .fragment
-            .iter_mut()
-            .flat_map(|f| f.targets.iter_mut())
-            .flatten()
-        {
-            target.blend = Some(blend);
-        }
+        set_blend(descriptor);
         Ok(())
+    }
+}
+
+/// Background minus face, on every target of the pipeline.
+pub fn set_blend(descriptor: &mut RenderPipelineDescriptor) {
+    let blend = BlendState {
+        color: BlendComponent {
+            src_factor: BlendFactor::SrcAlpha,
+            dst_factor: BlendFactor::One,
+            operation: BlendOperation::ReverseSubtract,
+        },
+        alpha: BlendComponent::OVER,
+    };
+    for target in descriptor
+        .fragment
+        .iter_mut()
+        .flat_map(|f| f.targets.iter_mut())
+        .flatten()
+    {
+        target.blend = Some(blend);
     }
 }
 

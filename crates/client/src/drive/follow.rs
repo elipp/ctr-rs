@@ -13,6 +13,18 @@ use crate::pause::PauseMenu;
 #[derive(Component)]
 pub struct ChaseCamera;
 
+/// A camera that draws a part of the picture of local player `.0` (0 is ours): its sky, its main
+/// camera, or the one over them for the kart. They are put in the player's part of the screen
+/// (`split::layout`).
+#[derive(Component, Clone, Copy)]
+pub struct ViewOf(pub usize);
+
+/// The main camera of local player `.0`, which the sky's camera and the layout of the screen go
+/// by. Ours has [`ChaseCamera`] too (the systems that follow "the camera" follow that one); the
+/// others' have `OverlayCamera`, which keeps those systems off them.
+#[derive(Component, Clone, Copy)]
+pub struct MainView(pub usize);
+
 impl ChaseCamera {
     pub fn new() -> ChaseCamera {
         ChaseCamera
@@ -184,6 +196,28 @@ pub(super) fn chase(
     // The roll's sign (which way the horizon tilts) is a guess.
     let roll = (a.roll + (b.roll - a.roll) * t) * std::f32::consts::TAU;
     for mut transform in &mut cameras {
+        transform.translation = eye;
+        transform.look_at(target, Vec3::Y);
+        transform.rotate_local_z(roll);
+    }
+}
+
+/// The cameras of the other local players, between the last two ticks of their views. (No orbit
+/// by the mouse: that is ours.)
+pub(super) fn chase_extra(
+    drive: Res<Drive>,
+    fixed: Res<Time<Fixed>>,
+    mut cameras: Query<(&MainView, &mut Transform), Without<ChaseCamera>>,
+) {
+    let t = fixed.overstep_fraction();
+    for (main, mut transform) in &mut cameras {
+        let Some(view) = drive.views.get(main.0) else {
+            continue;
+        };
+        let (a, b) = (view.previous_view, view.current_view);
+        let eye = a.eye.lerp(b.eye, t);
+        let target = a.target.lerp(b.target, t);
+        let roll = (a.roll + (b.roll - a.roll) * t) * std::f32::consts::TAU;
         transform.translation = eye;
         transform.look_at(target, Vec3::Y);
         transform.rotate_local_z(roll);

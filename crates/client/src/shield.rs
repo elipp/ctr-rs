@@ -21,7 +21,8 @@ use render::shield::Shields;
 use vehicle::shield::Shield;
 
 use crate::DEPTH_BIAS_PER_ORDER;
-use crate::drive::{ChaseCamera, animation_pose, rotation_of};
+use crate::billboard::{FacesView, TurnedMaterial, TurnedSubtractMaterial};
+use crate::drive::{animation_pose, rotation_of};
 use crate::kart::{Attached, KartMotion, KartSlot};
 use crate::spawn_parts;
 use crate::subtract::SubtractMaterial;
@@ -157,6 +158,7 @@ fn spawn_part(
         layer,
     );
     commands.entity(group).insert((
+        FacesView,
         Attached(kart),
         ShieldPart {
             layer: which,
@@ -170,7 +172,6 @@ pub fn update(
     sim: Res<crate::props::Sim>,
     fixed: Res<Time<Fixed>>,
     karts: Query<(&KartSlot, &KartMotion)>,
-    cameras: Query<&Transform, (With<ChaseCamera>, Without<ShieldPart>)>,
     mut instances: Query<(
         &mut ShieldPart,
         &Attached,
@@ -180,20 +181,16 @@ pub fn update(
     )>,
     mut parts: Query<
         (
-            Option<&MeshMaterial3d<StandardMaterial>>,
-            Option<&MeshMaterial3d<SubtractMaterial>>,
+            Option<&MeshMaterial3d<TurnedMaterial>>,
+            Option<&MeshMaterial3d<TurnedSubtractMaterial>>,
             &mut Transform,
         ),
-        (Without<ShieldPart>, Without<ChaseCamera>),
+        Without<ShieldPart>,
     >,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+    mut materials: ResMut<Assets<TurnedMaterial>>,
+    mut subtract_materials: ResMut<Assets<TurnedSubtractMaterial>>,
 ) {
     let t = fixed.overstep_fraction();
-    // The bubble is a half-sphere that is drawn facing the camera (`DRAW_BILLBOARD`).
-    let Ok(camera) = cameras.single().map(|c| c.rotation) else {
-        return;
-    };
 
     for (mut part, attached, mut transform, mut visibility, children) in &mut instances {
         let Ok((slot, motion)) = karts.get(attached.0) else {
@@ -219,7 +216,8 @@ pub fn update(
         };
         let (round, along) = (round as f32 / 4096.0, along as f32 / 4096.0);
         transform.translation = motion.pose(t).translation;
-        transform.rotation = camera;
+        // (Turned to each view by the GPU: `DRAW_BILLBOARD`, `FacesView`.)
+        transform.rotation = Quat::IDENTITY;
         // The highlight turns about the bubble in its parts, under the flattening of its group
         // (which is in the camera's axes, as the dome is).
         let (depth, turn) = if part.layer == Layer::Highlight {
@@ -255,7 +253,7 @@ pub fn update(
                     continue;
                 };
                 if let Some(mut m) = standard.and_then(|h| materials.get_mut(&h.0)) {
-                    dim(&mut m);
+                    dim(&mut m.base);
                 }
                 if let Some(mut m) = subtract.and_then(|h| subtract_materials.get_mut(&h.0)) {
                     dim(&mut m.base);

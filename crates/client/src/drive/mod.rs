@@ -37,13 +37,14 @@ use race::KartSpec;
 use vehicle::Driver;
 
 use crate::Track;
-use follow::chase;
+use follow::{chase, chase_extra};
 use overlay::{hud, reserves_hud, reward_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
-pub use follow::ChaseCamera;
+pub use follow::{ChaseCamera, MainView, ViewOf};
 pub(crate) use input::Pads;
 pub(crate) use local::LocalView;
+pub(crate) use split::HudCamera;
 pub(crate) use overlay::spawn_hud;
 pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 
@@ -91,6 +92,11 @@ impl Drive {
     /// Our view, the first one: it is what the HUD and the sounds go by.
     pub(crate) fn own(&mut self) -> &mut LocalView {
         &mut self.views[0]
+    }
+
+    /// The local players' views, ours first.
+    pub(crate) fn views(&self) -> &[LocalView] {
+        &self.views
     }
 
     pub(crate) fn weather(&self) -> &crate::weather::WeatherView {
@@ -154,6 +160,7 @@ impl Plugin for DrivePlugin {
                     crate::kart::show,
                     crate::submerge::cut,
                     chase,
+                    chase_extra,
                     debug_actions,
                     crate::projectile::place,
                     crate::rain::draw.run_if(crate::fx::beaker_rain),
@@ -176,6 +183,7 @@ impl Plugin for DrivePlugin {
                 Update,
                 (
                     split::sync,
+                    split::layout,
                     crate::shadow::update,
                     crate::flame::update,
                     crate::skid::update,
