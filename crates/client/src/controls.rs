@@ -140,6 +140,28 @@ impl Default for Controls {
     }
 }
 
+impl Controls {
+    /// The keys of the second player on the same keyboard: the I, J, K and L keys steer, with the
+    /// hops and the item beside them. Only what the kart does is bound: the rest (the menu's
+    /// level and racer keys, the mutes) is the one keyboard's, and stays the first player's.
+    pub fn second() -> Controls {
+        let keys = |control: Control| -> Vec<KeyCode> {
+            match control {
+                Control::Gas => vec![KeyCode::KeyI],
+                Control::Brake => vec![KeyCode::KeyK],
+                Control::Left => vec![KeyCode::KeyJ],
+                Control::Right => vec![KeyCode::KeyL],
+                Control::Hop => vec![KeyCode::KeyU],
+                Control::Hop2 => vec![KeyCode::KeyO],
+                Control::Item => vec![KeyCode::Semicolon],
+                Control::AimUp => vec![KeyCode::KeyY],
+                _ => Vec::new(),
+            }
+        };
+        Controls(Control::ALL.map(keys))
+    }
+}
+
 impl From<BTreeMap<String, Vec<String>>> for Controls {
     fn from(names: BTreeMap<String, Vec<String>>) -> Controls {
         let mut controls = Controls::default();
@@ -377,6 +399,20 @@ mod tests {
         assert_eq!(read.keys(Control::Left), [KeyCode::KeyA]);
         assert!(read.keys(Control::Item).is_empty());
         assert_eq!(read.keys(Control::Gas), [KeyCode::ArrowUp]);
+    }
+
+    #[test]
+    fn the_second_player_shares_no_key_with_the_first() {
+        let (first, second) = (Controls::default(), Controls::second());
+        for control in Control::ALL {
+            for &key in second.keys(control) {
+                assert!(bindable(key), "{key:?}");
+                assert!(
+                    Control::ALL.iter().all(|&c| !first.keys(c).contains(&key)),
+                    "{key:?}"
+                );
+            }
+        }
     }
 
     #[test]

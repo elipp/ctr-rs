@@ -6,8 +6,8 @@ use race::Pad;
 use race::rollback::Step;
 use vehicle::{Effect, buttons};
 
-use super::follow::view_of;
 use super::input::{Controller, pad_of};
+use super::local::Follow;
 use super::overlay::NetHud;
 use super::pose::{Pose, pose_of};
 use super::{Drive, Kart};
@@ -60,15 +60,7 @@ pub(super) struct Memory {
     /// The ticks waited for a late player, and the buttons held last tick (a watching client's
     /// pick the kart to follow).
     waits: (u32, u32),
-    /// Our kart had finished last tick, and the played ticks left of the camera's hold at the
-    /// finish line.
-    finish: (bool, u32),
 }
-
-/// How long the camera stays at the finish line watching our kart coast away, in played ticks.
-const FINISH_HOLD_TICKS: u32 = 60;
-/// How far above our kart's position the held camera looks.
-const FINISH_HOLD_LOOK_HEIGHT: i32 = 0x40;
 
 /// One game tick of the sim.
 pub(super) fn drive_tick(
@@ -91,11 +83,7 @@ pub(super) fn drive_tick(
         mut toasts,
         mut sfx,
     } = shown;
-    let Memory {
-        was_paused,
-        waits,
-        finish,
-    } = &mut *memory;
+    let Memory { was_paused, waits } = &mut *memory;
     let drive = &mut *drive;
     // In an online race the sim is everyone's: no pause, no restarts.
     let online = lobby.online.is_some();
@@ -113,9 +101,7 @@ pub(super) fn drive_tick(
     let paused = (hold.menu.open || hold.fx.holds()) && !online;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
-        drive.previous_view = drive.current_view;
-        drive.weather.freeze();
-        drive.confetti.freeze();
+        drive.own().freeze();
         for (mut motion, _, _) in &mut motions {
             motion.freeze();
         }
@@ -195,9 +181,8 @@ pub(super) fn drive_tick(
             }),
         );
         particles.list.clear();
-        drive.camera = camera::CameraDc::default();
-        drive.weather = crate::weather::WeatherView::new(&track.0);
-        drive.confetti = default();
+        drive.own().reset(&track);
+        drive.own().slot = own;
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
 
@@ -371,12 +356,14 @@ pub(super) fn drive_tick(
         return;
     }
     waits.0 = 0;
+    // The pads that are one player's own: the others do not read them.
+    let taken: Vec<Entity> = drive.views.iter().filter_map(|v| v.device.pad()).collect();
     // Which way R1 and L1 were tapped this tick, to change the kart the camera follows.
     let mut cycle = 0;
     // A spectator has no pad to play, nor does a finished player that the sim ignores, but their
     // R1 and L1 pick the kart to follow all the same.
     if watches {
-        let held = controller.read(waits.1).buttons_held;
+        let held = controller.read(&drive.views[0].device, &taken, waits.1).buttons_held;
         let taps = held & !waits.1;
         waits.1 = held;
         cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
@@ -437,12 +424,14 @@ pub(super) fn drive_tick(
         } else if let Some(pad) = auto_pad {
             pad
         } else {
-            Pad::of_input(&controller.read(held))
+            Pad::of_input(&controller.read(&drive.views[0].device, &taken, held))
         };
         if !watches {
             // (The taps are the controller's even when the policy drives: its pad is not ours.)
             let buttons_held = match auto_pad {
-                Some(_) => controller.read(waits.1).buttons_held,
+                Some(_) => controller
+                    .read(&drive.views[0].device, &taken, waits.1)
+                    .buttons_held,
                 None => pad.held,
             };
             let taps = buttons_held & !if auto_pad.is_some() { waits.1 } else { held };
@@ -461,6 +450,18 @@ pub(super) fn drive_tick(
                 ry: pad.ry,
             });
         }
+    }
+    // The other local players' pads, from their own devices. (Their karts are in the race
+    // already, and the pads are in before the tick is played, as ours is.)
+    for view in drive.views.iter().skip(1) {
+        if sim.race.confirmed_until(view.slot) > tick {
+            continue;
+        }
+        let held = sim.race.karts[view.slot].held;
+        let pad = Pad::of_input(&controller.read(&view.device, &taken, held));
+        sim.race
+            .confirm(view.slot, tick, pad)
+            .expect("their pads come in order");
     }
     for mut text in &mut net_label {
         text.0 = match &lobby.online {
@@ -526,7 +527,7 @@ pub(super) fn drive_tick(
 
     // The mask grab put the kart back on the track: the camera swings round behind it.
     if mine.result.respawned {
-        drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
+        drive.own().camera.flags |= camera::flags::DIRECTION_CHANGED;
     }
 
     // A boost pulls the camera back.
@@ -535,12 +536,8 @@ pub(super) fn drive_tick(
         .iter()
         .any(|e| matches!(e, Effect::CameraFireSpeedZoom { .. }))
     {
-        drive.camera.flags |= camera::flags::FIRE_SPEED_ZOOM;
+        drive.own().camera.flags |= camera::flags::FIRE_SPEED_ZOOM;
     }
-    let camera_input = camera::Input {
-        elapsed_time_ms: vehicle::Env::default().elapsed_time_ms,
-        ..Default::default()
-    };
     // Once we have finished, the camera can follow the others (R1 and L1), the ones still here.
     let finished = sim.driver().actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
     if let Some(net) = lobby.online.as_mut() {
@@ -581,7 +578,7 @@ pub(super) fn drive_tick(
             }
         }
         if net.watching != before {
-            drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
+            drive.own().camera.flags |= camera::flags::DIRECTION_CHANGED;
         }
     }
     let watching = lobby
@@ -592,48 +589,21 @@ pub(super) fn drive_tick(
     if spectating {
         sim.own = watching;
     }
-    let kart = &sim.race.karts[watching];
-    // Past the line the camera stays there a while and turns after our kart as it coasts away,
-    // until R1 or L1 picks a kart to follow (or a rollback takes the finish back).
-    let (was_finished, held) = finish;
     let ours_finished = !spectating && finished;
-    if ours_finished && !*was_finished {
-        *held = FINISH_HOLD_TICKS;
-    }
-    *was_finished = ours_finished;
-    if !ours_finished || cycle != 0 || watching != own {
-        *held = 0;
-    }
-    let holding = *held > 0;
-    if holding {
-        // (Counted in played ticks only: the wait for the others past the line holds still.)
-        *held -= 1;
-    }
-    let jumped = !holding && drive.camera.flags & camera::flags::DIRECTION_CHANGED != 0;
-    if holding {
-        let mut target = kart.driver.pos_curr;
-        target.x >>= 8;
-        target.y = (target.y >> 8) + FINISH_HOLD_LOOK_HEIGHT;
-        target.z >>= 8;
-        drive.camera.look_at(target);
-        // Once it is over, straight back behind the kart.
-        drive.camera.flags |= camera::flags::DIRECTION_CHANGED;
-    } else {
-        drive
-            .camera
-            .follow_driver(&kart.driver, &track.0, &camera_input);
-    }
-    // The start-line fly-in, over the chase camera, for as long as the race says.
-    let fly_in_frame = camera::TRANSITION_FRAMES - tick as i32;
-    if sim.race.intro_ticks > 0 && fly_in_frame >= 0 {
-        drive.camera.fly_in(&track.0, fly_in_frame);
-    }
-    drive.weather.step(&track.0, &drive.camera, jumped);
     let ours = &sim.race.karts[sim.own].driver;
     let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
-    drive
-        .confetti
-        .step(&drive.camera, hold.fx.confetti.apply(won));
+    drive.own().follow(
+        &track,
+        Follow {
+            tick,
+            kart: &sim.race.karts[watching],
+            intro: sim.race.intro_ticks > 0,
+            finished: ours_finished,
+            cycle: cycle != 0,
+            elsewhere: watching != own,
+            confetti: hold.fx.confetti.apply(won),
+        },
+    );
 
     // The offsets of the others' karts fade as far as their players' pings call for.
     for (mut motion, slot, ours) in &mut motions {
@@ -648,8 +618,7 @@ pub(super) fn drive_tick(
         }
     }
     each_motion(&sim, &mut motions, |motion, kart| motion.push(kart));
-    drive.previous_view = drive.current_view;
-    drive.current_view = view_of(&drive.camera);
+    drive.own().push();
 
     // The tick's sounds, the other karts' heard from where the camera is now.
     let places: Vec<Vec3> = sim
@@ -658,7 +627,7 @@ pub(super) fn drive_tick(
         .iter()
         .map(|kart| pose_of(&kart.driver).translation)
         .collect();
-    let ear = drive.current_view.transform();
+    let ear = drive.own().current_view.transform();
     sfx.tick(tick, &sim.race, &track.0, &ticks, sim.own, &places, &ear);
 }
 

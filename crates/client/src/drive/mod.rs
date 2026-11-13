@@ -24,6 +24,7 @@
 
 mod follow;
 mod input;
+mod local;
 mod overlay;
 mod pose;
 mod tick;
@@ -33,12 +34,13 @@ use race::KartSpec;
 use vehicle::Driver;
 
 use crate::Track;
-use follow::{View, chase, view_of};
+use follow::chase;
 use overlay::{hud, reserves_hud, reward_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
 pub use follow::ChaseCamera;
 pub(crate) use input::Pads;
+pub(crate) use local::LocalView;
 pub(crate) use overlay::spawn_hud;
 pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 
@@ -46,17 +48,15 @@ pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 #[derive(Component)]
 pub struct Kart;
 
-/// What the viewer keeps of driving: the camera, the poses to draw between ticks. The
+/// What the viewer keeps of driving: a view for each local player, the first of them ours. The
 /// race itself, our kart in it included, is [`crate::props::Sim`].
 #[derive(Resource)]
 pub struct Drive {
     pub(crate) character: usize,
     anim_num_frames: [u16; 8],
-    camera: camera::CameraDc,
-    weather: crate::weather::WeatherView,
-    confetti: crate::confetti::ConfettiView,
-    previous_view: View,
-    current_view: View,
+    /// The local players' views (never none): the camera, the weather and the poses to draw
+    /// between ticks, of each.
+    views: Vec<LocalView>,
 }
 
 impl Drive {
@@ -67,33 +67,24 @@ impl Drive {
         character: usize,
         anim_num_frames: [u16; 8],
     ) -> Drive {
-        let mut camera = camera::CameraDc::default();
-        camera.follow_driver(
-            driver,
-            &track.0,
-            &camera::Input {
-                elapsed_time_ms: 32,
-                ..Default::default()
-            },
-        );
-        let view = view_of(&camera);
         Drive {
-            camera,
-            weather: crate::weather::WeatherView::new(&track.0),
-            confetti: default(),
-            previous_view: view,
-            current_view: view,
+            views: vec![LocalView::new(track, driver, 0, input::Device::Primary)],
             character,
             anim_num_frames,
         }
     }
 
+    /// Our view, the first one: it is what the HUD and the sounds go by.
+    pub(crate) fn own(&mut self) -> &mut LocalView {
+        &mut self.views[0]
+    }
+
     pub(crate) fn weather(&self) -> &crate::weather::WeatherView {
-        &self.weather
+        &self.views[0].weather
     }
 
     pub(crate) fn confetti(&self) -> &crate::confetti::ConfettiView {
-        &self.confetti
+        &self.views[0].confetti
     }
 
     /// Our kart is of `character` now, with a model whose animations have `anim_num_frames`.

@@ -152,7 +152,7 @@ pub(super) fn chase(
         orbit.zoom = (orbit.zoom * ZOOM_PER_LINE.powf(lines)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
     }
     let t = fixed.overstep_fraction();
-    let (a, b) = (drive.previous_view, drive.current_view);
+    let (a, b) = (drive.views[0].previous_view, drive.views[0].current_view);
     let mut eye = a.eye.lerp(b.eye, t);
     let mut target = a.target.lerp(b.target, t);
     // The kart the camera follows, if it is another player's (a spectator's, or once we have
