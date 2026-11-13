@@ -1,6 +1,4 @@
 # ctr-rs
-<img width="951" height="639" alt="image" src="https://github.com/user-attachments/assets/6823b41a-b7e9-4b3d-8c72-39d3bac8ea0b" />
-
 ctr-rs is an online-focused reimplementation of Crash Team Racing (PS1, 1999), written in Rust.
 
 ## What's here
