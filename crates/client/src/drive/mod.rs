@@ -44,7 +44,7 @@ use tick::{debug_actions, drive_tick};
 pub use follow::{ChaseCamera, MainView, ViewOf};
 pub(crate) use input::Pads;
 pub(crate) use local::LocalView;
-pub(crate) use split::HudCamera;
+pub(crate) use split::{HudCamera, UnderCamera, window_rect};
 pub(crate) use overlay::spawn_hud;
 pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 
@@ -143,7 +143,7 @@ impl Plugin for DrivePlugin {
         app.insert_resource(LocalPlayers(1))
             .insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
-            .init_resource::<crate::flash::Flash>()
+            .init_resource::<crate::flash::Flashes>()
             .add_systems(Update, overlay::debug_text_command)
             .add_systems(Startup, spawn_hud)
             .add_systems(

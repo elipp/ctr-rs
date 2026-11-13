@@ -7,6 +7,7 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
+use crate::hud_view::{self, HudView};
 use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 
 #[derive(Component)]
@@ -31,6 +32,10 @@ pub(crate) fn debug_text_command(
 /// The wumpa count: the number after the "x".
 #[derive(Component)]
 pub(crate) struct WumpaHud;
+
+/// The "x" and the count of a view.
+#[derive(Component)]
+pub(super) struct WumpaCounter;
 
 /// How long a checkpoint time's toast stays up, in milliseconds.
 const SPLIT_SHOW_MS: u64 = 3000;
@@ -70,28 +75,6 @@ pub(crate) fn spawn_hud(mut commands: Commands) {
                 }
             },
         );
-    // The counter: a small "x" and the count in the big orange digits, level with the middle of
-    // the fruit, right of it. The "x" is orange too, and its middle is the digits' (retail draws
-    // it 4 lines down from their top, 8 tall, on digits 16 tall).
-    let height = Font::Large.line_height() as f32;
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(50.0),
-            margin: UiRect::left(hud::x(COUNTER_X)),
-            top: hud::y(MIDDLE_Y - height / 2.0),
-            align_items: AlignItems::Center,
-            column_gap: hud::x(COUNTER_GAP as f32),
-            ..default()
-        },
-        children![
-            CtrText::new("x", Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
-            (
-                WumpaHud,
-                CtrText::new("0", Font::Large, Gradient::ORANGE).fixed(hud::PIXEL),
-            ),
-        ],
-    ));
     commands.spawn((
         ReservesHud,
         Text::new(""),
@@ -150,16 +133,51 @@ pub(super) fn reward_hud(
     }
 }
 
-/// The wumpa count.
+/// The wumpa count of each local player: a small "x" and the count in the big orange digits,
+/// level with the middle of the fruit, right of it. The "x" is orange too, and its middle is the
+/// digits' (retail draws it 4 lines down from their top, 8 tall, on digits 16 tall).
 pub(super) fn wumpa_hud(
+    mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    drive: Res<super::Drive>,
+    counters: Query<(&HudView, &Children), With<WumpaCounter>>,
     mut counts: Query<&mut CtrText, With<WumpaHud>>,
 ) {
-    let count = sim.driver().num_wumpas.to_string();
-    for mut text in &mut counts {
-        // A changed text puts its glyphs up again: only a new count changes it.
-        if text.text != count {
-            text.text = count.clone();
+    let height = Font::Large.line_height() as f32;
+    for view in hud_view::missing(&sim, &drive, counters.iter().map(|(v, _)| *v)) {
+        commands.spawn((
+            WumpaCounter,
+            HudView(view),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(50.0),
+                margin: UiRect::left(hud::x(COUNTER_X)),
+                top: hud::y(MIDDLE_Y - height / 2.0),
+                align_items: AlignItems::Center,
+                column_gap: hud::x(COUNTER_GAP as f32),
+                ..default()
+            },
+            children![
+                CtrText::new("x", Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
+                (
+                    WumpaHud,
+                    CtrText::new("0", Font::Large, Gradient::ORANGE).fixed(hud::PIXEL),
+                ),
+            ],
+        ));
+    }
+    for (&HudView(view), children) in &counters {
+        if view >= hud_view::views(&sim, &drive) {
+            continue;
+        }
+        let count = hud_view::driver_of(&sim, &drive, view).num_wumpas.to_string();
+        for &child in children {
+            // A changed text puts its glyphs up again: only a new count changes it.
+            if let Ok(mut text) = counts.get_mut(child)
+                && text.text != count
+            {
+                text.text = count.clone();
+            }
         }
     }
 }

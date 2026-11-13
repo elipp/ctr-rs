@@ -160,7 +160,7 @@ impl Plugin for FxPlugin {
 fn act(
     mut actions: MessageReader<Action>,
     mut fx: ResMut<Effects>,
-    mut flash: ResMut<crate::flash::Flash>,
+    mut flash: ResMut<crate::flash::Flashes>,
     lobby: Res<Lobby>,
     mut toasts: MessageWriter<Toast>,
 ) {

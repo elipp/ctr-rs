@@ -31,7 +31,7 @@ use render::mesh::{self, MeshPart, PARTS, SCALE};
 use render::projectile::{BURST_DROP, Models, NITRO_COLOR, TNT_COLOR, loop_frame};
 
 use crate::billboard::FacesView;
-use crate::drive::{ChaseCamera, animation_pose, rotation_of};
+use crate::drive::{animation_pose, rotation_of};
 use crate::props::Sim;
 use crate::subtract::SubtractMaterial;
 use crate::{DEPTH_BIAS_PER_ORDER, KART_LAYER, Textures, spawn_parts};
@@ -410,8 +410,8 @@ pub fn tick(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     mut bodies: Query<(Entity, &mut Body, Option<&Children>)>,
     mut effects: Query<(Entity, &mut Effect, &Transform)>,
-    cameras: Query<&Transform, (With<ChaseCamera>, Without<Body>, Without<Effect>)>,
-    mut flash: ResMut<crate::flash::Flash>,
+    cameras: Query<(&crate::drive::MainView, &Transform), (Without<Body>, Without<Effect>)>,
+    mut flash: ResMut<crate::flash::Flashes>,
     mut last: Local<Option<u32>>,
 ) {
     // Once per tick of the sim, however often the system is scheduled.
@@ -476,17 +476,20 @@ pub fn tick(
 
     // The bursts there are: the next frame, until the animation is over.
     if !restarted {
-        let view = cameras.single().ok().map(|c| c.to_matrix().inverse());
+        // Each view's camera, as the matrix from the world to it.
+        let views: Vec<(usize, Mat4)> = cameras
+            .iter()
+            .map(|(view, camera)| (view.0, camera.to_matrix().inverse()))
+            .collect();
         for (entity, mut effect, transform) in &mut effects {
             if !effect.playback.advance() {
                 commands.entity(entity).despawn();
                 continue;
             }
-            if effect.flashes
-                && effect.playback.frame == 1
-                && let Some(view) = view
-            {
-                flash.proximity(view.transform_point3(transform.translation) / SCALE);
+            if effect.flashes && effect.playback.frame == 1 {
+                for &(view, matrix) in &views {
+                    flash.proximity(view, matrix.transform_point3(transform.translation) / SCALE);
+                }
             }
             set_frame(
                 &effect.header,

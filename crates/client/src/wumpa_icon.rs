@@ -8,6 +8,7 @@ use bevy::window::PrimaryWindow;
 use loader::model::Model;
 use render::mesh;
 
+use crate::hud_view::{self, HudView};
 use crate::subtract::SubtractMaterial;
 use crate::{Textures, Track};
 
@@ -70,7 +71,9 @@ fn build(
     track: Res<Track>,
     textures: Res<Textures>,
     display: Res<FruitDisplay>,
-    icon: Query<(), With<WumpaIcon>>,
+    sim: Res<crate::props::Sim>,
+    drive: Res<crate::drive::Drive>,
+    icon: Query<&HudView, With<WumpaIcon>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -80,7 +83,8 @@ fn build(
     if track.is_changed() {
         *none = false;
     }
-    if !icon.is_empty() || *none {
+    let missing = hud_view::missing(&sim, &drive, icon.iter().copied());
+    if missing.is_empty() || *none {
         return;
     }
     let placed = track
@@ -132,36 +136,41 @@ fn build(
         double_sided: true,
         ..default()
     };
-    let pivot = commands
-        .spawn((
-            WumpaIcon {
-                diameter: (high - low).max_element(),
-                rest,
-            },
-            Transform::default(),
-            Visibility::default(),
-        ))
-        .id();
-    crate::spawn_parts(
-        data.parts,
-        &base,
-        Transform::from_translation(-middle),
-        Some(pivot),
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &mut subtract_materials,
-        LAYER,
-    );
+    // One for each view, all drawn by the camera over the whole window.
+    for view in missing {
+        let pivot = commands
+            .spawn((
+                WumpaIcon {
+                    diameter: (high - low).max_element(),
+                    rest,
+                },
+                HudView(view),
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        crate::spawn_parts(
+            data.parts.clone(),
+            &base,
+            Transform::from_translation(-middle),
+            Some(pivot),
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut subtract_materials,
+            LAYER,
+        );
+    }
 }
 
 /// Puts the fruit in the corner of the window, as tall as the HUD wants it, and turns it as
 /// the fruit of the level turn.
 fn show(
     sim: Res<crate::props::Sim>,
+    drive: Res<crate::drive::Drive>,
     fixed: Res<Time<Fixed>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut icon: Query<(&WumpaIcon, &mut Transform)>,
+    mut icon: Query<(&WumpaIcon, &HudView, &mut Transform)>,
     mut last: Local<(u32, f32)>,
 ) {
     let Ok(window) = windows.single() else {
@@ -175,11 +184,14 @@ fn show(
     }
     *last = (ticks, turns);
     let angle = turns / crate::props::FRUIT_SPIN_TICKS * std::f32::consts::TAU;
-    for (icon, mut transform) in &mut icon {
-        // The camera looks at the middle of the window, with y up.
+    let players = drive.views().len();
+    for (icon, &HudView(view), mut transform) in &mut icon {
+        // The camera looks at the middle of the window, with y up; the fruit is in the player's
+        // part of it.
+        let rect = crate::drive::window_rect(view, players, window);
         transform.translation = Vec3::new(
-            FRUIT_X * crate::hud::PIXEL.x,
-            window.height() / 2.0 - ICON_MIDDLE_Y * crate::hud::PIXEL.y,
+            rect.center().x - window.width() / 2.0 + FRUIT_X * crate::hud::PIXEL.x,
+            window.height() / 2.0 - rect.min.y - ICON_MIDDLE_Y * crate::hud::PIXEL.y,
             -DEPTH,
         );
         transform.scale = Vec3::splat(HEIGHT_PIXELS / icon.diameter);
@@ -204,33 +216,36 @@ struct FlyingWumpa {
 
 /// Where the flight started (the spot the last fruit was picked up at, as the screen had it) and
 /// how many fruit were queued last frame, to see a new one come in.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Flight {
     start: Vec2,
     queued: i32,
 }
 
-/// Keeps the flying fruit where the queue has it. The picture is a node of the UI over the 3D
-/// fruit of the counter, which it lands on.
+/// Keeps the flying fruit of each view where the queue has it. The picture is a node of the UI
+/// over the 3D fruit of the counter, which it lands on; the node is in its view's part of the
+/// window.
 fn fly(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    drive: Res<crate::drive::Drive>,
     fixed: Res<Time<Fixed>>,
     textures: Res<Textures>,
     windows: Query<&Window, With<PrimaryWindow>>,
     screen: Res<crate::pixel::RenderSize>,
-    cameras: Query<(&Camera, &GlobalTransform), With<crate::drive::ChaseCamera>>,
-    karts: Query<&Transform, (With<crate::drive::Kart>, Without<crate::drive::ChaseCamera>)>,
+    cameras: Query<(&crate::drive::MainView, &Camera, &GlobalTransform)>,
+    karts: Query<(&crate::kart::KartSlot, &Transform)>,
     mut images: ResMut<Assets<Image>>,
-    mut flying: Query<(&FlyingWumpa, &mut Node, &mut Visibility)>,
-    mut flight: Local<Flight>,
+    mut flying: Query<(&FlyingWumpa, &HudView, &mut Node, &mut Visibility)>,
+    mut flights: Local<Vec<Flight>>,
     mut missing: Local<bool>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    let driver = sim.driver();
-    let Ok((wumpa, mut node, mut visibility)) = flying.single_mut() else {
+    let players = drive.views().len();
+    let absent = hud_view::missing(&sim, &drive, flying.iter().map(|(_, v, ..)| *v));
+    if !absent.is_empty() {
         // The first frame of a level, which took the node away.
         if *missing {
             return;
@@ -242,44 +257,64 @@ fn fly(
             return;
         };
         let size = Vec2::new(atlas.width as f32, atlas.height as f32) * crate::hud::PIXEL;
-        commands.spawn((
-            FlyingWumpa { size },
-            ImageNode::new(crate::hud::atlas_image(atlas, &mut images))
-                .with_mode(NodeImageMode::Stretch),
-            Visibility::Hidden,
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Px(size.x),
-                height: Val::Px(size.y),
-                ..default()
-            },
-            Pickable::IGNORE,
-        ));
-        return;
-    };
-    // A fruit came in: the flight starts from the kart.
-    let queued = driver.pickup_wumpa_collected;
-    if queued > flight.queued
-        && let Ok((camera, camera_transform)) = cameras.single()
-        && let Ok(kart) = karts.single()
-        && let Ok(at) = camera.world_to_viewport(camera_transform, kart.translation)
-    {
-        // (The camera draws into the picture of the scene, which may be smaller than the window.)
-        flight.start = screen.to_window(at) - Vec2::new(0.0, START_LIFT * crate::hud::PIXEL.y);
-    }
-    flight.queued = queued;
-    if queued == 0 {
-        *visibility = Visibility::Hidden;
+        let image = crate::hud::atlas_image(atlas, &mut images);
+        for view in absent {
+            commands.spawn((
+                FlyingWumpa { size },
+                HudView(view),
+                ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch),
+                Visibility::Hidden,
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(size.x),
+                    height: Val::Px(size.y),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+        }
         return;
     }
-    *visibility = Visibility::Inherited;
-    let end = Vec2::new(
-        window.width() / 2.0 + FRUIT_X * crate::hud::PIXEL.x,
-        ICON_MIDDLE_Y * crate::hud::PIXEL.y,
-    );
-    // The tick's countdown, run on between ticks.
-    let left = (driver.pickup_wumpa_cooldown as f32 - fixed.overstep_fraction()).max(0.0);
-    let at = end + (flight.start - end) * (left / vehicle::wumpa::FLIGHT_TICKS as f32);
-    node.left = Val::Px(at.x - wumpa.size.x / 2.0);
-    node.top = Val::Px(at.y - wumpa.size.y / 2.0);
+    flights.resize(players, Flight::default());
+    for (wumpa, &HudView(view), mut node, mut visibility) in &mut flying {
+        if view >= players {
+            continue;
+        }
+        let slot = hud_view::slot_of(&sim, &drive, view);
+        let driver = &sim.race.karts[slot].driver;
+        let rect = crate::drive::window_rect(view, players, window);
+        let flight = &mut flights[view];
+        // A fruit came in: the flight starts from the kart.
+        let queued = driver.pickup_wumpa_collected;
+        if queued > flight.queued
+            && let Some((_, camera, camera_transform)) = cameras.iter().find(|(m, ..)| m.0 == view)
+            && let Some((_, kart)) = karts.iter().find(|(k, _)| k.0 == slot)
+            && let Ok(at) = camera.world_to_viewport(camera_transform, kart.translation)
+        {
+            // (The camera draws into a part of the picture of the scene, which may be smaller
+            // than the window; the node is in the player's part of the window.)
+            let origin = camera
+                .viewport
+                .as_ref()
+                .map_or(Vec2::ZERO, |v| v.physical_position.as_vec2() / screen.scale_factor);
+            flight.start = screen.to_window(origin + at)
+                - rect.min
+                - Vec2::new(0.0, START_LIFT * crate::hud::PIXEL.y);
+        }
+        flight.queued = queued;
+        if queued == 0 {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        *visibility = Visibility::Inherited;
+        let end = Vec2::new(
+            rect.width() / 2.0 + FRUIT_X * crate::hud::PIXEL.x,
+            ICON_MIDDLE_Y * crate::hud::PIXEL.y,
+        );
+        // The tick's countdown, run on between ticks.
+        let left = (driver.pickup_wumpa_cooldown as f32 - fixed.overstep_fraction()).max(0.0);
+        let at = end + (flight.start - end) * (left / vehicle::wumpa::FLIGHT_TICKS as f32);
+        node.left = Val::Px(at.x - wumpa.size.x / 2.0);
+        node.top = Val::Px(at.y - wumpa.size.y / 2.0);
+    }
 }

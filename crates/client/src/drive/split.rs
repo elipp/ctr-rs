@@ -23,6 +23,11 @@ use crate::toast::Toast;
 #[derive(Component)]
 pub struct HudCamera(pub usize);
 
+/// The camera of local player `.0` that draws what goes under the figures of the HUD: the same
+/// part of the window as [`HudCamera`]'s (`hud_view::Under`).
+#[derive(Component)]
+pub struct UnderCamera(pub usize);
+
 /// Makes the players on the screen as many as `/players` says: the others' karts and views, and
 /// what each drives with. A pad if there is one that no player has, else (for the second player)
 /// the keyboard's second set of keys. Not in a lobby, and not before the level is up.
@@ -71,11 +76,23 @@ pub(super) fn sync(
         for view in 0..n {
             builder.commands.spawn((
                 Extra,
+                UnderCamera(view),
+                crate::pixel::OwnTarget,
+                Camera2d,
+                Camera {
+                    order: crate::pixel::UNDER_ORDER + view as isize,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
+                config.msaa(),
+            ));
+            builder.commands.spawn((
+                Extra,
                 HudCamera(view),
                 crate::pixel::OwnTarget,
                 Camera2d,
                 Camera {
-                    order: 4 + view as isize,
+                    order: crate::pixel::HUD_ORDER + view as isize,
                     clear_color: ClearColorConfig::None,
                     ..default()
                 },
@@ -137,7 +154,9 @@ fn spawn_cameras(
     clear: ClearColorConfig,
     sky: Option<(&Projection, ClearColorConfig)>,
 ) {
-    // EXPERIMENT: after the first player's cameras (was `-3 * view`: before them).
+    // After the first player's cameras: the first camera to draw into the picture clears all of
+    // it, which wipes what an earlier one drew in its part. Under the present camera and the HUD's
+    // (`pixel::PRESENT_ORDER`).
     let order = 10 * view as isize;
     if let Some((projection, clear)) = sky {
         commands.spawn((
@@ -165,6 +184,8 @@ fn spawn_cameras(
         .with_child((
             OverlayCamera,
             ViewOf(view),
+            // Its own trail of the clock (`clock.rs`).
+            crate::clock::ClockTrail::default(),
             Camera3d::default(),
             Camera {
                 order: order + 1,
@@ -206,8 +227,8 @@ pub(super) fn layout(
         &mut Camera,
         Option<&MainView>,
         Option<&RenderLayers>,
-    ), Without<HudCamera>>,
-    mut huds: Query<(&HudCamera, &mut Camera)>,
+    ), (Without<HudCamera>, Without<UnderCamera>)>,
+    mut huds: Query<(Option<&HudCamera>, Option<&UnderCamera>, &mut Camera), Or<(With<HudCamera>, With<UnderCamera>)>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut commands: Commands,
 ) {
@@ -239,11 +260,14 @@ pub(super) fn layout(
     let Ok(window) = windows.single() else {
         return;
     };
-    for (hud, mut camera) in &mut huds {
-        if hud.0 >= n {
+    for (hud, under, mut camera) in &mut huds {
+        let Some(view) = hud.map(|h| h.0).or(under.map(|u| u.0)) else {
+            continue;
+        };
+        if view >= n {
             continue;
         }
-        let (position, size) = rect(hud.0, n, window.physical_size());
+        let (position, size) = rect(view, n, window.physical_size());
         let have = (camera.viewport.as_ref()).map(|v| (v.physical_position, v.physical_size));
         if have != Some((position, size)) {
             camera.viewport = Some(Viewport {
@@ -253,6 +277,19 @@ pub(super) fn layout(
             });
         }
     }
+}
+
+/// Where local player `view` of `n` is on the window, in its logical pixels: all of it for one.
+pub(crate) fn window_rect(view: usize, n: usize, window: &Window) -> Rect {
+    if n <= 1 {
+        return Rect::new(0.0, 0.0, window.width(), window.height());
+    }
+    let (position, size) = rect(view, n, window.physical_size());
+    let scale = window.scale_factor();
+    Rect::from_corners(
+        position.as_vec2() / scale,
+        (position + size).as_vec2() / scale,
+    )
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@
 
 use bevy::prelude::*;
 
+use crate::hud_view::{self, HudView};
 use crate::props::Sim;
 
 /// `fadeFromBlack_currentValue` above the neutral `0x1000`, at a blast.
@@ -17,8 +18,29 @@ const FULL: i16 = 0xfff;
 /// `fade_step`, the other way.
 const STEP: i16 = 0x88;
 
-/// How far above neutral the fade is, at the last two ticks.
+/// The flash of each local player's screen, by view.
 #[derive(Resource, Default)]
+pub struct Flashes(Vec<Flash>);
+
+impl Flashes {
+    /// A blast on everyone's screen, now (`/debug fx flash`).
+    pub fn full(&mut self) {
+        for flash in &mut self.0 {
+            flash.full();
+        }
+    }
+
+    /// A burst that plays its second frame at `local` in the camera of `view` (see
+    /// [`Flash::proximity`]).
+    pub fn proximity(&mut self, view: usize, local: Vec3) {
+        if let Some(flash) = self.0.get_mut(view) {
+            flash.proximity(local);
+        }
+    }
+}
+
+/// How far above neutral the fade is, at the last two ticks.
+#[derive(Default)]
 pub struct Flash {
     previous: i16,
     current: i16,
@@ -57,32 +79,43 @@ const PROXIMITY_Z: i32 = 0x200;
 #[derive(Component)]
 pub struct Overlay;
 
-/// One game tick: the fade runs on, and a blast on our kart puts it back to full.
-pub fn step(sim: Res<Sim>, mut flash: ResMut<Flash>, mut last: Local<Option<u32>>) {
+/// One game tick: the fades run on, and a blast on a player's kart puts theirs back to full.
+pub fn step(
+    sim: Res<Sim>,
+    drive: Res<crate::drive::Drive>,
+    mut flashes: ResMut<Flashes>,
+    mut last: Local<Option<u32>>,
+) {
     let tick = sim.race.tick;
     let previous = last.replace(tick);
     if previous == Some(tick) {
         return;
     }
-    // The race began again.
-    if previous.is_some_and(|p| tick < p) {
-        *flash = Flash::default();
+    let views = hud_view::views(&sim, &drive);
+    // The race began again, or the players changed.
+    if previous.is_some_and(|p| tick < p) || flashes.0.len() != views {
+        flashes.0.clear();
+        flashes.0.resize_with(views, Flash::default);
     }
-    flash.previous = flash.current;
-    // A bubble that hurt a kart it bumped into pops with a flash on its owner's screen
-    // (`RB_ShieldDark_ThTick_Grow`): the tick that decides the pop leaves it at its first frame.
-    let bubble_popped = sim
-        .driver()
-        .shield
-        .is_some_and(|s| s.crash_attack && s.pop_frame == Some(1));
-    if bubble_popped || sim.race.last_weapons.flashes.contains(&sim.own) {
-        // It starts at once, not over the tick.
-        *flash = Flash {
-            previous: FULL,
-            current: FULL,
-        };
-    } else {
-        flash.current = (flash.current - STEP).max(0);
+    for (view, flash) in flashes.0.iter_mut().enumerate() {
+        flash.previous = flash.current;
+        let slot = hud_view::slot_of(&sim, &drive, view);
+        // A bubble that hurt a kart it bumped into pops with a flash on its owner's screen
+        // (`RB_ShieldDark_ThTick_Grow`): the tick that decides the pop leaves it at its first
+        // frame.
+        let bubble_popped = sim.race.karts[slot]
+            .driver
+            .shield
+            .is_some_and(|s| s.crash_attack && s.pop_frame == Some(1));
+        if bubble_popped || sim.race.last_weapons.flashes.contains(&slot) {
+            // It starts at once, not over the tick.
+            *flash = Flash {
+                previous: FULL,
+                current: FULL,
+            };
+        } else {
+            flash.current = (flash.current - STEP).max(0);
+        }
     }
 }
 
@@ -93,14 +126,17 @@ fn brightness(excess: i16) -> f32 {
 
 pub fn show(
     mut commands: Commands,
+    sim: Res<Sim>,
+    drive: Res<crate::drive::Drive>,
     fixed: Res<Time<Fixed>>,
-    flash: Res<Flash>,
-    mut overlay: Query<&mut BackgroundColor, With<Overlay>>,
+    flashes: Res<Flashes>,
+    mut overlays: Query<(&HudView, &mut BackgroundColor), With<Overlay>>,
 ) {
-    let Ok(mut color) = overlay.single_mut() else {
+    for view in hud_view::missing(&sim, &drive, overlays.iter().map(|(v, _)| *v)) {
         // The first frame of a race, or of a new level (which took the nodes away).
         commands.spawn((
             Overlay,
+            HudView(view),
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
             Node {
                 position_type: PositionType::Absolute,
@@ -112,11 +148,15 @@ pub fn show(
             GlobalZIndex(-2),
             Pickable::IGNORE,
         ));
-        return;
-    };
+    }
     let t = fixed.overstep_fraction();
-    let alpha = brightness(flash.previous) * (1.0 - t) + brightness(flash.current) * t;
-    color.0 = Color::srgba(1.0, 1.0, 1.0, alpha);
+    for (&HudView(view), mut color) in &mut overlays {
+        let Some(flash) = flashes.0.get(view) else {
+            continue;
+        };
+        let alpha = brightness(flash.previous) * (1.0 - t) + brightness(flash.current) * t;
+        color.0 = Color::srgba(1.0, 1.0, 1.0, alpha);
+    }
 }
 
 #[cfg(test)]

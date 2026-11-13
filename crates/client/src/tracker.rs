@@ -21,7 +21,8 @@ use loader::lev::CheckpointNode;
 use weapon::Kind;
 use weapon::warpball::flags::MASK_REPATH;
 
-use crate::drive::{ChaseCamera, Kart};
+use crate::hud_view::{self, HudView};
+use crate::kart::KartSlot;
 use crate::hud::{atlas_image, pack_icons};
 use crate::Track;
 use crate::props::Sim;
@@ -245,8 +246,8 @@ fn warpball_along(nodes: &[CheckpointNode], node_curr: usize, ours: usize) -> i3
 /// `RB_GetThread_ClosestTracker`: the missile or warpball nearest to us of those that chase us,
 /// by the squared flat distance of its place to the kart's (the first of equals; the missiles
 /// come before the warpballs, as the sim ticks them).
-fn closest_tracker(sim: &Sim, nodes: &[CheckpointNode]) -> Option<Chaser> {
-    let body = weapon::Body::of(sim.driver());
+fn closest_tracker(sim: &Sim, slot: usize, nodes: &[CheckpointNode]) -> Option<Chaser> {
+    let body = weapon::Body::of(&sim.race.karts[slot].driver);
     let flat = |a: i32, b: i32| (a as u32).wrapping_sub(b as u32);
     let squared = |at: [i32; 3], pos: [i32; 3]| {
         let (dx, dz) = (flat(at[0], pos[0]), flat(at[2], pos[2]));
@@ -258,7 +259,7 @@ fn closest_tracker(sim: &Sim, nodes: &[CheckpointNode]) -> Option<Chaser> {
     let missiles = weapons
         .projectiles()
         .iter()
-        .filter(|p| p.kind == Kind::Missile && p.target == Some(sim.own))
+        .filter(|p| p.kind == Kind::Missile && p.target == Some(slot))
         .map(|p| {
             let chaser = Chaser {
                 id: p.id,
@@ -271,7 +272,7 @@ fn closest_tracker(sim: &Sim, nodes: &[CheckpointNode]) -> Option<Chaser> {
     let warpballs = weapons
         .warpballs()
         .iter()
-        .filter(|w| w.target == Some(sim.own))
+        .filter(|w| w.target == Some(slot))
         .map(|w| {
             let chaser = Chaser {
                 id: w.id,
@@ -299,11 +300,16 @@ fn flags_of(sim: &Sim, id: u32) -> Option<u16> {
     missile.map(|p| p.flags).or(warpball.map(|w| w.flags))
 }
 
+/// What the HUD remembers for each local player, by view.
+#[derive(Resource, Default)]
+pub struct Trackers(Vec<Tracker>);
+
 /// One game tick of the HUD.
 pub fn step(
     sim: Res<Sim>,
+    drive: Res<crate::drive::Drive>,
     track: Res<Track>,
-    mut state: ResMut<Tracker>,
+    mut states: ResMut<Trackers>,
     mut last: Local<Option<u32>>,
 ) {
     let tick = sim.race.tick;
@@ -311,33 +317,43 @@ pub fn step(
     if previous == Some(tick) {
         return;
     }
-    // The race began again.
-    if previous.is_some_and(|p| tick < p) {
-        *state = Tracker::default();
+    // The race began again, or the players changed.
+    let players = hud_view::views(&sim, &drive);
+    if previous.is_some_and(|p| tick < p) || states.0.len() != players {
+        states.0.clear();
+        states.0.resize_with(players, Tracker::default);
     }
-    if let Some(flags) = state.chasing.and_then(|id| flags_of(&sim, id)) {
-        state.chasing_flags = flags;
+    for (view, state) in states.0.iter_mut().enumerate() {
+        if let Some(flags) = state.chasing.and_then(|id| flags_of(&sim, id)) {
+            state.chasing_flags = flags;
+        }
+        let slot = crate::hud_view::slot_of(&sim, &drive, view);
+        let closest = closest_tracker(&sim, slot, &track.0.restart_points);
+        step_state(state, closest, tick);
     }
-    let closest = closest_tracker(&sim, &track.0.restart_points);
-    step_state(&mut state, closest, tick);
 }
 
-/// The two meshes, kept to be rewritten each frame.
+/// What the figures of each view share: the materials, and the picture's size.
 #[derive(Resource)]
 struct Figure {
-    brackets: Handle<Mesh>,
-    icon: Handle<Mesh>,
+    brackets: Handle<StandardMaterial>,
+    icon: Handle<StandardMaterial>,
     size: Vec2,
 }
 
-#[derive(Component)]
-struct Part;
+/// A figure of the view `HudView` says, in its own mesh (rewritten each frame): the brackets or
+/// the lock-on icon.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    Brackets,
+    Icon,
+}
 
 pub struct TrackerPlugin;
 
 impl Plugin for TrackerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Tracker>()
+        app.init_resource::<Trackers>()
             .add_systems(FixedUpdate, step.run_if(crate::drive::driving))
             .add_systems(Update, show.run_if(crate::drive::driving));
     }
@@ -426,7 +442,8 @@ fn icon_quads(size: (usize, usize), frame: Frame) -> Vec<([i32; 2], [f32; 2])> {
 
 fn show(
     mut commands: Commands,
-    state: Res<Tracker>,
+    states: Res<Trackers>,
+    drive: Res<crate::drive::Drive>,
     textures: Res<crate::Textures>,
     figure: Option<Res<Figure>>,
     mut images: ResMut<Assets<Image>>,
@@ -434,9 +451,10 @@ fn show(
     mut materials: ResMut<Assets<StandardMaterial>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     screen: Res<crate::pixel::RenderSize>,
-    cameras: Query<(&Camera, &GlobalTransform), With<ChaseCamera>>,
-    karts: Query<&Transform, (With<Kart>, Without<ChaseCamera>)>,
-    mut parts: Query<&mut Visibility, With<Part>>,
+    cameras: Query<(&crate::drive::MainView, &Camera, &GlobalTransform)>,
+    karts: Query<(&KartSlot, &Transform)>,
+    mut parts: Query<(&HudView, &Part, &Mesh3d, &mut Visibility)>,
+    sim: Res<Sim>,
 ) {
     let Some(figure) = figure else {
         let icons = pack_icons();
@@ -452,91 +470,118 @@ fn show(
             alpha_mode: AlphaMode::Mask(0.5),
             ..default()
         };
-        let brackets = meshes.add(mesh(false));
-        let icon = meshes.add(mesh(true));
         commands.insert_resource(Figure {
-            brackets: brackets.clone(),
-            icon: icon.clone(),
+            brackets: materials.add(unlit(None)),
+            icon: materials.add(unlit(Some(image))),
             size: Vec2::new(size.0 as f32, size.1 as f32),
         });
-        for (mesh, material) in [
-            (brackets, materials.add(unlit(None))),
-            (icon, materials.add(unlit(Some(image)))),
+        return;
+    };
+    // The figures of each view, made when there are none: one pair, in the same layer as the
+    // others', which the one camera over the whole window draws.
+    let missing = hud_view::missing(
+        &sim,
+        &drive,
+        parts
+            .iter()
+            .filter(|(_, part, ..)| **part == Part::Brackets)
+            .map(|(view, ..)| *view),
+    );
+    for view in missing {
+        for (part, mesh_, material) in [
+            (Part::Brackets, mesh(false), &figure.brackets),
+            (Part::Icon, mesh(true), &figure.icon),
         ] {
             commands.spawn((
-                Part,
+                part,
+                HudView(view),
                 // The meshes are rewritten every frame; their bounds would go stale.
                 NoFrustumCulling,
-                Mesh3d(mesh),
-                MeshMaterial3d(material),
+                Mesh3d(meshes.add(mesh_)),
+                MeshMaterial3d(material.clone()),
                 Transform::default(),
                 Visibility::Hidden,
                 RenderLayers::layer(LAYER),
             ));
         }
-        return;
-    };
-    let anchor = (|| {
-        let frame = state.frame?;
-        let window = windows.single().ok()?;
-        let (camera, camera_transform) = cameras.single().ok()?;
-        let kart = karts.single().ok()?;
-        // (The camera draws into the picture of the scene, which may be smaller than the window.)
-        let at = screen.to_window(
-            camera
-                .world_to_viewport(camera_transform, kart.translation)
-                .ok()?,
-        );
-        Some((frame, window, at))
-    })();
-    let Some((frame, window, at)) = anchor else {
-        for mut visibility in &mut parts {
-            *visibility = Visibility::Hidden;
-        }
-        return;
-    };
-    // The picture is 512 by 216 on the PlayStation, stretched over the window.
-    let scale = Vec2::new(window.width() / 512.0, window.height() / 216.0);
-    let place = |offset: [i32; 2]| {
-        let screen = at + Vec2::new(offset[0] as f32, offset[1] as f32 - LIFT) * scale;
-        [
-            screen.x - window.width() / 2.0,
-            window.height() / 2.0 - screen.y,
-            -DEPTH,
-        ]
-    };
-    let triangles = brackets(frame);
-    if let Some(mut mesh) = meshes.get_mut(&figure.brackets) {
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_POSITION,
-            triangles.iter().map(|(p, _)| place(*p)).collect::<Vec<_>>(),
-        );
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_COLOR,
-            triangles.iter().map(|(_, c)| *c).collect::<Vec<_>>(),
-        );
     }
-    let quads = icon_quads((figure.size.x as usize, figure.size.y as usize), frame);
-    if let Some(mut mesh) = meshes.get_mut(&figure.icon) {
-        // The icon is red, and white on the beat; the game's colour byte is a multiplier with
-        // 0x80 neutral, so both are twice as bright as the picture.
-        let tint = if frame.white {
-            [2.0, 2.0, 2.0, ALPHA]
-        } else {
-            [2.0, 0.0, 0.0, ALPHA]
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let players = drive.views().len();
+    for (&HudView(view), part, mesh_handle, mut visibility) in &mut parts {
+        let frame = states.0.get(view).and_then(|state| state.frame);
+        let anchor = (|| {
+            let frame = frame?;
+            let slot = hud_view::slot_of(&sim, &drive, view);
+            let (_, camera, camera_transform) = cameras.iter().find(|(m, ..)| m.0 == view)?;
+            let (_, kart) = karts.iter().find(|(k, _)| k.0 == slot)?;
+            // (The camera draws into a part of the picture of the scene, which may be smaller
+            // than the window: the point is in the part, which is then in the picture.)
+            let origin = camera
+                .viewport
+                .as_ref()
+                .map_or(Vec2::ZERO, |v| v.physical_position.as_vec2() / screen.scale_factor);
+            let at = screen.to_window(
+                origin
+                    + camera
+                        .world_to_viewport(camera_transform, kart.translation)
+                        .ok()?,
+            );
+            Some((frame, at))
+        })();
+        let Some((frame, at)) = anchor else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
         };
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_POSITION,
-            quads.iter().map(|(p, _)| place(*p)).collect::<Vec<_>>(),
-        );
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_UV_0,
-            quads.iter().map(|(_, uv)| *uv).collect::<Vec<_>>(),
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint; quads.len()]);
-    }
-    for mut visibility in &mut parts {
-        *visibility = Visibility::Inherited;
+        visibility.set_if_neq(Visibility::Inherited);
+        // The picture is 512 by 216 on the PlayStation, stretched over the player's part of the
+        // window.
+        let rect = crate::drive::window_rect(view, players, window);
+        let scale = Vec2::new(rect.width() / 512.0, rect.height() / 216.0);
+        let place = |offset: [i32; 2]| {
+            let screen = at + Vec2::new(offset[0] as f32, offset[1] as f32 - LIFT) * scale;
+            [
+                screen.x - window.width() / 2.0,
+                window.height() / 2.0 - screen.y,
+                -DEPTH,
+            ]
+        };
+        let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) else {
+            continue;
+        };
+        match part {
+            Part::Brackets => {
+                let triangles = brackets(frame);
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_POSITION,
+                    triangles.iter().map(|(p, _)| place(*p)).collect::<Vec<_>>(),
+                );
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_COLOR,
+                    triangles.iter().map(|(_, c)| *c).collect::<Vec<_>>(),
+                );
+            }
+            Part::Icon => {
+                let quads = icon_quads((figure.size.x as usize, figure.size.y as usize), frame);
+                // The icon is red, and white on the beat; the game's colour byte is a multiplier
+                // with 0x80 neutral, so both are twice as bright as the picture.
+                let tint = if frame.white {
+                    [2.0, 2.0, 2.0, ALPHA]
+                } else {
+                    [2.0, 0.0, 0.0, ALPHA]
+                };
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_POSITION,
+                    quads.iter().map(|(p, _)| place(*p)).collect::<Vec<_>>(),
+                );
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_UV_0,
+                    quads.iter().map(|(_, uv)| *uv).collect::<Vec<_>>(),
+                );
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint; quads.len()]);
+            }
+        }
     }
 }
 

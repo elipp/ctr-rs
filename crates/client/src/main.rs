@@ -52,6 +52,7 @@ mod fx;
 mod clock;
 mod heat;
 mod hud;
+mod hud_view;
 mod kart;
 mod laps;
 mod learned;

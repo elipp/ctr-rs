@@ -40,6 +40,7 @@ use bevy::render::sync_world::MainEntity;
 use bevy::render::view::ViewTarget;
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 
+use crate::hud_view;
 use crate::props::Sim;
 
 /// Retail's frames a second, which the trail's blend and zoom are per.
@@ -96,16 +97,18 @@ impl Plugin for ClockPlugin {
     }
 }
 
-/// The strength of our kart's screen this frame, and what it makes of the pass.
+/// The strength of each view's screen this frame, and what it makes of the pass.
 fn update(
     sim: Res<Sim>,
+    drive: Res<crate::drive::Drive>,
     config: Res<crate::config::Config>,
     fixed: Res<Time<Fixed>>,
     real: Res<Time<Real>>,
-    mut trails: Query<&mut ClockTrail>,
+    mut trails: Query<(&crate::drive::ViewOf, &mut ClockTrail)>,
     // The last tick seen, and when it was.
     mut seen: Local<Option<(u32, f64)>>,
-    mut drawn: Local<bool>,
+    // Whether each view's pass drew last frame.
+    mut drawn: Local<Vec<bool>>,
 ) {
     let now = real.elapsed_secs_f64();
     let tick = sim.race.tick;
@@ -113,46 +116,55 @@ fn update(
         *seen = Some((tick, now));
     }
     let stale = seen.is_some_and(|(_, at)| now - at > STALE_SECS);
-    // Shader effects off: no trail, so no pass (and no picture kept).
-    let strength = if stale || !config.shader_effects {
-        0
-    } else {
-        sim.race.last_blurs.get(sim.own).copied().unwrap_or(0)
-    };
     // Retail's frames this one stands for.
     let frames = (real.delta_secs() * RETAIL_FPS).clamp(0.0, 4.0);
-    let trail = if strength < 0 {
-        ClockTrail {
-            mode: FLASH,
-            ..default()
+    drawn.resize(hud_view::views(&sim, &drive), false);
+    for (view, mut t) in &mut trails {
+        let view = view.0;
+        if view >= drawn.len() {
+            continue;
         }
-    } else if strength == 0 {
-        ClockTrail::default()
-    } else if !*drawn {
-        ClockTrail {
-            mode: KEEP,
-            ..default()
-        }
-    } else {
-        // `timer + cameraID`, between the ticks, for the pulse (one player: camera 0).
-        let wave = tick as f32 + fixed.overstep_fraction();
-        let sin = (wave * 100.0 / 4096.0 * std::f32::consts::TAU).sin().abs();
-        let mut blur = sin * 1024.0 + 1024.0;
-        if strength < 0x1000 {
-            blur *= strength as f32 / 4096.0;
-        }
-        // The pixels in from each side, of retail's view.
-        let inset = Vec2::new(blur * 9.0 / 4096.0 + 2.0, blur * 6.0 / 4096.0 + 2.0) / VIEW;
-        // `frames` of retail's zooms and blends in one.
-        let scale = (Vec2::ONE - 2.0 * inset).powf(frames);
-        ClockTrail {
-            mode: TRAIL,
-            keep: 0.5f32.powf(frames),
-            inset: (Vec2::ONE - scale) / 2.0,
-        }
-    };
-    *drawn = trail.mode != OFF;
-    for mut t in &mut trails {
+        // Shader effects off: no trail, so no pass (and no picture kept).
+        let strength = if stale || !config.shader_effects {
+            0
+        } else {
+            sim.race
+                .last_blurs
+                .get(hud_view::slot_of(&sim, &drive, view))
+                .copied()
+                .unwrap_or(0)
+        };
+        let trail = if strength < 0 {
+            ClockTrail {
+                mode: FLASH,
+                ..default()
+            }
+        } else if strength == 0 {
+            ClockTrail::default()
+        } else if !drawn[view] {
+            ClockTrail {
+                mode: KEEP,
+                ..default()
+            }
+        } else {
+            // `timer + cameraID`, between the ticks, for the pulse.
+            let wave = (tick as usize + view) as f32 + fixed.overstep_fraction();
+            let sin = (wave * 100.0 / 4096.0 * std::f32::consts::TAU).sin().abs();
+            let mut blur = sin * 1024.0 + 1024.0;
+            if strength < 0x1000 {
+                blur *= strength as f32 / 4096.0;
+            }
+            // The pixels in from each side, of retail's view.
+            let inset = Vec2::new(blur * 9.0 / 4096.0 + 2.0, blur * 6.0 / 4096.0 + 2.0) / VIEW;
+            // `frames` of retail's zooms and blends in one.
+            let scale = (Vec2::ONE - 2.0 * inset).powf(frames);
+            ClockTrail {
+                mode: TRAIL,
+                keep: 0.5f32.powf(frames),
+                inset: (Vec2::ONE - scale) / 2.0,
+            }
+        };
+        drawn[view] = trail.mode != OFF;
         *t = trail;
     }
 }

@@ -722,7 +722,7 @@ pub(crate) fn setup(
             crate::pixel::OnWindow,
             Camera3d::default(),
             Camera {
-                order: 3,
+                order: crate::pixel::FIGURES_ORDER,
                 clear_color: ClearColorConfig::None,
                 ..default()
             },

@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 
 use crate::hud;
+use crate::hud_view::{self, HudView};
 use crate::speedometer::ShowSpeedometer;
 
 /// Where the bar's bottom right corner is on retail's screen (`UI_HUD_SLOT_SLIDE_METER`), and its
@@ -42,17 +43,13 @@ fn fill(room_left: i32, max_room: i32) -> i32 {
             .unwrap_or(0)
 }
 
-/// The bar of local player `view`, outline and all, and the HUD camera it is laid out in (none
-/// while there is one player: the window's).
-#[derive(Component)]
-struct SlideMeter {
-    view: usize,
-    camera: Option<Entity>,
-}
-
-/// The fill of the bar of local player `view`.
+/// The fill of the bar of local player `.0`.
 #[derive(Component)]
 struct Fill(usize);
+
+/// The bar of a local player, outline and all.
+#[derive(Component)]
+struct SlideMeter;
 
 pub struct SlideMeterPlugin;
 
@@ -63,48 +60,24 @@ impl Plugin for SlideMeterPlugin {
 }
 
 /// Shows the meter of each local player, in the player's part of the screen when there are
-/// several (each has a HUD camera then, `drive::HudCamera`).
+/// several (`hud_view`).
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     drive: Res<crate::drive::Drive>,
     showing: Res<ShowSpeedometer>,
-    cameras: Query<(Entity, &crate::drive::HudCamera)>,
-    mut meters: Query<(Entity, &SlideMeter, &mut Visibility)>,
+    mut meters: Query<(&HudView, &mut Visibility), With<SlideMeter>>,
     mut fills: Query<(&Fill, &mut Node, &mut BackgroundColor)>,
 ) {
-    let players = drive.views();
-    for (entity, meter, _) in &meters {
-        if meter.view >= players.len() {
-            commands.entity(entity).despawn();
-        }
+    for view in hud_view::missing(&sim, &drive, meters.iter().map(|(v, _)| *v)) {
+        // The first frame, or of a new level (which took the nodes away).
+        spawn(&mut commands, view);
     }
-    for (view, local) in players.iter().enumerate() {
-        let camera = (players.len() > 1)
-            .then(|| cameras.iter().find(|(_, hud)| hud.0 == view).map(|(e, _)| e))
-            .flatten();
-        if players.len() > 1 && camera.is_none() {
-            // Its camera is not up yet.
+    for (&HudView(view), mut visibility) in &mut meters {
+        if view >= hud_view::views(&sim, &drive) {
             continue;
         }
-        let Some((entity, meter, mut visibility)) = meters
-            .iter_mut()
-            .find(|(_, meter, _)| meter.view == view)
-        else {
-            // The first frame, or of a new level (which took the nodes away).
-            spawn(&mut commands, view, camera);
-            continue;
-        };
-        if meter.camera != camera {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        // (Ours is the one the camera follows, which is another kart for a spectator.)
-        let d = if view == 0 {
-            sim.driver()
-        } else {
-            &sim.race.karts[local.slot()].driver
-        };
+        let d = hud_view::driver_of(&sim, &drive, view);
         let finished = d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
         visibility.set_if_neq(if finished && !showing.0 {
             Visibility::Hidden
@@ -129,11 +102,12 @@ fn show(
     }
 }
 
-fn spawn(commands: &mut Commands, view: usize, camera: Option<Entity>) {
+fn spawn(commands: &mut Commands, view: usize) {
     // The outline is a line on the bar's first column and row, and one just past its last: the
     // node is a pixel wider and taller than the bar, its border those lines.
-    let mut meter = commands.spawn((
-        SlideMeter { view, camera },
+    commands.spawn((
+        SlideMeter,
+        HudView(view),
         Node {
             position_type: PositionType::Absolute,
             right: hud::x((hud::WIDTH - RIGHT - 1) as f32),
@@ -161,9 +135,6 @@ fn spawn(commands: &mut Commands, view: usize, camera: Option<Entity>) {
             Pickable::IGNORE,
         )],
     ));
-    if let Some(camera) = camera {
-        meter.insert(UiTargetCamera(camera));
-    }
 }
 
 #[cfg(test)]
