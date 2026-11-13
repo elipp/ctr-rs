@@ -83,6 +83,9 @@ pub enum Action {
     /// Our own kart driven by the brain bots' policy (`/autopilot`): on, off, or the other of
     /// the two for none given. Kept until the game closes.
     Autopilot(Option<bool>),
+    /// How many players share the screen (`/players`, 1 to [`crate::drive::MAX_PLAYERS`]), or
+    /// say how many there are with none given. Not in a lobby yet.
+    Players(Option<u8>),
     RestartRace,
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
     CupCreate {
@@ -183,6 +186,7 @@ const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
+const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
@@ -222,6 +226,15 @@ impl Action {
                 "on" => Ok(Action::Autopilot(Some(true))),
                 "off" => Ok(Action::Autopilot(Some(false))),
                 _ => Err(AUTOPILOT_USAGE.into()),
+            },
+            "players" => match rest {
+                "" => Ok(Action::Players(None)),
+                _ => match rest.parse::<u8>() {
+                    Ok(n) if (1..=crate::drive::MAX_PLAYERS as u8).contains(&n) => {
+                        Ok(Action::Players(Some(n)))
+                    }
+                    _ => Err(PLAYERS_USAGE.into()),
+                },
             },
             "cup" => Action::cup(rest),
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
@@ -1713,6 +1726,20 @@ mod tests {
             policy("bots policy  target/my run/policy-00500.safetensors "),
             Some(PolicyChoice::File("target/my run/policy-00500.safetensors".into()))
         );
+    }
+
+    #[test]
+    fn players_is_a_count_from_one_to_four() {
+        let parsed = |line| match Action::parse(line) {
+            Ok(Action::Players(n)) => Some(n),
+            _ => None,
+        };
+        assert_eq!(parsed("players"), Some(None));
+        assert_eq!(parsed("players 2"), Some(Some(2)));
+        assert_eq!(parsed("players 4"), Some(Some(4)));
+        assert_eq!(parsed("players 0"), None);
+        assert_eq!(parsed("players 5"), None);
+        assert_eq!(parsed("players two"), None);
     }
 
     #[test]

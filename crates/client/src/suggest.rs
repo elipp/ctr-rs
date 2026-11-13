@@ -256,6 +256,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
         options: &[leaf("on", "The policy drives"), leaf("off", "We drive")],
         arg: None,
     },
+    Spec {
+        name: "players",
+        about: "How many players share the screen",
+        options: &[],
+        arg: Some("[1 to 4]"),
+    },
     node(
         "cup",
         "A series of races with points",
@@ -601,6 +607,7 @@ mod tests {
                 "race",
                 "bots",
                 "autopilot",
+                "players",
                 "cup",
                 "promote",
                 "track",

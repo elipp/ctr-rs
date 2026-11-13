@@ -141,6 +141,11 @@ impl Default for Controls {
 }
 
 impl Controls {
+    /// No keys at all.
+    pub fn none() -> Controls {
+        Controls(Control::ALL.map(|_| Vec::new()))
+    }
+
     /// The keys of the second player on the same keyboard: the I, J, K and L keys steer, with the
     /// hops and the item beside them. Only what the kart does is bound: the rest (the menu's
     /// level and racer keys, the mutes) is the one keyboard's, and stays the first player's.

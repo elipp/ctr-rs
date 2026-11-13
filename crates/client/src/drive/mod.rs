@@ -17,6 +17,8 @@
 //! * R: back to the starting grid
 //! * H or Triangle: swap the minimap and the speedometer (`speedometer.rs`)
 //! * Escape, P or Start: the pause menu (`pause.rs`)
+//! * `/players <1 to 4>`: share the screen (offline). The second player takes a free pad, or the
+//!   keyboard's I J K L (U, O hop, `;` item, Y aim); the others take pads (`split.rs`)
 //!
 //! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the
 //! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
@@ -27,6 +29,7 @@ mod input;
 mod local;
 mod overlay;
 mod pose;
+mod split;
 mod tick;
 
 use bevy::prelude::*;
@@ -47,6 +50,17 @@ pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 /// The kart model's entity: its pose is the interpolated pose of the sim.
 #[derive(Component)]
 pub struct Kart;
+
+/// A kart of another local player (`/players`), as opposed to one of a lobby (`remote.rs`).
+#[derive(Component)]
+pub struct Extra;
+
+/// The most players that can share the screen.
+pub const MAX_PLAYERS: usize = 4;
+
+/// How many players share the screen (`/players`): the first is ours.
+#[derive(Resource)]
+pub struct LocalPlayers(pub usize);
 
 /// What the viewer keeps of driving: a view for each local player, the first of them ours. The
 /// race itself, our kart in it included, is [`crate::props::Sim`].
@@ -93,6 +107,12 @@ impl Drive {
         self.anim_num_frames = anim_num_frames;
     }
 
+    /// The karts of the local players, in the order of their slots.
+    pub fn specs(&self) -> Vec<KartSpec> {
+        let extras = self.views.iter().skip(1).filter_map(|view| view.spec);
+        std::iter::once(self.spec()).chain(extras).collect()
+    }
+
     /// Our kart, as a race takes it.
     pub fn spec(&self) -> KartSpec {
         KartSpec {
@@ -114,7 +134,8 @@ pub struct DrivePlugin;
 
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(crate::exhaust::Particles::new())
+        app.insert_resource(LocalPlayers(1))
+            .insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
             .init_resource::<crate::flash::Flash>()
             .add_systems(Update, overlay::debug_text_command)
@@ -154,6 +175,7 @@ impl Plugin for DrivePlugin {
             .add_systems(
                 Update,
                 (
+                    split::sync,
                     crate::shadow::update,
                     crate::flame::update,
                     crate::skid::update,

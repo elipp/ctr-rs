@@ -26,7 +26,7 @@ pub fn kart_collisions() -> bool {
 pub fn build(
     mut lobby: ResMut<Lobby>,
     track: Res<Track>,
-    others: Query<Entity, (With<KartSlot>, Without<Kart>)>,
+    others: Query<Entity, (With<KartSlot>, Without<Kart>, Without<crate::drive::Extra>)>,
     mut builder: KartBuilder,
     loading: Option<Res<crate::loading::Loading>>,
     mut toasts: MessageWriter<crate::toast::Toast>,

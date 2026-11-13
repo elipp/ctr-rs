@@ -101,7 +101,9 @@ pub(super) fn drive_tick(
     let paused = (hold.menu.open || hold.fx.holds()) && !online;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
-        drive.own().freeze();
+        for view in &mut drive.views {
+            view.freeze();
+        }
         for (mut motion, _, _) in &mut motions {
             motion.freeze();
         }
@@ -116,7 +118,7 @@ pub(super) fn drive_tick(
     let picked = std::mem::take(&mut hold.menu.restart);
     let mut restart = picked && !online;
     // The lobby closed, or the race failed: back to the grid with our kart alone.
-    if !online && sim.race.karts.len() != 1 {
+    if !online && sim.race.karts.len() != drive.views.len() {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
@@ -127,7 +129,7 @@ pub(super) fn drive_tick(
     if restart {
         let (specs, own, spectator) = match &lobby.online {
             Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
-            None => (vec![drive.spec()], 0, false),
+            None => (drive.specs(), 0, false),
         };
         let bots = lobby.online.as_ref().map(|net| {
             let setup = vehicle::bot::Setup {
@@ -181,7 +183,9 @@ pub(super) fn drive_tick(
             }),
         );
         particles.list.clear();
-        drive.own().reset(&track);
+        for view in &mut drive.views {
+            view.reset(&track);
+        }
         drive.own().slot = own;
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
@@ -618,6 +622,27 @@ pub(super) fn drive_tick(
         }
     }
     each_motion(&sim, &mut motions, |motion, kart| motion.push(kart));
+    // The other local players' views: their karts are never watched or finished-for-the-camera.
+    for view in drive.views.iter_mut().skip(1) {
+        let kart = &sim.race.karts[view.slot];
+        let finished = kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+        view.follow(
+            &track,
+            Follow {
+                tick,
+                kart,
+                intro: sim.race.intro_ticks > 0,
+                finished,
+                cycle: false,
+                elsewhere: false,
+                confetti: hold
+                    .fx
+                    .confetti
+                    .apply(finished && kart.driver.driver_rank == 0),
+            },
+        );
+        view.push();
+    }
     drive.own().push();
 
     // The tick's sounds, the other karts' heard from where the camera is now.

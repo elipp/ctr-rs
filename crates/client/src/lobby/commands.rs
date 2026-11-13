@@ -60,6 +60,9 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         {
             net::NOT_NOW
         }
+        Action::Players(Some(_)) if lobby.is_open() || lobby.online.is_some() => {
+            "Split screen is for offline play: close the lobby first"
+        }
         Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
         Action::Character(_) if lobby.online.is_some() || lobby.characters_locked() => net::NOT_NOW,
         // (A host's countdown is to the track it is on.)
@@ -119,6 +122,7 @@ pub(super) fn run(
     mut lag: ResMut<super::lag::FakeLag>,
     mut config: ResMut<crate::config::Config>,
     mut brains: ResMut<crate::learned::Brains>,
+    mut players: ResMut<crate::drive::LocalPlayers>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -126,6 +130,15 @@ pub(super) fn run(
         if let Some(why) = refusal(action, &lobby) {
             toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
+        }
+        // A lobby is for one player of ours (so far): the others go.
+        if matches!(
+            action,
+            Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
+        ) && players.0 > 1
+        {
+            players.0 = 1;
+            toasts.write(Toast::new("Split screen is off in a lobby", 2500));
         }
         let now = time.elapsed_secs();
         let say = match action {
@@ -232,6 +245,15 @@ pub(super) fn run(
                         toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
                     }
                 }
+                continue;
+            }
+            Action::Players(wanted) => {
+                if let Some(n) = wanted {
+                    players.0 = (*n as usize).clamp(1, crate::drive::MAX_PLAYERS);
+                }
+                let text = format!("{} player(s) on the screen", players.0);
+                console!("{text}");
+                toasts.write(Toast::new(text, 2500));
                 continue;
             }
             Action::Autopilot(on) => {
