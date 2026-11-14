@@ -262,7 +262,16 @@ async fn list(
     events: &Sender<Event>,
     claim: &mut bool,
 ) -> Result<bool, Error> {
-    let connection = endpoint.connect(EndpointAddr::new(realm), ALPN).await?;
+    let connection = endpoint
+        .connect(EndpointAddr::new(realm), ALPN)
+        .await
+        .map_err(|e| -> Error {
+            if is_alpn_mismatch(&e) {
+                OUTDATED.into()
+            } else {
+                e.into()
+            }
+        })?;
     if *claim {
         match ask(&connection, &Request::Claim).await? {
             // Ours now. Or there was nothing to claim, and the announce below lists it afresh.
@@ -358,20 +367,54 @@ pub struct PublicLobby {
     pub compatible: bool,
 }
 
+/// What a host is told when the realm turns its protocol away.
+const OUTDATED: &str = "please update the game";
+
+/// Why a list could not be fetched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowseError {
+    /// The realm does not speak our protocol (it has moved on, or we have): one of the two builds
+    /// has to be updated, and the realm is the one that is kept current.
+    Outdated,
+    Failed(String),
+}
+
+impl std::fmt::Display for BrowseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BrowseError::Outdated => f.write_str(OUTDATED),
+            BrowseError::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Whether a failed connection is the realm turning our protocol away: TLS alert 120,
+/// `no_application_protocol`, which QUIC reports as "the cryptographic handshake failed: error 120".
+fn is_alpn_mismatch(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut e = Some(e);
+    while let Some(err) = e {
+        if err.to_string().contains("handshake failed: error 120") {
+            return true;
+        }
+        e = err.source();
+    }
+    false
+}
+
 /// The list being fetched from a realm, which [`Browse::poll`] hands over when it is here.
 pub struct Browse {
-    result: Mutex<Receiver<Result<Vec<PublicLobby>, String>>>,
+    result: Mutex<Receiver<Result<Vec<PublicLobby>, BrowseError>>>,
     #[cfg(not(target_arch = "wasm32"))]
     _thread: JoinHandle<()>,
 }
 
 impl Browse {
     /// The list or what went wrong, once, when the realm has answered.
-    pub fn poll(&self) -> Option<Result<Vec<PublicLobby>, String>> {
+    pub fn poll(&self) -> Option<Result<Vec<PublicLobby>, BrowseError>> {
         match self.result.lock().unwrap().try_recv() {
             Ok(result) => Some(result),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err("the network thread stopped".into())),
+            Err(TryRecvError::Disconnected) => Some(Err(BrowseError::Failed("the network thread stopped".into()))),
         }
     }
 }
@@ -387,8 +430,8 @@ pub fn browse(realm: EndpointId, build: u32) -> Browse {
     let list = move || async move {
         let list = n0_future::time::timeout(BROWSE_TIMEOUT, fetch(realm, build))
             .await
-            .unwrap_or_else(|_| Err("the realm took too long".into()));
-        let _ = tx.send(list.map_err(|e| e.to_string()));
+            .unwrap_or_else(|_| Err(BrowseError::Failed("the realm took too long".into())));
+        let _ = tx.send(list);
     };
     #[cfg(not(target_arch = "wasm32"))]
     let thread = std::thread::Builder::new()
@@ -410,18 +453,28 @@ pub fn browse(realm: EndpointId, build: u32) -> Browse {
     }
 }
 
-async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, Error> {
-    let endpoint = crate::endpoint_builder().bind().await?;
+async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, BrowseError> {
+    let failed = |e: Error| BrowseError::Failed(e.to_string());
+    let endpoint = crate::endpoint_builder().bind().await.map_err(|e| failed(e.into()))?;
     let list = async {
-        let connection = endpoint.connect(EndpointAddr::new(realm), ALPN).await?;
+        let connection = endpoint
+            .connect(EndpointAddr::new(realm), ALPN)
+            .await
+            .map_err(|e| {
+                if is_alpn_mismatch(&e) {
+                    BrowseError::Outdated
+                } else {
+                    failed(e.into())
+                }
+            })?;
         let response = ask(&connection, &Request::List).await;
         connection.close(0u32.into(), b"bye");
-        response
+        response.map_err(failed)
     }
     .await;
     endpoint.close().await;
     let Response::Lobbies(entries) = list? else {
-        return Err("the realm answered nonsense".into());
+        return Err(BrowseError::Failed("the realm answered nonsense".into()));
     };
     let ours = version(build);
     Ok(entries

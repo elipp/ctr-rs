@@ -15,6 +15,10 @@ use bitcode::{Decode, Encode};
 /// What the realm server and its clients speak, exchanged in the connection handshake.
 pub const ALPN: &[u8] = b"ctr-rust/realm/2";
 
+/// What the realm server still answers, to tell a client that speaks it to update (see
+/// [`outdated`]). Retire one when no client of it is left.
+pub const LEGACY_ALPNS: &[&[u8]] = &[b"ctr-rust/realm/1"];
+
 /// The most chars of a lobby's name.
 pub const MAX_NAME: usize = 32;
 /// The most chars of a track's name.
@@ -157,6 +161,39 @@ impl Response {
     }
 }
 
+/// What a client of [`LEGACY_ALPNS`] asks, as it was then. Only `Announce`, `Withdraw` and `List`
+/// existed, and the encoding of an enum depends on the variants it has, so the current [`Request`]
+/// cannot read it.
+#[derive(Clone, Debug, PartialEq, Eq, Decode)]
+enum LegacyRequest {
+    Announce(Listing),
+    Withdraw,
+    List,
+}
+
+/// The response to a request of a client that is too old, in the encoding it reads (`Response`
+/// has only grown at the end). A browser sees one lobby, greyed out as being of another version,
+/// that says to update; a host's announce is rejected. `realm` is the realm's own id, for the
+/// entry's: it has to be a valid one for the client to show it.
+pub fn outdated(request: &[u8], realm: [u8; 32]) -> Option<Vec<u8>> {
+    let response = match bitcode::decode(request).ok()? {
+        LegacyRequest::Announce(_) => Response::Rejected(Reject::Invalid),
+        LegacyRequest::Withdraw => Response::Ok,
+        LegacyRequest::List => Response::Lobbies(vec![Entry {
+            id: realm,
+            listing: Listing {
+                name: "Please update".into(),
+                players: 0,
+                max_players: 1,
+                state: State::Lobby,
+                track: String::new(),
+                version: "outdated".into(),
+            },
+        }]),
+    };
+    Some(response.to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +231,27 @@ mod tests {
             );
         }
         assert!(Request::from_bytes(b"\xff\xff\xff").is_err());
+    }
+
+    #[test]
+    fn outdated_clients_are_told_to_update() {
+        #[derive(Encode)]
+        enum Old {
+            #[allow(dead_code)]
+            Announce(Listing),
+            #[allow(dead_code)]
+            Withdraw,
+            List,
+        }
+        let reply = outdated(&bitcode::encode(&Old::List), [9; 32]).unwrap();
+        let Response::Lobbies(entries) = Response::from_bytes(&reply).unwrap() else {
+            panic!("not a list");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, [9; 32]);
+        assert!(entries[0].listing.validate().is_ok());
+        assert!(outdated(&bitcode::encode(&Old::Withdraw), [9; 32]).is_some());
+        assert!(outdated(b"\xff\xff\xff", [9; 32]).is_none());
     }
 
     #[test]

@@ -236,6 +236,10 @@ fn browser_items(public: &PublicLobbies) -> Vec<Entry> {
     let mut items = Vec::new();
     match &public.status {
         Status::Idle | Status::Loading => items.push(entry(Item::Info, "Looking...")),
+        Status::Outdated => {
+            items.push(entry(Item::Info, "Please update"));
+            items.push(entry(Item::Info, "to see public lobbies"));
+        }
         Status::Failed => {
             items.push(entry(Item::Info, "Could not reach the realm"));
             items.push(entry(Item::Refresh, "Try again"));
