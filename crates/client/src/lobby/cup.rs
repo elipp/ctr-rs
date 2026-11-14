@@ -3,8 +3,9 @@
 //! `/race start` is the same thing with one track and no points.
 //!
 //! The host runs the series: it starts each race, scores it when it is over and starts the next
-//! after [`BETWEEN_RACES_SECONDS`]. Of a series, the guests only get the races and, after each
-//! race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
+//! after [`BETWEEN_RACES_SECONDS`]. `/cup pause` pauses the race for everyone, or the countdown
+//! to the next race, until `/cup resume`. Of a series, the guests only get the races and, after
+//! each race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
 //! ([`standings_text`]).
 //!
 //! Bots race for points too, and with them in the race the points are retail's of a cup with
@@ -177,6 +178,8 @@ pub struct Series {
     /// ones. One kind or none.
     pub brains: Vec<u8>,
     pub retail: net::RetailBots,
+    /// `/cup pause` between races: the next one waits for `/cup resume`.
+    pub paused: bool,
     /// The points of every player and bot so far, in the order they were first scored.
     points: Vec<(Who, u32)>,
     names: HashMap<Who, String>,
@@ -193,6 +196,7 @@ impl Series {
             scored: false,
             brains: Vec::new(),
             retail: net::RetailBots::default(),
+            paused: false,
             points: Vec::new(),
             names: HashMap::new(),
         }
@@ -208,6 +212,7 @@ impl Series {
             scored: true,
             brains: Vec::new(),
             retail: net::RetailBots::default(),
+            paused: false,
             points: Vec::new(),
             names: HashMap::new(),
         }

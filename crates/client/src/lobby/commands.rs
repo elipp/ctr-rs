@@ -84,7 +84,20 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::CupStart(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
+        Action::CupStart(_) if lobby.series.as_ref().is_some_and(|s| s.paused) => {
+            "A cup is paused (/cup resume, or /race stop to end it)"
+        }
         Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => net::NOT_NOW,
+        Action::CupPause | Action::CupResume if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::CupPause | Action::CupResume
+            if lobby.online.is_none() && !lobby.series.as_ref().is_some_and(|s| s.scored) =>
+        {
+            "No race or cup in progress (/cup start)"
+        }
+        Action::CupPause if lobby.is_paused() => "Paused already (/cup resume)",
+        Action::CupResume if !lobby.is_paused() => "Not paused (/cup pause)",
         Action::StartRace | Action::RestartRace | Action::CupStart(_)
             if lobby.countdown.is_some() =>
         {
@@ -124,6 +137,7 @@ pub(super) fn run(
     mut config: ResMut<crate::config::Config>,
     mut brains: ResMut<crate::learned::Brains>,
     mut players: ResMut<crate::drive::LocalPlayers>,
+    sim: Res<crate::props::Sim>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -311,6 +325,14 @@ pub(super) fn run(
                         logs.write(Log::error(format!("Cup {}: {why}", def.name)));
                     }
                 }
+                continue;
+            }
+            Action::CupPause => {
+                lobby.pause(sim.race.tick());
+                continue;
+            }
+            Action::CupResume => {
+                lobby.resume(now);
                 continue;
             }
             Action::CupDelete(name) => {

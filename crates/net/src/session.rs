@@ -257,6 +257,8 @@ pub(crate) async fn run(
     let mut game_ready = false;
     let mut ready_sent = false;
     let mut running = false;
+    // The host paused the race (`Command::Pause`): nobody is removed for being silent meanwhile.
+    let mut paused = false;
     // The players that left the race on the way (everyone learns of it from the host).
     let mut departed: HashSet<EndpointId> = HashSet::new();
     // Which race this is, counted from 0, and our slot, the characters, the roster and the bots
@@ -404,6 +406,7 @@ pub(crate) async fn run(
                     && let Some((slot, characters, players, bots)) = race_info.clone()
                 {
                     epoch += 1;
+                    paused = false;
                     // The same players, so the brain bots of the race before, and retail bots only
                     // where they were (a race has one kind or the other), as many as fit.
                     retail.characters.truncate(if bots > 0 { 0 } else { MAX_PLAYERS.saturating_sub(characters.len()) });
@@ -418,6 +421,21 @@ pub(crate) async fn run(
                     host.ready_from.clear();
                     let locals = plan.as_ref().map_or_else(|| vec![slot], |plan| plan.locals_of(me));
                     io.event(Event::Started { slot, locals, characters, players, track, hash, laps, bots, retail });
+                },
+                Command::Pause(at) => if let Some(host) = &host
+                    && host.racing
+                {
+                    paused = at.is_some();
+                    // The pause does not count as silence.
+                    if !paused {
+                        for link in links.values_mut() {
+                            link.advanced = Instant::now();
+                        }
+                    }
+                    for guest in &host.guests {
+                        let _ = send_reliably(&guest.connection, &Message::Pause { epoch, at }).await;
+                    }
+                    io.event(Event::Paused(at));
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -516,6 +534,7 @@ pub(crate) async fn run(
                 Command::Ready => game_ready = true,
                 Command::RaceOver => {
                     race_on = false;
+                    paused = false;
                     if let Some(host) = &mut host {
                         host.racing = false;
                         // Whoever left during the race is out of the lobby now that it is over.
@@ -975,6 +994,11 @@ pub(crate) async fn run(
                             io.event(Event::Stopped);
                         }
                     }
+                    Message::Pause { epoch: sent, at } => {
+                        if sent == epoch && from == host_id && host.is_none() {
+                            io.event(Event::Paused(at));
+                        }
+                    }
                     // (`listen` takes these.)
                     Message::Ping { .. } | Message::Pong { .. } => {}
                 },
@@ -1104,6 +1128,7 @@ pub(crate) async fn run(
                 }
                 if let Some(host) = &mut host
                     && host.racing
+                    && !paused
                 {
                     let own = links.values().next().map(|link| link.sender.tick());
                     let heard: Vec<(EndpointId, Tick, Instant)> = links
@@ -1351,6 +1376,7 @@ pub(crate) async fn run(
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
+            paused = false;
             race_info = Some((0, characters.clone(), roster.clone(), bots));
             let locals = new_plan.locals_of(me);
             plan = Some(new_plan);

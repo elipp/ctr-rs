@@ -13,6 +13,8 @@
 //!   `/cup delete <name>`, and `/cup start <name>` to drive it: its races one after another, points
 //!   for the first four to finish, and [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a
 //!   cup of one race with no points.
+//! * `/cup pause`: pause the race for everyone, or the countdown to a cup's next race (the host
+//!   only); `/cup resume` to go on
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/promote <player>`: hand the lobby over to a player, between races (the host only): they host it
 //!   from then on, a public lobby stays listed, and we are a guest of theirs
@@ -368,6 +370,52 @@ impl Lobby {
             self.series = Some(series);
             self.count_down(Then::Start { track, laps }, now, BETWEEN_RACES_SECONDS);
         }
+    }
+
+    /// Whether `/cup pause` is in effect, in a race or between the races of a cup.
+    pub(crate) fn is_paused(&self) -> bool {
+        self.online.as_ref().is_some_and(|net| net.pause_at.is_some())
+            || self.series.as_ref().is_some_and(|s| s.paused)
+    }
+
+    /// `/cup pause` (the host only): everyone's race stops at `tick`, our current one. Between
+    /// the races of a cup, the countdown to the next one stops instead.
+    fn pause(&mut self, tick: u32) {
+        if self.online.is_some() {
+            if let Some(session) = &self.session {
+                session.pause(tick);
+            }
+            return;
+        }
+        let Some(series) = self.series.as_mut().filter(|s| s.scored) else {
+            return;
+        };
+        series.paused = true;
+        if self.countdown.as_ref().is_some_and(|c| matches!(c.then, Then::Start { .. })) {
+            self.countdown = None;
+        }
+        self.announce("Cup paused");
+    }
+
+    /// `/cup resume`: the race goes on from where it stopped, or the countdown to the cup's next
+    /// race starts.
+    fn resume(&mut self, now: f32) {
+        if self.online.as_ref().is_some_and(|net| net.pause_at.is_some()) {
+            if let Some(session) = &self.session {
+                session.resume();
+            }
+            return;
+        }
+        let Some(series) = self.series.as_mut().filter(|s| s.paused) else {
+            return;
+        };
+        series.paused = false;
+        let then = Then::Start {
+            track: series.track(),
+            laps: series.laps,
+        };
+        self.announce("Cup resumed");
+        self.count_down(then, now, COUNTDOWN_SECONDS);
     }
 
     /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,

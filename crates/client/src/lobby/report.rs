@@ -42,6 +42,7 @@ pub(super) fn report(
     let mut sums = Vec::new();
     let mut leads = Vec::new();
     let mut stopped = false;
+    let mut paused = None;
     let mut rtts = Vec::new();
     let mut left = Vec::new();
     let mut gones = Vec::new();
@@ -159,6 +160,7 @@ pub(super) fn report(
                     asked: Vec::new(),
                     frozen: vec![false; characters_len],
                     lefts: Vec::new(),
+                    pause_at: None,
                 });
             }
             Event::Go => go = true,
@@ -169,6 +171,7 @@ pub(super) fn report(
                 started = None;
                 stopped = true;
             }
+            Event::Paused(at) => paused = Some(at),
             Event::Pads {
                 slot,
                 first,
@@ -291,6 +294,19 @@ pub(super) fn report(
     let new_race = started.is_some();
     if new_race {
         lobby.online = started;
+    }
+    // (The session drops the pauses of older races, so one that came with a start is of the new
+    // race.)
+    if let Some(at) = paused
+        && let Some(net) = &mut lobby.online
+    {
+        net.pause_at = at;
+        let text = if at.is_some() {
+            "Race paused by the host"
+        } else {
+            "Race resumed"
+        };
+        toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
     }
     let nicks_told = roster.is_some();
     if let Some((track, hash)) = wanted_map {

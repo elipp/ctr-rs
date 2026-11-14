@@ -406,6 +406,15 @@ pub struct Sfx<'w> {
 }
 
 impl Sfx<'_> {
+    /// [`Sounds::pause`] or [`Sounds::unpause`], for the host's `/cup pause`.
+    pub fn set_paused(&self, paused: bool) {
+        if paused {
+            self.sounds.pause();
+        } else {
+            self.sounds.unpause();
+        }
+    }
+
     /// What tick `tick` of `race` (on `level`) asks to be heard: the traffic light that came on,
     /// the engines, each kart's sounds and voice lines (`karts`, by slot), our kart's loops, our
     /// laps and item roulette, the sounds of the objects and the weapons, and where the race is

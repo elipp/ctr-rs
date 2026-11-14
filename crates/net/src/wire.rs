@@ -290,6 +290,10 @@ pub enum Message {
     /// Reliable, client to host: the answer to a [`Message::Handoff`] to us. We are ready to
     /// host when the host closes.
     HandoffAck,
+    /// Reliable, host to each client: the race of `epoch` pauses at tick `at` (a client already
+    /// past it pauses where it is), or resumes with `None`. (Last, so that the other messages
+    /// keep their tags.)
+    Pause { epoch: u32, at: Option<Tick> },
 }
 
 /// How often a player pings the ones it is connected to.
@@ -540,6 +544,8 @@ mod tests {
                 }],
                 next: Some((7, "Coco Park".into())),
             }),
+            Message::Pause { epoch: 2, at: Some(900) },
+            Message::Pause { epoch: 2, at: None },
             Message::Say { text: "gg".into() },
             Message::Chat {
                 from: [5; 32],

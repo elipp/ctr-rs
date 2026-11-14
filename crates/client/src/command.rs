@@ -97,6 +97,10 @@ pub enum Action {
     CupStart(String),
     /// Forget the cup of that name.
     CupDelete(String),
+    /// Pause the race for everyone, or the countdown to a cup's next race (the host only).
+    CupPause,
+    /// Undo `/cup pause` (the host only).
+    CupResume,
     /// End the race in progress for everyone, with no winner (the host only).
     StopRace,
     /// (Debug) Roll that item into our hand: one of `vehicle::item::ENABLED`.
@@ -187,7 +191,7 @@ const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
-const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
+const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | pause | resume | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
@@ -444,7 +448,9 @@ impl Action {
             }
             "start" if rest.split_whitespace().count() == 1 => Ok(Action::CupStart(rest.into())),
             "delete" if rest.split_whitespace().count() == 1 => Ok(Action::CupDelete(rest.into())),
-            "" | "start" | "delete" => Err(CUP_USAGE.into()),
+            "pause" if rest.is_empty() => Ok(Action::CupPause),
+            "resume" if rest.is_empty() => Ok(Action::CupResume),
+            "" | "start" | "delete" | "pause" | "resume" => Err(CUP_USAGE.into()),
             _ => Err(format!("Unknown command: /cup {sub}\n{CUP_USAGE}")),
         }
     }
@@ -2312,6 +2318,9 @@ mod tests {
         assert_eq!(line.text, "/cup start fast");
         assert!(line.entered);
         assert!(matches!(Action::parse("cup start fast"), Ok(Action::CupStart(name)) if name == "fast"));
+        assert!(matches!(Action::parse("cup pause"), Ok(Action::CupPause)));
+        assert!(matches!(Action::parse("cup resume"), Ok(Action::CupResume)));
+        assert!(Action::parse("cup pause now").is_err());
 
         // Typing narrows them down, in any case.
         let mut line = typed_with_cups("/cup start F");

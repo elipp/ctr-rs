@@ -57,6 +57,8 @@ pub(super) struct Shown<'w, 's> {
 #[derive(Default)]
 pub(super) struct Memory {
     was_paused: bool,
+    /// The host's `/cup pause` stopped the race last tick.
+    was_host_paused: bool,
     /// The ticks waited for a late player, and the buttons held last tick (a watching client's
     /// pick the kart to follow).
     waits: (u32, u32),
@@ -83,9 +85,13 @@ pub(super) fn drive_tick(
         mut toasts,
         mut sfx,
     } = shown;
-    let Memory { was_paused, waits } = &mut *memory;
+    let Memory {
+        was_paused,
+        was_host_paused,
+        waits,
+    } = &mut *memory;
     let drive = &mut *drive;
-    // In an online race the sim is everyone's: no pause, no restarts.
+    // In an online race the sim is everyone's: no pause of our own, no restarts.
     let online = lobby.online.is_some();
     // The level of the race is not up yet, nor the karts of the others.
     if lobby
@@ -96,9 +102,18 @@ pub(super) fn drive_tick(
         return;
     }
 
+    // The host's `/cup pause`: stop at its tick, or now if we are already past it. Rollback evens
+    // out the ticks we are ahead once the race resumes.
+    let host_paused = (lobby.online.as_ref())
+        .and_then(|net| net.pause_at)
+        .is_some_and(|at| sim.race.tick() >= at);
+    if host_paused != *was_host_paused {
+        sfx.set_paused(host_paused);
+        *was_host_paused = host_paused;
+    }
     // The pause menu (or the effects panel's freeze) stops the race, unless the race is
     // everyone's.
-    let paused = (hold.menu.open || hold.fx.holds()) && !online;
+    let paused = ((hold.menu.open || hold.fx.holds()) && !online) || host_paused;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
         for view in &mut drive.views {

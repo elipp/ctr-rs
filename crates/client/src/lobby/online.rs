@@ -80,6 +80,8 @@ pub struct Online {
     /// Where the pads of the players that left end (`Event::Left`), for `drive_tick` to apply:
     /// (slot, first tick, pads).
     pub lefts: Vec<(usize, u32, Vec<Pad>)>,
+    /// The tick the host paused the race at (`/cup pause`): `drive_tick` plays no ticks from it on.
+    pub pause_at: Option<u32>,
 }
 
 /// A player whose sim has parted from ours.

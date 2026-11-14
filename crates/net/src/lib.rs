@@ -158,7 +158,7 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/17";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/18";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -288,6 +288,9 @@ pub enum Event {
     },
     /// The host stopped the race (see [`Session::stop`]).
     Stopped,
+    /// The host paused the race at that tick, or resumed it (`None`): see [`Session::pause`].
+    /// The host gets its own as well.
+    Paused(Option<Tick>),
     /// The player in `slot` left the race. The game answers with [`Session::have`] once it has
     /// taken the pads that came in so far, and takes no more pads of that player.
     Gone { slot: usize },
@@ -425,6 +428,7 @@ enum Command {
     },
     NetInfo,
     Stop,
+    Pause(Option<Tick>),
     Public(Option<Public>),
     Promote(EndpointId),
 }
@@ -593,6 +597,17 @@ impl Session {
     /// (we do not; we know). The lobby stays, and [`Session::restart`] starts the same players again.
     pub fn stop(&self) {
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// Pauses the race in progress for everyone at tick `at`, if we host the lobby. Everyone gets
+    /// [`Event::Paused`], we too. Nobody is removed for being silent while it is paused.
+    pub fn pause(&self, at: Tick) {
+        let _ = self.commands.send(Command::Pause(Some(at)));
+    }
+
+    /// Resumes the race that [`Session::pause`] paused.
+    pub fn resume(&self) {
+        let _ = self.commands.send(Command::Pause(None));
     }
 
     /// Hands the lobby over to the guest `to`, if we host it and no race is on: it hosts from
