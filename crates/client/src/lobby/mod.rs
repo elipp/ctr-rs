@@ -42,7 +42,7 @@ use net::{EndpointId, Pad, Session, Ticket};
 use crate::console::Log;
 use crate::maps;
 
-use commands::run;
+use commands::{pause_key, run};
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
 use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
@@ -734,6 +734,7 @@ impl Plugin for LobbyPlugin {
             .add_systems(
                 Update,
                 (
+                    pause_key,
                     run,
                     countdown,
                     report,

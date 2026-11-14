@@ -6,6 +6,7 @@ use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, BotKind, Lobby};
 use crate::command::{Action, PolicyChoice};
 use crate::console::{Log, console};
+use crate::controls::Control;
 use crate::maps;
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -121,6 +122,28 @@ fn shuffle<T>(items: &mut [T]) {
     for i in (1..items.len()).rev() {
         items.swap(i, state.hash_one(i) as usize % (i + 1));
     }
+}
+
+/// [`Control::PauseRace`] (G by default) is `/cup pause`, or `/cup resume` when paused. Only in a
+/// lobby; a guest gets the usual host-only refusal.
+pub(super) fn pause_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    config: Res<crate::config::Config>,
+    menu: Res<crate::pause::PauseMenu>,
+    lobby: Res<Lobby>,
+    mut actions: MessageWriter<Action>,
+) {
+    if menu.capturing.is_some()
+        || !lobby.is_open()
+        || !config.controls.just_pressed(Control::PauseRace, &keys)
+    {
+        return;
+    }
+    actions.write(if lobby.is_paused() {
+        Action::CupResume
+    } else {
+        Action::CupPause
+    });
 }
 
 /// Does what the keys and the command line ask (`command.rs`).

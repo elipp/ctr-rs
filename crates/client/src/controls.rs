@@ -1,7 +1,8 @@
-//! The keyboard's driving keys, and the ones that step the level and the racer and mute, which the pause
-//! menu's Controls change (`pause.rs`) and the config keeps (`config.rs`), by the names of Bevy's
-//! `KeyCode`s: `{"gas": ["ArrowUp"], ...}`. A control the config leaves out has its default keys, and a name it does not know, or of a key that
-//! cannot be bound, is passed over.
+//! The keyboard's driving keys, and the ones that step the level and the racer, mute and pause the
+//! race, which the pause menu's Controls change (`pause.rs`) and the config keeps (`config.rs`),
+//! by the names of Bevy's `KeyCode`s: `{"gas": ["ArrowUp"], ...}`. A control the config leaves
+//! out has its default keys, and a name it does not know, or of a key that cannot be bound, is
+//! passed over.
 //!
 //! A key is one control's: binding it to another takes it from the one that had it, which gets the
 //! other's old keys if it is left with none. The keys the client already uses while driving
@@ -41,10 +42,12 @@ pub enum Control {
     /// Mutes or unmutes the music, and every sound (`sound.rs`).
     MuteMusic,
     MuteSound,
+    /// `/cup pause`, or `/cup resume` when paused (the host only: `lobby/commands.rs`).
+    PauseRace,
 }
 
 impl Control {
-    pub const ALL: [Control; 16] = [
+    pub const ALL: [Control; 17] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -61,6 +64,7 @@ impl Control {
         Control::RacerMenu,
         Control::MuteMusic,
         Control::MuteSound,
+        Control::PauseRace,
     ];
 
     /// Its name in the config.
@@ -82,6 +86,7 @@ impl Control {
             Control::RacerMenu => "racer-menu",
             Control::MuteMusic => "mute-music",
             Control::MuteSound => "mute-sound",
+            Control::PauseRace => "pause-race",
         }
     }
 
@@ -104,6 +109,7 @@ impl Control {
             Control::RacerMenu => "Racer menu",
             Control::MuteMusic => "Mute music",
             Control::MuteSound => "Mute sound",
+            Control::PauseRace => "Pause race",
         }
     }
 
@@ -125,6 +131,7 @@ impl Control {
             Control::RacerMenu => &[KeyCode::KeyC],
             Control::MuteMusic => &[KeyCode::KeyM],
             Control::MuteSound => &[KeyCode::KeyS],
+            Control::PauseRace => &[KeyCode::KeyG],
         }
     }
 
@@ -155,7 +162,8 @@ impl Controls {
 
     /// The keys of the second player on the same keyboard: the I, J, K and L keys steer, with the
     /// hops and the item beside them. Only what the kart does is bound: the rest (the menu's
-    /// level and racer keys, the mutes) is the one keyboard's, and stays the first player's.
+    /// level and racer keys, the mutes, the pause) is the one keyboard's, and stays the first
+    /// player's.
     pub fn second() -> Controls {
         let keys = |control: Control| -> Vec<KeyCode> {
             match control {
