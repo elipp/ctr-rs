@@ -495,8 +495,8 @@ impl Action {
     /// Nothing (the panel), `confetti auto|on|off`, `flash`, `finish`, `speed <factor>`,
     /// `freeze on|off`, `step`, `weather on|off` or `rain on|off`.
     fn fx(line: &str) -> Result<crate::fx::Fx, String> {
-        use crate::fx::{Force, Fx, SPEED_RANGE};
-        const USAGE: &str = "Usage: /debug fx [confetti auto|on|off | flash | finish | speed <factor> | freeze on|off | step | weather on|off | rain on|off]";
+        use crate::fx::{Chaser, Force, Fx, SPEED_RANGE};
+        const USAGE: &str = "Usage: /debug fx [confetti auto|on|off | flash | finish | speed <factor> | freeze on|off | step | weather on|off | rain on|off | tracker missile|warp [duration, 5s]]";
         let (what, value) = word(line);
         let on_off = || match value {
             "on" => Ok(true),
@@ -526,6 +526,23 @@ impl Action {
             "step" => Fx::Step,
             "weather" => Fx::Weather(on_off()?),
             "rain" => Fx::BeakerRain(on_off()?),
+            "tracker" => {
+                let (kind, duration) = word(value);
+                let kind = match kind {
+                    "missile" => Chaser::Missile,
+                    "warp" => Chaser::Warpball,
+                    _ => return Err(USAGE.into()),
+                };
+                let ms = if duration.is_empty() {
+                    5000.0
+                } else {
+                    milliseconds(duration).ok_or_else(|| USAGE.to_string())?
+                };
+                if !(0.0..=STALL_MAX_MS).contains(&ms) {
+                    return Err(format!("A duration is 0 to {} s\n{USAGE}", STALL_MAX_MS / 1000.0));
+                }
+                Fx::Tracker(kind, ms as u32)
+            }
             _ => return Err(format!("Unknown command: /debug fx {what}\n{USAGE}")),
         })
     }

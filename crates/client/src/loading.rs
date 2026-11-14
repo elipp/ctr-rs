@@ -8,15 +8,16 @@
 //! and the chase camera. If that does not come in [`GIVE_UP_FRAMES`] the game goes on anyway
 //! and says what was missing in the log, rather than hold it up for good.
 //!
-//! A load takes no time to speak of, so it is not covered: the screen is only up between the
-//! races of a cup, and for `/debug loading-screen`. It is retail's (`RaceFlag_DrawSelf`): the grey
+//! A load takes no time to speak of, so it is not covered: the screen is only up for the races
+//! of a lobby (the players load at their own speeds, and the faster ones would otherwise show the
+//! scene before the race has set it up), and for `/debug loading-screen`. It is retail's (`RaceFlag_DrawSelf`): the grey
 //! checkered flag waving over all of it, and "LOADING..." flying in over it a letter at a time
 //! (`RaceFlag_DrawLoadingString`). When it is done the flag speeds off to the left, and the
 //! letters after it, with the game running under them. Retail draws the flag as quads through the GTE; here the wave is retail's, worked
 //! out on the CPU column by column, and the shader (`loading.wgsl`) finds the flag under each
 //! pixel. The flag goes on past retail's edges, for windows wider than its screen.
 //!
-//! Between the races of a cup the flag comes in first, as retail's does
+//! Before an online race the flag comes in first, as retail's does
 //! (`RaceFlag_BeginTransition`): the next race's start brings it in over the race before, the
 //! level loads once it covers the window ([`entering`]), and it stays [`CUP_MIN_SECONDS`] at
 //! least, and until everyone is ready to start.
@@ -85,7 +86,7 @@ const ENTER_SNAP: f32 = 8.0;
 const COVERED_AT: f32 = 500.0;
 
 /// The least time the flag stays between the races of a cup once it covers the window.
-const CUP_MIN_SECONDS: f32 = 2.0;
+const CUP_MIN_SECONDS: f32 = 3.0;
 
 /// The text, in the large font and the menus' orange, with its top at line 108.
 const TEXT: &str = "LOADING...";
@@ -525,6 +526,7 @@ fn animate(
     mut materials: ResMut<Assets<FlagMaterial>>,
     loading: Option<Res<Loading>>,
     lobby: Option<Res<crate::lobby::Lobby>>,
+    drive: Option<Res<drive::Drive>>,
     mut commands: Commands,
 ) {
     let Ok(window) = windows.single() else {
@@ -545,11 +547,21 @@ fn animate(
                 if covers {
                     *left -= real.delta_secs();
                 }
-                // (A race that was stopped meanwhile has no go to wait for.)
+                // (A race that was stopped meanwhile has nothing to wait for.) Not at the go
+                // alone: until the race has put the karts on the grid and started the sim over
+                // (`drive_tick`), and our views are up, the scene shows the karts as they were.
                 let ready = lobby
                     .as_ref()
                     .and_then(|lobby| lobby.online.as_ref())
-                    .is_none_or(|online| online.go);
+                    .is_none_or(|online| {
+                        online.go
+                            && online.built
+                            && !online.fresh
+                            && (online.spectating()
+                                || drive
+                                    .as_ref()
+                                    .is_some_and(|d| d.views().len() == online.locals.len()))
+                    });
                 if *left <= 0.0 && loading.is_none() && ready {
                     flag.leaving = true;
                 }

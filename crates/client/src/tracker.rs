@@ -183,7 +183,10 @@ fn step_state(state: &mut Tracker, closest: Option<Chaser>, tick: u32) {
     } else {
         &ANIM_CHASED
     };
-    let (x, y) = table[state.timer as usize];
+    // The arrival timer starts at 12 but the chased table has 8 frames: a new missile that
+    // shows up while the arrival is still playing switches tables mid-countdown, so hold the
+    // last frame rather than reading past the end.
+    let (x, y) = table[(state.timer as usize).min(table.len() - 1)];
     let closest_id = closest.map(|c| c.id);
     let reset = if state.timer == 0 && closest.is_none() {
         // It hit; or it is a warpball that went back to the path when the mask grabbed its
@@ -300,6 +303,43 @@ fn flags_of(sim: &Sim, id: u32) -> Option<u16> {
     missile.map(|p| p.flags).or(warpball.map(|w| w.flags))
 }
 
+/// `/debug fx tracker`: a missile or warpball that chases every local player, for some ticks (what
+/// is left, and all of them): it closes in from [`SPOOF_FAR`] to [`SPOOF_NEAR`] on the HUD's scale,
+/// and then it is gone, which is a hit.
+#[derive(Resource, Default)]
+pub struct Spoof(Option<(crate::fx::Chaser, u32, u32)>);
+
+impl Spoof {
+    /// The chaser to pretend of this tick, if any.
+    fn chaser(&self) -> Option<Chaser> {
+        let (kind, left, total) = self.0?;
+        let progress = 1.0 - left.saturating_sub(1) as f32 / total.saturating_sub(1).max(1) as f32;
+        let distance = SPOOF_FAR + (SPOOF_NEAR - SPOOF_FAR) * progress;
+        // `step_state` takes the root of this over `DISTANCE_DIVISOR` for the distance.
+        let units = distance * DISTANCE_DIVISOR as f32;
+        Some(Chaser {
+            id: u32::MAX,
+            squared: (units * units) as u32,
+            flags: 0,
+            along: (kind == crate::fx::Chaser::Warpball).then_some(0),
+        })
+    }
+}
+
+fn spoof_requests(mut actions: MessageReader<crate::command::Action>, mut spoof: ResMut<Spoof>) {
+    for action in actions.read() {
+        if let crate::command::Action::DebugFx(crate::fx::Fx::Tracker(kind, ms)) = *action {
+            let ticks = (ms as f64 * crate::GAME_TICK_HZ / 1000.0).round() as u32;
+            spoof.0 = Some((kind, ticks, ticks));
+        }
+    }
+}
+
+/// Where a spoofed missile starts and ends, in the HUD's distance (beeps go faster under 200 and
+/// 100).
+const SPOOF_FAR: f32 = 300.0;
+const SPOOF_NEAR: f32 = 20.0;
+
 /// What the HUD remembers for each local player, by view.
 #[derive(Resource, Default)]
 pub struct Trackers(Vec<Tracker>);
@@ -310,6 +350,7 @@ pub fn step(
     hud: HudViews,
     track: Res<Track>,
     mut states: ResMut<Trackers>,
+    mut spoof: ResMut<Spoof>,
     mut last: Local<Option<u32>>,
 ) {
     let tick = sim.race.tick;
@@ -323,6 +364,8 @@ pub fn step(
         states.0.clear();
         states.0.resize_with(players, Tracker::default);
     }
+    let fake = spoof.chaser();
+    spoof.0 = spoof.0.and_then(|(kind, left, total)| (left > 1).then_some((kind, left - 1, total)));
     for (view, state) in states.0.iter_mut().enumerate() {
         if let Some(flags) = state.chasing.and_then(|id| flags_of(&sim, id)) {
             state.chasing_flags = flags;
@@ -330,7 +373,7 @@ pub fn step(
         let Some(ViewKart { slot, .. }) = hud.get(view) else {
             continue;
         };
-        let closest = closest_tracker(&sim, slot, &track.0.restart_points);
+        let closest = closest_tracker(&sim, slot, &track.0.restart_points).or(fake);
         step_state(state, closest, tick);
     }
 }
@@ -356,6 +399,8 @@ pub struct TrackerPlugin;
 impl Plugin for TrackerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Trackers>()
+            .init_resource::<Spoof>()
+            .add_systems(Update, spoof_requests.run_if(crate::drive::driving))
             .add_systems(FixedUpdate, step.run_if(crate::drive::driving))
             .add_systems(Update, show.run_if(crate::drive::driving));
     }
@@ -539,7 +584,11 @@ fn show(
         // The picture is 512 by 216 on the PlayStation, stretched over the player's part of the
         // window.
         let rect = mine.rect(window);
-        let scale = Vec2::new(rect.width() / 512.0, rect.height() / 216.0);
+        // The icon is drawn for pixels that are taller than wide (as on a 4:3 screen), so its
+        // texels are not square on their own. Size it as on a 4:3 picture that fits the part,
+        // whatever the window's shape: x as that picture's, y a retail pixel taller.
+        let sx = (rect.width() / 512.0).min(rect.height() * (4.0 / 3.0) / 512.0);
+        let scale = Vec2::new(sx, sx * crate::exhaust::SCREEN_PIXEL_ASPECT);
         let place = |offset: [i32; 2]| {
             let screen = at + Vec2::new(offset[0] as f32, offset[1] as f32 - LIFT) * scale;
             [
@@ -649,6 +698,21 @@ mod tests {
         assert_eq!(frames[12], Some(ANIM_ARRIVED[10]));
         assert_eq!(frames[21], Some(ANIM_ARRIVED[1]));
         assert!(frames[22..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_new_missile_during_the_arrival_does_not_read_past_the_chased_table() {
+        let mut state = Tracker::default();
+        for tick in 0..10 {
+            step_state(&mut state, missile(7, 400 * 400 * 2500), tick);
+        }
+        // It hits once the chased countdown is over: the arrival timer starts at 12, past the
+        // end of the chased table.
+        step_state(&mut state, None, 10);
+        assert!(state.timer > ANIM_CHASED.len() as i16);
+        // Another one is fired at us before the arrival is over.
+        step_state(&mut state, missile(8, 400 * 400 * 2500), 11);
+        assert!(state.frame.is_some());
     }
 
     #[test]

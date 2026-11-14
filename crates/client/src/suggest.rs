@@ -536,6 +536,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                         "The red beaker's rain",
                         &[leaf("on", "Draw it"), leaf("off", "Hide it")],
                     ),
+                    node(
+                        "tracker",
+                        "Spoof an incoming missile or warpball",
+                        &[
+                            leaf("missile", "Red brackets, then [duration, 5s]"),
+                            leaf("warp", "Blue brackets, then [duration, 5s]"),
+                        ],
+                    ),
                 ],
             ),
         ],
@@ -643,7 +651,8 @@ mod tests {
         assert_eq!(
             names("/debug fx "),
             [
-                "confetti", "flash", "finish", "speed", "freeze", "step", "weather", "rain"
+                "confetti", "flash", "finish", "speed", "freeze", "step", "weather", "rain",
+                "tracker"
             ]
         );
         assert_eq!(names("/debug fx f"), ["flash", "finish", "freeze"]);

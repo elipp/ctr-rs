@@ -6,6 +6,7 @@
 //! * `finish`: our kart finishes the race now, first (offline)
 //! * `speed <factor>`: slow motion (offline), 1 is the game's speed
 //! * `freeze on|off`, `step`: the race stops, and goes on one tick at a time (offline)
+//! * `tracker missile|warp [duration]`: a spoofed missile (or warpball) chasing us, 5s if left out
 //! * `weather on|off`, `rain on|off`: the level's rain or snow, and the red beaker's rain
 //!
 //! Its last line is `/debug podium` (`podium.rs`): the podium of a cup's end, and back. The panel
@@ -42,6 +43,15 @@ pub enum Fx {
     Step,
     Weather(bool),
     BeakerRain(bool),
+    /// Spoof a missile or warpball that chases us, for this many milliseconds (`tracker.rs`).
+    Tracker(Chaser, u32),
+}
+
+/// What the spoofed tracker warning is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Chaser {
+    Missile,
+    Warpball,
 }
 
 /// Whether an effect is as the race has it, or forced on or off.
@@ -200,6 +210,7 @@ fn act(
             }
             Fx::Weather(on) => fx.weather = on,
             Fx::BeakerRain(on) => fx.beaker_rain = on,
+            Fx::Tracker(..) => {}
         }
     }
 }
