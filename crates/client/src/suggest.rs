@@ -270,6 +270,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
             takes("start", "Count down to a cup's first race", "<name>"),
             leaf("pause", "Pause the race for everyone (host only)"),
             leaf("resume", "Resume after /cup pause (host only)"),
+            leaf("next", "Skip to the cup's next track (host only)"),
+            leaf("previous", "Back to the cup's previous track (host only)"),
             takes("delete", "Forget a cup", "<name>"),
         ],
     ),

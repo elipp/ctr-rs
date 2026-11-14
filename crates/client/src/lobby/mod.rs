@@ -15,6 +15,8 @@
 //!   cup of one race with no points.
 //! * `/cup pause`: pause the race for everyone, or the countdown to a cup's next race (the host
 //!   only); `/cup resume` to go on
+//! * `/cup next`, `/cup previous`: stop the cup's race without points, and count down to its next
+//!   or previous track (the host only)
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/promote <player>`: hand the lobby over to a player, between races (the host only): they host it
 //!   from then on, a public lobby stays listed, and we are a guest of theirs
@@ -428,6 +430,35 @@ impl Lobby {
         self.count_down(then, now, COUNTDOWN_SECONDS);
     }
 
+    /// `/cup next` (`step` 1) and `/cup previous` (-1), the host only: the race in progress stops
+    /// without points, and the countdown goes to the track `step` away. Between races, `step`
+    /// counts from the race that was coming up.
+    fn step_cup(&mut self, step: isize, now: f32) {
+        let Some(series) = self.series.as_mut().filter(|s| s.scored) else {
+            return;
+        };
+        let Some(race) = (series.race.checked_add_signed(step)).filter(|&r| r < series.tracks.len())
+        else {
+            return;
+        };
+        series.race = race;
+        series.paused = false;
+        let track = series.track();
+        let then = Then::Start {
+            track,
+            laps: series.laps,
+        };
+        let text = format!("Race {} of {}: {}", race + 1, series.tracks.len(), maps::name(track));
+        if self.online.is_some() {
+            if let Some(session) = &self.session {
+                session.stop();
+            }
+            self.end_race();
+        }
+        self.announce(text);
+        self.count_down(then, now, COUNTDOWN_SECONDS);
+    }
+
     /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,
     /// so that players who join now do not hear of a race in progress.)
     fn end_race(&mut self) {
@@ -652,19 +683,6 @@ impl Lobby {
     pub fn announce(&self, text: impl Into<String>) {
         if let Some(session) = &self.session {
             session.announce(text);
-        }
-    }
-
-    /// Starts the race over on `track` (the host only), with the bots it had.
-    pub fn restart(&self, track: u32, hash: u64, laps: u8) {
-        if let Some(session) = &self.session {
-            self.provide(session, track);
-            let bots = self
-                .online
-                .as_ref()
-                .map(|o| o.retail.clone())
-                .unwrap_or_default();
-            session.restart(track, hash, laps, bots);
         }
     }
 

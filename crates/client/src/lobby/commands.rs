@@ -98,6 +98,20 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "No race or cup in progress (/cup start)"
         }
         Action::CupPause if lobby.is_paused() => "Paused already (/cup resume)",
+        Action::CupNext | Action::CupPrevious if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::CupNext | Action::CupPrevious
+            if !lobby.series.as_ref().is_some_and(|s| s.scored) =>
+        {
+            "No cup in progress (/cup start)"
+        }
+        Action::CupNext if !lobby.series.as_ref().is_some_and(|s| s.has_next()) => {
+            "This is the cup's last track"
+        }
+        Action::CupPrevious if lobby.series.as_ref().is_some_and(|s| s.race == 0) => {
+            "This is the cup's first track"
+        }
         Action::CupResume if !lobby.is_paused() => "Not paused (/cup pause)",
         Action::StartRace | Action::RestartRace | Action::CupStart(_)
             if lobby.countdown.is_some() =>
@@ -366,6 +380,14 @@ pub(super) fn run(
                 lobby.resume(now);
                 continue;
             }
+            Action::CupNext => {
+                lobby.step_cup(1, now);
+                continue;
+            }
+            Action::CupPrevious => {
+                lobby.step_cup(-1, now);
+                continue;
+            }
             Action::CupDelete(name) => {
                 let Some(cup) = config.cups.remove(name) else {
                     logs.write(Log::error(format!("No cup is called {name}")));
@@ -486,7 +508,6 @@ pub(super) fn run(
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart {
                         track: net.track,
-                        hash: net.hash,
                         laps: net.laps,
                     };
                     lobby.count_down(then, now, super::COUNTDOWN_SECONDS);
