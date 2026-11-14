@@ -67,7 +67,10 @@ impl Realm {
         request: Request,
     ) -> Response {
         let mut guard = self.lobbies.lock().unwrap();
-        let Lobbies { listed: lobbies, handed } = &mut *guard;
+        let Lobbies {
+            listed: lobbies,
+            handed,
+        } = &mut *guard;
         handed.retain(|_, h| h.until > now);
         match request {
             Request::Announce(listing) => {
@@ -119,9 +122,6 @@ impl Realm {
                         match (before.state, state) {
                             (State::Lobby, State::Racing) => {
                                 info!(%host, %name, %track, "race started");
-                                self.alert(format!(
-                                    "Race started: {name}\ntrack {track}, {players}/{max_players}"
-                                ));
                             }
                             (State::Racing, State::Lobby) => info!(%host, %name, "race over"),
                             _ => {}
@@ -136,7 +136,6 @@ impl Realm {
             Request::Withdraw => {
                 if let Some(held) = remove(lobbies, id, connection) {
                     info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby withdrawn");
-                    self.alert(format!("Lobby closed: {}\n{} open", held.listing.name, lobbies.len()));
                 }
                 Response::Ok
             }
@@ -150,7 +149,13 @@ impl Realm {
                     "lobby handed over"
                 );
                 let until = now + Duration::from_secs(TRANSFER_SECONDS);
-                handed.insert(to, Handed { listing: held.listing, until });
+                handed.insert(
+                    to,
+                    Handed {
+                        listing: held.listing,
+                        until,
+                    },
+                );
                 Response::Ok
             }
             Request::Claim => {
@@ -161,7 +166,13 @@ impl Realm {
                     return Response::Rejected(Reject::NothingToClaim);
                 };
                 info!(host = %short(&id), name = %handed.listing.name, "lobby claimed");
-                lobbies.insert(id, Held { connection, listing: handed.listing });
+                lobbies.insert(
+                    id,
+                    Held {
+                        connection,
+                        listing: handed.listing,
+                    },
+                );
                 Response::Ok
             }
             Request::List => {
@@ -184,7 +195,6 @@ impl Realm {
         let lobbies = &mut self.lobbies.lock().unwrap().listed;
         if let Some(held) = remove(lobbies, id, connection) {
             info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby gone: its host disconnected");
-            self.alert(format!("Lobby gone: {}\n{} open", held.listing.name, lobbies.len()));
         }
     }
 
@@ -319,7 +329,10 @@ mod tests {
             panic!("not a list");
         };
         assert_eq!(entries.len(), 1);
-        assert_eq!((entries[0].id, entries[0].listing.name.as_str()), ([2; 32], "a"));
+        assert_eq!(
+            (entries[0].id, entries[0].listing.name.as_str()),
+            ([2; 32], "a")
+        );
         // It lasts as long as the new connection.
         realm.closed([2; 32], 5);
         assert!(names(&realm).is_empty());
@@ -343,7 +356,11 @@ mod tests {
         let now = Instant::now();
         realm.handle_at(now, [1; 32], 1, Request::Announce(listing("a")));
         // Nothing listed for the sender, an old connection, or to itself.
-        for (id, connection, to) in [([9; 32], 9, [2; 32]), ([1; 32], 7, [2; 32]), ([1; 32], 1, [1; 32])] {
+        for (id, connection, to) in [
+            ([9; 32], 9, [2; 32]),
+            ([1; 32], 7, [2; 32]),
+            ([1; 32], 1, [1; 32]),
+        ] {
             let response = realm.handle_at(now, id, connection, Request::Transfer(to));
             assert_eq!(response, Response::Rejected(Reject::NotListed));
         }
