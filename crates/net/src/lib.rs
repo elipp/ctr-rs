@@ -169,6 +169,9 @@ pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/4";
 /// The most karts a race has: the host's bots fill it up to this (see [`Session::set_bots`]).
 pub const MAX_PLAYERS: usize = 8;
 
+/// The characters there are (`GAME_CHARACTER_IDS`); a peer's character past them is the first.
+pub const CHARACTERS: u8 = 16;
+
 /// The most a custom track may weigh, as the bytes it is sent in. A stream that carries more is
 /// not read.
 pub const MAX_BLOB: usize = 32 << 20;

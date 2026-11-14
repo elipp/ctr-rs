@@ -119,8 +119,12 @@ fn check_mask_grab_progress(d: &mut Driver, level: &Level, quad: u32) -> bool {
     }
 
     let points = &level.restart_points;
-    let node = &points[q.checkpoint_index as usize];
-    let track_length = points[0].dist_to_finish as i32;
+    // (Retail trusts the level's checkpoint indices.)
+    let (Some(node), Some(first)) = (points.get(q.checkpoint_index as usize), points.first())
+    else {
+        return false;
+    };
+    let track_length = first.dist_to_finish as i32;
 
     if d.actions_flag_set & actions::BEHIND_START_LINE == 0
         && node.next_forward > 1
@@ -139,10 +143,10 @@ fn check_mask_grab_progress(d: &mut Driver, level: &Level, quad: u32) -> bool {
     let last_checkpoint = level.quad_blocks[last_valid as usize].checkpoint_index;
     if (node.dist_to_finish as i32) < (mips::mul_lo(track_length, 0xf) >> 4)
         && last_checkpoint != 0xff
-        && mips::add_lo(
-            points[last_checkpoint as usize].dist_to_finish as i32,
-            track_length >> 2,
-        ) < node.dist_to_finish as i32
+        && points.get(last_checkpoint as usize).is_some_and(|last| {
+            mips::add_lo(last.dist_to_finish as i32, track_length >> 2)
+                < node.dist_to_finish as i32
+        })
     {
         return true;
     }

@@ -68,7 +68,9 @@ pub fn update_progress(d: &mut Driver, level: &Level) {
     let Some(progress_node) = points.get(checkpoint.next_forward as usize) else {
         return;
     };
-    let next_node = &points[progress_node.next_forward as usize];
+    let Some(next_node) = points.get(progress_node.next_forward as usize) else {
+        return;
+    };
 
     let position = [
         mips::sra(d.pos_curr.x, WORLD_POS_SHIFT) as i16,

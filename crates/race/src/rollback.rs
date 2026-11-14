@@ -185,7 +185,7 @@ impl<S: Simulation> Rollback<S> {
     /// holds a neutral pad. Every client has to call this after confirming the same pads for it,
     /// or their sims part. The ticks already played past its last pad are played again.
     pub fn leave(&mut self, slot: usize) {
-        if self.departed[slot] {
+        if self.departed.get(slot).is_none_or(|&gone| gone) {
             return;
         }
         let end = self.confirmed_until(slot);
@@ -220,8 +220,9 @@ impl<S: Simulation> Rollback<S> {
     /// The pad of `slot` for `tick`. It has to be the next one we do not have (the ones before
     /// it are taken as repeats), or [`Hole`] says where to start again.
     pub fn confirm(&mut self, slot: usize, tick: u32, pad: Pad) -> Result<(), Hole> {
-        // A player that left has no more pads.
-        if self.departed[slot] {
+        // A player that left has no more pads (nor does one that was never here: a peer's slot is
+        // not trusted).
+        if self.departed.get(slot).is_none_or(|&gone| gone) {
             return Ok(());
         }
         let expected = self.confirmed_until(slot);

@@ -228,6 +228,9 @@ pub(super) fn drive_tick(
     if let Some(net) = lobby.online.as_mut() {
         // The pads of the others that came in since the last tick.
         for (slot, first, pads) in net.inbox.drain(..) {
+            if slot >= sim.race.players() {
+                continue;
+            }
             let pads: Vec<Pad> = pads.iter().map(pad_of).collect();
             if let Err(hole) = sim.race.confirm_all(slot, first, &pads) {
                 error!(

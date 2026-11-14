@@ -42,6 +42,8 @@ impl Driver {
     /// `VehBirth_NonGhost` and `VehBirth_TireSprites` leave it. It is not on
     /// the track yet: see [`spawn`].
     pub fn new(driver_id: u8, character: usize) -> Driver {
+        // (A character past the roster, from a peer, is the first.)
+        let character = if character < CHARACTER_ENGINES.len() { character } else { 0 };
         Driver {
             driver_id,
             character: character as u8,

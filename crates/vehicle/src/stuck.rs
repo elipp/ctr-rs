@@ -643,8 +643,11 @@ pub fn find_dest_pos(
 
     if points.is_empty() || q.checkpoint_index == NO_CHECKPOINT {
         // The middle of the quad block's two opposite corners, a little above the track.
-        let vertex = |corner: usize| level.vertices[q.vertex_index[corner] as usize].pos;
-        let (a, b) = (vertex(0), vertex(3));
+        let vertex = |corner: usize| level.vertices.get(q.vertex_index[corner] as usize);
+        let (Some(a), Some(b)) = (vertex(0), vertex(3)) else {
+            return;
+        };
+        let (a, b) = (a.pos, b.pos);
         d.pos_curr.x = mips::sll(mips::add_lo(a.x as i32, b.x as i32), 7);
         d.pos_curr.y = mips::sll(
             mips::add_lo(mips::add_lo(a.y as i32, b.y as i32), RESPAWN_Y_OFFSET),
