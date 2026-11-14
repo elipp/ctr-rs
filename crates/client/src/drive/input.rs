@@ -8,20 +8,47 @@ use race::Pad;
 use vehicle::{Input, buttons};
 
 use crate::config::Config;
-use crate::controls::Control;
+use crate::controls::{Control, Controls};
 
 /// The pads, as long as the window has focus: a pad pushed while another window is in front is not
 /// ours to read.
 #[derive(SystemParam)]
 pub(crate) struct Pads<'w, 's> {
-    pads: Query<'w, 's, &'static Gamepad>,
+    pads: Query<'w, 's, (Entity, &'static Gamepad)>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
 impl Pads<'_, '_> {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Gamepad> {
+        self.entities().map(|(_, pad)| pad)
+    }
+
+    /// The pads with their entities, which tell them apart.
+    pub(crate) fn entities(&self) -> impl Iterator<Item = (Entity, &Gamepad)> {
         let focused = self.windows.iter().any(|w| w.focused);
         self.pads.iter().filter(move |_| focused)
+    }
+}
+
+/// What a local player drives with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Device {
+    /// Our own: the keys the config binds (the pause menu changes them), and every pad that
+    /// is not another player's.
+    Primary,
+    /// A set of keys of its own, and no pad.
+    Keys(Controls),
+    /// One pad, and no keys.
+    Pad(Entity),
+}
+
+impl Device {
+    /// The pad this device is, which no other player reads.
+    pub(crate) fn pad(&self) -> Option<Entity> {
+        match self {
+            Device::Pad(pad) => Some(*pad),
+            _ => None,
+        }
     }
 }
 
@@ -34,18 +61,87 @@ pub(super) struct Controller<'w, 's> {
 }
 
 impl Controller<'_, '_> {
-    pub fn read(&self, previous_held: u32) -> Input {
-        read_input(&self.keys, &self.pads, &self.config, previous_held)
+    /// The keys and the pads `device` reads. `taken` are the pads that are other players' (the
+    /// primary device leaves them alone).
+    fn sources<'a>(
+        &'a self,
+        device: &'a Device,
+        taken: &[Entity],
+    ) -> (Option<&'a Controls>, Vec<&'a Gamepad>) {
+        match device {
+            Device::Primary => (
+                Some(&self.config.controls),
+                (self.pads.entities())
+                    .filter(|(entity, _)| !taken.contains(entity))
+                    .map(|(_, pad)| pad)
+                    .collect(),
+            ),
+            Device::Keys(controls) => (Some(controls), Vec::new()),
+            Device::Pad(wanted) => (
+                None,
+                (self.pads.entities())
+                    .filter(|(entity, _)| entity == wanted)
+                    .map(|(_, pad)| pad)
+                    .collect(),
+            ),
+        }
     }
+
+    /// What `device` is giving now.
+    pub fn read(&self, device: &Device, taken: &[Entity], previous_held: u32) -> Input {
+        let (controls, pads) = self.sources(device, taken);
+        read_input(&self.keys, controls, &pads, previous_held)
+    }
+
+    /// What `device` tapped this frame, to work a menu with: the driving keys and buttons, as
+    /// the pause menu's are not for one player. `stick` is which way the left stick was
+    /// pushed last frame (-1, 0 or 1 up), which the caller keeps to tap with it.
+    pub fn menu(&self, device: &Device, taken: &[Entity], stick: &mut i32) -> MenuTaps {
+        let (controls, pads) = self.sources(device, taken);
+        let key = |control| controls.is_some_and(|c| c.just_pressed(control, &self.keys));
+        let pad = |button| pads.iter().any(|p| p.just_pressed(button));
+        let y = pads
+            .iter()
+            .map(|p| p.left_stick().y)
+            .find(|y| *y != 0.0)
+            .unwrap_or(0.0);
+        let pushed = (y > MENU_STICK) as i32 - (y < -MENU_STICK) as i32;
+        let tapped = |way: i32| pushed == way && *stick != way;
+        let (stick_up, stick_down) = (tapped(1), tapped(-1));
+        *stick = pushed;
+        MenuTaps {
+            up: key(Control::Gas) || pad(GamepadButton::DPadUp) || stick_up,
+            down: key(Control::Brake) || pad(GamepadButton::DPadDown) || stick_down,
+            take: key(Control::Hop) || pad(GamepadButton::South),
+            back: key(Control::Item) || pad(GamepadButton::East),
+            toggle: key(Control::RacerMenu) || pad(GamepadButton::Select),
+        }
+    }
+}
+
+/// How far the left stick is pushed to tap a menu: as in the pause menu.
+const MENU_STICK: f32 = 0x60 as f32 / 127.0;
+
+/// The taps of a device in a menu of its player's own.
+#[derive(Clone, Copy, Default)]
+pub(super) struct MenuTaps {
+    pub up: bool,
+    pub down: bool,
+    /// Hop, or Cross.
+    pub take: bool,
+    /// Item, or Circle.
+    pub back: bool,
+    /// The racer menu's key, or Select: opens it and closes it.
+    pub toggle: bool,
 }
 
 fn read_input(
     keys: &ButtonInput<KeyCode>,
-    pads: &Pads,
-    config: &Config,
+    controls: Option<&Controls>,
+    pads: &[&Gamepad],
     previous_held: u32,
 ) -> Input {
-    let down = |control: Control| config.controls.held(control, keys);
+    let down = |control: Control| controls.is_some_and(|c| c.held(control, keys));
     let pad_down =
         |codes: &[GamepadButton]| pads.iter().any(|p| p.any_pressed(codes.iter().copied()));
     // Analog left stick of the first pad that has it pushed, deadzone already applied.

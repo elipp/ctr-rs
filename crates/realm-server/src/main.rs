@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::{Connection, presets};
 use iroh::{Endpoint, SecretKey};
-use realm_proto::{ALPN, MAX_REQUEST, Reject, Request, Response};
+use realm_proto::{ALPN, LEGACY_ALPNS, MAX_REQUEST, Reject, Request, Response};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -82,7 +82,7 @@ async fn bind(key: SecretKey, port: u16) -> Result<Endpoint, Error> {
     let builder = || {
         Endpoint::builder(presets::N0)
             .secret_key(key.clone())
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(std::iter::once(ALPN).chain(LEGACY_ALPNS.iter().copied()).map(<[u8]>::to_vec).collect())
             .clear_ip_transports()
     };
     // Both families when the host has them, and IPv4 alone when it does not.
@@ -140,9 +140,14 @@ async fn run() -> Result<(), Error> {
             continue;
         };
         let realm = realm.clone();
+        let me = *endpoint.id().as_bytes();
         tokio::spawn(async move {
             if let Ok(connection) = accepting.await {
-                serve(&realm, connection).await;
+                if LEGACY_ALPNS.contains(&connection.alpn()) {
+                    tell_to_update(&connection, me).await;
+                } else {
+                    serve(&realm, connection).await;
+                }
             }
             drop(slot);
         });
@@ -150,6 +155,22 @@ async fn run() -> Result<(), Error> {
     info!("shutting down");
     endpoint.close().await;
     Ok(())
+}
+
+/// Answers a client of an older protocol, which would otherwise find the realm unreachable, with
+/// a lobby that says to update (see [`realm_proto::outdated`]).
+async fn tell_to_update(connection: &Connection, realm: [u8; 32]) {
+    info!(host = %short(connection.remote_id().as_bytes()), "an outdated client");
+    while let Ok((mut send, mut recv)) = connection.accept_bi().await {
+        let request = tokio::time::timeout(READ_TIMEOUT, recv.read_to_end(MAX_REQUEST)).await;
+        let Ok(Ok(bytes)) = request else { break };
+        let Some(response) = realm_proto::outdated(&bytes, realm) else {
+            break;
+        };
+        if send.write_all(&response).await.is_err() || send.finish().is_err() {
+            break;
+        }
+    }
 }
 
 /// Answers the requests of a connection, until it ends. Its lobby ends with it.

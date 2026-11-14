@@ -17,15 +17,21 @@
 //! * R: back to the starting grid
 //! * H or Triangle: swap the minimap and the speedometer (`speedometer.rs`)
 //! * Escape, P or Start: the pause menu (`pause.rs`)
+//! * Select or C (B for the second keyboard player): that player's racer menu (`chooser.rs`)
+//! * `/players <1 to 4>`: share the screen (offline). The second player takes a free pad, or the
+//!   keyboard's I J K L (U, O hop, `;` item, Y aim); the others take pads (`split.rs`)
 //!
 //! Not in the sim yet: turbo pads (they are applied in kart-against-kart), items, the
 //! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
 //! or Uka Uka (`mask.rs`) carries the kart back to the track.
 
+mod chooser;
 mod follow;
 mod input;
+mod local;
 mod overlay;
 mod pose;
+mod split;
 mod tick;
 
 use bevy::prelude::*;
@@ -33,12 +39,15 @@ use race::KartSpec;
 use vehicle::Driver;
 
 use crate::Track;
-use follow::{View, chase, view_of};
+use follow::{chase, chase_extra};
 use overlay::{hud, reserves_hud, reward_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
-pub use follow::ChaseCamera;
+pub use follow::{ChaseCamera, MainView, ViewOf};
+pub use chooser::Chosen;
 pub(crate) use input::Pads;
+pub(crate) use local::LocalView;
+pub(crate) use split::{HudCamera, UnderCamera, window_rect};
 pub(crate) use overlay::spawn_hud;
 pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 
@@ -46,17 +55,26 @@ pub(crate) use pose::{Pose, animation_pose, pose_of, rotation_of};
 #[derive(Component)]
 pub struct Kart;
 
-/// What the viewer keeps of driving: the camera, the poses to draw between ticks. The
+/// A kart of another local player (`/players`), as opposed to one of a lobby (`remote.rs`).
+#[derive(Component)]
+pub struct Extra;
+
+/// The most players that can share the screen.
+pub const MAX_PLAYERS: usize = 4;
+
+/// How many players share the screen (`/players`): the first is ours.
+#[derive(Resource)]
+pub struct LocalPlayers(pub usize);
+
+/// What the viewer keeps of driving: a view for each local player, the first of them ours. The
 /// race itself, our kart in it included, is [`crate::props::Sim`].
 #[derive(Resource)]
 pub struct Drive {
     pub(crate) character: usize,
     anim_num_frames: [u16; 8],
-    camera: camera::CameraDc,
-    weather: crate::weather::WeatherView,
-    confetti: crate::confetti::ConfettiView,
-    previous_view: View,
-    current_view: View,
+    /// The local players' views (never none): the camera, the weather and the poses to draw
+    /// between ticks, of each.
+    views: Vec<LocalView>,
 }
 
 impl Drive {
@@ -67,39 +85,41 @@ impl Drive {
         character: usize,
         anim_num_frames: [u16; 8],
     ) -> Drive {
-        let mut camera = camera::CameraDc::default();
-        camera.follow_driver(
-            driver,
-            &track.0,
-            &camera::Input {
-                elapsed_time_ms: 32,
-                ..Default::default()
-            },
-        );
-        let view = view_of(&camera);
         Drive {
-            camera,
-            weather: crate::weather::WeatherView::new(&track.0),
-            confetti: default(),
-            previous_view: view,
-            current_view: view,
+            views: vec![LocalView::new(track, driver, 0, input::Device::Primary)],
             character,
             anim_num_frames,
         }
     }
 
+    /// Our view, the first one: it is what the HUD and the sounds go by.
+    pub(crate) fn own(&mut self) -> &mut LocalView {
+        &mut self.views[0]
+    }
+
+    /// The local players' views, ours first.
+    pub(crate) fn views(&self) -> &[LocalView] {
+        &self.views
+    }
+
     pub(crate) fn weather(&self) -> &crate::weather::WeatherView {
-        &self.weather
+        &self.views[0].weather
     }
 
     pub(crate) fn confetti(&self) -> &crate::confetti::ConfettiView {
-        &self.confetti
+        &self.views[0].confetti
     }
 
     /// Our kart is of `character` now, with a model whose animations have `anim_num_frames`.
     pub(crate) fn set_character(&mut self, character: usize, anim_num_frames: [u16; 8]) {
         self.character = character;
         self.anim_num_frames = anim_num_frames;
+    }
+
+    /// The karts of the local players, in the order of their slots.
+    pub fn specs(&self) -> Vec<KartSpec> {
+        let extras = self.views.iter().skip(1).filter_map(|view| view.spec);
+        std::iter::once(self.spec()).chain(extras).collect()
     }
 
     /// Our kart, as a race takes it.
@@ -123,9 +143,12 @@ pub struct DrivePlugin;
 
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(crate::exhaust::Particles::new())
+        app.insert_resource(LocalPlayers(1))
+            .init_resource::<Chosen>()
+            .add_systems(Update, (chooser::input, chooser::sync, chooser::show).chain().run_if(driving))
+            .insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
-            .init_resource::<crate::flash::Flash>()
+            .init_resource::<crate::flash::Flashes>()
             .add_systems(Update, overlay::debug_text_command)
             .add_systems(Startup, spawn_hud)
             .add_systems(
@@ -142,6 +165,7 @@ impl Plugin for DrivePlugin {
                     crate::kart::show,
                     crate::submerge::cut,
                     chase,
+                    chase_extra,
                     debug_actions,
                     crate::projectile::place,
                     crate::rain::draw.run_if(crate::fx::beaker_rain),
@@ -163,6 +187,8 @@ impl Plugin for DrivePlugin {
             .add_systems(
                 Update,
                 (
+                    split::sync,
+                    split::layout,
                     crate::shadow::update,
                     crate::flame::update,
                     crate::skid::update,

@@ -18,6 +18,7 @@ use render::mesh::SCALE;
 use render::particles::{Particle, Rng, quarter_units_to_world};
 use weapon::mine::MineKind;
 
+use crate::billboard::{self, ATTRIBUTE_CORNER, BillboardMaterial};
 use crate::exhaust::{SCREEN_PIXEL_ASPECT, icon_image};
 
 /// `IconGroup::group_id` of the fire's sprite in the level's own icons.
@@ -110,24 +111,27 @@ pub fn spawn(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<BillboardMaterial>,
 ) {
     let mut sprites = |image: Image, mode: AlphaMode| {
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
         );
-        set_quads(&mut mesh, &[], &[], &[]);
+        set_quads(&mut mesh, &Quads::default());
         (
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::WHITE,
-                base_color_texture: Some(images.add(image)),
-                unlit: true,
-                cull_mode: None,
-                double_sided: true,
-                alpha_mode: mode,
-                ..default()
+            MeshMaterial3d(materials.add(BillboardMaterial {
+                base: StandardMaterial {
+                    base_color: Color::WHITE,
+                    base_color_texture: Some(images.add(image)),
+                    unlit: true,
+                    cull_mode: None,
+                    double_sided: true,
+                    alpha_mode: mode,
+                    ..default()
+                },
+                extension: billboard::Billboard {},
             })),
             Transform::default(),
             NoFrustumCulling,
@@ -297,63 +301,61 @@ pub fn update(
     sprites: Query<&Mesh3d, With<FireSprites>>,
     tire_sprites: Query<&Mesh3d, With<TireSprites>>,
     shard_sprites: Query<&Mesh3d, With<ShardSprites>>,
-    cameras: Query<
-        &Transform,
-        (
-            With<Camera3d>,
-            Without<crate::OverlayCamera>,
-            Without<crate::sky::SkyCamera>,
-        ),
-    >,
     fire: Option<Res<Fire>>,
     fixed: Res<Time<Fixed>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let (Some(fire), Some(camera)) = (fire, cameras.iter().next()) else {
+    let Some(fire) = fire else {
         return;
     };
-    let (right, up) = (camera.rotation * Vec3::X, camera.rotation * Vec3::Y);
     let t = fixed.overstep_fraction();
     if let Some(mesh) = sprites.iter().next()
         && let Some(mut mesh) = meshes.get_mut(&mesh.0)
     {
-        let quads = lay_out(&fire.sparks, right, up, t, |_| {
+        let quads = lay_out(&fire.sparks, t, |_| {
             Some((fire.width, fire.height, [0.0, 0.0, 1.0, 1.0]))
         });
-        set_quads(&mut mesh, &quads.0, &quads.1, &quads.2);
+        set_quads(&mut mesh, &quads);
     }
     if let Some(mesh) = tire_sprites.iter().next()
         && let Some(mut mesh) = meshes.get_mut(&mesh.0)
     {
-        let quads = lay_out(&fire.tires, right, up, t, |p| {
+        let quads = lay_out(&fire.tires, t, |p| {
             let wheel = fire.wheels.get(p.icon_frame()?)?;
             Some((wheel.width, wheel.height, wheel.uv))
         });
-        set_quads(&mut mesh, &quads.0, &quads.1, &quads.2);
+        set_quads(&mut mesh, &quads);
     }
     if let Some(mesh) = shard_sprites.iter().next()
         && let Some(mut mesh) = meshes.get_mut(&mesh.0)
         && let Some((width, height)) = fire.smoke
     {
-        let quads = lay_out(&fire.shards, right, up, t, |_| {
+        let quads = lay_out(&fire.shards, t, |_| {
             Some((width, height, [0.0, 0.0, 1.0, 1.0]))
         });
-        set_quads(&mut mesh, &quads.0, &quads.1, &quads.2);
+        set_quads(&mut mesh, &quads);
     }
 }
 
+/// The vertices of some quads, four for each (top left, top right, bottom left, bottom right).
+#[derive(Default)]
+struct Quads {
+    positions: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+    uvs: Vec<[f32; 2]>,
+    /// The offset of each vertex from its quad's centre, in the view's plane (`billboard.rs`).
+    corners: Vec<[f32; 2]>,
+}
+
 /// The corners, colours and picture coordinates of the quads of `sparks`; `picture` says how big
-/// a particle's icon is and where it is in the texture (left, top, right and bottom).
+/// a particle's icon is and where it is in the texture (left, top, right and bottom). Each vertex
+/// is its quad's centre, and the shader turns the quad to each view.
 fn lay_out(
     sparks: &[Spark],
-    right: Vec3,
-    up: Vec3,
     t: f32,
     picture: impl Fn(&Particle) -> Option<(i32, i32, [f32; 4])>,
-) -> (Vec<[f32; 3]>, Vec<[f32; 4]>, Vec<[f32; 2]>) {
-    let mut positions = Vec::with_capacity(4 * sparks.len());
-    let mut colors = Vec::with_capacity(4 * sparks.len());
-    let mut uvs = Vec::with_capacity(4 * sparks.len());
+) -> Quads {
+    let mut quads = Quads::default();
     for s in sparks {
         // Where it is in its life, between the ticks.
         let age = s.lead + t;
@@ -371,30 +373,43 @@ fn lay_out(
         let center = Vec3::from_array(p.position().map(|c| c as f32)) / 256.0 * SCALE;
         let [r, g, b] = p.rgb().map(|c| c as f32 / 128.0);
         for [x, y] in corners {
-            let corner = center + right * quarter_units_to_world(x as f32)
-                - up * (quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT);
-            positions.push(corner.to_array());
-            colors.push([r, g, b, 1.0]);
+            let offset = Vec2::new(
+                quarter_units_to_world(x as f32),
+                -(quarter_units_to_world(y as f32) * SCREEN_PIXEL_ASPECT),
+            );
+            quads.positions.push(center.to_array());
+            quads.corners.push(offset.to_array());
+            quads.colors.push([r, g, b, 1.0]);
         }
-        uvs.extend([[u0, v0], [u1, v0], [u0, v1], [u1, v1]]);
+        quads.uvs.extend([[u0, v0], [u1, v0], [u0, v1], [u1, v1]]);
     }
-    (positions, colors, uvs)
+    quads
 }
 
-/// Gives the mesh one quad for each four corners (top left, top right, bottom left, bottom
-/// right) in `positions`. With none it keeps one that is not seen, as a mesh with no vertices at
-/// all is not drawn right.
-fn set_quads(mesh: &mut Mesh, positions: &[[f32; 3]], colors: &[[f32; 4]], uvs: &[[f32; 2]]) {
-    let hidden = ([[0.0f32; 3]; 4], [[0.0f32; 4]; 4], [[0.0f32; 2]; 4]);
-    let (positions, colors, uvs) = if positions.is_empty() {
-        (&hidden.0[..], &hidden.1[..], &hidden.2[..])
+/// Gives the mesh one quad for each four vertices of `quads`. With none it keeps one that is not
+/// seen, as a mesh with no vertices at all is not drawn right.
+fn set_quads(mesh: &mut Mesh, quads: &Quads) {
+    let hidden = Quads {
+        positions: vec![[0.0; 3]; 4],
+        colors: vec![[0.0; 4]; 4],
+        uvs: vec![[0.0; 2]; 4],
+        corners: vec![[0.0; 2]; 4],
+    };
+    let Quads {
+        positions,
+        colors,
+        uvs,
+        corners,
+    } = if quads.positions.is_empty() {
+        &hidden
     } else {
-        (positions, colors, uvs)
+        quads
     };
     let quads = (positions.len() / 4) as u32;
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.to_vec());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.to_vec());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs.to_vec());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs.clone());
+    mesh.insert_attribute(ATTRIBUTE_CORNER, corners.clone());
     mesh.insert_indices(Indices::U32(
         (0..quads)
             .flat_map(|q| [0, 2, 1, 1, 2, 3].map(|i| q * 4 + i))

@@ -72,6 +72,7 @@ const TOO_FAR: f32 = 3200.0;
 pub(crate) fn overhead(
     mut commands: Commands,
     lobby: Res<Lobby>,
+    drive: Option<Res<crate::drive::Drive>>,
     screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &Transform), With<ChaseCamera>>,
     karts: Query<(&KartSlot, &Transform), Without<ChaseCamera>>,
@@ -92,7 +93,9 @@ pub(crate) fn overhead(
     >,
     mut watching: Query<(Entity, &mut Text, &mut Visibility), With<WatchingLabel>>,
 ) {
-    let Some(net) = &lobby.online else {
+    // (Not in a split screen: the plates are placed by the one camera.)
+    let split = drive.is_some_and(|d| d.views().len() > 1);
+    let Some(net) = lobby.online.as_ref().filter(|_| !split) else {
         for (entity, ..) in &labels {
             commands.entity(entity).despawn();
         }

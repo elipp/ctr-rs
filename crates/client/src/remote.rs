@@ -26,7 +26,7 @@ pub fn kart_collisions() -> bool {
 pub fn build(
     mut lobby: ResMut<Lobby>,
     track: Res<Track>,
-    others: Query<Entity, (With<KartSlot>, Without<Kart>)>,
+    others: Query<Entity, (With<KartSlot>, Without<Kart>, Without<crate::drive::Extra>)>,
     mut builder: KartBuilder,
     loading: Option<Res<crate::loading::Loading>>,
     mut toasts: MessageWriter<crate::toast::Toast>,
@@ -90,9 +90,10 @@ pub fn build(
         } else {
             online.retail_specs.push(spec);
         }
-        // (Ours is on the grid already. A spectator's slot is past the players', where the bots'
+        // (Ours is on the grid already, and our other local players' are put there with their
+        // views, `drive::split::sync`. A spectator's slot is past the players', where the bots'
         // karts are.)
-        if slot == online.slot && !online.spectating() {
+        if online.local(slot) && !online.spectating() {
             continue;
         }
         let birth = race::Kart::birth(&track.0, slot, &spec);

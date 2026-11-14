@@ -9,6 +9,7 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
+use crate::hud_view::{HudView, HudViews};
 
 /// How far above the middle of the screen the text's top is, in lines of retail's screen.
 const ABOVE_MIDDLE: f32 = 30.0;
@@ -31,13 +32,15 @@ impl Plugin for WrongWayPlugin {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    hud: HudViews,
     menu: Res<crate::pause::PauseMenu>,
-    mut line: Query<&mut Visibility, With<WrongWay>>,
+    mut lines: Query<(&HudView, &mut Visibility), With<WrongWay>>,
 ) {
-    let Ok(mut visibility) = line.single_mut() else {
+    for view in hud.missing(lines.iter().map(|(v, _)| *v)) {
         // The first frame, or of a new level (which took the nodes away).
         commands.spawn((
             WrongWay,
+            HudView(view),
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Percent(50.0),
@@ -53,19 +56,20 @@ fn show(
                 Pickable::IGNORE,
             )],
         ));
-        return;
-    };
+    }
     let race = &*sim.race;
-    let shown = race.laps != race::FREE_DRIVE_LAPS
-        && race
-            .karts
-            .get(sim.own)
-            .is_some_and(|kart| vehicle::lap::wrong_way(&kart.driver))
-        && race.event_ms & FLASH_BIT != 0
-        && !menu.open;
-    visibility.set_if_neq(if shown {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    });
+    for (&HudView(view), mut visibility) in &mut lines {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
+        let shown = race.laps != race::FREE_DRIVE_LAPS
+            && vehicle::lap::wrong_way(kart.driver)
+            && race.event_ms & FLASH_BIT != 0
+            && !menu.open;
+        visibility.set_if_neq(if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
 }

@@ -19,7 +19,7 @@ use crate::mesh::{Atlas, SCALE};
 pub const SPRITE_SIZE: usize = 32;
 
 /// `sDrawTiresSpriteIndexTable`: `|axle . view| / 32` (0..=128) to icon number.
-const SPRITE_INDEX: [u8; 0x81] = [
+pub const SPRITE_INDEX: [u8; 0x81] = [
     0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02,
     0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
     0x03, 0x03, 0x03, 0x03, 0x03, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
@@ -111,7 +111,43 @@ fn sprite_for(angle: f32) -> usize {
     SPRITE_INDEX[index as usize] as usize
 }
 
-/// Where a kart's wheels are drawn for a camera at `eye`.
+/// A wheel as the kart has it, before any camera: what `wheels.wesl` turns to a view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WheelPose {
+    pub center: Vec3,
+    /// The axle, whose direction is the wheel's (4096 long, for the sprite's angle).
+    pub axle: Vec3,
+    /// To the side of the kart the wheel is on, outwards.
+    pub side: Vec3,
+    pub right_hand: bool,
+}
+
+/// Where a kart's wheels are, for any camera.
+///
+/// `position` and `rotation` are the kart's (instance) pose in world units and `scale` the
+/// instance scale per axis (0x1000 = 1.0).
+pub fn wheel_poses(
+    position: Vec3,
+    rotation: Mat3,
+    scale: [i32; 3],
+    wheel_rotation: i16,
+    hazard_timer: i16,
+) -> [WheelPose; WHEELS] {
+    let pairs = local_pairs(scale, wheel_rotation, hazard_timer);
+    std::array::from_fn(|i| {
+        let (center, rim) = pairs[i];
+        let right_hand = i % 2 == 1;
+        WheelPose {
+            center: position + rotation * (center / FINE * SCALE),
+            axle: rotation * rim,
+            side: rotation * Vec3::new(if right_hand { -1.0 } else { 1.0 }, 0.0, 0.0),
+            right_hand,
+        }
+    })
+}
+
+/// Where a kart's wheels are drawn for a camera at `eye`. (The GPU does this, in `wheels.wesl`,
+/// for every view; this is what it must match.)
 ///
 /// `position` and `rotation` are the kart's (instance) pose in world units,
 /// `scale` the instance scale per axis (0x1000 = 1.0) and `wheel_size` retail's
@@ -126,11 +162,14 @@ pub fn wheel_quads(
     eye: Vec3,
 ) -> [WheelQuad; WHEELS] {
     let radius = radius(wheel_size);
-    let pairs = local_pairs(scale, wheel_rotation, hazard_timer);
+    let poses = wheel_poses(position, rotation, scale, wheel_rotation, hazard_timer);
     std::array::from_fn(|i| {
-        let (center, rim) = pairs[i];
-        let center = position + rotation * (center / FINE * SCALE);
-        let axle = rotation * rim;
+        let WheelPose {
+            center,
+            axle,
+            side,
+            right_hand,
+        } = poses[i];
 
         // `viewNormal`: from the wheel to the camera.
         let to_eye = (eye - center).normalize_or_zero();
@@ -150,7 +189,6 @@ pub fn wheel_quads(
         // axle points away from the camera, and the right-hand wheels are
         // the left-hand ones the other way round.
         let angle = axle.dot(to_eye);
-        let right_hand = i % 2 == 1;
         let corners = match (right_hand, angle < 0.0) {
             (false, false) => [p3, p1, p2, p0],
             (true, false) => [p2, p0, p3, p1],
@@ -158,7 +196,6 @@ pub fn wheel_quads(
             (true, true) => [p0, p2, p1, p3],
         };
 
-        let side = rotation * Vec3::new(if right_hand { -1.0 } else { 1.0 }, 0.0, 0.0);
         WheelQuad {
             corners,
             sprite: sprite_for(angle),

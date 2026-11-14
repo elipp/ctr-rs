@@ -17,6 +17,7 @@ use vehicle::item::held;
 
 use crate::font::CtrText;
 use crate::hud;
+use crate::hud_view::{HudView, HudViews, Under};
 use crate::hud::{atlas_image, pack_icons};
 
 /// The pictures of the weapons and of the glow, loaded when the first race needs them.
@@ -118,15 +119,16 @@ fn shuffled(step: u32) -> u8 {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    views: HudViews,
     textures: Res<crate::Textures>,
     time: Res<Time<Real>>,
     mut images: ResMut<Assets<Image>>,
     icons: Option<Res<WeaponIcons>>,
-    mut hud: Query<(&mut ImageNode, &mut Visibility, &Children), With<WeaponHud>>,
+    mut hud: Query<(&HudView, &mut ImageNode, &mut Visibility, &Children), With<WeaponHud>>,
     mut quantity: Query<&mut CtrText, With<Quantity>>,
 ) {
-    let driver = sim.driver();
-    let Ok((mut image, mut visibility, children)) = hud.single_mut() else {
+    let missing = views.missing(hud.iter().map(|(v, ..)| *v));
+    if !missing.is_empty() {
         // The first frame of a race, or of a new level (which took the nodes away).
         let atlas = match icons {
             Some(icons) => icons.weapons.clone(),
@@ -141,11 +143,13 @@ fn show(
                 weapons
             }
         };
+        for view in missing {
         let root = commands
             .spawn((
                 WeaponHud,
+                HudView(view),
                 // Stretch: `Auto` would keep the picture's own proportions inside the node.
-                ImageNode::new(atlas).with_mode(NodeImageMode::Stretch),
+                ImageNode::new(atlas.clone()).with_mode(NodeImageMode::Stretch),
                 Visibility::Hidden,
                 Node {
                     position_type: PositionType::Absolute,
@@ -171,8 +175,14 @@ fn show(
             },
             ChildOf(root),
         ));
+        }
         return;
+    }
+    for (&HudView(view), mut image, mut visibility, children) in &mut hud {
+    let Some(kart) = views.get(view) else {
+        continue;
     };
+    let driver = kart.driver;
     let shown = match driver.held_item_id {
         held::NONE => None,
         held::ROULETTE => {
@@ -208,33 +218,39 @@ fn show(
             text.text = count.clone();
         }
     }
+    }
 }
 
 /// The glows behind the weapon and the wumpa counter, while the driver is juiced up and has not
 /// finished.
+///
+/// The UI is drawn by the camera of the highest order, which is the fruit's own: the glows would
+/// be drawn over the fruit and blend with it. They are drawn under the cameras that draw the fruit
+/// (and the kart) instead: by the main camera, or by the one that puts the picture on the window
+/// when the pixel scale is on, and in a split screen by the player's own camera for them (`Under`,
+/// `hud_view`).
 fn shine(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
+    views: HudViews,
     time: Res<Time<Real>>,
     icons: Option<Res<WeaponIcons>>,
-    mut glows: Query<(
-        Entity,
-        &Shine,
-        &mut ImageNode,
-        &mut Visibility,
-        Option<&UiTargetCamera>,
-    )>,
-    cameras: Query<(Entity, &Camera), With<Camera3d>>,
-    presenting: Query<(Entity, &Camera), With<crate::pixel::Present>>,
+    mut glows: Query<(&Shine, &HudView, &mut ImageNode, &mut Visibility)>,
 ) {
     // The weapon's own system makes the pictures, on its first frame.
     let Some(icons) = icons else {
         return;
     };
-    if glows.is_empty() {
-        let glow = |shine: Shine, node: Node| {
+    let missing = views.missing(glows
+            .iter()
+            .filter(|(shine, ..)| matches!(shine, Shine::Weapon))
+            .map(|(_, view, ..)| *view),
+    );
+    if !missing.is_empty() {
+        let glow = |shine: Shine, view: usize, node: Node| {
             (
                 shine,
+                HudView(view),
+                Under,
                 ImageNode::new(icons.shine.clone()).with_mode(NodeImageMode::Stretch),
                 Visibility::Hidden,
                 node,
@@ -250,62 +266,55 @@ fn shine(
             ..node
         };
         let weapon = shine_size(&Shine::Weapon);
-        commands.spawn(glow(
-            Shine::Weapon,
-            size(
-                &Shine::Weapon,
-                Node {
-                    left: Val::Percent(50.0),
-                    margin: UiRect::left(Val::Px(-weapon.x / 2.0)),
-                    top: Val::Px(WEAPON_TOP + WEAPON_SIZE.y / 2.0 - weapon.y / 2.0),
-                    ..default()
-                },
-            ),
-        ));
         let wumpa = shine_size(&Shine::Wumpa);
-        commands.spawn(glow(
-            Shine::Wumpa,
-            size(
-                &Shine::Wumpa,
-                // Behind the fruit only, not the count.
-                Node {
-                    left: Val::Percent(50.0),
-                    margin: UiRect::left(Val::Px(
-                        crate::wumpa_icon::FRUIT_X * crate::hud::PIXEL.x - wumpa.x / 2.0,
-                    )),
-                    top: Val::Px(crate::wumpa_icon::MIDDLE_Y * crate::hud::PIXEL.y - wumpa.y / 2.0),
-                    ..default()
-                },
-            ),
-        ));
+        for view in missing {
+            commands.spawn(glow(
+                Shine::Weapon,
+                view,
+                size(
+                    &Shine::Weapon,
+                    Node {
+                        left: Val::Percent(50.0),
+                        margin: UiRect::left(Val::Px(-weapon.x / 2.0)),
+                        top: Val::Px(WEAPON_TOP + WEAPON_SIZE.y / 2.0 - weapon.y / 2.0),
+                        ..default()
+                    },
+                ),
+            ));
+            commands.spawn(glow(
+                Shine::Wumpa,
+                view,
+                size(
+                    &Shine::Wumpa,
+                    // Behind the fruit only, not the count.
+                    Node {
+                        left: Val::Percent(50.0),
+                        margin: UiRect::left(Val::Px(
+                            crate::wumpa_icon::FRUIT_X * crate::hud::PIXEL.x - wumpa.x / 2.0,
+                        )),
+                        top: Val::Px(
+                            crate::wumpa_icon::MIDDLE_Y * crate::hud::PIXEL.y - wumpa.y / 2.0,
+                        ),
+                        ..default()
+                    },
+                ),
+            ));
+        }
         return;
     }
-    let driver = sim.driver();
-    let juiced = driver.num_wumpas >= JUICED
-        && driver.actions_flag_set & vehicle::actions::RACE_FINISHED == 0;
-    let armed = juiced && driver.held_item_id != held::NONE;
-    // The glow of the weapon turns the pulse twice as fast when both are up.
-    let theta =
-        time.elapsed_secs() * FRAMES_PER_SECOND * THETA_STEP * if armed { 2.0 } else { 1.0 };
-    // 1 to 2 over the colours at their dimmest, which the picture is made at.
-    let pulse = shine_pulse(theta as u32) / 2.0;
-    // The UI is drawn by the camera of the highest order, which is the fruit's own: the glows
-    // would be drawn over the fruit and blend with it. They are drawn by the main camera instead,
-    // under the cameras that draw the fruit (and the kart). With the pixel scale on, the main
-    // camera draws into the picture of the scene: the one that puts that on the window draws them,
-    // which is under the fruit's too.
-    let main = presenting
-        .iter()
-        .find(|(_, c)| c.is_active)
-        .or_else(|| cameras.iter().find(|(_, c)| c.order == 0))
-        .map(|(e, _)| e);
-    for (entity, shine, mut image, mut visibility, target) in &mut glows {
-        if let Some(main) = main
-            && target.is_none_or(|t| t.0 != main)
-        {
-            // (The scene may have been replaced since this frame's glows were seen.)
-            commands.entity(entity).try_insert(UiTargetCamera(main));
-        }
+    for (shine, &HudView(view), mut image, mut visibility) in &mut glows {
+        let Some(kart) = views.get(view) else {
+            continue;
+        };
+        let driver = kart.driver;
+        let juiced = driver.num_wumpas >= JUICED
+            && driver.actions_flag_set & vehicle::actions::RACE_FINISHED == 0;
+        let armed = juiced && driver.held_item_id != held::NONE;
+        // The glow of the weapon turns the pulse twice as fast when both are up.
+        let theta =
+            time.elapsed_secs() * FRAMES_PER_SECOND * THETA_STEP * if armed { 2.0 } else { 1.0 };
+        // 1 to 2 over the colours at their dimmest, which the picture is made at.
+        let pulse = shine_pulse(theta as u32) / 2.0;
         let up = match shine {
             Shine::Weapon => armed,
             Shine::Wumpa => juiced,

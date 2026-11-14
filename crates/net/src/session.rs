@@ -94,12 +94,14 @@ pub(crate) async fn tell_lobby(
         id: me,
         character,
         nick: nick.to_string(),
+        extras: host.extras.clone(),
     })
     .chain(guests.iter().filter(|g| !g.spectator).filter_map(|g| {
         g.hello.map(|(_, character)| Player {
             id: g.id,
             character,
             nick: g.nick.1.clone(),
+            extras: g.extras.clone(),
         })
     }))
     .collect();
@@ -110,12 +112,13 @@ pub(crate) async fn tell_lobby(
             id: g.id,
             character: 0,
             nick: g.nick.1.clone(),
+            extras: Vec::new(),
         })
         .collect();
     let message = Message::Lobby {
         players: players
             .iter()
-            .map(|p| (*p.id.as_bytes(), p.character, p.nick.clone()))
+            .map(|p| (*p.id.as_bytes(), p.character, p.nick.clone(), p.extras.clone()))
             .collect(),
         watching: spectators
             .iter()
@@ -177,6 +180,7 @@ pub(crate) async fn run(
     mut io: Io,
     role: Role,
     mut character: u8,
+    mut extras: Vec<u8>,
     mut nick: String,
     build: u32,
     mut spectator: bool,
@@ -203,7 +207,7 @@ pub(crate) async fn run(
             }
             io.event(Event::Open(Ticket::of(&endpoint.addr())));
             // The lobby has us in it from the start.
-            let state = HostState::default();
+            let state = HostState { extras: extras.clone(), ..HostState::default() };
             tell_lobby(me, character, &nick, &state, &io).await;
             host = Some(state);
         }
@@ -215,6 +219,7 @@ pub(crate) async fn run(
             io.event(Event::Joined(ticket.id));
             let hello = Message::Hello {
                 character,
+                extras: extras.clone(),
                 seq: 0,
                 build,
                 nick: nick.clone(),
@@ -299,7 +304,7 @@ pub(crate) async fn run(
                         }
                         host.guests.retain(|g| g.id != id);
                         host.gone.remove(&id);
-                        let guest = Guest { id, connection: connection.clone(), hello: None, nick: (0, String::new()), spectator: false, hard: false };
+                        let guest = Guest { id, connection: connection.clone(), hello: None, extras: Vec::new(), nick: (0, String::new()), spectator: false, hard: false };
                         io.event(Event::PeerJoined(id));
                         if host.racing {
                             let wait = Message::Announce { text: RACE_IN_PROGRESS.into() };
@@ -342,7 +347,7 @@ pub(crate) async fn run(
                             host_connection = Some(connection.clone());
                             io.event(Event::Joined(candidate));
                             // As if we joined it: the host takes the latest Hello it has.
-                            let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
+                            let hello = Message::Hello { character, extras: extras.clone(), seq: hellos, build, nick: nick.clone(), spectator };
                             let _ = send_reliably(&connection, &hello).await;
                             let _ = send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await;
                             hellos += 1;
@@ -411,7 +416,8 @@ pub(crate) async fn run(
                     }
                     (running, game_ready, ready_sent) = (false, false, false);
                     host.ready_from.clear();
-                    io.event(Event::Started { slot, characters, players, track, hash, laps, bots, retail });
+                    let locals = plan.as_ref().map_or_else(|| vec![slot], |plan| plan.locals_of(me));
+                    io.event(Event::Started { slot, locals, characters, players, track, hash, laps, bots, retail });
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -449,7 +455,19 @@ pub(crate) async fn run(
                     }
                     if let Some(connection) = &host_connection {
                         // The host takes the latest Hello it has, so one that is sent again overrides.
-                        let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
+                        let hello = Message::Hello { character, extras: extras.clone(), seq: hellos, build, nick: nick.clone(), spectator };
+                        send_reliably(connection, &hello).await?;
+                        hellos += 1;
+                    }
+                },
+                Command::Extras(new) => if !spectator && new != extras && !host.as_ref().is_some_and(|h| h.racing || h.locked) {
+                    extras = new;
+                    if let Some(host) = &mut host {
+                        host.extras = extras.clone();
+                        tell_lobby(me, character, &nick, host, &io).await;
+                    }
+                    if let Some(connection) = &host_connection {
+                        let hello = Message::Hello { character, extras: extras.clone(), seq: hellos, build, nick: nick.clone(), spectator };
                         send_reliably(connection, &hello).await?;
                         hellos += 1;
                     }
@@ -468,7 +486,7 @@ pub(crate) async fn run(
                 },
                 Command::Spectate(watch) => if watch != spectator && let Some(connection) = &host_connection {
                     spectator = watch;
-                    let hello = Message::Hello { character, seq: hellos, build, nick: nick.clone(), spectator };
+                    let hello = Message::Hello { character, extras: extras.clone(), seq: hellos, build, nick: nick.clone(), spectator };
                     send_reliably(connection, &hello).await?;
                     hellos += 1;
                 },
@@ -545,10 +563,19 @@ pub(crate) async fn run(
                         link.send();
                     }
                 },
-                // (They go with our own pad, which follows.)
-                Command::BotInput(pads) => if running {
+                // (They go with our own pad, which follows.) The streams are our extra players' first,
+                // then (the host's) the bots'.
+                Command::ExtraInput(pads) => if running {
                     for link in links.values_mut() {
-                        for ((sender, _), &pad) in link.bot_senders.iter_mut().zip(&pads) {
+                        for ((sender, _), &pad) in link.extra_senders.iter_mut().zip(&pads) {
+                            sender.push(pad);
+                        }
+                    }
+                },
+                Command::BotInput(pads) => if running && let Some(plan) = &plan {
+                    let own = plan.locals_of(me).len().saturating_sub(1);
+                    for link in links.values_mut() {
+                        for ((sender, _), &pad) in link.extra_senders.iter_mut().skip(own).zip(&pads) {
                             sender.push(pad);
                         }
                     }
@@ -598,18 +625,26 @@ pub(crate) async fn run(
                             "the host plays another version of the sim ({theirs}, yours is {yours}): you both need the same build"
                         ).into());
                     }
-                    Message::Hello { character: theirs, seq, nick: theirs_nick, spectator: watches, .. } => {
+                    Message::Hello { character: theirs, extras: theirs_extras, seq, nick: theirs_nick, spectator: watches, .. } => {
                         if let Some(host) = &mut host
                             && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
                             && guest.hello.is_none_or(|(have, _)| seq > have)
                         {
-                            // (While characters are fixed, a guest drives on with the one it has.)
+                            // (While characters are fixed, a guest drives on with the one it has,
+                            // and its extras stay as they were. The first Hello sets them.)
+                            let fixed = host.locked && guest.hello.is_some();
                             let theirs = match guest.hello {
                                 Some((_, had)) if host.locked => had,
                                 _ => theirs,
                             };
                             guest.hello = Some((seq, theirs));
                             guest.spectator = watches;
+                            // (A spectator has no extras; the rest is cut to fit a race at the start.)
+                            if watches {
+                                guest.extras = Vec::new();
+                            } else if !fixed {
+                                guest.extras = theirs_extras.into_iter().take(MAX_PLAYERS - 1).collect();
+                            }
                             if seq >= guest.nick.0 {
                                 guest.nick = (seq, clean_nick(&theirs_nick));
                             }
@@ -681,11 +716,12 @@ pub(crate) async fn run(
                     Message::Lobby { players, watching, public, locked, bots } if from == host_id && host.is_none() => {
                         let players: Vec<Player> = players
                             .iter()
-                            .map(|(bytes, character, nick)| {
+                            .map(|(bytes, character, nick, extras)| {
                                 EndpointId::from_bytes(bytes).map(|id| Player {
                                     id,
                                     character: *character,
                                     nick: clean_nick(nick),
+                                    extras: extras.clone(),
                                 })
                             })
                             .collect::<Result<_, _>>()?;
@@ -696,6 +732,7 @@ pub(crate) async fn run(
                                     id,
                                     character: 0,
                                     nick: clean_nick(nick),
+                                    extras: Vec::new(),
                                 })
                             })
                             .collect::<Result<_, _>>()?;
@@ -731,8 +768,9 @@ pub(crate) async fn run(
                         (running, game_ready, ready_sent) = (false, false, false);
                         dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
                         race_info = Some((slot, characters.clone(), roster.clone(), bots));
+                        let locals = new_plan.locals_of(me);
                         plan = Some(new_plan);
-                        io.event(Event::Started { slot, characters, players: roster, track, hash, laps, bots, retail });
+                        io.event(Event::Started { slot, locals, characters, players: roster, track, hash, laps, bots, retail });
                     }
                     Message::Restart { epoch: new, track, hash, laps, retail }
                         if plan.is_some() && from == host_id && host.is_none() =>
@@ -743,7 +781,8 @@ pub(crate) async fn run(
                             epoch = new;
                             start_over(&mut links, epoch, plan, me);
                             (running, game_ready, ready_sent) = (false, false, false);
-                            io.event(Event::Started { slot, characters, players, track, hash, laps, bots, retail });
+                            let locals = plan.locals_of(me);
+                            io.event(Event::Started { slot, locals, characters, players, track, hash, laps, bots, retail });
                         }
                     }
                     Message::Announce { text } => {
@@ -799,7 +838,7 @@ pub(crate) async fn run(
                             // The tail of the race before.
                         } else if let (Some(plan), Some(link)) = (&plan, links.get_mut(&from)) {
                             link.peer_has = link.peer_has.max(inputs.ack);
-                            for ((_, has), &ack) in link.bot_senders.iter_mut().zip(&inputs.bot_acks) {
+                            for ((_, has), &ack) in link.extra_senders.iter_mut().zip(&inputs.acks) {
                                 *has = (*has).max(ack);
                             }
                             let before = link.receiver.next();
@@ -824,16 +863,16 @@ pub(crate) async fn run(
                             }
                         }
                     }
-                    // The pads of a bot of the host's.
-                    Message::Bot { epoch: sent, bot, first, pads } => {
+                    // The pads of an extra player of a peer's (or a bot of the host's).
+                    Message::Extra { epoch: sent, stream, first, pads } => {
                         if sent == epoch
                             && let (Some(plan), Some(link)) = (&plan, links.get_mut(&from))
-                            && let Some(slot) = plan.bot_slot(bot as usize)
-                            && let Some(receiver) = link.bot_receivers.get_mut(bot as usize)
+                            && let Some(slot) = plan.extra_slot(from, stream as usize)
+                            && let Some(receiver) = link.extra_receivers.get_mut(stream as usize)
                         {
                             let before = receiver.next();
                             receiver.accept_pads(first, &pads).map_err(|gap| {
-                                format!("lost pads of the bot of player {slot}: {gap:?}")
+                                format!("lost pads of player {slot} (an extra of {from}): {gap:?}")
                             })?;
                             let after = receiver.next();
                             if after > before {
@@ -1009,26 +1048,31 @@ pub(crate) async fn run(
                             if !stale {
                                 host.gone.insert(from);
                             }
-                            if let Some(slot) = plan.as_ref().and_then(|plan| plan.slot_of(from))
+                            if let Some(plan) = &plan
+                                && let Some(main) = plan.slot_of(from)
                                 && departed.insert(from)
                             {
                                 // Nobody is waited for twice, and whoever is gone is not waited for.
                                 for d in host.departures.values_mut() {
-                                    d.waiting.remove(&slot);
+                                    d.waiting.remove(&main);
                                 }
-                                let plan = plan.as_ref().expect("the slot came from it");
-                                // (The host speaks for its bots.)
-                                let waiting = (0..plan.roster.len())
-                                    .filter(|&s| s != slot && !plan.is_bot(s) && !departed.contains(&plan.roster[s]))
+                                // Each of its slots (extras too) is settled on its own. Whoever
+                                // is waited for answers for the slots it holds, once as itself:
+                                // the first of its own (the host speaks for its bots).
+                                let waiting: HashSet<usize> = (0..plan.roster.len())
+                                    .filter(|&s| plan.is_main(s) && !plan.is_bot(s) && !departed.contains(&plan.roster[s]))
                                     .collect();
-                                host.departures.insert(slot, Departure { waiting, first: 0, pads: Vec::new() });
-                                let gone = Message::Gone { epoch, slot: slot as u8 };
-                                for guest in &host.guests {
-                                    if plan.slot_of(guest.id).is_some() && !departed.contains(&guest.id) {
-                                        let _ = send_reliably(&guest.connection, &gone).await;
+                                let slots: Vec<usize> = if main >= plan.players { vec![main] } else { plan.slots_of(from).collect() };
+                                for slot in slots {
+                                    host.departures.insert(slot, Departure { waiting: waiting.clone(), first: 0, pads: Vec::new() });
+                                    let gone = Message::Gone { epoch, slot: slot as u8 };
+                                    for guest in &host.guests {
+                                        if plan.slot_of(guest.id).is_some() && !departed.contains(&guest.id) {
+                                            let _ = send_reliably(&guest.connection, &gone).await;
+                                        }
                                     }
+                                    io.event(Event::Gone { slot });
                                 }
-                                io.event(Event::Gone { slot });
                             }
                         } else if !stale {
                             let had = host.guests.len();
@@ -1103,6 +1147,7 @@ pub(crate) async fn run(
                 None => return Err("the host closed the lobby".into()),
                 Some(id) if id == me => {
                     let mut state = HostState {
+                        extras: extras.clone(),
                         public: heirs.public.clone(),
                         ..HostState::default()
                     };
@@ -1122,6 +1167,7 @@ pub(crate) async fn run(
                             id,
                             connection,
                             hello: None,
+                            extras: Vec::new(),
                             nick: (0, String::new()),
                             spectator: false,
                             hard: false,
@@ -1236,29 +1282,45 @@ pub(crate) async fn run(
             }
             departed.clear();
             host.departures.clear();
-            // The players take the slots after ours, in the order they joined, then our bots fill
-            // the race up (they are ours, with our id), and the spectators take the slots after.
+            // The players take the slots after ours, in the order they joined, then the extra
+            // players of ours and of theirs in the same order, then our bots fill the race up
+            // (they are ours, with our id), and the spectators take the slots after.
             let racers: Vec<&Guest> = host.guests.iter().filter(|g| !g.spectator).collect();
             let watchers: Vec<&Guest> = host.guests.iter().filter(|g| g.spectator).collect();
+            // The extras take what room the players leave, ours first, then the guests' in the
+            // order they joined.
+            let mut room = MAX_PLAYERS.saturating_sub(1 + racers.len());
+            let mut fit = |extras: &[u8]| {
+                let take = extras.len().min(room);
+                room -= take;
+                extras[..take].to_vec()
+            };
+            let own_extras = fit(&host.extras);
+            let guest_extras: Vec<Vec<u8>> = racers.iter().map(|g| fit(&g.extras)).collect();
             // A race has one kind of bot: the retail ones, if it was started with any, else ours.
-            let room = MAX_PLAYERS.saturating_sub(1 + racers.len());
             retail.characters.truncate(room);
             let brains = if retail.characters.is_empty() { room } else { 0 };
             let bot_characters: Vec<u8> = host.bots.iter().copied().take(brains).collect();
             let bots = bot_characters.len();
-            let players = 1 + racers.len() + bots;
+            let players = 1 + racers.len() + own_extras.len() + guest_extras.iter().map(Vec::len).sum::<usize>() + bots;
             let characters: Vec<u8> = std::iter::once(character)
                 .chain(racers.iter().filter_map(|g| g.hello.map(|(_, c)| c)))
+                .chain(own_extras.iter().copied())
+                .chain(guest_extras.iter().flatten().copied())
                 .chain(bot_characters)
                 .collect();
             let ours = hard_nat(&endpoint);
             let roster: Vec<EndpointId> = std::iter::once(me)
                 .chain(racers.iter().map(|g| g.id))
+                .chain(std::iter::repeat_n(me, own_extras.len()))
+                .chain(racers.iter().zip(&guest_extras).flat_map(|(g, e)| std::iter::repeat_n(g.id, e.len())))
                 .chain(std::iter::repeat_n(me, bots))
                 .chain(watchers.iter().map(|g| g.id))
                 .collect();
             let hard: Vec<bool> = std::iter::once(ours)
                 .chain(racers.iter().map(|g| g.hard))
+                .chain(std::iter::repeat_n(ours, own_extras.len()))
+                .chain(racers.iter().zip(&guest_extras).flat_map(|(g, e)| std::iter::repeat_n(g.hard, e.len())))
                 .chain(std::iter::repeat_n(ours, bots))
                 .chain(watchers.iter().map(|g| g.hard))
                 .collect();
@@ -1290,9 +1352,11 @@ pub(crate) async fn run(
             host.ready_from.clear();
             host.racing = true;
             race_info = Some((0, characters.clone(), roster.clone(), bots));
+            let locals = new_plan.locals_of(me);
             plan = Some(new_plan);
             io.event(Event::Started {
                 slot: 0,
+                locals,
                 characters,
                 players: roster,
                 track,
@@ -1312,7 +1376,7 @@ pub(crate) async fn run(
                 }
                 links
                     .entry(id)
-                    .or_insert_with(|| Link::new(connection.clone(), epoch, plan.bot_streams(me, id)));
+                    .or_insert_with(|| Link::new(connection.clone(), epoch, plan.streams(me, id)));
                 false
             });
         }

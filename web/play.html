@@ -533,6 +533,16 @@ async function keepAwake() {
 }
 document.addEventListener("visibilitychange", keepAwake);
 
+// The warnings and errors the game logged (`console.rs`), kept for a crash: a tablet's browser has
+// no console to look at.
+const logged = [];
+window.ctrLog = (line) => {
+  if (logged[logged.length - 1] === line) return;
+  logged.push(line);
+  if (logged.length > 200) logged.shift();
+};
+const report = () => (logged.length === 0 ? "" : `\n\nLogged before it:\n${logged.join("\n")}`);
+
 let crash = null;
 function crashed(message) {
   if (crash !== null) return;
@@ -543,7 +553,7 @@ function crashed(message) {
   document.activeElement?.blur();
   touchGame.hidden = touchLine.hidden = true;
   drop.classList.remove("hidden", "busy", "over");
-  document.getElementById("detail").textContent = message;
+  document.getElementById("detail").textContent = message + report();
   document.getElementById("detail").hidden = false;
   document.getElementById("note").hidden = true;
   let kept = false;
@@ -562,7 +572,7 @@ function crashed(message) {
   ]);
 }
 function copyCrash() {
-  navigator.clipboard.writeText(`ctr-rs crashed\n\n${crash}\n\n${navigator.userAgent}`).then(
+  navigator.clipboard.writeText(`ctr-rs crashed\n\n${crash}${report()}\n\n${navigator.userAgent}`).then(
     () => (status.textContent = "The error is copied"),
     (e) => console.warn(`could not copy: ${e}`),
   );

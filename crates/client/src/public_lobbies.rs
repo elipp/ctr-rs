@@ -16,6 +16,8 @@ pub enum Status {
     /// The lobbies, the ones we can join first, then the fullest.
     Loaded(Vec<net::PublicLobby>),
     Failed,
+    /// The realm speaks another protocol than this build: the game needs an update.
+    Outdated,
 }
 
 #[derive(Resource, Default)]
@@ -65,6 +67,10 @@ pub fn poll(mut lobbies: ResMut<PublicLobbies>) {
             debug!("the realm lists {} lobbies", found.len());
             sort(&mut found);
             Status::Loaded(found)
+        }
+        Err(net::BrowseError::Outdated) => {
+            warn!("the realm speaks another protocol: the game needs an update");
+            Status::Outdated
         }
         Err(why) => {
             warn!("could not fetch the public lobbies: {why}");

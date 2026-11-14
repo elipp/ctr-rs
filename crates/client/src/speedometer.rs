@@ -15,6 +15,7 @@ use vehicle::calc::map_to_range;
 use crate::config::Config;
 use crate::controls::Control;
 use crate::hud;
+use crate::hud_view::{HudView, HudViews};
 use crate::hud::{atlas_image, pack_icons};
 use crate::pause::PauseMenu;
 
@@ -125,11 +126,11 @@ impl UiMaterial for NeedleMaterial {
     }
 }
 
-/// Made once, and kept across levels, which take the nodes away.
+/// Made once, and kept across levels, which take the nodes away. (The needle's material is each
+/// view's own.)
 #[derive(Resource)]
 struct Art {
     dial: Handle<Image>,
-    needle: Handle<NeedleMaterial>,
     digits: Vec<Handle<Image>>,
 }
 
@@ -191,22 +192,23 @@ fn smooth_image(atlas: Atlas, images: &mut Assets<Image>) -> Handle<Image> {
 
 fn show(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
+    hud: HudViews,
     showing: Res<ShowSpeedometer>,
     textures: Res<crate::Textures>,
     art: Option<Res<Art>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<NeedleMaterial>>,
-    mut parts: Query<&mut Visibility, With<Part>>,
-    mut fills: Query<(&mut Node, &mut BackgroundColor), With<BarFill>>,
-    mut slots: Query<(&DigitSlot, &mut ImageNode)>,
-    mut drawn_angle: Local<Option<i32>>,
+    mut parts: Query<(&HudView, &mut Visibility), With<Part>>,
+    needles: Query<(&HudView, &MaterialNode<NeedleMaterial>)>,
+    mut fills: Query<(&HudView, &mut Node, &mut BackgroundColor), With<BarFill>>,
+    mut slots: Query<(&HudView, &DigitSlot, &mut ImageNode)>,
+    // The angle each view's needle was drawn at.
+    mut drawn_angles: Local<Vec<Option<i32>>>,
 ) {
     let Some(art) = art else {
         let font = digits(&pack_icons(), &textures.vram).unwrap_or_default();
         commands.insert_resource(Art {
             dial: smooth_image(dial(), &mut images),
-            needle: materials.add(NeedleMaterial::at(LOW_ANGLE)),
             digits: font
                 .into_iter()
                 .map(|d| atlas_image(d, &mut images))
@@ -214,8 +216,13 @@ fn show(
         });
         return;
     };
-    if parts.is_empty() {
-        spawn(&mut commands, &art);
+    let missing = hud.missing(parts.iter().map(|(v, _)| *v));
+    if !missing.is_empty() {
+        // (The new needles are at rest.)
+        drawn_angles.clear();
+        for view in missing {
+            spawn(&mut commands, &art, &mut materials, view);
+        }
         return;
     }
     let visibility = if showing.0 {
@@ -223,28 +230,37 @@ fn show(
     } else {
         Visibility::Hidden
     };
-    for mut part in &mut parts {
+    for (_, mut part) in &mut parts {
         part.set_if_neq(visibility);
     }
     if !showing.0 {
         return;
     }
 
-    let d = sim.driver();
-    let angle = needle_angle(
-        d.speedometer_needle_value as i32,
-        d.stats.accel_speed_class_stat as i32,
-        d.stats.sacred_fire_speed as i32,
-    );
-    if *drawn_angle != Some(angle)
-        && let Some(mut material) = materials.get_mut(&art.needle)
-    {
-        *material = NeedleMaterial::at(angle);
-        *drawn_angle = Some(angle);
+    drawn_angles.resize(hud.len(), None);
+    for (&HudView(view), needle) in &needles {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
+        let d = kart.driver;
+        let angle = needle_angle(
+            d.speedometer_needle_value as i32,
+            d.stats.accel_speed_class_stat as i32,
+            d.stats.sacred_fire_speed as i32,
+        );
+        if drawn_angles[view] != Some(angle)
+            && let Some(mut material) = materials.get_mut(&needle.0)
+        {
+            *material = NeedleMaterial::at(angle);
+            drawn_angles[view] = Some(angle);
+        }
     }
 
-    let jump = d.jump_meter as i32;
-    for (mut node, mut background) in &mut fills {
+    for (&HudView(view), mut node, mut background) in &mut fills {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
+        let jump = kart.driver.jump_meter as i32;
         // The outline covers the bar's top row.
         let height = hud::y((jump * BAR_HEIGHT / JUMP_MAX).clamp(0, BAR_HEIGHT - 1) as f32);
         if node.height != height {
@@ -252,9 +268,12 @@ fn show(
         }
         background.set_if_neq(BackgroundColor(bar_color(jump)));
     }
-    let shown = jump_digits(jump);
-    for (slot, mut node) in &mut slots {
-        let image = &art.digits[shown[slot.0]];
+    for (&HudView(view), slot, mut node) in &mut slots {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
+        let jump = kart.driver.jump_meter as i32;
+        let image = &art.digits[jump_digits(jump)[slot.0]];
         if node.image != *image {
             node.image = image.clone();
         }
@@ -275,7 +294,12 @@ fn at(x: i32, y: i32, width: i32, height: i32) -> Node {
 
 /// The dial goes under the slide meter and the rest over it, so they are two nodes either side of
 /// its `ZIndex`. Like the rest of the HUD they are placed from the window's bottom right.
-fn spawn(commands: &mut Commands, art: &Art) {
+fn spawn(
+    commands: &mut Commands,
+    art: &Art,
+    materials: &mut Assets<NeedleMaterial>,
+    view: usize,
+) {
     let place = Node {
         position_type: PositionType::Absolute,
         right: hud::x((hud::WIDTH - LEFT - WIDTH as i32) as f32),
@@ -288,6 +312,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         |image: &Handle<Image>| ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch);
     commands.spawn((
         Part,
+        HudView(view),
         picture(&art.dial),
         place.clone(),
         ZIndex(0),
@@ -297,6 +322,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
     let overlay = commands
         .spawn((
             Part,
+            HudView(view),
             place,
             ZIndex(crate::slide_meter::Z + 1),
             Visibility::Hidden,
@@ -324,6 +350,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         ChildOf(overlay),
         children![(
             BarFill,
+            HudView(view),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::ZERO,
@@ -352,6 +379,7 @@ fn spawn(commands: &mut Commands, art: &Art) {
         for (n, x) in DIGITS_X.into_iter().enumerate() {
             commands.spawn((
                 DigitSlot(n),
+                HudView(view),
                 picture(&art.digits[0]),
                 at(
                     JUMP_X + x,
@@ -365,7 +393,8 @@ fn spawn(commands: &mut Commands, art: &Art) {
         }
     }
     commands.spawn((
-        MaterialNode(art.needle.clone()),
+        MaterialNode(materials.add(NeedleMaterial::at(LOW_ANGLE))),
+        HudView(view),
         at(LEFT, TOP, WIDTH as i32, HEIGHT as i32),
         Pickable::IGNORE,
         ChildOf(overlay),

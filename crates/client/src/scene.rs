@@ -393,9 +393,17 @@ pub(crate) fn restart_drive(world: &mut World, options: Options) {
 /// ordered among themselves by depth, and never hidden by the track.
 pub(crate) const KART_LAYER: usize = 1;
 
+/// The render layer of the kart of local player `slot` (0 is ours), and what goes with it: the
+/// layer that the camera over that player's picture draws, and the other players' main cameras
+/// draw as well, so that each sees the others' karts in the world.
+pub(crate) fn player_layer(slot: usize) -> usize {
+    if slot == 0 { KART_LAYER } else { 20 + slot }
+}
+
 /// The cameras that draw over the picture of the main one: the one for [`KART_LAYER`], and the
-/// HUD's (`wumpa_icon` and `tracker`). The systems that follow "the camera" (the wheels' view, the smoke, the
-/// skid marks) look for the main camera, which has not got this.
+/// HUD's (`wumpa_icon` and `tracker`), and the cameras of the local players after the first. The
+/// systems that follow "the camera" (the wheels' view, the smoke, the skid marks) look for the
+/// main camera, which has not got this.
 #[derive(Component)]
 pub(crate) struct OverlayCamera;
 
@@ -502,6 +510,7 @@ pub(crate) fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+    mut billboard_materials: ResMut<Assets<crate::billboard::BillboardMaterial>>,
     driving: Option<Res<drive::Drive>>,
     wheel_icons: Res<WheelIcons>,
     smoke_icon: Res<crate::SmokeIcon>,
@@ -639,7 +648,7 @@ pub(crate) fn setup(
         &mut commands,
         &mut images,
         &mut meshes,
-        &mut materials,
+        &mut billboard_materials,
     );
     let specs: Vec<race::KartSpec> = driving.iter().map(|d| d.spec()).collect();
     let sim = props::Sim::new(level, objects, &specs);
@@ -681,6 +690,8 @@ pub(crate) fn setup(
             projection.clone(),
             Transform::default(),
             drive::ChaseCamera::new(),
+            drive::MainView(0),
+            drive::ViewOf(0),
         ));
         // The heat shimmer, a pass over the whole picture: Tiger Temple's flame jets have it, and
         // the warpball's glow on every track.
@@ -696,6 +707,7 @@ pub(crate) fn setup(
                 },
                 projection,
                 Transform::default(),
+                drive::ViewOf(0),
                 RenderLayers::layer(KART_LAYER),
                 // The clock's trail is over the world and our kart, which this camera draws last.
                 crate::clock::ClockTrail::default(),
@@ -710,7 +722,7 @@ pub(crate) fn setup(
             crate::pixel::OnWindow,
             Camera3d::default(),
             Camera {
-                order: 3,
+                order: crate::pixel::FIGURES_ORDER,
                 clear_color: ClearColorConfig::None,
                 ..default()
             },

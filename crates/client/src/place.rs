@@ -11,6 +11,7 @@ use render::place::{Digit, suffix};
 
 use crate::font::CtrText;
 use crate::hud;
+use crate::hud_view::{HudView, HudViews};
 
 /// How big a unit of the digits' models is drawn, in pixels of retail's screen across and lines
 /// down: in a retail screenshot the "1", 42 units wide and 55 tall, is about 52 pixels wide and
@@ -82,48 +83,55 @@ impl Plugin for PlacePlugin {
 
 fn show(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
+    hud: HudViews,
     lobby: Res<crate::lobby::Lobby>,
     digits: Res<BigDigits>,
-    mut hud: Query<&mut Visibility, With<PlaceHud>>,
+    mut huds: Query<(&HudView, &mut Visibility, &Children), With<PlaceHud>>,
     mut digit: Query<(&mut ImageNode, &mut Node), With<BigDigit>>,
     mut suffixes: Query<&mut CtrText, With<Suffix>>,
 ) {
-    let Ok(mut visibility) = hud.single_mut() else {
+    for view in hud.missing(huds.iter().map(|(v, ..)| *v)) {
         // The first frame, or of a new level (which took the nodes away).
-        spawn(&mut commands);
-        return;
-    };
-    // `driverRank` is -1 until the kart has a place.
-    let rank = sim.driver().driver_rank;
-    let place = usize::try_from(rank).ok().map(|rank| rank + 1);
-    let shown = place.filter(|&p| lobby.online.is_some() && p <= digits.0.len());
-    visibility.set_if_neq(if shown.is_some() {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    });
-    let Some(place) = shown else {
-        return;
-    };
-    let (image, size) = &digits.0[place - 1];
-    for (mut digit, mut node) in &mut digit {
-        if digit.image != *image {
-            digit.image = image.clone();
-            node.width = Val::Px(size.x);
-            node.height = Val::Px(size.y);
-        }
+        spawn(&mut commands, view);
     }
-    for mut text in &mut suffixes {
-        if text.text != suffix(place) {
-            text.text = suffix(place).to_string();
+    for (&HudView(view), mut visibility, children) in &mut huds {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
+        // `driverRank` is -1 until the kart has a place.
+        let rank = kart.driver.driver_rank;
+        let place = usize::try_from(rank).ok().map(|rank| rank + 1);
+        let shown = place.filter(|&p| lobby.online.is_some() && p <= digits.0.len());
+        visibility.set_if_neq(if shown.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+        let Some(place) = shown else {
+            continue;
+        };
+        let (image, size) = &digits.0[place - 1];
+        for &child in children {
+            if let Ok((mut digit, mut node)) = digit.get_mut(child)
+                && digit.image != *image
+            {
+                digit.image = image.clone();
+                node.width = Val::Px(size.x);
+                node.height = Val::Px(size.y);
+            }
+            if let Ok(mut text) = suffixes.get_mut(child)
+                && text.text != suffix(place)
+            {
+                text.text = suffix(place).to_string();
+            }
         }
     }
 }
 
-fn spawn(commands: &mut Commands) {
+fn spawn(commands: &mut Commands, view: usize) {
     commands.spawn((
         PlaceHud,
+        HudView(view),
         Node {
             position_type: PositionType::Absolute,
             left: hud::x(LEFT),

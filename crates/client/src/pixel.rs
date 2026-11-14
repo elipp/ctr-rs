@@ -8,22 +8,16 @@
 //! the scale is 1: what is drawn in the scene by "the screen" reads it, and not the window's. A
 //! spot in the scene's picture is put on the window by [`RenderSize::to_window`].
 
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::camera::visibility::RenderLayers;
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::camera::{ClearColorConfig, RenderTarget};
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::render::render_resource::TextureFormat;
 use bevy::window::PrimaryWindow;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::config::Config;
 
 /// The render layer of the picture on the window, which only its camera draws.
-#[cfg(not(target_arch = "wasm32"))]
 const LAYER: usize = 6;
 
 /// The most the scale can be.
@@ -72,12 +66,23 @@ pub struct OnWindow;
 pub struct OwnTarget;
 
 /// The order of the camera that puts the picture on the window: after the scene's cameras, which
-/// draw into the picture, and before the HUD's ([`OnWindow`]), which draw over it.
-#[cfg(not(target_arch = "wasm32"))]
-pub const PRESENT_ORDER: isize = 2;
+/// draw into the picture (the players' are at `10 * view`, `drive::split`), and before the HUD's
+/// ([`OnWindow`]), which draw over it. (Without the scale there is no such camera, and the HUD's
+/// are over the scene's all the same.)
+pub const PRESENT_ORDER: isize = 100;
+
+/// The orders of the HUD's cameras, over the picture. In a split screen each player has one of
+/// each (the order is the first plus the view): the one that draws what goes under the figures
+/// (the weapon's glows), the one that draws the figures (the fruit and the tracker), and the one
+/// that draws the rest of the HUD over them (`drive::HudCamera`).
+pub const UNDER_ORDER: isize = PRESENT_ORDER + 1;
+pub const FIGURES_ORDER: isize = PRESENT_ORDER + 10;
+pub const HUD_ORDER: isize = PRESENT_ORDER + 20;
+/// The order of the camera that the window's own UI goes to in a split screen (the menus, the
+/// console, the toasts): over every player's HUD, which has cameras of their own.
+pub const UI_ORDER: isize = PRESENT_ORDER + 50;
 
 /// The image that the scene's cameras draw into, while the scale is not 1.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource, Default)]
 struct Target(Option<Handle<Image>>);
 
@@ -91,12 +96,9 @@ impl Plugin for PixelPlugin {
             shown: 1.0,
             window: Vec2::ONE,
         });
-        // The browser has no pixel scale (the page's `render-scale` sizes the canvas instead):
-        // the scene's cameras always draw into the canvas, and Bevy picks the UI's camera itself.
-        #[cfg(not(target_arch = "wasm32"))]
+        // (The browser has no pixel scale, the page's `render-scale` sizes the canvas instead: the
+        // scale is 1 there, and the picture is only for a split screen.)
         app.init_resource::<Target>().add_systems(PreUpdate, follow);
-        #[cfg(target_arch = "wasm32")]
-        app.add_systems(PreUpdate, follow_window);
     }
 }
 
@@ -128,15 +130,6 @@ fn set_size(size: &mut ResMut<RenderSize>, wanted: RenderSize) {
     }
 }
 
-/// The browser's: what the cameras draw into is the canvas.
-#[cfg(target_arch = "wasm32")]
-fn follow_window(mut size: ResMut<RenderSize>, windows: Query<&Window, With<PrimaryWindow>>) {
-    if let Ok(window) = windows.single() {
-        set_size(&mut size, render_size(window, 1));
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 /// The camera that puts the picture on the window, and the picture, `shown` that big.
 fn spawn_present(
     commands: &mut Commands,
@@ -171,11 +164,17 @@ fn spawn_present(
         .id()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn target_image(size: UVec2) -> Image {
+    let (width, height) = (size.x.max(1), size.y.max(1));
+    // WebGL2 has no view formats (a texture seen as another format): the sRGB texture itself,
+    // which the cameras and the sprite see the same way as the view of the other.
+    #[cfg(target_arch = "wasm32")]
+    let mut image =
+        Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
+    #[cfg(not(target_arch = "wasm32"))]
     let mut image = Image::new_target_texture(
-        size.x.max(1),
-        size.y.max(1),
+        width,
+        height,
         TextureFormat::Rgba8Unorm,
         Some(TextureFormat::Rgba8UnormSrgb),
     );
@@ -183,7 +182,6 @@ fn target_image(size: UVec2) -> Image {
     image
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Sizes the picture to the window and the scale, points the scene's cameras at it (or back at
 /// the window when the scale is 1), and puts it on the window.
 ///
@@ -206,7 +204,8 @@ fn follow(
     present: Query<Entity, With<Present>>,
     mut commands: Commands,
     default_ui: Query<Entity, With<IsDefaultUiCamera>>,
-    mut last: Local<Option<(UVec2, u32, f32)>>,
+    drive: Option<Res<crate::drive::Drive>>,
+    mut last: Local<Option<(UVec2, u32, f32, bool)>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -215,8 +214,13 @@ fn follow(
     let wanted = render_size(window, scale);
     set_size(&mut size, wanted);
 
-    let on = scale > 1;
-    let key = (wanted.physical, scale, window.scale_factor());
+    // A split screen always has the picture, even at scale 1: the views are in parts of one
+    // texture that the cameras of a window share, and the cameras over it (the HUD's) draw that
+    // texture whole, which has only the last view's part right. The picture is a target of its own
+    // that they do not share.
+    let split = drive.is_some_and(|d| d.views().len() > 1);
+    let on = scale > 1 || split;
+    let key = (wanted.physical, scale, window.scale_factor(), on);
     let moved = *last != Some(key);
     *last = Some(key);
 

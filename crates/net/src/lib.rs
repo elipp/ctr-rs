@@ -28,7 +28,7 @@ pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 pub use n0_future::time::Instant;
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
 pub use realm::{
-    Browse, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public, PublicLobby,
+    Browse, BrowseError, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public, PublicLobby,
     browse, default_realm, lobby_name,
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
@@ -158,13 +158,13 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/16";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/17";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
 /// one, the host's pair with each guest included, so the host is no different from the others
 /// to the network.
-pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/2";
+pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/3";
 
 /// The most karts a race has: the host's bots fill it up to this (see [`Session::set_bots`]).
 pub const MAX_PLAYERS: usize = 8;
@@ -231,6 +231,10 @@ pub enum Event {
     /// kind of bot or the other): every client adds them to its race and drives them itself.
     Started {
         slot: usize,
+        /// Our slots: `slot` first, then the ones of our extra players (split screen), in the
+        /// order of their [`Session::extra_input`] pads. (Not the host's bots.) A spectator has
+        /// none.
+        locals: Vec<usize>,
         characters: Vec<u8>,
         players: Vec<EndpointId>,
         track: u32,
@@ -319,6 +323,8 @@ pub struct Player {
     pub id: EndpointId,
     /// What it drives (`GAME_CHARACTER_IDS` order).
     pub character: u8,
+    /// What the other players at its machine drive (split screen), each in a slot of its own.
+    pub extras: Vec<u8>,
     /// What it wants to be called, empty for none (see [`display_names`]).
     pub nick: String,
 }
@@ -372,6 +378,7 @@ impl PeerInfo {
 }
 
 enum Command {
+    Extras(Vec<u8>),
     Start {
         track: u32,
         hash: u64,
@@ -409,6 +416,7 @@ enum Command {
         pads: Vec<Pad>,
     },
     Input(Pad),
+    ExtraInput(Vec<Pad>),
     BotInput(Vec<Pad>),
     Bots(Vec<u8>),
     Checksum {
@@ -503,6 +511,13 @@ impl Session {
         let _ = self.commands.send(Command::Character(character));
     }
 
+    /// Changes the characters of the other players at our machine, for the race that has not
+    /// started yet, as `set_character` does ours. Like it, nothing changes while the host has
+    /// characters fixed (or if we only watch). Cut to fit with [`MAX_PLAYERS`].
+    pub fn set_extras(&self, extras: &[u8]) {
+        let _ = self.commands.send(Command::Extras(clean_extras(extras)));
+    }
+
     /// Fixes what everyone drives (`locked`), or frees it again, if we host the lobby: while it
     /// is fixed, no change of character is taken, ours or a guest's (a guest that joins keeps the
     /// one it joined with). Everyone is told in [`Event::Lobby`].
@@ -547,9 +562,16 @@ impl Session {
         let _ = self.commands.send(Command::Input(pad));
     }
 
+    /// The pads of our extra players (split screen) for the tick being played, one for each in
+    /// the order of their slots (`locals` of [`Event::Started`], after the first). They go out
+    /// with our own pad of the tick, so they come before its [`input`](Self::input).
+    pub fn extra_input(&self, pads: Vec<Pad>) {
+        let _ = self.commands.send(Command::ExtraInput(pads));
+    }
+
     /// The host's: the pads of its bots for the tick being played, one for each in the order of
     /// their slots (see [`Event::Started`]). They go out with our own pad of the tick, so they
-    /// come before its [`input`](Self::input).
+    /// come before its [`input`](Self::input) (and after the [`extra_input`](Self::extra_input)).
     pub fn bot_input(&self, pads: Vec<Pad>) {
         let _ = self.commands.send(Command::BotInput(pads));
     }
@@ -626,22 +648,26 @@ impl Io {
 }
 
 /// Opens a lobby, driving `character` and called `nick` (empty for none, see [`clean_nick`]).
+/// `extras` are the characters of the other players at our machine (split screen); a race takes
+/// up to [`MAX_PLAYERS`] players in all, so the ones that do not fit are left out.
 /// [`Event::Open`] comes once it can be reached.
 ///
 /// `build` is the version of the sim (`race::SIM_VERSION`): a guest with another is turned away.
-pub fn host(character: u8, nick: &str, build: u32) -> Session {
+pub fn host(character: u8, extras: &[u8], nick: &str, build: u32) -> Session {
     let nick = clean_nick(nick);
+    let extras = clean_extras(extras);
     spawn(move |endpoint, io| {
-        Box::pin(run(endpoint, io, Role::Host, character, nick, build, false))
+        Box::pin(run(endpoint, io, Role::Host, character, extras, nick, build, false))
     })
 }
 
-/// Joins the lobby of `ticket`, driving `character` and called `nick`.
+/// Joins the lobby of `ticket`, driving `character` and called `nick`, with `extras` as in
+/// [`host`].
 ///
 /// `build` is the version of the sim (`race::SIM_VERSION`): the host turns us away if its own is
 /// another.
-pub fn join(ticket: Ticket, character: u8, nick: &str, build: u32) -> Session {
-    enter(ticket, character, nick, build, false)
+pub fn join(ticket: Ticket, character: u8, extras: &[u8], nick: &str, build: u32) -> Session {
+    enter(ticket, character, clean_extras(extras), nick, build, false)
 }
 
 /// Joins the lobby of `ticket` to watch: we are not one of the players of its races and make no
@@ -649,10 +675,10 @@ pub fn join(ticket: Ticket, character: u8, nick: &str, build: u32) -> Session {
 /// after the last player ([`Event::Started`]'s `slot` is past its `characters`), and in no
 /// [`Event::Lobby`]. `build` is as in [`join`].
 pub fn spectate(ticket: Ticket, nick: &str, build: u32) -> Session {
-    enter(ticket, 0, nick, build, true)
+    enter(ticket, 0, Vec::new(), nick, build, true)
 }
 
-fn enter(ticket: Ticket, character: u8, nick: &str, build: u32, spectator: bool) -> Session {
+fn enter(ticket: Ticket, character: u8, extras: Vec<u8>, nick: &str, build: u32, spectator: bool) -> Session {
     let nick = clean_nick(nick);
     spawn(move |endpoint, io| {
         Box::pin(run(
@@ -660,11 +686,17 @@ fn enter(ticket: Ticket, character: u8, nick: &str, build: u32, spectator: bool)
             io,
             Role::Join(ticket),
             character,
+            extras,
             nick,
             build,
             spectator,
         ))
     })
+}
+
+/// The extra players a machine can have: no more than the race has room for besides the first.
+fn clean_extras(extras: &[u8]) -> Vec<u8> {
+    extras.iter().copied().take(MAX_PLAYERS - 1).collect()
 }
 
 type Task = std::pin::Pin<Box<dyn Future<Output = Result<(), Error>>>>;

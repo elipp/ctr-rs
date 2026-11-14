@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 
 use crate::hud;
+use crate::hud_view::{HudView, HudViews};
 use crate::speedometer::ShowSpeedometer;
 
 /// Where the bar's bottom right corner is on retail's screen (`UI_HUD_SLOT_SLIDE_METER`), and its
@@ -42,13 +43,13 @@ fn fill(room_left: i32, max_room: i32) -> i32 {
             .unwrap_or(0)
 }
 
-/// The bar, outline and all.
+/// The fill of the bar of local player `.0`.
+#[derive(Component)]
+struct Fill(usize);
+
+/// The bar of a local player, outline and all.
 #[derive(Component)]
 struct SlideMeter;
-
-/// Its fill.
-#[derive(Component)]
-struct Fill;
 
 pub struct SlideMeterPlugin;
 
@@ -58,47 +59,54 @@ impl Plugin for SlideMeterPlugin {
     }
 }
 
+/// Shows the meter of each local player, in the player's part of the screen when there are
+/// several (`hud_view`).
 fn show(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
+    hud: HudViews,
     showing: Res<ShowSpeedometer>,
-    mut meter: Query<&mut Visibility, With<SlideMeter>>,
-    mut fills: Query<(&mut Node, &mut BackgroundColor), With<Fill>>,
+    mut meters: Query<(&HudView, &mut Visibility), With<SlideMeter>>,
+    mut fills: Query<(&Fill, &mut Node, &mut BackgroundColor)>,
 ) {
-    let Ok(mut visibility) = meter.single_mut() else {
+    for view in hud.missing(meters.iter().map(|(v, _)| *v)) {
         // The first frame, or of a new level (which took the nodes away).
-        spawn(&mut commands);
-        return;
-    };
-    let d = sim.driver();
-    let finished = d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    visibility.set_if_neq(if finished && !showing.0 {
-        Visibility::Hidden
-    } else {
-        Visibility::Inherited
-    });
-    let room_left = d.turbo_meter_room_left as i32;
-    let length = fill(room_left, d.stats.turbo_max_room as i32);
-    let color = if (d.stats.turbo_low_room_warning as i32) * ELAPSED_MS < room_left {
-        FILLING
-    } else {
-        READY
-    };
-    for (mut node, mut background) in &mut fills {
-        // The outline covers the bar's first column.
-        let width = hud::x(length.clamp(0, WIDTH - 1) as f32);
-        if node.width != width {
-            node.width = width;
+        spawn(&mut commands, view);
+    }
+    for (&HudView(view), mut visibility) in &mut meters {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
+        let d = kart.driver;
+        let finished = d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+        visibility.set_if_neq(if finished && !showing.0 {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+        let room_left = d.turbo_meter_room_left as i32;
+        let length = fill(room_left, d.stats.turbo_max_room as i32);
+        let color = if (d.stats.turbo_low_room_warning as i32) * ELAPSED_MS < room_left {
+            FILLING
+        } else {
+            READY
+        };
+        for (_, mut node, mut background) in fills.iter_mut().filter(|(f, _, _)| f.0 == view) {
+            // The outline covers the bar's first column.
+            let width = hud::x(length.clamp(0, WIDTH - 1) as f32);
+            if node.width != width {
+                node.width = width;
+            }
+            background.set_if_neq(BackgroundColor(color));
         }
-        background.set_if_neq(BackgroundColor(color));
     }
 }
 
-fn spawn(commands: &mut Commands) {
+fn spawn(commands: &mut Commands, view: usize) {
     // The outline is a line on the bar's first column and row, and one just past its last: the
     // node is a pixel wider and taller than the bar, its border those lines.
     commands.spawn((
         SlideMeter,
+        HudView(view),
         Node {
             position_type: PositionType::Absolute,
             right: hud::x((hud::WIDTH - RIGHT - 1) as f32),
@@ -113,7 +121,7 @@ fn spawn(commands: &mut Commands) {
         ZIndex(Z),
         Pickable::IGNORE,
         children![(
-            Fill,
+            Fill(view),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::ZERO,

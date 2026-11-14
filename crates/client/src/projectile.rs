@@ -30,7 +30,8 @@ use render::explosion::{Playback, tint};
 use render::mesh::{self, MeshPart, PARTS, SCALE};
 use render::projectile::{BURST_DROP, Models, NITRO_COLOR, TNT_COLOR, loop_frame};
 
-use crate::drive::{ChaseCamera, animation_pose, rotation_of};
+use crate::billboard::FacesView;
+use crate::drive::{animation_pose, rotation_of};
 use crate::props::Sim;
 use crate::subtract::SubtractMaterial;
 use crate::{DEPTH_BIAS_PER_ORDER, KART_LAYER, Textures, spawn_parts};
@@ -409,8 +410,8 @@ pub fn tick(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     mut bodies: Query<(Entity, &mut Body, Option<&Children>)>,
     mut effects: Query<(Entity, &mut Effect, &Transform)>,
-    cameras: Query<&Transform, (With<ChaseCamera>, Without<Body>, Without<Effect>)>,
-    mut flash: ResMut<crate::flash::Flash>,
+    cameras: Query<(&crate::drive::MainView, &Transform), (Without<Body>, Without<Effect>)>,
+    mut flash: ResMut<crate::flash::Flashes>,
     mut last: Local<Option<u32>>,
 ) {
     // Once per tick of the sim, however often the system is scheduled.
@@ -475,17 +476,20 @@ pub fn tick(
 
     // The bursts there are: the next frame, until the animation is over.
     if !restarted {
-        let view = cameras.single().ok().map(|c| c.to_matrix().inverse());
+        // Each view's camera, as the matrix from the world to it.
+        let views: Vec<(usize, Mat4)> = cameras
+            .iter()
+            .map(|(view, camera)| (view.0, camera.to_matrix().inverse()))
+            .collect();
         for (entity, mut effect, transform) in &mut effects {
             if !effect.playback.advance() {
                 commands.entity(entity).despawn();
                 continue;
             }
-            if effect.flashes
-                && effect.playback.frame == 1
-                && let Some(view) = view
-            {
-                flash.proximity(view.transform_point3(transform.translation) / SCALE);
+            if effect.flashes && effect.playback.frame == 1 {
+                for &(view, matrix) in &views {
+                    flash.proximity(view, matrix.transform_point3(transform.translation) / SCALE);
+                }
             }
             set_frame(
                 &effect.header,
@@ -515,6 +519,9 @@ pub fn tick(
             .animations
             .first()
             .map_or(0, |a| a.num_frames as i16);
+        if !matches!(facing, Facing::Fixed(_)) {
+            commands.entity(entity).insert(FacesView);
+        }
         commands.entity(entity).insert(Effect {
             header: model.header.clone(),
             parts,
@@ -622,11 +629,15 @@ pub fn tick(
             &mut subtract_materials,
             w.layer,
         );
+        let billboard = w.billboard || model.header.points_to_camera();
+        if billboard {
+            commands.entity(entity).insert(FacesView);
+        }
         commands.entity(entity).insert(Body {
             id: w.id,
             layer: w.layer,
             frame: 0,
-            billboard: w.billboard || model.header.points_to_camera(),
+            billboard,
             header: model.header.clone(),
             parts,
             previous: w.placed,
@@ -638,7 +649,6 @@ pub fn tick(
 /// Puts the weapons between the last two ticks, and turns the bursts to the camera.
 pub fn place(
     fixed: Res<Time<Fixed>>,
-    cameras: Query<&Transform, (With<ChaseCamera>, Without<Body>, Without<Effect>)>,
     mut bodies: Query<(&Body, &mut Transform), Without<Effect>>,
     mut effects: Query<(&Effect, &mut Transform), Without<Body>>,
 ) {
@@ -649,20 +659,17 @@ pub fn place(
         transform.rotation = a.rotation.slerp(b.rotation, t);
         transform.scale = a.scale.lerp(b.scale, t);
     }
-    let camera = cameras.single().ok().map(|c| c.rotation);
+    // What faces the view has a rotation relative to the view's (`FacesView`).
     for (body, mut transform) in &mut bodies {
-        if let (true, Some(camera)) = (body.billboard, camera) {
-            transform.rotation = camera;
+        if body.billboard {
+            transform.rotation = Quat::IDENTITY;
         }
     }
     for (effect, mut transform) in &mut effects {
-        transform.rotation = match (effect.facing, camera) {
-            (Facing::Fixed(rotation), _) => rotation,
-            (Facing::Camera, Some(camera)) => camera,
-            (Facing::CameraQuarter, Some(camera)) => {
-                camera * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)
-            }
-            _ => continue,
+        transform.rotation = match effect.facing {
+            Facing::Fixed(rotation) => rotation,
+            Facing::Camera => Quat::IDENTITY,
+            Facing::CameraQuarter => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
         };
     }
 }

@@ -8,6 +8,9 @@ pub struct Online {
     /// Our place in the roster: our player, or, past the last of them, a spectator's (see
     /// [`Online::spectating`]).
     pub slot: usize,
+    /// The slots that are ours: `slot` first, then our other local players' (split screen), each
+    /// on a view of its own. The host's bots are not among them.
+    pub locals: Vec<usize>,
     /// The character each slot drives, which sets its kart's stats.
     pub characters: Vec<u8>,
     /// How many of the players are the host's bots, the last of them (see [`Online::is_bot`]).
@@ -105,6 +108,11 @@ impl Online {
     /// Whether `slot` is one of the host's bots.
     pub fn is_bot(&self, slot: usize) -> bool {
         self.bot_slots().contains(&slot)
+    }
+
+    /// Whether `slot` is one of our local players (a split screen's other views too).
+    pub fn local(&self, slot: usize) -> bool {
+        self.locals.contains(&slot)
     }
 
     /// Whether the race has bots and they are ours: we host (the host is slot 0).

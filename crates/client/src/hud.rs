@@ -52,6 +52,7 @@ impl PluginGroup for HudPlugins {
             .add(crate::minimap::MinimapPlugin)
             .add(crate::heat::HeatPlugin)
             .add(crate::clock::ClockPlugin)
+            .add(crate::hud_view::HudViewPlugin)
             .add(crate::slide_meter::SlideMeterPlugin)
             .add(crate::speedometer::SpeedometerPlugin)
             .add(crate::toast::ToastPlugin)

@@ -60,6 +60,9 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         {
             net::NOT_NOW
         }
+        Action::Players(Some(_)) if lobby.is_open() || lobby.online.is_some() => {
+            "The players are set before joining: close the lobby first"
+        }
         Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
         Action::Character(_) if lobby.online.is_some() || lobby.characters_locked() => net::NOT_NOW,
         // (A host's countdown is to the track it is on.)
@@ -112,6 +115,7 @@ pub(super) fn run(
     mut actions: MessageReader<Action>,
     mut lobby: ResMut<Lobby>,
     drive: Res<crate::drive::Drive>,
+    chosen: Res<crate::drive::Chosen>,
     track: Res<crate::Track>,
     time: Res<Time<Real>>,
     mut smoothing: ResMut<crate::kart::Smoothing>,
@@ -119,6 +123,7 @@ pub(super) fn run(
     mut lag: ResMut<super::lag::FakeLag>,
     mut config: ResMut<crate::config::Config>,
     mut brains: ResMut<crate::learned::Brains>,
+    mut players: ResMut<crate::drive::LocalPlayers>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -127,10 +132,21 @@ pub(super) fn run(
             toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
+        // Whoever watches has no kart of its own: the other players go.
+        if matches!(action, Action::SpectateLobby(_)) && players.0 > 1 {
+            players.0 = 1;
+            toasts.write(Toast::new("Split screen is off while watching", 2500));
+        }
+        // The other local players join the lobby along with the first, each with the racer picked
+        // in its menu (by default the one that follows the one before). Their menus change it
+        // later, through `Lobby::set_extras`.
+        let extras: Vec<u8> = (1..players.0)
+            .map(|slot| chosen.character(slot, drive.character) as u8)
+            .collect();
         let now = time.elapsed_secs();
         let say = match action {
             Action::CreateLobby { public } => {
-                lobby.host(drive.character as u8, &config.nickname, public.as_deref());
+                lobby.host(drive.character as u8, &extras, &config.nickname, public.as_deref());
                 if public.is_some() {
                     "Creating public lobby..."
                 } else {
@@ -138,7 +154,7 @@ pub(super) fn run(
                 }
             }
             Action::JoinLobby(ticket) => {
-                lobby.join(ticket.clone(), drive.character as u8, &config.nickname);
+                lobby.join(ticket.clone(), drive.character as u8, &extras, &config.nickname);
                 "Joining lobby..."
             }
             Action::SpectateLobby(ticket) => {
@@ -232,6 +248,15 @@ pub(super) fn run(
                         toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
                     }
                 }
+                continue;
+            }
+            Action::Players(wanted) => {
+                if let Some(n) = wanted {
+                    players.0 = (*n as usize).clamp(1, crate::drive::MAX_PLAYERS);
+                }
+                let text = format!("{} player(s) on the screen", players.0);
+                console!("{text}");
+                toasts.write(Toast::new(text, 2500));
                 continue;
             }
             Action::Autopilot(on) => {

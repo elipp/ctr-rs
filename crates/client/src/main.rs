@@ -29,6 +29,7 @@ mod accordion;
 mod animation;
 mod assets;
 mod banner;
+mod billboard;
 mod command;
 mod confetti;
 mod config;
@@ -51,6 +52,7 @@ mod fx;
 mod clock;
 mod heat;
 mod hud;
+mod hud_view;
 mod kart;
 mod laps;
 mod learned;
@@ -119,9 +121,12 @@ pub(crate) use resources::*;
 pub(crate) use scene::*;
 
 /// What is logged. In a browser (WebGL2) Bevy says at the start which of its plugins the GPU
-/// cannot run, none of which the game uses: that is not for the console.
+/// cannot run, none of which the game uses: that is not for the console. Everywhere, our shaders
+/// are queued before Bevy's `mesh_bindings` module exists (it is added when the plugins finish),
+/// which the shader cache warns of once each and then resolves by itself: a shader that really
+/// fails to compile is still an error.
 fn log_filter() -> String {
-    let filter = bevy::log::DEFAULT_FILTER;
+    let filter = format!("{},bevy_shader::shader_cache=error", bevy::log::DEFAULT_FILTER);
     if cfg!(target_arch = "wasm32") {
         format!(
             "{filter},bevy_core_pipeline::oit=error,\
@@ -129,7 +134,7 @@ fn log_filter() -> String {
              bevy_pbr::ssao=error,bevy_pbr::atmosphere=error"
         )
     } else {
-        filter.to_string()
+        filter
     }
 }
 
@@ -332,8 +337,11 @@ fn main() {
         config::ConfigPlugin,
         probe::ProbePlugin,
         nav::NavPlugin,
+        billboard::BillboardPlugin,
+        skid::SkidPlugin,
         nav_edit::NavEditPlugin,
     ));
+    app.add_plugins(wheels::WheelsPlugin);
     app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
     app.add_systems(Update, fly.run_if(not(drive::driving)))
         .init_resource::<scene::Picked>()

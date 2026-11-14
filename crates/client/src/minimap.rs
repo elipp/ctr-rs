@@ -19,6 +19,7 @@ use render::minimap::{
 };
 
 use crate::hud;
+use crate::hud_view::{HudView, HudViews};
 use crate::hud::{atlas_image, pack_groups};
 use crate::{Textures, Track};
 
@@ -88,7 +89,8 @@ fn build(
     track: Res<Track>,
     textures: Res<Textures>,
     dots: Option<Res<DotImages>>,
-    maps: Query<Entity, With<Map>>,
+    hud: HudViews,
+    maps: Query<(Entity, &HudView), With<Map>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<MapMaterial>>,
     mut none: Local<bool>,
@@ -118,12 +120,25 @@ fn build(
             size,
         });
     }
-    if track.is_changed() {
-        *none = false;
-        for map in &maps {
+    // Retail has none in a split screen (it has a progress bar there, which is not made yet).
+    if hud.is_split() {
+        for (map, _) in &maps {
             commands.entity(map).despawn();
         }
-    } else if !maps.is_empty() || *none {
+        return;
+    }
+    let missing = if track.is_changed() {
+        *none = false;
+        for (map, _) in &maps {
+            commands.entity(map).despawn();
+        }
+        hud.iter().map(|v| v.view).collect()
+    } else if *none {
+        return;
+    } else {
+        hud.missing(maps.iter().map(|(_, v)| *v))
+    };
+    if missing.is_empty() {
         return;
     }
     let layout = Minimap::parse(&textures.dram).ok().flatten();
@@ -138,21 +153,25 @@ fn build(
         return;
     };
     let size = (picture.width, picture.height);
-    commands.spawn((
-        Map { layout, size },
-        MaterialNode(materials.add(MapMaterial {
-            picture: atlas_image(picture, &mut images),
-        })),
-        Node {
-            position_type: PositionType::Absolute,
-            right: hud::x((hud::WIDTH - RIGHT) as f32),
-            bottom: hud::y((hud::HEIGHT - BOTTOM) as f32),
-            width: hud::x(size.0 as f32),
-            height: hud::y(size.1 as f32),
-            ..default()
-        },
-        Pickable::IGNORE,
-    ));
+    let material = materials.add(MapMaterial {
+        picture: atlas_image(picture, &mut images),
+    });
+    for view in missing {
+        commands.spawn((
+            Map { layout, size },
+            HudView(view),
+            MaterialNode(material.clone()),
+            Node {
+                position_type: PositionType::Absolute,
+                right: hud::x((hud::WIDTH - RIGHT) as f32),
+                bottom: hud::y((hud::HEIGHT - BOTTOM) as f32),
+                width: hud::x(size.0 as f32),
+                height: hud::y(size.1 as f32),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ));
+    }
 }
 
 /// The dots are the picture's children, so they hide with it.
@@ -169,65 +188,82 @@ fn hide_for_speedometer(
     }
 }
 
-/// Moves each kart's dot to where it is, and tints it.
+/// TODO: retail shows a progress bar in the middle of the screen in a split screen, where there
+/// is no minimap (`build` leaves it out).
+///
+/// Moves each kart's dot to where it is, and tints it, on the map of each view (where that view's
+/// own kart is the player's dot).
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    hud: HudViews,
     images: Option<Res<DotImages>>,
-    maps: Query<(Entity, &Map)>,
+    maps: Query<(Entity, &HudView, &Map, Option<&Children>)>,
     mut dots: Query<(Entity, &Dot, &mut ImageNode, &mut Node, &mut ZIndex)>,
 ) {
-    let (Ok((map_entity, map)), Some(images)) = (maps.single(), images) else {
+    let Some(images) = images else {
         return;
     };
     let karts = &sim.race.karts;
-    for (entity, dot, ..) in &dots {
-        if dot.0 >= karts.len() {
-            commands.entity(entity).despawn();
-        }
-    }
-    // The picture's top left on retail's screen, which the dots are placed from.
-    let (left, top) = (RIGHT - map.size.0 as i32, BOTTOM - map.size.1 as i32);
     let flash = sim.race.objects.ticks() & 2 != 0;
-    for (slot, kart) in karts.iter().enumerate() {
-        let d = &kart.driver;
-        let character = (d.character as usize).min(CHARACTER_COLORS.len() - 1);
-        // (Retail's one player has the player's dot and the bots the others: here the others are
-        // the other players too.)
-        let image = if slot != sim.own {
-            &images.bot[character]
-        } else if flash {
-            &images.player[character]
-        } else {
-            images.player.last().unwrap()
+    for (map_entity, &HudView(view), map, children) in &maps {
+        let Some(kart) = hud.get(view) else {
+            continue;
         };
-        let (x, y) = icon_pos(&map.layout, d.pos_curr.x >> 8, d.pos_curr.z >> 8);
-        let node = Node {
-            position_type: PositionType::Absolute,
-            left: hud::x((x - left) as f32),
-            top: hud::y((y - top) as f32),
-            width: hud::x(images.size.0 as f32),
-            height: hud::y(images.size.1 as f32),
-            ..default()
-        };
-        let z = ZIndex(if slot == sim.own { 1 } else { 0 });
-        match dots.iter_mut().find(|(_, dot, ..)| dot.0 == slot) {
-            Some((_, _, mut current, mut current_node, mut current_z)) => {
-                if current.image != *image {
-                    current.image = image.clone();
-                }
-                current_node.set_if_neq(node);
-                current_z.set_if_neq(z);
+        let own = kart.slot;
+        for &child in children.into_iter().flatten() {
+            if let Ok((entity, dot, ..)) = dots.get(child)
+                && dot.0 >= karts.len()
+            {
+                commands.entity(entity).despawn();
             }
-            None => {
-                commands.spawn((
-                    Dot(slot),
-                    ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch),
-                    node,
-                    z,
-                    Pickable::IGNORE,
-                    ChildOf(map_entity),
-                ));
+        }
+        // The picture's top left on retail's screen, which the dots are placed from.
+        let (left, top) = (RIGHT - map.size.0 as i32, BOTTOM - map.size.1 as i32);
+        for (slot, kart) in karts.iter().enumerate() {
+            let d = &kart.driver;
+            let character = (d.character as usize).min(CHARACTER_COLORS.len() - 1);
+            // (Retail's one player has the player's dot and the bots the others: here the others
+            // are the other players too.)
+            let image = if slot != own {
+                &images.bot[character]
+            } else if flash {
+                &images.player[character]
+            } else {
+                images.player.last().unwrap()
+            };
+            let (x, y) = icon_pos(&map.layout, d.pos_curr.x >> 8, d.pos_curr.z >> 8);
+            let node = Node {
+                position_type: PositionType::Absolute,
+                left: hud::x((x - left) as f32),
+                top: hud::y((y - top) as f32),
+                width: hud::x(images.size.0 as f32),
+                height: hud::y(images.size.1 as f32),
+                ..default()
+            };
+            let z = ZIndex(if slot == own { 1 } else { 0 });
+            let existing = children
+                .into_iter()
+                .flatten()
+                .find(|&&c| dots.get(c).is_ok_and(|(_, dot, ..)| dot.0 == slot));
+            match existing.and_then(|&c| dots.get_mut(c).ok()) {
+                Some((_, _, mut current, mut current_node, mut current_z)) => {
+                    if current.image != *image {
+                        current.image = image.clone();
+                    }
+                    current_node.set_if_neq(node);
+                    current_z.set_if_neq(z);
+                }
+                None => {
+                    commands.spawn((
+                        Dot(slot),
+                        ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch),
+                        node,
+                        z,
+                        Pickable::IGNORE,
+                        ChildOf(map_entity),
+                    ));
+                }
             }
         }
     }

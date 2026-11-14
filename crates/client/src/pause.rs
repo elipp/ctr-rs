@@ -236,6 +236,10 @@ fn browser_items(public: &PublicLobbies) -> Vec<Entry> {
     let mut items = Vec::new();
     match &public.status {
         Status::Idle | Status::Loading => items.push(entry(Item::Info, "Looking...")),
+        Status::Outdated => {
+            items.push(entry(Item::Info, "Please update"));
+            items.push(entry(Item::Info, "to see public lobbies"));
+        }
         Status::Failed => {
             items.push(entry(Item::Info, "Could not reach the realm"));
             items.push(entry(Item::Refresh, "Try again"));
@@ -298,8 +302,8 @@ const LIST_TEXELS: usize = 180;
 const ROW_TEXELS: usize = Font::Middle.line_height() + 4;
 
 /// The panel behind the items, the line around it, and its shadow.
-const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
-const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
+pub(crate) const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
+pub(crate) const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
 const SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 
 /// The menu on screen, and what it was built for.

@@ -10,6 +10,7 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
+use crate::hud_view::{HudView, HudViews, ViewKart};
 
 /// Where the blocks are: both from the top, TIME from the left and LAP from the right, in lines
 /// and pixels of retail's screen.
@@ -75,10 +76,13 @@ fn text(text: &str, font: Font, gradient: Gradient) -> CtrText {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    hud: HudViews,
     lobby: Res<crate::lobby::Lobby>,
-    mut blocks: Query<&mut Visibility, Or<(With<TimeBlock>, With<LapBlock>)>>,
-    mut rows: Query<(Entity, &mut LapRows)>,
+    mut blocks: Query<(&HudView, &mut Visibility), Or<(With<TimeBlock>, With<LapBlock>)>>,
+    time_blocks: Query<&HudView, With<TimeBlock>>,
+    mut rows: Query<(Entity, &HudView, &mut LapRows)>,
     mut texts: Query<(
+        &HudView,
         &mut CtrText,
         Has<Total>,
         Has<LapCount>,
@@ -86,9 +90,12 @@ fn show(
         Option<&RowTime>,
     )>,
 ) {
-    if blocks.is_empty() {
+    let missing = hud.missing(time_blocks.iter().copied());
+    if !missing.is_empty() {
         // The first frame, or of a new level (which took the nodes away).
-        spawn(&mut commands);
+        for view in missing {
+            spawn(&mut commands, view);
+        }
         return;
     }
     let shown = if lobby.online.is_some() {
@@ -96,59 +103,66 @@ fn show(
     } else {
         Visibility::Hidden
     };
-    for mut visibility in &mut blocks {
+    for (_, mut visibility) in &mut blocks {
         visibility.set_if_neq(shown);
     }
     if lobby.online.is_none() {
         return;
     }
     let race = &*sim.race;
-    let driver = sim.driver();
-    let finished = driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    let done = &race.lap_times[sim.own];
-    // The time stops when we cross the line of the last lap: then it is the laps' times.
-    let total = if finished {
-        done.iter().sum()
-    } else {
-        race.event_ms
-    };
-    // A kart that finished stays on its last lap.
-    let laps = race.laps;
-    let lap = (driver.lap_index + 1).min(laps);
-    // The laps done, and the one being driven (the first counts from the green light).
-    let mut times: Vec<i32> = done.clone();
-    if !finished {
-        times.push(race.event_ms - driver.lap_time);
-    }
-    if let Ok((entity, mut count)) = rows.single_mut()
-        && count.0 != times.len()
+    for ViewKart {
+        view, slot, driver, ..
+    } in hud.iter()
     {
-        count.0 = times.len();
-        commands.entity(entity).despawn_related::<Children>();
-        for (i, &ms) in times.iter().enumerate() {
-            spawn_row(&mut commands, entity, i, &clock(ms));
-        }
-    }
-    for (mut text, is_total, is_count, label, time) in &mut texts {
-        let wanted = if is_total {
-            clock(total)
-        } else if is_count {
-            format!("{lap}/{laps}")
-        } else if let Some(RowLabel(i)) = label {
-            format!("L{}", i + 1)
-        } else if let Some(&RowTime(i)) = time {
-            times.get(i).map_or_else(String::new, |&ms| clock(ms))
+        let finished = driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+        let done = &race.lap_times[slot];
+        // The time stops when we cross the line of the last lap: then it is the laps' times.
+        let total = if finished {
+            done.iter().sum()
         } else {
-            continue;
+            race.event_ms
         };
-        if text.text != wanted {
-            text.text = wanted;
+        // A kart that finished stays on its last lap.
+        let laps = race.laps;
+        let lap = (driver.lap_index + 1).min(laps);
+        // The laps done, and the one being driven (the first counts from the green light).
+        let mut times: Vec<i32> = done.clone();
+        if !finished {
+            times.push(race.event_ms - driver.lap_time);
+        }
+        if let Some((entity, _, mut count)) = rows.iter_mut().find(|(_, v, _)| v.0 == view)
+            && count.0 != times.len()
+        {
+            count.0 = times.len();
+            commands.entity(entity).despawn_related::<Children>();
+            for (i, &ms) in times.iter().enumerate() {
+                spawn_row(&mut commands, entity, view, i, &clock(ms));
+            }
+        }
+        for (v, mut text, is_total, is_count, label, time) in &mut texts {
+            if v.0 != view {
+                continue;
+            }
+            let wanted = if is_total {
+                clock(total)
+            } else if is_count {
+                format!("{lap}/{laps}")
+            } else if let Some(RowLabel(i)) = label {
+                format!("L{}", i + 1)
+            } else if let Some(&RowTime(i)) = time {
+                times.get(i).map_or_else(String::new, |&ms| clock(ms))
+            } else {
+                continue;
+            };
+            if text.text != wanted {
+                text.text = wanted;
+            }
         }
     }
 }
 
-/// Both blocks, hidden, with no lap rows.
-fn spawn(commands: &mut Commands) {
+/// Both blocks of local player `view`, hidden, with no lap rows.
+fn spawn(commands: &mut Commands, view: usize) {
     let block = |left: Option<f32>, right: Option<f32>, align| Node {
         position_type: PositionType::Absolute,
         left: left.map_or(Val::Auto, hud::x),
@@ -159,15 +173,18 @@ fn spawn(commands: &mut Commands) {
         row_gap: hud::y(LINE_GAP),
         ..default()
     };
+    let view = HudView(view);
     commands.spawn((
         TimeBlock,
+        view,
         block(Some(TIME_LEFT), None, AlignItems::FlexStart),
         Visibility::Hidden,
         Pickable::IGNORE,
         children![
             text("Time", Font::Middle, Gradient::ORANGE),
-            (Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
+            (view, Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
             (
+                view,
                 LapRows(0),
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -180,23 +197,25 @@ fn spawn(commands: &mut Commands) {
     ));
     commands.spawn((
         LapBlock,
+        view,
         block(None, Some(LAP_RIGHT), AlignItems::FlexEnd),
         Visibility::Hidden,
         Pickable::IGNORE,
         children![
             text("Lap", Font::Middle, Gradient::WHITE),
-            (LapCount, text("", Font::Large, Gradient::WHITE)),
+            (view, LapCount, text("", Font::Large, Gradient::WHITE)),
         ],
     ));
 }
 
 /// Row `i` of the lap rows: the red "L1" and the white time after it.
-fn spawn_row(commands: &mut Commands, rows: Entity, i: usize, time: &str) {
+fn spawn_row(commands: &mut Commands, rows: Entity, view: usize, i: usize, time: &str) {
     commands.spawn((
         Node::default(),
         ChildOf(rows),
         children![
             (
+                HudView(view),
                 RowLabel(i),
                 text(&format!("L{}", i + 1), Font::Middle, Gradient::RED),
                 // The time starts at the same place in every row.
@@ -205,7 +224,7 @@ fn spawn_row(commands: &mut Commands, rows: Entity, i: usize, time: &str) {
                     ..default()
                 },
             ),
-            (RowTime(i), text(time, Font::Middle, Gradient::WHITE)),
+            (HudView(view), RowTime(i), text(time, Font::Middle, Gradient::WHITE)),
         ],
     ));
 }

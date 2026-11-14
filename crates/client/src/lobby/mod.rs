@@ -156,6 +156,20 @@ impl BotSettings {
     }
 }
 
+/// A kart of the lobby's next race, as [`Lobby::rows`] gives it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Row {
+    pub character: u8,
+    /// What it is called: its player's name, and for a split screen's other players, their number ("name@2"), as in the race.
+    pub name: String,
+    /// The short key of its machine.
+    pub key: String,
+    /// Whether it is the host's own.
+    pub host: bool,
+    /// Whether it is at our machine.
+    pub you: bool,
+}
+
 /// A player in the lobby, as the last [`Event::Lobby`] said.
 struct Member {
     id: EndpointId,
@@ -165,6 +179,8 @@ struct Member {
     label: String,
     nick: String,
     character: u8,
+    /// What the other players at its machine drive.
+    extras: Vec<u8>,
     /// Whether it is us.
     you: bool,
 }
@@ -191,18 +207,35 @@ impl Lobby {
         }
     }
 
-    /// The players in the lobby, as the last [`Event::Lobby`] said: the character, the name
-    /// (the nickname, or the short key without one) and the short key of each.
-    pub fn members(&self) -> impl Iterator<Item = (u8, &str, &str)> {
-        self.roster
-            .iter()
-            .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
-    }
-
-    /// Our place in [`members`](Self::members), if we drive (not if we only watch, or the lobby
-    /// has not told yet).
-    pub fn you(&self) -> Option<usize> {
-        self.roster.iter().position(|m| m.you)
+    /// The karts the lobby's players have in a race, as the last [`Event::Lobby`] said, one row
+    /// each: a player's, then those of the other players at its machine (split screen), as many
+    /// as the grid has room for. (The race gives the room to the host's extras first, then
+    /// each guest's, in this order.)
+    pub fn rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for (n, member) in self.roster.iter().enumerate() {
+            rows.push(Row {
+                character: member.character,
+                name: member.label.clone(),
+                key: member.key.clone(),
+                host: n == 0,
+                you: member.you,
+            });
+        }
+        // (The extras come after all the players, as they do in the race.)
+        for member in &self.roster {
+            for (n, &character) in member.extras.iter().enumerate() {
+                rows.push(Row {
+                    character,
+                    name: format!("{}@{}", member.label, n + 2),
+                    key: member.key.clone(),
+                    host: false,
+                    you: member.you,
+                });
+            }
+        }
+        rows.truncate(race::MAX_KARTS);
+        rows
     }
 
     /// Who the lobby could be handed to, the character and the name of each: the others, if we
@@ -241,8 +274,8 @@ impl Lobby {
     /// `public` one is also listed in the realm, under that name (the default if it is empty;
     /// `net::lobby_name` has checked it).
     /// The name is the lobby's, not ours: it stays as it is when we change nickname.
-    pub fn host(&mut self, character: u8, nick: &str, public: Option<&str>) {
-        self.session = Some(net::host(character, nick, race::SIM_VERSION));
+    pub fn host(&mut self, character: u8, extras: &[u8], nick: &str, public: Option<&str>) {
+        self.session = Some(net::host(character, extras, nick, race::SIM_VERSION));
         self.bots_told = None;
         self.public = public.map(|name| {
             Some(name)
@@ -354,9 +387,9 @@ impl Lobby {
     }
 
     /// Joins the lobby at `ticket`.
-    pub fn join(&mut self, ticket: Ticket, character: u8, nick: &str) {
+    pub fn join(&mut self, ticket: Ticket, character: u8, extras: &[u8], nick: &str) {
         debug!("joining {ticket}");
-        self.session = Some(net::join(ticket, character, nick, race::SIM_VERSION));
+        self.session = Some(net::join(ticket, character, extras, nick, race::SIM_VERSION));
         self.joined = true;
         self.spectator = false;
         self.roster.clear();
@@ -431,7 +464,8 @@ impl Lobby {
     /// How many bots the next race of the lobby has, as far as we know: as many as the host's
     /// `/bots` asks and the grid has room for after the players.
     pub fn next_bots(&self) -> usize {
-        let room = race::MAX_KARTS.saturating_sub(self.roster.len().max(1));
+        let karts: usize = self.roster.iter().map(|m| 1 + m.extras.len()).sum();
+        let room = race::MAX_KARTS.saturating_sub(karts.max(1));
         (self.lobby_bots.count as usize).min(room)
     }
 
@@ -439,6 +473,19 @@ impl Lobby {
     pub fn set_character(&self, character: u8) {
         if let Some(session) = &self.session {
             session.set_character(character);
+        }
+    }
+
+    /// What our other local players drive, as the lobby last said (the host's word on it).
+    pub fn own_extras(&self) -> Option<&[u8]> {
+        self.roster.iter().find(|m| m.you).map(|m| m.extras.as_slice())
+    }
+
+    /// The other local players drive other characters now, which the others learn before the
+    /// race starts.
+    pub fn set_extras(&self, extras: &[u8]) {
+        if let Some(session) = &self.session {
+            session.set_extras(extras);
         }
     }
 
@@ -488,15 +535,26 @@ impl Lobby {
     /// characters.
     fn refresh_labels(&mut self) {
         if let Some(online) = &mut self.online {
+            // One name for each endpoint (its first slot): the others of its slots are its extra
+            // players, "name@2", "name@3", ...
+            let first = |slot: usize| online.ids.iter().position(|id| *id == online.ids[slot]) == Some(slot);
             let players: Vec<(EndpointId, &str)> = (online.ids.iter().enumerate())
-                .filter(|&(slot, _)| !online.is_bot(slot))
+                .filter(|&(slot, _)| !online.is_bot(slot) && first(slot))
                 .map(|(_, id)| (*id, self.nicks.get(id).map_or("", String::as_str)))
                 .collect();
-            let mut names = net::display_names(&players).into_iter();
+            let names = net::display_names(&players);
+            let name_of = |id: EndpointId| {
+                let at = players.iter().position(|(other, _)| *other == id);
+                at.map(|at| names[at].clone()).unwrap_or_default()
+            };
             online.labels = (0..online.ids.len())
                 .map(|slot| match online.characters.get(slot) {
                     Some(&c) if online.is_bot(slot) => online::bot_label(c),
-                    _ => names.next().unwrap_or_default(),
+                    _ if first(slot) => name_of(online.ids[slot]),
+                    _ => {
+                        let nth = (0..=slot).filter(|&s| !online.is_bot(s) && online.ids[s] == online.ids[slot]).count();
+                        format!("{}@{nth}", name_of(online.ids[slot]))
+                    }
                 })
                 .collect();
         }
@@ -506,6 +564,15 @@ impl Lobby {
     pub fn send(&self, pad: Pad) {
         if let Some(session) = &self.session {
             session.input(pad);
+        }
+    }
+
+    /// The pads of our other local players (split screen) for the tick being played, in the order
+    /// of their slots (`Online::locals`, after the first). They go before ours
+    /// ([`send`](Self::send)).
+    pub fn send_extras(&self, pads: Vec<Pad>) {
+        if let Some(session) = &self.session {
+            session.extra_input(pads);
         }
     }
 

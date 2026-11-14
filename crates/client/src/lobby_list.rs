@@ -2,7 +2,8 @@
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has an "H" on its portrait's corner. Our name is in [`HIGHLIGHT`], as in the race's
+//! has an "H" on its portrait's corner. The other players at a machine (split screen) follow
+//! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
 //! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
 //! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),
 //! if any, and then those who only watch.
@@ -13,7 +14,7 @@ use render::font::{Font, Gradient};
 use crate::font::CtrText;
 use crate::hud;
 use crate::leaderboard::ICON_X;
-use crate::lobby::Lobby;
+use crate::lobby::{Lobby, Row};
 use crate::portrait_row::{
     BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_host_badge,
     spawn_portrait, spawn_tags,
@@ -22,12 +23,7 @@ use crate::portrait_row::{
 /// The column of rows, with the players it was built for, and which of them is us, and the bots
 /// (how many, and what kind).
 #[derive(Component)]
-struct List(
-    Vec<(u8, String, String)>,
-    Vec<(String, String)>,
-    Option<usize>,
-    (usize, String),
-);
+struct List(Vec<Row>, Vec<(String, String)>, (usize, String));
 
 /// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
 /// of retail's screen, to be clear of the toasts and the chat at the top.
@@ -73,11 +69,8 @@ fn build(
     loaded: Option<Res<Portraits>>,
     lists: Query<(Entity, &List)>,
 ) {
-    let players: Vec<(u8, String, String)> = if lobby.is_waiting() {
-        lobby
-            .members()
-            .map(|(c, n, k)| (c, n.to_string(), k.to_string()))
-            .collect()
+    let players: Vec<Row> = if lobby.is_waiting() {
+        lobby.rows()
     } else {
         Vec::new()
     };
@@ -89,14 +82,13 @@ fn build(
     } else {
         Vec::new()
     };
-    let you = lobby.you();
     let bots = if players.is_empty() {
         (0, String::new())
     } else {
         (lobby.next_bots(), lobby.next_bots_kind())
     };
     for (entity, list) in &lists {
-        if list.0 == players && list.1 == watchers && list.2 == you && list.3 == bots {
+        if list.0 == players && list.1 == watchers && list.2 == bots {
             return;
         }
         commands.entity(entity).despawn();
@@ -132,14 +124,14 @@ fn build(
         Pickable::IGNORE,
         ChildOf(column),
     ));
-    for (n, (character, name, key)) in players.iter().enumerate() {
+    for (n, row) in players.iter().enumerate() {
         let y = FIRST_Y + n as f32 * SLOT;
-        let portrait = spawn_portrait(&mut commands, column, &image, *character, y);
-        if n == 0 {
+        let portrait = spawn_portrait(&mut commands, column, &image, row.character, y);
+        if row.host {
             spawn_host_badge(&mut commands, portrait, true);
         }
-        let tag = spawn_tags(&mut commands, portrait, name, key);
-        if Some(n) == you {
+        let tag = spawn_tags(&mut commands, portrait, &row.name, &row.key);
+        if row.you {
             commands.entity(tag).insert(TextColor(HIGHLIGHT));
         }
     }
@@ -186,5 +178,5 @@ fn build(
             ChildOf(column),
         ));
     }
-    commands.entity(column).insert(List(players, watchers, you, bots));
+    commands.entity(column).insert(List(players, watchers, bots));
 }

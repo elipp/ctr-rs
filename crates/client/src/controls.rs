@@ -35,13 +35,16 @@ pub enum Control {
     PreviousLevel,
     NextRacer,
     PreviousRacer,
+    /// Opens the menu that picks the racer of a local player (`drive/chooser.rs`), as a pad's
+    /// Select does.
+    RacerMenu,
     /// Mutes or unmutes the music, and every sound (`sound.rs`).
     MuteMusic,
     MuteSound,
 }
 
 impl Control {
-    pub const ALL: [Control; 15] = [
+    pub const ALL: [Control; 16] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -55,6 +58,7 @@ impl Control {
         Control::PreviousLevel,
         Control::NextRacer,
         Control::PreviousRacer,
+        Control::RacerMenu,
         Control::MuteMusic,
         Control::MuteSound,
     ];
@@ -75,6 +79,7 @@ impl Control {
             Control::PreviousLevel => "previous-level",
             Control::NextRacer => "next-racer",
             Control::PreviousRacer => "previous-racer",
+            Control::RacerMenu => "racer-menu",
             Control::MuteMusic => "mute-music",
             Control::MuteSound => "mute-sound",
         }
@@ -96,6 +101,7 @@ impl Control {
             Control::PreviousLevel => "Previous level",
             Control::NextRacer => "Next racer",
             Control::PreviousRacer => "Previous racer",
+            Control::RacerMenu => "Racer menu",
             Control::MuteMusic => "Mute music",
             Control::MuteSound => "Mute sound",
         }
@@ -116,6 +122,7 @@ impl Control {
             Control::PreviousLevel => &[KeyCode::BracketLeft, KeyCode::PageDown],
             Control::NextRacer => &[KeyCode::Period],
             Control::PreviousRacer => &[KeyCode::Comma],
+            Control::RacerMenu => &[KeyCode::KeyC],
             Control::MuteMusic => &[KeyCode::KeyM],
             Control::MuteSound => &[KeyCode::KeyS],
         }
@@ -137,6 +144,34 @@ pub struct Controls([Vec<KeyCode>; Control::ALL.len()]);
 impl Default for Controls {
     fn default() -> Controls {
         Controls(Control::ALL.map(|c| c.defaults().to_vec()))
+    }
+}
+
+impl Controls {
+    /// No keys at all.
+    pub fn none() -> Controls {
+        Controls(Control::ALL.map(|_| Vec::new()))
+    }
+
+    /// The keys of the second player on the same keyboard: the I, J, K and L keys steer, with the
+    /// hops and the item beside them. Only what the kart does is bound: the rest (the menu's
+    /// level and racer keys, the mutes) is the one keyboard's, and stays the first player's.
+    pub fn second() -> Controls {
+        let keys = |control: Control| -> Vec<KeyCode> {
+            match control {
+                Control::Gas => vec![KeyCode::KeyI],
+                Control::Brake => vec![KeyCode::KeyK],
+                Control::Left => vec![KeyCode::KeyJ],
+                Control::Right => vec![KeyCode::KeyL],
+                Control::Hop => vec![KeyCode::KeyU],
+                Control::Hop2 => vec![KeyCode::KeyO],
+                Control::Item => vec![KeyCode::Semicolon],
+                Control::AimUp => vec![KeyCode::KeyY],
+                Control::RacerMenu => vec![KeyCode::KeyB],
+                _ => Vec::new(),
+            }
+        };
+        Controls(Control::ALL.map(keys))
     }
 }
 
@@ -377,6 +412,20 @@ mod tests {
         assert_eq!(read.keys(Control::Left), [KeyCode::KeyA]);
         assert!(read.keys(Control::Item).is_empty());
         assert_eq!(read.keys(Control::Gas), [KeyCode::ArrowUp]);
+    }
+
+    #[test]
+    fn the_second_player_shares_no_key_with_the_first() {
+        let (first, second) = (Controls::default(), Controls::second());
+        for control in Control::ALL {
+            for &key in second.keys(control) {
+                assert!(bindable(key), "{key:?}");
+                assert!(
+                    Control::ALL.iter().all(|&c| !first.keys(c).contains(&key)),
+                    "{key:?}"
+                );
+            }
+        }
     }
 
     #[test]

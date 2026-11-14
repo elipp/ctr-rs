@@ -156,6 +156,7 @@ const GLOW_RADII: [i32; 3] = [
 fn update(
     fire: Option<Res<Fire>>,
     sim: Option<Res<Sim>>,
+    drive: Option<Res<crate::drive::Drive>>,
     config: Res<crate::config::Config>,
     fixed: Res<Time<Fixed>>,
     mut cameras: Query<(&Camera, &Transform, &mut HeatWarp), With<crate::drive::ChaseCamera>>,
@@ -164,8 +165,10 @@ fn update(
     let Ok((camera, transform, mut warp)) = cameras.single_mut() else {
         return;
     };
-    // With no lenses, the pass is not drawn.
-    if !config.shader_effects {
+    // With no lenses, the pass is not drawn. (Not in a split screen, which has one camera of it:
+    // the flame jets' shimmer and the warpball's glow.)
+    let split = drive.is_some_and(|d| d.views().len() > 1);
+    if !config.shader_effects || split {
         warp.count = 0;
         return;
     }

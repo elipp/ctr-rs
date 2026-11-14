@@ -53,6 +53,8 @@ pub(crate) struct HostState {
     pub(crate) public: Option<Public>,
     /// The lobby is being handed over to a guest that has not yet answered.
     pub(crate) handoff: Option<Handoff>,
+    /// Our own extra players' characters (split screen), for the lobby to tell of.
+    pub(crate) extras: Vec<u8>,
     /// The characters of the bots that fill a race up to [`MAX_PLAYERS`], as many of them as
     /// it takes (`Session::set_bots`); none, to race without.
     pub(crate) bots: Vec<u8>,
@@ -107,6 +109,8 @@ pub(crate) struct Guest {
     pub(crate) connection: Connection,
     /// What it said it drives, and the number of the Hello that said it; none  until it comes.
     pub(crate) hello: Option<(u32, u8)>,
+    /// The characters of its extra players (from its Hello).
+    pub(crate) extras: Vec<u8>,
     /// What it wants to be called, and the number of the Hello or Nick that said it.
     pub(crate) nick: (u32, String),
     /// It only watches: no kart, no pads (from its Hello).
@@ -118,7 +122,8 @@ pub(crate) struct Guest {
 /// The race as agreed at the start.
 pub(crate) struct Plan {
     /// The endpoint of each slot. The host is 0, and the spectators come after the players.
-    /// The host's bots are the last of the players, with the host's endpoint.
+    /// A player with extras (split screen) has more slots, after the guests', and the host's bots
+    /// are the last of the players, with the host's endpoint.
     pub(crate) roster: Vec<EndpointId>,
     /// How many of the roster race: the slots from here on are spectators.
     pub(crate) players: usize,
@@ -127,14 +132,26 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    /// The slot of `id`: its own, not one of its bots'.
+    /// The slot of `id`: its own (the first it has), not one of its extras' or bots'.
     pub(crate) fn slot_of(&self, id: EndpointId) -> Option<usize> {
         self.roster.iter().position(|&r| r == id)
     }
 
-    /// The slot of the host's bot `bot` (from 0).
-    pub(crate) fn bot_slot(&self, bot: usize) -> Option<usize> {
-        (bot < self.bots).then(|| self.players - self.bots + bot)
+    /// The slots of the players that `id` makes pads for or drives, in the order of their
+    /// streams: its own, then its extras, then (the host's) its bots.
+    pub(crate) fn slots_of(&self, id: EndpointId) -> impl Iterator<Item = usize> + '_ {
+        (0..self.players).filter(move |&slot| self.roster[slot] == id)
+    }
+
+    /// The slots that are `id`'s own players, extras included, but not the host's bots: the ones
+    /// a game at `id` plays.
+    pub(crate) fn locals_of(&self, id: EndpointId) -> Vec<usize> {
+        self.slots_of(id).filter(|&slot| !self.is_bot(slot)).collect()
+    }
+
+    /// The slot of the extra stream `stream` (from 0) of `id`.
+    pub(crate) fn extra_slot(&self, id: EndpointId, stream: usize) -> Option<usize> {
+        self.slots_of(id).nth(stream + 1)
     }
 
     /// Whether `slot` is one of the host's bots: it makes no pads of its own, nor says what it
@@ -143,20 +160,23 @@ impl Plan {
         (self.players - self.bots..self.players).contains(&slot)
     }
 
-    /// The bot streams of a link of `me` to `id`: the ones it sends and the ones it takes. The
-    /// host sends its bots' pads to everyone, and only the host's are taken.
-    pub(crate) fn bot_streams(&self, me: EndpointId, id: EndpointId) -> (usize, usize) {
-        match self.roster.first() {
-            Some(&host) if host == me => (self.bots, 0),
-            Some(&host) if host == id => (0, self.bots),
-            _ => (0, 0),
-        }
+    /// The extra streams of a link of `me` to `id`: the ones it sends and the ones it takes.
+    /// Each player sends the pads of its other slots (the host's bots included) to everyone.
+    pub(crate) fn streams(&self, me: EndpointId, id: EndpointId) -> (usize, usize) {
+        let extras = |id| self.slots_of(id).count().saturating_sub(1);
+        (extras(me), extras(id))
     }
 
     /// Whether `id` is in the roster as a spectator: it sends no pads, so nothing is waited for
     /// from it.
     pub(crate) fn is_spectator(&self, id: EndpointId) -> bool {
         self.slot_of(id).is_some_and(|slot| slot >= self.players)
+    }
+
+    /// Whether `slot` is the first of its endpoint's: the one that speaks for it (says what it
+    /// holds of the pads of a player that left, ...).
+    pub(crate) fn is_main(&self, slot: usize) -> bool {
+        self.slot_of(self.roster[slot]) == Some(slot)
     }
 }
 
@@ -195,16 +215,16 @@ pub(crate) struct Link {
     pub(crate) epoch: u32,
     /// When its pads last went further (or the link began).
     pub(crate) advanced: Instant,
-    /// The host's: the pads of each of its bots until the peer confirms them, and the first tick
-    /// of each it has not.
-    pub(crate) bot_senders: Vec<(InputSender, Tick)>,
-    /// A link to the host: the pads of each of its bots, as far as they have come in.
-    pub(crate) bot_receivers: Vec<InputReceiver>,
+    /// The pads of each of our extra streams until the peer confirms them, and the first tick of
+    /// each it has not.
+    pub(crate) extra_senders: Vec<(InputSender, Tick)>,
+    /// The pads of each of its extra streams, as far as they have come in.
+    pub(crate) extra_receivers: Vec<InputReceiver>,
 }
 
 impl Link {
-    /// A link that sends the pads of `sends` bots of ours and takes those of `receives` of its
-    /// (see [`Plan::bot_streams`]).
+    /// A link that sends the pads of `sends` extra streams of ours and takes those of `receives`
+    /// of its (see [`Plan::streams`]).
     pub(crate) fn new(connection: Connection, epoch: u32, (sends, receives): (usize, usize)) -> Link {
         Link {
             epoch,
@@ -213,22 +233,22 @@ impl Link {
             receiver: InputReceiver::default(),
             peer_has: 0,
             advanced: Instant::now(),
-            bot_senders: (0..sends).map(|_| (InputSender::default(), 0)).collect(),
-            bot_receivers: (0..receives).map(|_| InputReceiver::default()).collect(),
+            extra_senders: (0..sends).map(|_| (InputSender::default(), 0)).collect(),
+            extra_receivers: (0..receives).map(|_| InputReceiver::default()).collect(),
         }
     }
 
-    /// Sends the pads it lacks of ours, and of our bots', and what we have of its.
+    /// Sends the pads it lacks of ours, and of our extra streams', and what we have of its.
     pub(crate) fn send(&mut self) {
         let mut packet = self.sender.packet(self.peer_has, self.receiver.next());
         packet.epoch = self.epoch;
-        packet.bot_acks = self.bot_receivers.iter().map(InputReceiver::next).collect();
+        packet.acks = self.extra_receivers.iter().map(InputReceiver::next).collect();
         send_datagram(&self.connection, &Message::Inputs(packet));
-        for (bot, (sender, peer_has)) in self.bot_senders.iter_mut().enumerate() {
+        for (stream, (sender, peer_has)) in self.extra_senders.iter_mut().enumerate() {
             let packet = sender.packet(*peer_has, 0);
-            let message = Message::Bot {
+            let message = Message::Extra {
                 epoch: self.epoch,
-                bot: bot as u8,
+                stream: stream as u8,
                 first: packet.first,
                 pads: packet.pads,
             };
@@ -257,7 +277,7 @@ pub(crate) fn to_dial(
         .enumerate()
         .filter(|&(i, id)| {
             *id != me
-                // (The host's bots have its id: it is dialed once.)
+                // (A player's extras and the host's bots have its id: it is dialed once.)
                 && roster.iter().position(|r| r == id) == Some(i)
                 && !linked(id)
                 && match (hard_of(mine), hard_of(i)) {
@@ -305,7 +325,7 @@ pub(crate) fn stalled(
 /// received yet, on the connections that are up.
 pub(crate) fn start_over(links: &mut HashMap<EndpointId, Link>, epoch: u32, plan: &Plan, me: EndpointId) {
     for (&id, link) in links.iter_mut() {
-        *link = Link::new(link.connection.clone(), epoch, plan.bot_streams(me, id));
+        *link = Link::new(link.connection.clone(), epoch, plan.streams(me, id));
     }
 }
 
