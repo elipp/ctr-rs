@@ -674,8 +674,13 @@ pub(super) fn drive_tick(
         .iter()
         .map(|kart| pose_of(&kart.driver).translation)
         .collect();
-    let ear = drive.own().current_view.transform();
-    sfx.tick(tick, &sim.race, &track.0, &ticks, sim.own, &places, &ear);
+    let views = drive.views.len();
+    let listeners: Vec<_> = (drive.views.iter().enumerate())
+        .map(|(i, view)| {
+            crate::sound::Listener::new(i, views, view.slot, view.current_view.transform())
+        })
+        .collect();
+    sfx.tick(tick, &sim.race, &track.0, &ticks, &listeners, &places);
 }
 
 /// The debug commands that change our kart: `/debug set weapon <N>` drops what we hold and rolls

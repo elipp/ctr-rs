@@ -7114,6 +7114,9 @@ version = "0.1.0"
 dependencies = [
  "iroh",
  "realm-proto",
+ "reqwest",
+ "rustls",
+ "serde",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -7235,6 +7238,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

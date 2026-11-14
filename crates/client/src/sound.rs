@@ -24,6 +24,12 @@
 //! and turbo's roar are kept going too, heard from where they are, and not from far (see
 //! `docs/notes/DEVIATIONS.md`).
 //!
+//! With several local players (split screen) every view is a [`Listener`]: the music and the lap
+//! and win jingles are heard once (the music follows the first player), the voices carry
+//! everywhere, and what the world makes is heard by the loudest camera. Each player has the loops
+//! of its own engine, skid and turbo (the first also the ground and the wall rub), and its own
+//! sounds are panned toward its side of the screen ([`VIEW_PAN`]). See `docs/notes/DEVIATIONS.md`.
+//!
 //! [`Control::MuteMusic`] (M at first) mutes the music and [`Control::MuteSound`] (S) every sound,
 //! and the same again unmutes them ([`Mute`]). Neither touches the config's volumes, so unmuting
 //! plays at them again, and neither is kept past the session.
@@ -100,6 +106,39 @@ const PEER_LOOPS: [u8; 2] = [audio_slot::SKID, audio_slot::TURBO];
 /// at full volume, and the objects and the weapons carry to [`HEARD_WITHIN`].
 const KART_FULL_WITHIN: i32 = 300;
 const KART_HEARD_WITHIN: i32 = 2500;
+
+/// How far to the side of the middle a local player's own sounds (engine, skid, turbo, bumps) are
+/// panned in split screen: the first view to the left, the next to the right, and so on, so that
+/// the engines can be told apart. Not retail's.
+const VIEW_PAN: i32 = 48;
+
+/// Where a local player hears from: the camera of its view, and the slot of its kart. The first is
+/// the main player's. World sounds are heard by the loudest ear; a local kart's own sounds are
+/// heard in the middle, shifted toward its view's side.
+#[derive(Clone, Copy, Debug)]
+pub struct Listener {
+    pub slot: usize,
+    pub ear: Transform,
+    /// How far its own sounds are panned from the middle (negative is left).
+    pub bias: i32,
+}
+
+impl Listener {
+    /// The listener of view `view` of `views`, whose kart is `slot` and whose camera is at `ear`.
+    pub fn new(view: usize, views: usize, slot: usize, ear: Transform) -> Listener {
+        let bias = match (views, view % 2) {
+            (0 | 1, _) => 0,
+            (_, 0) => -VIEW_PAN,
+            _ => VIEW_PAN,
+        };
+        Listener { slot, ear, bias }
+    }
+}
+
+/// `pan` moved `bias` toward a side.
+fn biased(pan: u8, bias: i32) -> u8 {
+    (pan as i32 + bias).clamp(0, 255) as u8
+}
 
 /// The output samples the audio thread renders at a time, with the sound engine locked: 3 ms.
 const BLOCK: usize = 128;
@@ -373,14 +412,16 @@ impl Source for Output {
 /// What the game's sounds keep between ticks.
 #[derive(Resource, Default)]
 struct Kept {
-    /// The engine loops that play: ours, then the two of the other karts nearest the camera.
-    engine_loops: Option<[u16; 3]>,
+    /// The engine loops that play: each local player's, then the two of the other karts nearest
+    /// a camera.
+    engine_loops: Option<Vec<u16>>,
     /// By slot.
     engines: Vec<EngineSound>,
     /// What the two loops of the nearest others played last.
     far: [FarVoice; 2],
-    /// Our kart's loops (`driverAudioPtrs`), by [`vehicle::audio_slot`].
-    loops: [Option<Sound>; 4],
+    /// Each local kart's loops (`driverAudioPtrs`), by view and [`vehicle::audio_slot`]. Only the
+    /// first view's keep the ground and the wall rub.
+    loops: Vec<[Option<Sound>; 4]>,
     /// The skid and the turbo's roar of the other karts, by slot ([`PEER_LOOPS`] order).
     peer_loops: Vec<[Option<Sound>; 2]>,
     /// By slot: `VehFire_AudioCooldown`, in milliseconds.
@@ -409,9 +450,10 @@ impl Sfx<'_> {
     /// What tick `tick` of `race` (on `level`) asks to be heard: the traffic light that came on,
     /// the engines, each kart's sounds and voice lines (`karts`, by slot), our kart's loops, our
     /// laps and item roulette, the sounds of the objects and the weapons, and where the race is
-    /// for the music. Ours (`own`) play in the middle, the others' are heard from where they are
-    /// (`places`, in world space, by slot) by the camera `ear`. A race that starts again first
-    /// stops every sound and the music, and is at the traffic lights.
+    /// for the music. The local players' (`listeners`, the main player's first) play in the
+    /// middle of their sides, the others' are heard from where they are (`places`, in world space,
+    /// by slot) by the loudest camera. The music follows the main player. A race that starts again
+    /// first stops every sound and the music, and is at the traffic lights.
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
@@ -419,16 +461,19 @@ impl Sfx<'_> {
         race: &Race,
         level: &Level,
         karts: &[KartTick],
-        own: usize,
+        listeners: &[Listener],
         places: &[Vec3],
-        ear: &Transform,
     ) {
         let drivers: Vec<&Driver> = race.karts.iter().map(|kart| &kart.driver).collect();
         let drivers = &drivers[..];
         let light = race.light;
-        let Some(&ours) = drivers.get(own) else {
+        if listeners.iter().any(|l| l.slot >= drivers.len()) {
+            return;
+        }
+        let Some(main) = listeners.first() else {
             return;
         };
+        let ours = drivers[main.slot];
         let mut sounds = self.sounds.lock();
         let kept = &mut *self.kept;
         if tick < kept.tick || kept.engines.len() != drivers.len() {
@@ -451,7 +496,13 @@ impl Sfx<'_> {
         }
         kept.tick = tick;
         sounds.frame = tick;
-        engines(&mut sounds, kept, drivers, own, places, ear);
+        while kept.loops.len() > listeners.len() {
+            for playing in kept.loops.pop().iter_mut().flatten() {
+                sounds.recycle_mute(playing);
+            }
+        }
+        kept.loops.resize(listeners.len(), [None; 4]);
+        engines(&mut sounds, kept, drivers, listeners, places);
 
         if let Some(light) = light {
             let id = match light {
@@ -468,10 +519,10 @@ impl Sfx<'_> {
             };
             let cooldown = &mut kept.boost_cooldowns[slot];
             *cooldown = (*cooldown - TICK_MS).max(0);
-            let heard = if slot == own {
-                Some((u8::MAX, CENTRE))
-            } else {
-                places.get(slot).and_then(|&at| heard_kart(ear, at))
+            let local = listeners.iter().position(|l| l.slot == slot);
+            let heard = match local {
+                Some(view) => Some((u8::MAX, biased(CENTRE, listeners[view].bias))),
+                None => places.get(slot).and_then(|&at| heard_kart_by(listeners, at)),
             };
             for effect in &kart.effects {
                 // The voice lines are not heard from anywhere, the loops are ours alone, and what
@@ -479,7 +530,7 @@ impl Sfx<'_> {
                 match *effect {
                     Effect::Sound3D(sound) => {
                         let echo = driver.actions_flag_set & actions::ENGINE_ECHO != 0;
-                        play_3d(&mut sounds, ear, &sound, echo);
+                        play_3d(&mut sounds, listeners, &sound, echo);
                         continue;
                     }
                     // Heard the same by everyone, from whoever it was.
@@ -497,8 +548,9 @@ impl Sfx<'_> {
                             .find(|d| d.driver_id == driver_id)
                             .map_or(driver.character, |d| d.character);
                         // A kart's voice is heard from where it is; out of earshot it is not said.
-                        // Unless the config says the voices carry everywhere, as in retail.
-                        let heard = if self.config.global_voices {
+                        // Unless the config says the voices carry everywhere, as in retail, which
+                        // they do with several players on the screen (one voice, said once).
+                        let heard = if self.config.global_voices || listeners.len() > 1 {
                             Some((u8::MAX, CENTRE))
                         } else {
                             heard
@@ -520,14 +572,19 @@ impl Sfx<'_> {
                         distort,
                         pan,
                         echo,
-                    } if slot == own => {
+                    } if local.is_some() => {
+                        let view = local.unwrap();
+                        // The other players' have the engine, the skid and the roar only.
+                        if view > 0 && !PEER_LOOPS.contains(&loop_slot) {
+                            continue;
+                        }
                         let sfx = howl::Sfx {
                             volume,
                             distort,
-                            pan,
+                            pan: biased(pan, listeners[view].bias),
                             echo,
                         };
-                        let playing = &mut kept.loops[loop_slot as usize];
+                        let playing = &mut kept.loops[view][loop_slot as usize];
                         sounds.recycle(playing, id.map(u16::from), sfx);
                         continue;
                     }
@@ -541,7 +598,7 @@ impl Sfx<'_> {
                         pan,
                         echo,
                     } if PEER_LOOPS.contains(&loop_slot) => {
-                        let near = places.get(slot).and_then(|&at| heard_kart(ear, at));
+                        let near = heard;
                         let (id, sfx) = match near {
                             Some((near, side)) => {
                                 // (The skid's own pan, around the middle, moves the side.)
@@ -607,11 +664,13 @@ impl Sfx<'_> {
             }
         }
         // A fire that went out in a tick played again (a rollback) still stops its roar.
-        if ours.turbo.is_none() {
-            sounds.recycle_mute(&mut kept.loops[audio_slot::TURBO as usize]);
+        for (view, l) in listeners.iter().enumerate() {
+            if drivers[l.slot].turbo.is_none() {
+                sounds.recycle_mute(&mut kept.loops[view][audio_slot::TURBO as usize]);
+            }
         }
         for (slot, driver) in drivers.iter().enumerate() {
-            if slot != own && driver.turbo.is_none() {
+            if !listeners.iter().any(|l| l.slot == slot) && driver.turbo.is_none() {
                 let turbo = PEER_LOOPS
                     .iter()
                     .position(|&l| l == audio_slot::TURBO)
@@ -623,19 +682,19 @@ impl Sfx<'_> {
         }
 
         // `PlayLevel_UpdateLapStats` and `Audio_Update1`: a lap of ours, and our win.
-        if let Some(lap) = karts.get(own).map(|kart| kart.lap) {
-            if lap.new_lap {
-                sounds.play(LAP_SFX, AntiSpam::CutRecent, howl::Sfx::FULL);
-                sounds.clear_voiceline_times();
-            }
-            if lap.finished && ours.driver_rank == 0 {
-                sounds.play(WIN_SFX, AntiSpam::Off, howl::Sfx::FULL);
-            }
+        // (With several local players, a lap of any of them is heard once, and so is a win.)
+        let laps = || listeners.iter().filter_map(|l| karts.get(l.slot).map(|k| (l, k.lap)));
+        if laps().any(|(_, lap)| lap.new_lap) {
+            sounds.play(LAP_SFX, AntiSpam::CutRecent, howl::Sfx::FULL);
+            sounds.clear_voiceline_times();
+        }
+        if laps().any(|(l, lap)| lap.finished && drivers[l.slot].driver_rank == 0) {
+            sounds.play(WIN_SFX, AntiSpam::Off, howl::Sfx::FULL);
         }
 
         // The item roulette spins from a weapon crate's break until the item is picked
         // (`RB_CrateWeapon_ThCollide`, `UI_RenderFrame_Racing`).
-        let rolling = ours.item_roll_timer != 0;
+        let rolling = (listeners.iter()).any(|l| drivers[l.slot].item_roll_timer != 0);
         if rolling && !kept.rolling {
             sounds.play(ROULETTE_SFX, AntiSpam::Off, howl::Sfx::FULL);
         } else if !rolling && kept.rolling {
@@ -643,9 +702,9 @@ impl Sfx<'_> {
         }
         kept.rolling = rolling;
 
-        // The objects and the weapons are heard from the camera, as the echo of our kart.
+        // The objects and the weapons are heard from the cameras, as the echo of our kart.
         let echo = ours.actions_flag_set & actions::ENGINE_ECHO != 0;
-        objects(&mut sounds, kept, race, level, ear, echo);
+        objects(&mut sounds, kept, race, level, listeners, echo);
 
         // `Audio_Update1`, as our kart is the human driver in the lead.
         let mask = ours
@@ -671,7 +730,7 @@ fn objects(
     kept: &mut Kept,
     race: &Race,
     level: &Level,
-    ear: &Transform,
+    ear: &[Listener],
     echo: bool,
 ) {
     let place = |instance: usize| {
@@ -755,8 +814,8 @@ fn objects(
 }
 
 /// `PlaySound3D`: `sound` heard by the camera `ear` from where it is, if it is near enough.
-fn play_3d(sounds: &mut Howl, ear: &Transform, sound: &Sound3D, echo: bool) {
-    if let Some((volume, pan)) = heard(ear, level_at(sound.pos)) {
+fn play_3d(sounds: &mut Howl, ear: &[Listener], sound: &Sound3D, echo: bool) {
+    if let Some((volume, pan)) = loudest(ear, level_at(sound.pos), heard) {
         let sfx = howl::Sfx {
             volume,
             distort: NO_DISTORTION,
@@ -774,7 +833,7 @@ fn keep_loops<K: Copy + Eq + std::hash::Hash>(
     sounds: &mut Howl,
     loops: &mut HashMap<K, Option<Sound>>,
     wanted: impl Iterator<Item = (K, Sound3D)>,
-    ear: &Transform,
+    ear: &[Listener],
     echo: bool,
 ) {
     let mut seen = Vec::new();
@@ -787,7 +846,7 @@ fn keep_loops<K: Copy + Eq + std::hash::Hash>(
             sounds.stop(old);
             *playing = None;
         }
-        let Some((volume, pan)) = heard(ear, level_at(sound.pos)) else {
+        let Some((volume, pan)) = loudest(ear, level_at(sound.pos), heard) else {
             continue;
         };
         let sfx = howl::Sfx {
@@ -812,58 +871,70 @@ fn level_at([x, y, z]: [i32; 3]) -> Vec3 {
     Vec3::new(x as f32, y as f32, z as f32) * SCALE
 }
 
-/// The engines after a tick: ours (`own`) as `EngineSound_Player` hears it, and the two other
-/// karts nearest the camera `ear` as `EngineSound_NearestAIs` does (`places` in world space, by
-/// slot). Another engine of ours starts the loops again.
+/// The engines after a tick: each local player's (`listeners`) as `EngineSound_Player` hears it,
+/// on the loop of its view (`engine * 4 + view`) and panned toward its side, and the two other
+/// karts nearest a camera as `EngineSound_NearestAIs` does (`places` in world space, by slot).
+/// Another engine of a player's starts the loops again.
 fn engines(
     sounds: &mut Howl,
     kept: &mut Kept,
     drivers: &[&Driver],
-    own: usize,
+    listeners: &[Listener],
     places: &[Vec3],
-    ear: &Transform,
 ) {
-    let ours = drivers[own];
-    let class = CHARACTER_ENGINES
-        .get(ours.character as usize)
-        .map_or(0, |&class| class as u16);
-    let loops = [class * ENGINES_PER_CLASS, FAR_ENGINES[0], FAR_ENGINES[1]];
-    if kept.engine_loops != Some(loops) {
+    // (A class has loops for four players: further views have none.)
+    let own = listeners.len().min(ENGINES_PER_CLASS as usize);
+    let mut loops: Vec<u16> = (listeners.iter().take(own).enumerate())
+        .map(|(view, l)| {
+            let class = CHARACTER_ENGINES
+                .get(drivers[l.slot].character as usize)
+                .map_or(0, |&class| class as u16);
+            class * ENGINES_PER_CLASS + view as u16
+        })
+        .collect();
+    loops.extend(FAR_ENGINES);
+    if kept.engine_loops.as_deref() != Some(&loops[..]) {
         for id in kept.engine_loops.take().into_iter().flatten() {
             sounds.stop_engine(id);
         }
         // `VehBirth_EngineAudio_AllPlayers`, and `MainInit` for the AIs'.
-        for id in loops {
+        for &id in &loops {
             sounds.start_engine(id, howl::Sfx::SILENT);
         }
-        kept.engine_loops = Some(loops);
+        kept.engine_loops = Some(loops.clone());
         kept.engines = vec![EngineSound::default(); drivers.len()];
         kept.far = Default::default();
     }
-    let voice = kept.engines[own].player(ours);
-    sounds.set_engine(loops[0], engine_sfx(voice));
+    for (view, l) in listeners.iter().take(own).enumerate() {
+        let mut voice = kept.engines[l.slot].player(drivers[l.slot]);
+        voice.pan = biased(voice.pan, l.bias);
+        sounds.set_engine(loops[view], engine_sfx(voice));
+    }
 
-    // The nearest and the next nearest, the first found of equals.
-    let mut nearest = [(None, i32::MAX); 2];
+    // The nearest and the next nearest to any camera (not a player's), the first found of equals.
+    let mut nearest = [(None, i32::MAX, 0); 2];
     for (slot, &at) in places.iter().enumerate().take(drivers.len()) {
-        if slot == own {
+        if listeners.iter().any(|l| l.slot == slot) {
             continue;
         }
-        let distance = ((at - ear.translation).length() / SCALE) as i32;
+        let (distance, ear) = (listeners.iter().enumerate())
+            .map(|(i, l)| (((at - l.ear.translation).length() / SCALE) as i32, i))
+            .min()
+            .unwrap();
         if distance < nearest[0].1 {
-            nearest = [(Some(slot), distance), nearest[0]];
+            nearest = [(Some(slot), distance, ear), nearest[0]];
         } else if distance < nearest[1].1 {
-            nearest[1] = (Some(slot), distance);
+            nearest[1] = (Some(slot), distance, ear);
         }
     }
-    let echo = ours.actions_flag_set & actions::ENGINE_ECHO != 0;
-    for (i, (slot, distance)) in nearest.into_iter().enumerate() {
+    let echo = drivers[listeners[0].slot].actions_flag_set & actions::ENGINE_ECHO != 0;
+    for (i, (slot, distance, ear)) in nearest.into_iter().enumerate() {
         let sfx = slot.map_or(howl::Sfx::SILENT, |slot| {
-            let pan = CENTRE as i32 + side_of(ear, places[slot]);
+            let pan = CENTRE as i32 + side_of(&listeners[ear].ear, places[slot]);
             let kart = &mut kept.engines[slot];
             engine_sfx(kart.far(drivers[slot], distance, pan, &mut kept.far[i], echo))
         });
-        sounds.set_engine(loops[1 + i], sfx);
+        sounds.set_engine(loops[own + i], sfx);
     }
 }
 
@@ -874,6 +945,21 @@ fn engine_sfx(voice: EngineVoice) -> howl::Sfx {
         pan: voice.pan,
         echo: voice.echo,
     }
+}
+
+/// What the loudest of the `listeners` hears of `at` by `how` ([`heard`] or [`heard_kart`]): its
+/// volume and pan. A sound is heard once, by whoever is nearest.
+fn loudest(
+    listeners: &[Listener],
+    at: Vec3,
+    how: fn(&Transform, Vec3) -> Option<(u8, u8)>,
+) -> Option<(u8, u8)> {
+    listeners.iter().filter_map(|l| how(&l.ear, at)).max_by_key(|&(volume, _)| volume)
+}
+
+/// As [`heard_kart`], by the loudest of the `listeners`.
+fn heard_kart_by(listeners: &[Listener], at: Vec3) -> Option<(u8, u8)> {
+    loudest(listeners, at, heard_kart)
 }
 
 /// `PlaySound3D`: the volume and pan a sound at `at` (world space) is heard with by the camera
@@ -920,6 +1006,10 @@ mod tests {
 
     fn ear() -> Transform {
         Transform::from_xyz(0.0, 0.0, 0.0).looking_at(Vec3::NEG_Z, Vec3::Y)
+    }
+
+    fn ears() -> [Listener; 1] {
+        [Listener::new(0, 1, 0, ear())]
     }
 
     /// A point `units` level units from the ear, `degrees` to its right of straight ahead.
@@ -980,7 +1070,7 @@ mod tests {
             &mut sounds,
             &mut loops,
             [(7, near)].into_iter(),
-            &ear(),
+            &ears(),
             false,
         );
         let playing = loops[&7].unwrap();
@@ -993,7 +1083,7 @@ mod tests {
             &mut sounds,
             &mut loops,
             [(7, nearer)].into_iter(),
-            &ear(),
+            &ears(),
             false,
         );
         assert_eq!(loops[&7], Some(playing));
@@ -1006,12 +1096,12 @@ mod tests {
             &mut sounds,
             &mut loops,
             [(7, far), (8, far)].into_iter(),
-            &ear(),
+            &ears(),
             false,
         );
         assert_eq!((loops[&7], loops[&8]), (Some(playing), None));
         // Not sent, it stops.
-        keep_loops(&mut sounds, &mut loops, std::iter::empty(), &ear(), false);
+        keep_loops(&mut sounds, &mut loops, std::iter::empty(), &ears(), false);
         assert!(loops.is_empty());
     }
 

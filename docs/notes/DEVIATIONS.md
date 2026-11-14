@@ -66,6 +66,14 @@ This file is for the places where the port _intentionally_ differs from the orig
 - A launch is heard from the weapon just sent off, or from the kart for a mine that went off at once. The objects and weapons echo as our kart does, where retail takes the camera's quad block.
 - As in retail, the snowball of Blizzard Bluff is silent (retail looks for `DYNAMIC_SNOWBALL`, the level has `TEMP_SNOWBALL`), and so are the turtles (their sound waits for a timer value the wait ends before).
 
+**Sound in split screen (2026-11-14, NOT listened to):** `client::sound`'s `Listener` (one per local view: the kart's slot, the view's camera and a pan bias), given to `Sfx::tick` by `drive_tick`. Intentional differences:
+- Retail turns the engines down for two or more players on one screen (`EngineAudio_Recalculate`) and plays every player's sounds in the middle; ours pan each local player's own sounds (engine, skid, turbo, bumps and boosts) 48 steps toward its side of the screen, the first view to the left, the next to the right, and so on (also in two players' stacked views), so that the engines can be told apart, and do not turn the engines down.
+- Each local player has the loop of its own engine (`EngineFX` `class * 4 + view`, so up to four; further views have none). The first has all of our kart's loops; the others have the skid and the turbo's roar only, not the ground or the wall rub. (Retail has no limit but the SPU's 24 voices, which `howl` does not impose either.)
+- The two far engines go to the two karts nearest any camera that are not a local player's.
+- What the world makes (the crates, the fruit, the objects, the weapons, the other karts' sounds) is heard by the loudest camera, with the pan of that camera, so that a sound is heard once.
+- The music, and the states it follows (the lap, the place, the mask, the wrong way), are the first player's alone. The lap's sound and the win's play once if any local player has one, and the item roulette's plays while any local player's spins.
+- The voice lines carry everywhere with more than one view, as with `global_voices`, and are said once (the queue of `request_voiceline` picks by priority).
+
 **The echo of tunnels (2026-10-27, NOT listened to):** `howl::reverb` (the SPU's reverb unit of `platform/native_audio.c`: its ten modes, the 22.05 kHz work area and the filter in and out; the same output as the C, sample for sample, on a test signal in every mode), `Howl::set_reverb` and `set_level_reverb` (`SetReverbMode`, `Audio_SetReverbMode` with `data.reverbParams`, `data.reverbMode` and `reverbModeBossID`), set by `client::sound` as a track loads. Intentional differences:
 - A map's number (the top bit set) is past the levels' table, so a map has the reverb of the levels after it (studio A). Retail's `levelID` is signed and has no maps.
 - There are no boss races, so no boss's reverb is ever set.
