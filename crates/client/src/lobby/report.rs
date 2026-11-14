@@ -43,6 +43,9 @@ pub(super) fn report(
     let mut leads = Vec::new();
     let mut stopped = false;
     let mut paused = None;
+    let mut new_standings = None;
+    // Whether a race started, and if so whether it is a cup's.
+    let mut started_cup = None;
     let mut rtts = Vec::new();
     let mut left = Vec::new();
     let mut gones = Vec::new();
@@ -71,9 +74,13 @@ pub(super) fn report(
                 bots,
             } => roster = Some((players, spectators, you, locked, bots)),
             Event::Announce(text) => announce(&mut toasts, text),
+            // (The scoreboard shows them: `scoreboard.rs`.)
             Event::Standings(standings) => {
                 cup_next = standings.next.as_ref().map(|(track, _)| *track);
-                announce(&mut toasts, super::cup::standings_text(&standings))
+                for line in super::cup::standings_text(&standings).lines() {
+                    console!("{line}");
+                }
+                new_standings = Some(standings);
             }
             Event::Chat { from, text } => chats.push((from, text)),
             Event::Joined(id) => {
@@ -123,6 +130,7 @@ pub(super) fn report(
                     .characters
                     .truncate(race::MAX_KARTS.saturating_sub(characters_len));
                 stopped = false;
+                started_cup = Some(retail.cup);
                 let names: Vec<String> = players
                     .iter()
                     .map(|id| id.fmt_short().to_string())
@@ -285,6 +293,15 @@ pub(super) fn report(
     }
     if cup_next.is_some() {
         lobby.cup_next = cup_next;
+    }
+    // A race that is not of a cup, or the first of a new one, leaves the old standings behind.
+    if let Some(cup) = started_cup
+        && (!cup || lobby.standings.as_ref().is_some_and(|s| s.next.is_none()))
+    {
+        lobby.standings = None;
+    }
+    if new_standings.is_some() {
+        lobby.standings = new_standings;
     }
     if stopped {
         lobby.cup_next = None;

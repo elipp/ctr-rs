@@ -80,6 +80,8 @@ pub struct Standings {
     /// The next race, if one follows: the track (its level id) and its name, as the host knows
     /// it (a guest may not have a custom track yet).
     pub next: Option<(u32, String)>,
+    /// The host stopped the cup: these are its final standings, and `gained` is empty.
+    pub stopped: bool,
 }
 
 /// The retail bots of a race (`vehicle::bot`), which every client adds after the players and
@@ -114,6 +116,8 @@ pub struct Score {
     pub id: [u8; 32],
     /// What the player was called when the race was scored (it may have left since).
     pub name: String,
+    /// The character it drove then, for its portrait.
+    pub character: u8,
     pub points: u32,
 }
 
@@ -518,14 +522,17 @@ mod tests {
                 gained: vec![Score {
                     id: [2; 32],
                     name: "Ripper".into(),
+                    character: 4,
                     points: 3,
                 }],
                 totals: vec![Score {
                     id: [2; 32],
                     name: "Ripper".into(),
+                    character: 4,
                     points: 5,
                 }],
                 next: Some((7, "Coco Park".into())),
+                stopped: false,
             }),
             Message::Pause { epoch: 2, at: Some(900) },
             Message::Pause { epoch: 2, at: None },

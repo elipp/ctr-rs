@@ -139,6 +139,15 @@ impl Online {
         }
     }
 
+    /// The kart of `slot` as a cup scores it.
+    pub fn finisher(&self, slot: usize) -> Option<super::cup::Finisher> {
+        Some(super::cup::Finisher {
+            who: self.who(slot)?,
+            name: self.kart_label(slot).to_string(),
+            character: *self.kart_characters().get(slot)?,
+        })
+    }
+
     /// Whether we only watch: the slot is past the players', and there is no kart of ours.
     pub fn spectating(&self) -> bool {
         self.slot >= self.characters.len()

@@ -115,6 +115,8 @@ pub struct Lobby {
     /// The track of the cup's next race, as the standings of the race before told it: its start
     /// brings the loading screen's flag in over the race before (`scene::switch_level`).
     pub(crate) cup_next: Option<u32>,
+    /// The cup's latest standings (or its final ones), for the scoreboard.
+    pub(crate) standings: Option<net::Standings>,
     pub online: Option<Online>,
 }
 
@@ -169,6 +171,7 @@ pub struct Row {
     pub name: String,
     /// The short key of its machine.
     pub key: String,
+    pub id: EndpointId,
     /// Whether it is the host's own.
     pub host: bool,
     /// Whether it is at our machine.
@@ -223,6 +226,7 @@ impl Lobby {
                 character: member.character,
                 name: member.label.clone(),
                 key: member.key.clone(),
+                id: member.id,
                 host: n == 0,
                 you: member.you,
             });
@@ -234,6 +238,7 @@ impl Lobby {
                     character,
                     name: format!("{}@{}", member.label, n + 2),
                     key: member.key.clone(),
+                    id: member.id,
                     host: false,
                     you: member.you,
                 });
@@ -374,6 +379,7 @@ impl Lobby {
             gained,
             totals: series.totals(),
             next: next.map(|track| (track, maps::name(track))),
+            stopped: false,
         };
         if let Some(session) = &self.session {
             session.standings(standings);

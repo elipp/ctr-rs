@@ -458,14 +458,8 @@ pub(super) fn run(
             Action::DebugRanking => {
                 // The others are told the race stopped; the host scores it like a finished one.
                 let Some(net) = &lobby.online else { continue };
-                let mut finishers: Vec<Finisher> = (0..net.karts())
-                    .filter_map(|slot| {
-                        Some(Finisher {
-                            who: net.who(slot)?,
-                            name: net.kart_label(slot).to_string(),
-                        })
-                    })
-                    .collect();
+                let mut finishers: Vec<Finisher> =
+                    (0..net.karts()).filter_map(|slot| net.finisher(slot)).collect();
                 shuffle(&mut finishers);
                 let players = finishers.len();
                 if let Some(session) = &lobby.session {
@@ -498,11 +492,17 @@ pub(super) fn run(
                     session.stop();
                 }
                 lobby.countdown = None;
-                let cup = lobby.series.take().is_some_and(|s| s.scored);
+                let series = lobby.series.take();
+                let cup = series.as_ref().is_some_and(|s| s.scored);
                 lobby.end_race();
                 // (The guests hear of a stopped race from the session; of a cup, only from us.)
                 if cup {
                     lobby.announce("Cup stopped");
+                    if let Some(standings) = series.and_then(|s| s.final_standings())
+                        && let Some(session) = &lobby.session
+                    {
+                        session.standings(standings);
+                    }
                 } else {
                     toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
                 }

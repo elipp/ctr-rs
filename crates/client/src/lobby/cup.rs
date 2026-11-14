@@ -145,23 +145,32 @@ pub enum Who {
 
 impl Who {
     /// What [`net::Score`] says it is: a player's key, or a made-up one for a bot.
-    fn id(&self) -> [u8; 32] {
+    pub(crate) fn id(&self) -> [u8; 32] {
         match self {
             Who::Player(id) => *id.as_bytes(),
             Who::Bot(character) => {
-                let mut id = [0xb0; 32];
+                let mut id = [BOT_ID; 32];
                 id[31] = *character;
                 id
             }
         }
     }
+
+    /// Whether a [`net::Score`]'s id is a bot's.
+    pub(crate) fn is_bot_id(id: &[u8; 32]) -> bool {
+        id[..31].iter().all(|&b| b == BOT_ID)
+    }
 }
 
-/// A kart of a race in the order they finished, and what it is called.
+/// What a bot's made-up id is filled with.
+const BOT_ID: u8 = 0xb0;
+
+/// A kart of a race in the order they finished, what it is called and the character it drives.
 #[derive(Clone)]
 pub struct Finisher {
     pub who: Who,
     pub name: String,
+    pub character: u8,
 }
 
 /// The races the host is running: a cup, or the one race of `/race start`.
@@ -182,7 +191,8 @@ pub struct Series {
     pub paused: bool,
     /// The points of every player and bot so far, in the order they were first scored.
     points: Vec<(Who, u32)>,
-    names: HashMap<Who, String>,
+    /// How each was last scored: its name and character.
+    drivers: HashMap<Who, Finisher>,
 }
 
 impl Series {
@@ -198,7 +208,7 @@ impl Series {
             retail: net::RetailBots::default(),
             paused: false,
             points: Vec::new(),
-            names: HashMap::new(),
+            drivers: HashMap::new(),
         }
     }
 
@@ -214,7 +224,7 @@ impl Series {
             retail: net::RetailBots::default(),
             paused: false,
             points: Vec::new(),
-            names: HashMap::new(),
+            drivers: HashMap::new(),
         }
     }
 
@@ -245,7 +255,7 @@ impl Series {
         };
         let mut gained = Vec::new();
         for (place, finisher) in finishers.iter().enumerate() {
-            self.names.insert(finisher.who, finisher.name.clone());
+            self.drivers.insert(finisher.who, finisher.clone());
             let won = if bots {
                 POINTS_WITH_BOTS.get(place).copied().unwrap_or(0)
             } else {
@@ -259,6 +269,7 @@ impl Series {
                 gained.push(Score {
                     id: finisher.who.id(),
                     name: finisher.name.clone(),
+                    character: finisher.character,
                     points: won,
                 });
             }
@@ -271,26 +282,50 @@ impl Series {
         let mut totals: Vec<Score> = self
             .points
             .iter()
-            .map(|(who, total)| Score {
-                id: who.id(),
-                name: self.names.get(who).cloned().unwrap_or_default(),
-                points: *total,
+            .map(|(who, total)| {
+                let driver = self.drivers.get(who);
+                Score {
+                    id: who.id(),
+                    name: driver.map(|d| d.name.clone()).unwrap_or_default(),
+                    character: driver.map_or(0, |d| d.character),
+                    points: *total,
+                }
             })
             .collect();
         totals.sort_by_key(|score| std::cmp::Reverse(score.points));
         totals
     }
+
+    /// The standings of a cup the host stopped, if anyone has points yet.
+    pub fn final_standings(&self) -> Option<net::Standings> {
+        if !self.scored || self.points.is_empty() {
+            return None;
+        }
+        Some(net::Standings {
+            cup: self.name.clone().unwrap_or_else(|| "Cup".into()),
+            race: self.race as u8,
+            races: self.tracks.len() as u8,
+            gained: Vec::new(),
+            totals: self.totals(),
+            next: None,
+            stopped: true,
+        })
+    }
 }
 
-/// The standings as a toast shows them: the race's results, then the totals and what comes next.
+/// The standings as the console shows them: the race's results, then the totals and what comes
+/// next.
 pub fn standings_text(standings: &net::Standings) -> String {
+    let totals: Vec<String> = (standings.totals.iter())
+        .map(|s| format!("{}: {}", s.name, s.points))
+        .collect();
+    if standings.stopped {
+        return format!("{}: stopped\n\nFinal standings\n{}", standings.cup, totals.join("\n"));
+    }
     let gained: Vec<String> = (standings.gained.iter().enumerate())
         .map(|(place, s)| format!("{}. {} +{}", place + 1, s.name, s.points))
         .collect();
     let gained = gained.join("\n");
-    let totals: Vec<String> = (standings.totals.iter())
-        .map(|s| format!("{}: {}", s.name, s.points))
-        .collect();
     let totals = totals.join("\n");
     let mut text = format!(
         "{}: race {} of {}\n\n{gained}",
@@ -316,6 +351,7 @@ mod tests {
             .map(|i| Finisher {
                 who: Who::Player(net::SecretKey::from_bytes(&[i + 1; 32]).public()),
                 name: format!("p{i}"),
+                character: i,
             })
             .collect()
     }
@@ -385,6 +421,23 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_cup_has_final_standings_once_anyone_has_points() {
+        let def = CupDef {
+            name: "c".into(),
+            tracks: vec!["1".into(), "2".into()],
+            laps: 3,
+        };
+        let mut series = Series::cup(&def, vec![1, 2]);
+        assert!(series.final_standings().is_none());
+        series.score(3, &finishers(3));
+        let standings = series.final_standings().unwrap();
+        assert!(standings.stopped && standings.next.is_none() && standings.gained.is_empty());
+        assert_eq!(standings.totals[0].name, "p0");
+        assert_eq!(standings.totals[0].character, 0);
+        assert!(Series::single(1, 3).final_standings().is_none());
+    }
+
+    #[test]
     fn with_bots_the_first_four_get_retails_points() {
         let mut series = Series::single(0, 3);
         series.retail.characters = vec![3, 4, 5];
@@ -395,6 +448,7 @@ mod tests {
                 Finisher {
                     who: Who::Bot(character),
                     name: format!("bot{character}"),
+                    character,
                 },
             );
         }

@@ -44,10 +44,12 @@ pub enum Control {
     MuteSound,
     /// `/cup pause`, or `/cup resume` when paused (the host only: `lobby/commands.rs`).
     PauseRace,
+    /// Held, shows the lobby's scoreboard (`scoreboard.rs`).
+    Scoreboard,
 }
 
 impl Control {
-    pub const ALL: [Control; 17] = [
+    pub const ALL: [Control; 18] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -65,6 +67,7 @@ impl Control {
         Control::MuteMusic,
         Control::MuteSound,
         Control::PauseRace,
+        Control::Scoreboard,
     ];
 
     /// Its name in the config.
@@ -87,6 +90,7 @@ impl Control {
             Control::MuteMusic => "mute-music",
             Control::MuteSound => "mute-sound",
             Control::PauseRace => "pause-race",
+            Control::Scoreboard => "scoreboard",
         }
     }
 
@@ -110,6 +114,7 @@ impl Control {
             Control::MuteMusic => "Mute music",
             Control::MuteSound => "Mute sound",
             Control::PauseRace => "Pause race",
+            Control::Scoreboard => "Scoreboard",
         }
     }
 
@@ -132,6 +137,7 @@ impl Control {
             Control::MuteMusic => &[KeyCode::KeyM],
             Control::MuteSound => &[KeyCode::KeyS],
             Control::PauseRace => &[KeyCode::KeyG],
+            Control::Scoreboard => &[KeyCode::Tab],
         }
     }
 
@@ -162,8 +168,8 @@ impl Controls {
 
     /// The keys of the second player on the same keyboard: the I, J, K and L keys steer, with the
     /// hops and the item beside them. Only what the kart does is bound: the rest (the menu's
-    /// level and racer keys, the mutes, the pause) is the one keyboard's, and stays the first
-    /// player's.
+    /// level and racer keys, the mutes, the pause, the scoreboard) is the one keyboard's, and
+    /// stays the first player's.
     pub fn second() -> Controls {
         let keys = |control: Control| -> Vec<KeyCode> {
             match control {

@@ -83,6 +83,7 @@ mod rect_menu;
 mod remote;
 mod resources;
 mod scene;
+mod scoreboard;
 mod shadow;
 mod shield;
 mod skid;
