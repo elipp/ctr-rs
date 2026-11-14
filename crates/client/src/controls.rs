@@ -266,6 +266,7 @@ pub fn taken(key: KeyCode) -> Option<&'static str> {
         KeyCode::Enter => "opens the command line",
         KeyCode::F3 => "opens the effects panel",
         KeyCode::Home => "resets the camera",
+        KeyCode::F11 => "toggles full screen",
         _ => return None,
     })
 }

@@ -387,11 +387,20 @@ function enterFullscreenAgain() {
   enterFullscreen.call(root)?.then(() => (restoreFullscreen = false)).catch(() => {});
 }
 fullButton.hidden = !enterFullscreen || isHomeScreenApp;
-fullButton.addEventListener("click", () => {
+function toggleFullscreen() {
   restoreFullscreen = false;
   const asked = isFullscreen() ? exitFullscreen.call(document) : enterFullscreen.call(root);
   asked?.catch((e) => console.warn(`could not change to full screen: ${e}`));
-});
+}
+fullButton.addEventListener("click", toggleFullscreen);
+// F11 works like the button. The browser's own F11 full screen would not tell the page, and the
+// button would show the wrong state.
+addEventListener("keydown", (e) => {
+  if (e.code !== "F11" || !enterFullscreen) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!e.repeat) toggleFullscreen();
+}, true);
 addEventListener("touchend", (e) => {
   if (!restoreFullscreen || lineOpen || fullButton.contains(e.target)) return;
   const touch = e.changedTouches[0];

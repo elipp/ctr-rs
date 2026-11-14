@@ -292,7 +292,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             "Change a setting",
             &[
                 takes("nickname", "The name others see (12 at most)", "<name>"),
-                // (A browser has none of these three: see `config.rs`.)
+                // (A browser has none of these four: see `config.rs`.)
                 #[cfg(not(target_arch = "wasm32"))]
                 node(
                     "vsync",
@@ -301,6 +301,12 @@ pub(crate) const COMMANDS: &[Spec] = &[
                         leaf("on", "Wait for the display"),
                         leaf("off", "Draw as fast as allowed"),
                     ],
+                ),
+                #[cfg(not(target_arch = "wasm32"))]
+                node(
+                    "fullscreen",
+                    "Fill the screen, no value toggles",
+                    &[leaf("on", "Fill the screen"), leaf("off", "In a window")],
                 ),
                 #[cfg(not(target_arch = "wasm32"))]
                 takes("fps-max", "Frame limit, 0 for none", "<frames a second>"),
