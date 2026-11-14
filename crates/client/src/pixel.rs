@@ -84,6 +84,9 @@ pub const PRESENT_ORDER: isize = 100;
 pub const UNDER_ORDER: isize = PRESENT_ORDER + 1;
 pub const FIGURES_ORDER: isize = PRESENT_ORDER + 10;
 pub const HUD_ORDER: isize = PRESENT_ORDER + 20;
+/// The order of the camera that the window's own UI goes to in a split screen (the menus, the
+/// console, the toasts): over every player's HUD, which has cameras of their own.
+pub const UI_ORDER: isize = PRESENT_ORDER + 50;
 
 /// The image that the scene's cameras draw into, while the scale is not 1.
 #[cfg(not(target_arch = "wasm32"))]

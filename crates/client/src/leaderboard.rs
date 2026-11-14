@@ -79,12 +79,18 @@ impl Plugin for LeaderboardPlugin {
 fn build(
     mut commands: Commands,
     lobby: Res<Lobby>,
+    drive: Res<crate::drive::Drive>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
     loaded: Option<Res<Portraits>>,
     boards: Query<(Entity, &Board)>,
 ) {
-    let online = lobby.online.as_ref().filter(|online| online.built);
+    // (None in a split screen: the column is one for the whole window, and the players have their
+    // own parts of it.)
+    let online = lobby
+        .online
+        .as_ref()
+        .filter(|online| online.built && drive.views().len() == 1);
     for (entity, board) in &boards {
         // The same race goes on; a restart keeps the players, so it keeps the column too.
         if online.is_some_and(|o| o.names == board.names && o.kart_characters() == board.characters)

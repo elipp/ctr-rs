@@ -17,6 +17,7 @@
 //! * R: back to the starting grid
 //! * H or Triangle: swap the minimap and the speedometer (`speedometer.rs`)
 //! * Escape, P or Start: the pause menu (`pause.rs`)
+//! * Select or C (B for the second keyboard player): that player's racer menu (`chooser.rs`)
 //! * `/players <1 to 4>`: share the screen (offline). The second player takes a free pad, or the
 //!   keyboard's I J K L (U, O hop, `;` item, Y aim); the others take pads (`split.rs`)
 //!
@@ -24,6 +25,7 @@
 //! start-of-race countdown, other karts. Falling off the track is a mask grab: Aku Aku
 //! or Uka Uka (`mask.rs`) carries the kart back to the track.
 
+mod chooser;
 mod follow;
 mod input;
 mod local;
@@ -42,6 +44,7 @@ use overlay::{hud, reserves_hud, reward_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
 pub use follow::{ChaseCamera, MainView, ViewOf};
+pub use chooser::Chosen;
 pub(crate) use input::Pads;
 pub(crate) use local::LocalView;
 pub(crate) use split::{HudCamera, UnderCamera, window_rect};
@@ -141,6 +144,8 @@ pub struct DrivePlugin;
 impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LocalPlayers(1))
+            .init_resource::<Chosen>()
+            .add_systems(Update, (chooser::input, chooser::sync, chooser::show).chain().run_if(driving))
             .insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
             .init_resource::<crate::flash::Flashes>()

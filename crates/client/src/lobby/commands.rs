@@ -61,7 +61,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             net::NOT_NOW
         }
         Action::Players(Some(_)) if lobby.is_open() || lobby.online.is_some() => {
-            "Split screen is for offline play: close the lobby first"
+            "The players are set before joining: close the lobby first"
         }
         Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
         Action::Character(_) if lobby.online.is_some() || lobby.characters_locked() => net::NOT_NOW,
@@ -115,6 +115,7 @@ pub(super) fn run(
     mut actions: MessageReader<Action>,
     mut lobby: ResMut<Lobby>,
     drive: Res<crate::drive::Drive>,
+    chosen: Res<crate::drive::Chosen>,
     track: Res<crate::Track>,
     time: Res<Time<Real>>,
     mut smoothing: ResMut<crate::kart::Smoothing>,
@@ -131,19 +132,21 @@ pub(super) fn run(
             toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
-        // A lobby is for one player of ours (so far): the others go.
-        if matches!(
-            action,
-            Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
-        ) && players.0 > 1
-        {
+        // Whoever watches has no kart of its own: the other players go.
+        if matches!(action, Action::SpectateLobby(_)) && players.0 > 1 {
             players.0 = 1;
-            toasts.write(Toast::new("Split screen is off in a lobby", 2500));
+            toasts.write(Toast::new("Split screen is off while watching", 2500));
         }
+        // The other local players join the lobby along with the first, each with the racer picked
+        // in its menu (by default the one that follows the one before). Their menus change it
+        // later, through `Lobby::set_extras`.
+        let extras: Vec<u8> = (1..players.0)
+            .map(|slot| chosen.character(slot, drive.character) as u8)
+            .collect();
         let now = time.elapsed_secs();
         let say = match action {
             Action::CreateLobby { public } => {
-                lobby.host(drive.character as u8, &config.nickname, public.as_deref());
+                lobby.host(drive.character as u8, &extras, &config.nickname, public.as_deref());
                 if public.is_some() {
                     "Creating public lobby..."
                 } else {
@@ -151,7 +154,7 @@ pub(super) fn run(
                 }
             }
             Action::JoinLobby(ticket) => {
-                lobby.join(ticket.clone(), drive.character as u8, &config.nickname);
+                lobby.join(ticket.clone(), drive.character as u8, &extras, &config.nickname);
                 "Joining lobby..."
             }
             Action::SpectateLobby(ticket) => {

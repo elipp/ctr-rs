@@ -190,8 +190,13 @@ pub(super) fn drive_tick(
         each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
     }
 
-    // Tick 0 has to come first: the others must be ready as well.
-    if lobby.online.as_ref().is_some_and(|net| !net.go) {
+    // Tick 0 has to come first: the others must be ready as well. (And our local players' views
+    // are up, which make their pads: the race cannot play a tick without them.)
+    if lobby
+        .online
+        .as_ref()
+        .is_some_and(|net| !net.go || (!net.spectating() && drive.views.len() != net.locals.len()))
+    {
         for mut text in &mut net_label {
             text.0 = match &lobby.online {
                 Some(net) if config.debug_hud => net.summary(0, 0),
@@ -304,7 +309,8 @@ pub(super) fn drive_tick(
     let late: Vec<usize> = if online {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
-            // (Our bots' pads are made below.)
+            // (Our other local players' pads are made below, and so are our bots'.)
+            .filter(|&slot| !lobby.online.as_ref().is_some_and(|net| net.local(slot)))
             .filter(|&slot| !ours(slot))
             .filter(|&slot| !(watches && finished_slot(slot)))
             .filter(|&slot| {
@@ -414,6 +420,34 @@ pub(super) fn drive_tick(
                 .collect(),
         );
     }
+    // The other local players' pads, from their own devices. (Their karts are in the race
+    // already, and the pads are in before the tick is played, as ours is.) Online they go to the
+    // others before ours, in the same packet.
+    let mut extra_pads = Vec::new();
+    for view in drive.views.iter().skip(1) {
+        if sim.race.confirmed_until(view.slot) > tick {
+            continue;
+        }
+        let held = sim.race.karts[view.slot].held;
+        // (A menu of the player's own has the controls: the kart coasts.)
+        let pad = if view.chooser.open {
+            Pad::default()
+        } else {
+            Pad::of_input(&controller.read(&view.device, &taken, held))
+        };
+        sim.race
+            .confirm(view.slot, tick, pad)
+            .expect("their pads come in order");
+        extra_pads.push(net::Pad {
+            held: pad.held,
+            lx: pad.lx,
+            ly: pad.ly,
+            ry: pad.ry,
+        });
+    }
+    if online && !extra_pads.is_empty() {
+        lobby.send_extras(extra_pads);
+    }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
     // others get it as well. (A tick that waits plays the pad it already has.) Once we have
     // finished it is neutral: the sim ignores it, and the others still wait for it (so that the
@@ -422,7 +456,7 @@ pub(super) fn drive_tick(
         let held = sim.kart().held;
         let pad = if watches {
             Pad::default()
-        } else if online && hold.menu.open {
+        } else if (online && hold.menu.open) || drive.views[0].chooser.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if let Some(pad) = auto_pad {
@@ -454,18 +488,6 @@ pub(super) fn drive_tick(
                 ry: pad.ry,
             });
         }
-    }
-    // The other local players' pads, from their own devices. (Their karts are in the race
-    // already, and the pads are in before the tick is played, as ours is.)
-    for view in drive.views.iter().skip(1) {
-        if sim.race.confirmed_until(view.slot) > tick {
-            continue;
-        }
-        let held = sim.race.karts[view.slot].held;
-        let pad = Pad::of_input(&controller.read(&view.device, &taken, held));
-        sim.race
-            .confirm(view.slot, tick, pad)
-            .expect("their pads come in order");
     }
     for mut text in &mut net_label {
         text.0 = match &lobby.online {

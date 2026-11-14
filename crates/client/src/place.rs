@@ -11,7 +11,7 @@ use render::place::{Digit, suffix};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews};
 
 /// How big a unit of the digits' models is drawn, in pixels of retail's screen across and lines
 /// down: in a retail screenshot the "1", 42 units wide and 55 tall, is about 52 pixels wide and
@@ -83,24 +83,23 @@ impl Plugin for PlacePlugin {
 
 fn show(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     lobby: Res<crate::lobby::Lobby>,
     digits: Res<BigDigits>,
     mut huds: Query<(&HudView, &mut Visibility, &Children), With<PlaceHud>>,
     mut digit: Query<(&mut ImageNode, &mut Node), With<BigDigit>>,
     mut suffixes: Query<&mut CtrText, With<Suffix>>,
 ) {
-    for view in hud_view::missing(&sim, &drive, huds.iter().map(|(v, ..)| *v)) {
+    for view in hud.missing(huds.iter().map(|(v, ..)| *v)) {
         // The first frame, or of a new level (which took the nodes away).
         spawn(&mut commands, view);
     }
     for (&HudView(view), mut visibility, children) in &mut huds {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
+        };
         // `driverRank` is -1 until the kart has a place.
-        let rank = hud_view::driver_of(&sim, &drive, view).driver_rank;
+        let rank = kart.driver.driver_rank;
         let place = usize::try_from(rank).ok().map(|rank| rank + 1);
         let shown = place.filter(|&p| lobby.online.is_some() && p <= digits.0.len());
         visibility.set_if_neq(if shown.is_some() {

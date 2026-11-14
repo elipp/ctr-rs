@@ -40,7 +40,7 @@ use bevy::render::sync_world::MainEntity;
 use bevy::render::view::ViewTarget;
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 
-use crate::hud_view;
+use crate::hud_view::HudViews;
 use crate::props::Sim;
 
 /// Retail's frames a second, which the trail's blend and zoom are per.
@@ -100,7 +100,7 @@ impl Plugin for ClockPlugin {
 /// The strength of each view's screen this frame, and what it makes of the pass.
 fn update(
     sim: Res<Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     config: Res<crate::config::Config>,
     fixed: Res<Time<Fixed>>,
     real: Res<Time<Real>>,
@@ -118,7 +118,7 @@ fn update(
     let stale = seen.is_some_and(|(_, at)| now - at > STALE_SECS);
     // Retail's frames this one stands for.
     let frames = (real.delta_secs() * RETAIL_FPS).clamp(0.0, 4.0);
-    drawn.resize(hud_view::views(&sim, &drive), false);
+    drawn.resize(hud.len(), false);
     for (view, mut t) in &mut trails {
         let view = view.0;
         if view >= drawn.len() {
@@ -128,9 +128,8 @@ fn update(
         let strength = if stale || !config.shader_effects {
             0
         } else {
-            sim.race
-                .last_blurs
-                .get(hud_view::slot_of(&sim, &drive, view))
+            hud.get(view)
+                .and_then(|kart| sim.race.last_blurs.get(kart.slot))
                 .copied()
                 .unwrap_or(0)
         };

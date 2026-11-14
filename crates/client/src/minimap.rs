@@ -19,7 +19,7 @@ use render::minimap::{
 };
 
 use crate::hud;
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews};
 use crate::hud::{atlas_image, pack_groups};
 use crate::{Textures, Track};
 
@@ -89,8 +89,7 @@ fn build(
     track: Res<Track>,
     textures: Res<Textures>,
     dots: Option<Res<DotImages>>,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     maps: Query<(Entity, &HudView), With<Map>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<MapMaterial>>,
@@ -122,7 +121,7 @@ fn build(
         });
     }
     // Retail has none in a split screen (it has a progress bar there, which is not made yet).
-    if drive.views().len() > 1 {
+    if hud.is_split() {
         for (map, _) in &maps {
             commands.entity(map).despawn();
         }
@@ -133,11 +132,11 @@ fn build(
         for (map, _) in &maps {
             commands.entity(map).despawn();
         }
-        (0..hud_view::views(&sim, &drive)).collect()
+        hud.iter().map(|v| v.view).collect()
     } else if *none {
         return;
     } else {
-        hud_view::missing(&sim, &drive, maps.iter().map(|(_, v)| *v))
+        hud.missing(maps.iter().map(|(_, v)| *v))
     };
     if missing.is_empty() {
         return;
@@ -197,7 +196,7 @@ fn hide_for_speedometer(
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     images: Option<Res<DotImages>>,
     maps: Query<(Entity, &HudView, &Map, Option<&Children>)>,
     mut dots: Query<(Entity, &Dot, &mut ImageNode, &mut Node, &mut ZIndex)>,
@@ -208,10 +207,10 @@ fn show(
     let karts = &sim.race.karts;
     let flash = sim.race.objects.ticks() & 2 != 0;
     for (map_entity, &HudView(view), map, children) in &maps {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let own = hud_view::slot_of(&sim, &drive, view);
+        };
+        let own = kart.slot;
         for &child in children.into_iter().flatten() {
             if let Ok((entity, dot, ..)) = dots.get(child)
                 && dot.0 >= karts.len()

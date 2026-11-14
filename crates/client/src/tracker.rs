@@ -21,7 +21,7 @@ use loader::lev::CheckpointNode;
 use weapon::Kind;
 use weapon::warpball::flags::MASK_REPATH;
 
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews, ViewKart};
 use crate::kart::KartSlot;
 use crate::hud::{atlas_image, pack_icons};
 use crate::Track;
@@ -307,7 +307,7 @@ pub struct Trackers(Vec<Tracker>);
 /// One game tick of the HUD.
 pub fn step(
     sim: Res<Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     track: Res<Track>,
     mut states: ResMut<Trackers>,
     mut last: Local<Option<u32>>,
@@ -318,7 +318,7 @@ pub fn step(
         return;
     }
     // The race began again, or the players changed.
-    let players = hud_view::views(&sim, &drive);
+    let players = hud.len();
     if previous.is_some_and(|p| tick < p) || states.0.len() != players {
         states.0.clear();
         states.0.resize_with(players, Tracker::default);
@@ -327,7 +327,9 @@ pub fn step(
         if let Some(flags) = state.chasing.and_then(|id| flags_of(&sim, id)) {
             state.chasing_flags = flags;
         }
-        let slot = crate::hud_view::slot_of(&sim, &drive, view);
+        let Some(ViewKart { slot, .. }) = hud.get(view) else {
+            continue;
+        };
         let closest = closest_tracker(&sim, slot, &track.0.restart_points);
         step_state(state, closest, tick);
     }
@@ -443,7 +445,7 @@ fn icon_quads(size: (usize, usize), frame: Frame) -> Vec<([i32; 2], [f32; 2])> {
 fn show(
     mut commands: Commands,
     states: Res<Trackers>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     textures: Res<crate::Textures>,
     figure: Option<Res<Figure>>,
     mut images: ResMut<Assets<Image>>,
@@ -454,7 +456,6 @@ fn show(
     cameras: Query<(&crate::drive::MainView, &Camera, &GlobalTransform)>,
     karts: Query<(&KartSlot, &Transform)>,
     mut parts: Query<(&HudView, &Part, &Mesh3d, &mut Visibility)>,
-    sim: Res<Sim>,
 ) {
     let Some(figure) = figure else {
         let icons = pack_icons();
@@ -479,10 +480,7 @@ fn show(
     };
     // The figures of each view, made when there are none: one pair, in the same layer as the
     // others', which the one camera over the whole window draws.
-    let missing = hud_view::missing(
-        &sim,
-        &drive,
-        parts
+    let missing = hud.missing(parts
             .iter()
             .filter(|(_, part, ..)| **part == Part::Brackets)
             .map(|(view, ..)| *view),
@@ -508,12 +506,15 @@ fn show(
     let Ok(window) = windows.single() else {
         return;
     };
-    let players = drive.views().len();
     for (&HudView(view), part, mesh_handle, mut visibility) in &mut parts {
+        let Some(mine) = hud.get(view) else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        let slot = mine.slot;
         let frame = states.0.get(view).and_then(|state| state.frame);
         let anchor = (|| {
             let frame = frame?;
-            let slot = hud_view::slot_of(&sim, &drive, view);
             let (_, camera, camera_transform) = cameras.iter().find(|(m, ..)| m.0 == view)?;
             let (_, kart) = karts.iter().find(|(k, _)| k.0 == slot)?;
             // (The camera draws into a part of the picture of the scene, which may be smaller
@@ -537,7 +538,7 @@ fn show(
         visibility.set_if_neq(Visibility::Inherited);
         // The picture is 512 by 216 on the PlayStation, stretched over the player's part of the
         // window.
-        let rect = crate::drive::window_rect(view, players, window);
+        let rect = mine.rect(window);
         let scale = Vec2::new(rect.width() / 512.0, rect.height() / 216.0);
         let place = |offset: [i32; 2]| {
             let screen = at + Vec2::new(offset[0] as f32, offset[1] as f32 - LIFT) * scale;

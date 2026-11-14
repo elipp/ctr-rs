@@ -35,6 +35,8 @@ pub(crate) struct LocalView {
     pub(super) slot: usize,
     /// What makes its pads.
     pub(super) device: Device,
+    /// Its racer menu (`chooser.rs`).
+    pub(crate) chooser: super::chooser::Chooser,
     /// The kart it drives, if it is not ours (`Drive` has ours).
     pub(super) spec: Option<race::KartSpec>,
     pub(super) camera: camera::CameraDc,
@@ -73,6 +75,7 @@ impl LocalView {
         LocalView {
             slot,
             device,
+            chooser: Default::default(),
             spec: None,
             camera,
             weather: crate::weather::WeatherView::new(&track.0),

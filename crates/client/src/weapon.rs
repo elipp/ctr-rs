@@ -17,7 +17,7 @@ use vehicle::item::held;
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::hud_view::{self, HudView, Under};
+use crate::hud_view::{HudView, HudViews, Under};
 use crate::hud::{atlas_image, pack_icons};
 
 /// The pictures of the weapons and of the glow, loaded when the first race needs them.
@@ -119,7 +119,7 @@ fn shuffled(step: u32) -> u8 {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    views: HudViews,
     textures: Res<crate::Textures>,
     time: Res<Time<Real>>,
     mut images: ResMut<Assets<Image>>,
@@ -127,7 +127,7 @@ fn show(
     mut hud: Query<(&HudView, &mut ImageNode, &mut Visibility, &Children), With<WeaponHud>>,
     mut quantity: Query<&mut CtrText, With<Quantity>>,
 ) {
-    let missing = hud_view::missing(&sim, &drive, hud.iter().map(|(v, ..)| *v));
+    let missing = views.missing(hud.iter().map(|(v, ..)| *v));
     if !missing.is_empty() {
         // The first frame of a race, or of a new level (which took the nodes away).
         let atlas = match icons {
@@ -179,10 +179,10 @@ fn show(
         return;
     }
     for (&HudView(view), mut image, mut visibility, children) in &mut hud {
-    if view >= hud_view::views(&sim, &drive) {
+    let Some(kart) = views.get(view) else {
         continue;
-    }
-    let driver = hud_view::driver_of(&sim, &drive, view);
+    };
+    let driver = kart.driver;
     let shown = match driver.held_item_id {
         held::NONE => None,
         held::ROULETTE => {
@@ -231,8 +231,7 @@ fn show(
 /// `hud_view`).
 fn shine(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    views: HudViews,
     time: Res<Time<Real>>,
     icons: Option<Res<WeaponIcons>>,
     mut glows: Query<(&Shine, &HudView, &mut ImageNode, &mut Visibility)>,
@@ -241,10 +240,7 @@ fn shine(
     let Some(icons) = icons else {
         return;
     };
-    let missing = hud_view::missing(
-        &sim,
-        &drive,
-        glows
+    let missing = views.missing(glows
             .iter()
             .filter(|(shine, ..)| matches!(shine, Shine::Weapon))
             .map(|(_, view, ..)| *view),
@@ -307,10 +303,10 @@ fn shine(
         return;
     }
     for (shine, &HudView(view), mut image, mut visibility) in &mut glows {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = views.get(view) else {
             continue;
-        }
-        let driver = hud_view::driver_of(&sim, &drive, view);
+        };
+        let driver = kart.driver;
         let juiced = driver.num_wumpas >= JUICED
             && driver.actions_flag_set & vehicle::actions::RACE_FINISHED == 0;
         let armed = juiced && driver.held_item_id != held::NONE;

@@ -35,13 +35,16 @@ pub enum Control {
     PreviousLevel,
     NextRacer,
     PreviousRacer,
+    /// Opens the menu that picks the racer of a local player (`drive/chooser.rs`), as a pad's
+    /// Select does.
+    RacerMenu,
     /// Mutes or unmutes the music, and every sound (`sound.rs`).
     MuteMusic,
     MuteSound,
 }
 
 impl Control {
-    pub const ALL: [Control; 15] = [
+    pub const ALL: [Control; 16] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -55,6 +58,7 @@ impl Control {
         Control::PreviousLevel,
         Control::NextRacer,
         Control::PreviousRacer,
+        Control::RacerMenu,
         Control::MuteMusic,
         Control::MuteSound,
     ];
@@ -75,6 +79,7 @@ impl Control {
             Control::PreviousLevel => "previous-level",
             Control::NextRacer => "next-racer",
             Control::PreviousRacer => "previous-racer",
+            Control::RacerMenu => "racer-menu",
             Control::MuteMusic => "mute-music",
             Control::MuteSound => "mute-sound",
         }
@@ -96,6 +101,7 @@ impl Control {
             Control::PreviousLevel => "Previous level",
             Control::NextRacer => "Next racer",
             Control::PreviousRacer => "Previous racer",
+            Control::RacerMenu => "Racer menu",
             Control::MuteMusic => "Mute music",
             Control::MuteSound => "Mute sound",
         }
@@ -116,6 +122,7 @@ impl Control {
             Control::PreviousLevel => &[KeyCode::BracketLeft, KeyCode::PageDown],
             Control::NextRacer => &[KeyCode::Period],
             Control::PreviousRacer => &[KeyCode::Comma],
+            Control::RacerMenu => &[KeyCode::KeyC],
             Control::MuteMusic => &[KeyCode::KeyM],
             Control::MuteSound => &[KeyCode::KeyS],
         }
@@ -160,6 +167,7 @@ impl Controls {
                 Control::Hop2 => vec![KeyCode::KeyO],
                 Control::Item => vec![KeyCode::Semicolon],
                 Control::AimUp => vec![KeyCode::KeyY],
+                Control::RacerMenu => vec![KeyCode::KeyB],
                 _ => Vec::new(),
             }
         };

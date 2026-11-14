@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 
 use crate::hud;
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews};
 use crate::speedometer::ShowSpeedometer;
 
 /// Where the bar's bottom right corner is on retail's screen (`UI_HUD_SLOT_SLIDE_METER`), and its
@@ -63,21 +63,20 @@ impl Plugin for SlideMeterPlugin {
 /// several (`hud_view`).
 fn show(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     showing: Res<ShowSpeedometer>,
     mut meters: Query<(&HudView, &mut Visibility), With<SlideMeter>>,
     mut fills: Query<(&Fill, &mut Node, &mut BackgroundColor)>,
 ) {
-    for view in hud_view::missing(&sim, &drive, meters.iter().map(|(v, _)| *v)) {
+    for view in hud.missing(meters.iter().map(|(v, _)| *v)) {
         // The first frame, or of a new level (which took the nodes away).
         spawn(&mut commands, view);
     }
     for (&HudView(view), mut visibility) in &mut meters {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let d = hud_view::driver_of(&sim, &drive, view);
+        };
+        let d = kart.driver;
         let finished = d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
         visibility.set_if_neq(if finished && !showing.0 {
             Visibility::Hidden

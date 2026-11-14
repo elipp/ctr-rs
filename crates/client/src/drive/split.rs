@@ -30,9 +30,12 @@ pub struct UnderCamera(pub usize);
 
 /// Makes the players on the screen as many as `/players` says: the others' karts and views, and
 /// what each drives with. A pad if there is one that no player has, else (for the second player)
-/// the keyboard's second set of keys. Not in a lobby, and not before the level is up.
+/// the keyboard's second set of keys. Not before the level is up. In an online race the players
+/// are the ones the roster gave us (`Online::locals`): the views follow those slots, and the
+/// karts are the characters the host said.
 pub(super) fn sync(
     wanted: Res<LocalPlayers>,
+    chosen: Res<super::Chosen>,
     lobby: Res<Lobby>,
     track: Res<Track>,
     loading: Option<Res<crate::loading::Loading>>,
@@ -46,13 +49,27 @@ pub(super) fn sync(
     mut builder: KartBuilder,
     mut toasts: MessageWriter<Toast>,
 ) {
-    if lobby.online.is_some() || loading.is_some() {
+    if loading.is_some() {
         return;
     }
-    let n = wanted.0.clamp(1, super::MAX_PLAYERS);
+    // The slot of each local player (the first is ours) and the character it drives.
+    let (slots, characters): (Vec<usize>, Vec<usize>) = match &lobby.online {
+        // (Once `remote::build` has put the others on the grid. A spectator has no view of its own.)
+        Some(online) if !online.built || online.spectating() => return,
+        Some(online) => online
+            .locals
+            .iter()
+            .map(|&slot| (slot, online.characters[slot] as usize))
+            .unzip(),
+        None => (0..wanted.0.clamp(1, super::MAX_PLAYERS))
+            .map(|slot| (slot, chosen.character(slot, drive.character)))
+            .unzip(),
+    };
+    let n = slots.len();
     // Both are there, as they should be: a new level takes the karts with the rest of the scene
     // (and starts a `Drive` of one view), a change of count leaves a mismatch.
-    let slots_right = (1..n).all(|slot| karts.iter().any(|k| k.0 == slot));
+    let slots_right = (1..n).all(|view| karts.iter().any(|k| k.0 == slots[view]))
+        && drive.views.iter().zip(&slots).skip(1).all(|(view, &slot)| view.slot == slot);
     if drive.views.len() == n && karts.iter().count() == n - 1 && slots_right {
         return;
     }
@@ -73,6 +90,20 @@ pub(super) fn sync(
     // The HUD of each, when there are several: over everything else of the window, but not the
     // one that Bevy's UI goes to (`OwnTarget` keeps `pixel` from taking them).
     if n > 1 {
+        // The window's UI (the pause menu, ...) is over all of them: this one is drawn last on
+        // the window, so `pixel` takes it for Bevy's UI.
+        builder.commands.spawn((
+            Extra,
+            crate::pixel::OnWindow,
+            Camera2d,
+            Camera {
+                order: crate::pixel::UI_ORDER,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            config.msaa(),
+            RenderLayers::none(),
+        ));
         for view in 0..n {
             builder.commands.spawn((
                 Extra,
@@ -100,8 +131,8 @@ pub(super) fn sync(
             ));
         }
     }
-    for slot in 1..n {
-        let character = (drive.character + slot) % crate::CHARACTERS.len();
+    for view in 1..n {
+        let (slot, character) = (slots[view], characters[view]);
         let (model, wheel_icons) = crate::load_racer(character);
         let spec = KartSpec {
             character,
@@ -112,10 +143,10 @@ pub(super) fn sync(
         let birth = race::Kart::birth(&track.0, slot, &spec);
         let device = match free.pop() {
             Some(pad) => Device::Pad(pad),
-            None if slot == 1 => Device::Keys(Controls::second()),
+            None if view == 1 => Device::Keys(Controls::second()),
             None => {
                 toasts.write(Toast::new(
-                    format!("Player {} has no pad: connect one, then /players again", slot + 1),
+                    format!("Player {} has no pad: connect one, then /players again", view + 1),
                     4000,
                 ));
                 Device::Keys(Controls::none())
@@ -126,13 +157,13 @@ pub(super) fn sync(
             &wheel_icons,
             Transform::default(),
             false,
-            player_layer(slot),
+            player_layer(view),
             Some((slot, &birth)),
         );
         builder.commands.entity(kart).insert(Extra);
         spawn_cameras(
             &mut builder.commands,
-            slot,
+            view,
             projection,
             camera.clear_color.clone(),
             sky.clone(),

@@ -95,6 +95,7 @@ pub(super) fn report(
             }
             Event::Started {
                 slot,
+                locals,
                 characters,
                 players,
                 track,
@@ -127,6 +128,7 @@ pub(super) fn report(
                     .collect();
                 started = Some(Online {
                     slot,
+                    locals,
                     characters,
                     bots,
                     // (Named after the nicknames below.)
@@ -341,6 +343,7 @@ pub(super) fn report(
                 label,
                 nick: p.nick.clone(),
                 character: p.character,
+                extras: p.extras.clone(),
                 you: Some(n) == you,
             })
             .collect();

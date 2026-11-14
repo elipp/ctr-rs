@@ -58,9 +58,9 @@ pub struct Inputs {
     /// as far as it can tell. The latency is in it, as it is in the receiver's own figure, so
     /// half the difference of the two is how far ahead the receiver's clock is.
     pub lead: i32,
-    /// To the host: for each of its bots (see [`Message::Bot`]), the first tick the sender has
-    /// no pad of, as `ack` is for the host's own. Empty to anyone else.
-    pub bot_acks: Vec<Tick>,
+    /// For each of the receiver's extra streams (see [`Message::Extra`]), the first tick the
+    /// sender has no pad of, as `ack` is for its main one. Empty when it has none.
+    pub acks: Vec<Tick>,
 }
 
 /// Where a cup stands after one of its races, as the host scored it: the clients show it as they
@@ -83,7 +83,7 @@ pub struct Standings {
 }
 
 /// The retail bots of a race (`vehicle::bot`), which every client adds after the players and
-/// drives itself: they take no pads. (The other kind, the host's brain bots, are players of the
+/// drives itself: they take no pads. (The other kind, the host's brain bots, are streams of the
 /// host's: see [`Message::Start`].) A race has one kind or the other.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct RetailBots {
@@ -130,8 +130,11 @@ pub enum Message {
     /// is shared with [`Message::Nick`], so that the latest of either wins.
     /// `spectator` is set by a client that only watches: it takes no slot among the players, and
     /// is on the end of the race's roster, past the last of them.
+    /// `extras` are the characters of the other players at the same machine (split screen), who
+    /// take slots of their own: their pads come as [`Message::Extra`] streams.
     Hello {
         character: u8,
+        extras: Vec<u8>,
         seq: u32,
         build: u32,
         nick: String,
@@ -149,7 +152,10 @@ pub enum Message {
     /// clients connect to each other by. `characters` has the players only: a slot past them is a
     /// spectator's, which plays no kart and sends no pads.
     /// The last `bots` of the players are bots that the host drives: their slots in `roster` are
-    /// the host's id, and their pads come from it in [`Message::Bot`].
+    /// the host's id, and their pads come from it in [`Message::Extra`].
+    /// A player's slots are the ones of its id in `roster`, among the players: the first is its
+    /// own (`slot`), the next are its `extras`, in the order of their streams. The host's bots
+    /// are its last.
     Start {
         /// Which race this is (see [`Message::Restart`]): 0 for the first of the lobby. A start
         /// after a race that is over takes new players in, and the ones that left out.
@@ -178,13 +184,14 @@ pub enum Message {
     Go,
     /// Unreliable, between any two players.
     Inputs(Inputs),
-    /// Unreliable, host to each client, along with its [`Message::Inputs`]: the pads of its bot
-    /// `bot` (counted from the first of them, see [`Message::Start`]) from `first` on. They are
-    /// repeated until confirmed (in [`Inputs::bot_acks`]), as the host's own are, each bot in a
-    /// datagram of its own so that a full window of them fits.
-    Bot {
+    /// Unreliable, between any two players, along with its [`Message::Inputs`]: the pads of the
+    /// sender's extra stream `stream` (counted from 0 for the first slot after its own, see
+    /// [`Message::Start`]) from `first` on. They are repeated until confirmed (in
+    /// [`Inputs::acks`]), as the sender's own are, each stream in a datagram of its own so that a
+    /// full window of them fits.
+    Extra {
         epoch: u32,
-        bot: u8,
+        stream: u8,
         first: Tick,
         pads: Vec<Pad>,
     },
@@ -209,14 +216,15 @@ pub enum Message {
     NoBlob { track: u32, hash: u64 },
     /// Reliable, host to each client: who is in the lobby and what each drives, the host first.
     /// It comes whenever that changes, in full, so a client that joins late catches up. Each
-    /// is the endpoint id, the character and the nickname (empty for none).
+    /// is the endpoint id, the character, the nickname (empty for none) and the characters of
+    /// its extra players.
     /// The guests that only watch follow, as the endpoint id and the nickname.
     /// Then how the lobby is listed, if it is public: the realm's endpoint id, the lobby's name
     /// and its track, as the host was given them. A guest keeps them to list the lobby itself
     /// should it become the host (see `Heirs`). Last, whether the host takes no change of
     /// character, from any player (see `Session::lock_characters`).
     Lobby {
-        players: Vec<([u8; 32], u8, String)>,
+        players: Vec<([u8; 32], u8, String, Vec<u8>)>,
         watching: Vec<([u8; 32], String)>,
         public: Option<([u8; 32], String, String)>,
         /// The host takes no change of character (a cup is on).
@@ -334,7 +342,7 @@ impl InputSender {
             pads: self.pads.iter().copied().collect(),
             ack: ours_to_ack,
             lead: self.tick() as i32 - ours_to_ack as i32,
-            bot_acks: Vec::new(),
+            acks: Vec::new(),
         }
     }
 }
@@ -367,7 +375,7 @@ impl InputReceiver {
     }
 
     /// Takes in the pads of the ticks from `first` on, as [`accept`](Self::accept) does a
-    /// packet's (a bot's, of [`Message::Bot`]).
+    /// packet's (an extra stream's, of [`Message::Extra`]).
     pub fn accept_pads(&mut self, first: Tick, pads: &[Pad]) -> Result<(), Gap> {
         let next = self.next();
         if first > next {
@@ -437,6 +445,7 @@ mod tests {
         for message in [
             Message::Hello {
                 character: 9,
+                extras: vec![2, 5],
                 seq: 3,
                 build: 1,
                 nick: "Penta".into(),
@@ -502,7 +511,7 @@ mod tests {
                 hash: 77,
             },
             Message::Lobby {
-                players: vec![([1; 32], 4, String::new()), ([2; 32], 15, "Ripper".into())],
+                players: vec![([1; 32], 4, String::new(), vec![]), ([2; 32], 15, "Ripper".into(), vec![3])],
                 watching: vec![([3; 32], "Eyes".into())],
                 public: Some(([6; 32], "Friday cup".into(), "Coco Park".into())),
                 locked: true,
@@ -542,11 +551,11 @@ mod tests {
                 pads: vec![pad(1), Pad::default()],
                 ack: 5,
                 lead: -3,
-                bot_acks: vec![4, 5],
+                acks: vec![4, 5],
             }),
-            Message::Bot {
+            Message::Extra {
                 epoch: 1,
-                bot: 2,
+                stream: 2,
                 first: 6,
                 pads: vec![pad(2)],
             },
@@ -604,7 +613,7 @@ mod tests {
             pads: (first..first + n).map(pad).collect(),
             ack: 0,
             lead: 0,
-            bot_acks: Vec::new(),
+            acks: Vec::new(),
         };
         receiver.accept(&packet(0, 5)).unwrap();
         receiver.accept(&packet(3, 5)).unwrap();

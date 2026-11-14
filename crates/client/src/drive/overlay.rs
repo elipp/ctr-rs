@@ -7,7 +7,7 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews};
 use crate::wumpa_icon::{COUNTER_GAP, COUNTER_X, MIDDLE_Y};
 
 #[derive(Component)]
@@ -138,13 +138,12 @@ pub(super) fn reward_hud(
 /// digits' (retail draws it 4 lines down from their top, 8 tall, on digits 16 tall).
 pub(super) fn wumpa_hud(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
-    drive: Res<super::Drive>,
+    hud: HudViews,
     counters: Query<(&HudView, &Children), With<WumpaCounter>>,
     mut counts: Query<&mut CtrText, With<WumpaHud>>,
 ) {
     let height = Font::Large.line_height() as f32;
-    for view in hud_view::missing(&sim, &drive, counters.iter().map(|(v, _)| *v)) {
+    for view in hud.missing(counters.iter().map(|(v, _)| *v)) {
         commands.spawn((
             WumpaCounter,
             HudView(view),
@@ -167,10 +166,10 @@ pub(super) fn wumpa_hud(
         ));
     }
     for (&HudView(view), children) in &counters {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let count = hud_view::driver_of(&sim, &drive, view).num_wumpas.to_string();
+        };
+        let count = kart.driver.num_wumpas.to_string();
         for &child in children {
             // A changed text puts its glyphs up again: only a new count changes it.
             if let Ok(mut text) = counts.get_mut(child)

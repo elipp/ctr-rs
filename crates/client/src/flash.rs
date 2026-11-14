@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews, ViewKart};
 use crate::props::Sim;
 
 /// `fadeFromBlack_currentValue` above the neutral `0x1000`, at a blast.
@@ -82,7 +82,7 @@ pub struct Overlay;
 /// One game tick: the fades run on, and a blast on a player's kart puts theirs back to full.
 pub fn step(
     sim: Res<Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     mut flashes: ResMut<Flashes>,
     mut last: Local<Option<u32>>,
 ) {
@@ -91,7 +91,7 @@ pub fn step(
     if previous == Some(tick) {
         return;
     }
-    let views = hud_view::views(&sim, &drive);
+    let views = hud.len();
     // The race began again, or the players changed.
     if previous.is_some_and(|p| tick < p) || flashes.0.len() != views {
         flashes.0.clear();
@@ -99,12 +99,13 @@ pub fn step(
     }
     for (view, flash) in flashes.0.iter_mut().enumerate() {
         flash.previous = flash.current;
-        let slot = hud_view::slot_of(&sim, &drive, view);
+        let Some(ViewKart { slot, driver, .. }) = hud.get(view) else {
+            continue;
+        };
         // A bubble that hurt a kart it bumped into pops with a flash on its owner's screen
         // (`RB_ShieldDark_ThTick_Grow`): the tick that decides the pop leaves it at its first
         // frame.
-        let bubble_popped = sim.race.karts[slot]
-            .driver
+        let bubble_popped = driver
             .shield
             .is_some_and(|s| s.crash_attack && s.pop_frame == Some(1));
         if bubble_popped || sim.race.last_weapons.flashes.contains(&slot) {
@@ -126,13 +127,12 @@ fn brightness(excess: i16) -> f32 {
 
 pub fn show(
     mut commands: Commands,
-    sim: Res<Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     fixed: Res<Time<Fixed>>,
     flashes: Res<Flashes>,
     mut overlays: Query<(&HudView, &mut BackgroundColor), With<Overlay>>,
 ) {
-    for view in hud_view::missing(&sim, &drive, overlays.iter().map(|(v, _)| *v)) {
+    for view in hud.missing(overlays.iter().map(|(v, _)| *v)) {
         // The first frame of a race, or of a new level (which took the nodes away).
         commands.spawn((
             Overlay,

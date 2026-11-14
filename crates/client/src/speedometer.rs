@@ -15,7 +15,7 @@ use vehicle::calc::map_to_range;
 use crate::config::Config;
 use crate::controls::Control;
 use crate::hud;
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews};
 use crate::hud::{atlas_image, pack_icons};
 use crate::pause::PauseMenu;
 
@@ -192,8 +192,7 @@ fn smooth_image(atlas: Atlas, images: &mut Assets<Image>) -> Handle<Image> {
 
 fn show(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     showing: Res<ShowSpeedometer>,
     textures: Res<crate::Textures>,
     art: Option<Res<Art>>,
@@ -217,7 +216,7 @@ fn show(
         });
         return;
     };
-    let missing = hud_view::missing(&sim, &drive, parts.iter().map(|(v, _)| *v));
+    let missing = hud.missing(parts.iter().map(|(v, _)| *v));
     if !missing.is_empty() {
         // (The new needles are at rest.)
         drawn_angles.clear();
@@ -238,12 +237,12 @@ fn show(
         return;
     }
 
-    drawn_angles.resize(hud_view::views(&sim, &drive), None);
+    drawn_angles.resize(hud.len(), None);
     for (&HudView(view), needle) in &needles {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let d = hud_view::driver_of(&sim, &drive, view);
+        };
+        let d = kart.driver;
         let angle = needle_angle(
             d.speedometer_needle_value as i32,
             d.stats.accel_speed_class_stat as i32,
@@ -258,10 +257,10 @@ fn show(
     }
 
     for (&HudView(view), mut node, mut background) in &mut fills {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let jump = hud_view::driver_of(&sim, &drive, view).jump_meter as i32;
+        };
+        let jump = kart.driver.jump_meter as i32;
         // The outline covers the bar's top row.
         let height = hud::y((jump * BAR_HEIGHT / JUMP_MAX).clamp(0, BAR_HEIGHT - 1) as f32);
         if node.height != height {
@@ -270,10 +269,10 @@ fn show(
         background.set_if_neq(BackgroundColor(bar_color(jump)));
     }
     for (&HudView(view), slot, mut node) in &mut slots {
-        if view >= hud_view::views(&sim, &drive) {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let jump = hud_view::driver_of(&sim, &drive, view).jump_meter as i32;
+        };
+        let jump = kart.driver.jump_meter as i32;
         let image = &art.digits[jump_digits(jump)[slot.0]];
         if node.image != *image {
             node.image = image.clone();

@@ -165,6 +165,8 @@ struct Member {
     label: String,
     nick: String,
     character: u8,
+    /// What the other players at its machine drive.
+    extras: Vec<u8>,
     /// Whether it is us.
     you: bool,
 }
@@ -241,8 +243,8 @@ impl Lobby {
     /// `public` one is also listed in the realm, under that name (the default if it is empty;
     /// `net::lobby_name` has checked it).
     /// The name is the lobby's, not ours: it stays as it is when we change nickname.
-    pub fn host(&mut self, character: u8, nick: &str, public: Option<&str>) {
-        self.session = Some(net::host(character, nick, race::SIM_VERSION));
+    pub fn host(&mut self, character: u8, extras: &[u8], nick: &str, public: Option<&str>) {
+        self.session = Some(net::host(character, extras, nick, race::SIM_VERSION));
         self.bots_told = None;
         self.public = public.map(|name| {
             Some(name)
@@ -354,9 +356,9 @@ impl Lobby {
     }
 
     /// Joins the lobby at `ticket`.
-    pub fn join(&mut self, ticket: Ticket, character: u8, nick: &str) {
+    pub fn join(&mut self, ticket: Ticket, character: u8, extras: &[u8], nick: &str) {
         debug!("joining {ticket}");
-        self.session = Some(net::join(ticket, character, nick, race::SIM_VERSION));
+        self.session = Some(net::join(ticket, character, extras, nick, race::SIM_VERSION));
         self.joined = true;
         self.spectator = false;
         self.roster.clear();
@@ -442,6 +444,19 @@ impl Lobby {
         }
     }
 
+    /// What our other local players drive, as the lobby last said (the host's word on it).
+    pub fn own_extras(&self) -> Option<&[u8]> {
+        self.roster.iter().find(|m| m.you).map(|m| m.extras.as_slice())
+    }
+
+    /// The other local players drive other characters now, which the others learn before the
+    /// race starts.
+    pub fn set_extras(&self, extras: &[u8]) {
+        if let Some(session) = &self.session {
+            session.set_extras(extras);
+        }
+    }
+
     /// We are called something else now, which the others learn at once, in a race too.
     pub fn set_nickname(&self, nick: &str) {
         if let Some(session) = &self.session {
@@ -488,15 +503,26 @@ impl Lobby {
     /// characters.
     fn refresh_labels(&mut self) {
         if let Some(online) = &mut self.online {
+            // One name for each endpoint (its first slot): the others of its slots are its extra
+            // players, "name@2", "name@3", ...
+            let first = |slot: usize| online.ids.iter().position(|id| *id == online.ids[slot]) == Some(slot);
             let players: Vec<(EndpointId, &str)> = (online.ids.iter().enumerate())
-                .filter(|&(slot, _)| !online.is_bot(slot))
+                .filter(|&(slot, _)| !online.is_bot(slot) && first(slot))
                 .map(|(_, id)| (*id, self.nicks.get(id).map_or("", String::as_str)))
                 .collect();
-            let mut names = net::display_names(&players).into_iter();
+            let names = net::display_names(&players);
+            let name_of = |id: EndpointId| {
+                let at = players.iter().position(|(other, _)| *other == id);
+                at.map(|at| names[at].clone()).unwrap_or_default()
+            };
             online.labels = (0..online.ids.len())
                 .map(|slot| match online.characters.get(slot) {
                     Some(&c) if online.is_bot(slot) => online::bot_label(c),
-                    _ => names.next().unwrap_or_default(),
+                    _ if first(slot) => name_of(online.ids[slot]),
+                    _ => {
+                        let nth = (0..=slot).filter(|&s| !online.is_bot(s) && online.ids[s] == online.ids[slot]).count();
+                        format!("{}@{nth}", name_of(online.ids[slot]))
+                    }
                 })
                 .collect();
         }
@@ -506,6 +532,15 @@ impl Lobby {
     pub fn send(&self, pad: Pad) {
         if let Some(session) = &self.session {
             session.input(pad);
+        }
+    }
+
+    /// The pads of our other local players (split screen) for the tick being played, in the order
+    /// of their slots (`Online::locals`, after the first). They go before ours
+    /// ([`send`](Self::send)).
+    pub fn send_extras(&self, pads: Vec<Pad>) {
+        if let Some(session) = &self.session {
+            session.extra_input(pads);
         }
     }
 

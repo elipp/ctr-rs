@@ -3,10 +3,11 @@
 //! view (`drive::HudCamera`), which lays it out in the player's part of the window. With one
 //! player there are no such cameras, and the nodes are the window's, as they always were.
 //!
-//! An element's system does the three things that differ: it spawns what is [`missing`], it finds
-//! the driver of each view ([`driver_of`]) and it shows that. This module does the rest: the
+//! An element's system does the three things that differ: it spawns what is [`HudViews::missing`], it goes
+//! through the [`HudViews`] for the driver of each view and it shows that. This module does the rest: the
 //! targeting, and the despawning of the elements of a view that is gone.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::drive::{Drive, HudCamera, UnderCamera};
@@ -18,32 +19,76 @@ use crate::props::Sim;
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HudView(pub usize);
 
-/// How many views the HUD has elements for: the ones whose kart the race has. (The players are
-/// added to the views first, and the race starts over with them a tick later: `drive_tick`.)
-pub fn views(sim: &Sim, drive: &Drive) -> usize {
-    drive.views().len().min(sim.race.karts.len())
+/// The views the HUD can show, which is the one place that knows which those are: the leading
+/// ones whose kart the race has. (The players are added to the views first, and the race starts
+/// over with them a tick later: `drive_tick`. Online the slots are the roster's, so the race of
+/// before may have the right number of karts and still lack their slots.) The systems of the HUD
+/// go through this, and never to [`Drive::views`] or the race's karts for a view of their own.
+#[derive(SystemParam)]
+pub struct HudViews<'w> {
+    sim: Res<'w, Sim>,
+    drive: Res<'w, Drive>,
 }
 
-/// The views that have none of an element yet, given the `have` the element's top nodes carry.
-pub fn missing(sim: &Sim, drive: &Drive, have: impl IntoIterator<Item = HudView>) -> Vec<usize> {
-    let have: Vec<usize> = have.into_iter().map(|v| v.0).collect();
-    (0..views(sim, drive))
-        .filter(|view| !have.contains(view))
-        .collect()
+/// A view that [`HudViews`] has a kart for.
+#[derive(Clone, Copy)]
+pub struct ViewKart<'a> {
+    /// The index in [`Drive::views`].
+    pub view: usize,
+    /// The race's slot of the kart the view is of: the one the camera follows for ours, which is
+    /// another kart for a spectator.
+    pub slot: usize,
+    pub driver: &'a vehicle::Driver,
+    /// How many parts the window is in (the views, whether they have a kart or not).
+    layout: usize,
 }
 
-/// The kart that `view` (of those [`views`] counts) is of: the one the camera follows for ours,
-/// which is another kart for a spectator.
-pub fn slot_of(sim: &Sim, drive: &Drive, view: usize) -> usize {
-    match view {
-        0 => sim.own,
-        _ => drive.views()[view].slot(),
+impl ViewKart<'_> {
+    /// Where the view is on the window, in its logical pixels.
+    pub fn rect(&self, window: &Window) -> Rect {
+        crate::drive::window_rect(self.view, self.layout, window)
     }
 }
 
-/// The driver of the kart that `view` is of.
-pub fn driver_of<'a>(sim: &'a Sim, drive: &Drive, view: usize) -> &'a vehicle::Driver {
-    &sim.race.karts[slot_of(sim, drive, view)].driver
+impl HudViews<'_> {
+    /// The view, if the race has its kart.
+    pub fn get(&self, view: usize) -> Option<ViewKart<'_>> {
+        let local = self.drive.views().get(view)?;
+        let slot = if view == 0 { self.sim.own } else { local.slot() };
+        let kart = self.sim.race.karts.get(slot)?;
+        // (A view is only usable when all the ones before it are.)
+        (view == 0 || self.get(view - 1).is_some()).then_some(ViewKart {
+            view,
+            slot,
+            driver: &kart.driver,
+            layout: self.drive.views().len(),
+        })
+    }
+
+    /// The usable views, in order.
+    pub fn iter(&self) -> impl Iterator<Item = ViewKart<'_>> {
+        (0..self.drive.views().len()).map_while(|view| self.get(view))
+    }
+
+    /// How many views are usable.
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    /// Whether the window is split between players (with the views' kart or without).
+    pub fn is_split(&self) -> bool {
+        self.drive.views().len() > 1
+    }
+
+    /// The usable views that have none of an element yet, given the `have` the element's top nodes
+    /// carry.
+    pub fn missing(&self, have: impl IntoIterator<Item = HudView>) -> Vec<usize> {
+        let have: Vec<usize> = have.into_iter().map(|v| v.0).collect();
+        self.iter()
+            .map(|v| v.view)
+            .filter(|view| !have.contains(view))
+            .collect()
+    }
 }
 
 /// On an element that is drawn under the figures of the HUD (the fruit and the tracker), as the

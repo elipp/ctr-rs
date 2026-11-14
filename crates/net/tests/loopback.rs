@@ -31,7 +31,7 @@ fn pad(slot: usize, tick: u32) -> Pad {
 
 #[test]
 fn a_host_and_two_peers_race_over_a_mesh() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -40,12 +40,12 @@ fn a_host_and_two_peers_race_over_a_mesh() {
         }
         _ => false,
     });
-    let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
+    let first = net::join(ticket.clone().unwrap(), 7, &[], "", BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the first peer", |e| {
         matches!(e, Event::PeerJoined(_))
     });
-    let second = net::join(ticket.unwrap(), 11, "", BUILD);
+    let second = net::join(ticket.unwrap(), 11, &[], "", BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the second peer", |e| {
         matches!(e, Event::PeerJoined(_))
@@ -72,6 +72,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
         wait_for(session, "the start", |e| match e {
             Event::Started {
                 slot,
+                locals,
                 characters,
                 players,
                 track,
@@ -87,6 +88,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
                 assert_eq!(characters, [4, 9, 11]);
                 assert_eq!(players.len(), 3);
                 assert_eq!(track, 5);
+                assert_eq!(locals, [slot]);
                 slots[i] = slot;
                 true
             }
@@ -166,7 +168,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
 
 #[test]
 fn a_character_changed_between_races_is_the_one_that_races() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -175,7 +177,7 @@ fn a_character_changed_between_races_is_the_one_that_races() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    let guest = net::join(ticket.unwrap(), 7, &[], "", BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
     std::thread::sleep(Duration::from_secs(2));
@@ -213,7 +215,7 @@ fn a_character_changed_between_races_is_the_one_that_races() {
 
 #[test]
 fn a_guest_fetches_a_custom_track_from_the_host() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -222,7 +224,7 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    let guest = net::join(ticket.unwrap(), 7, &[], "", BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
 
@@ -256,7 +258,7 @@ fn a_guest_fetches_a_custom_track_from_the_host() {
 
 #[test]
 fn asking_for_a_track_twice_brings_it_once() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -265,7 +267,7 @@ fn asking_for_a_track_twice_brings_it_once() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    let guest = net::join(ticket.unwrap(), 7, &[], "", BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
 
@@ -291,7 +293,7 @@ fn asking_for_a_track_twice_brings_it_once() {
 
 #[test]
 fn a_guest_with_another_build_is_turned_away() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -300,7 +302,7 @@ fn a_guest_with_another_build_is_turned_away() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, "", BUILD + 1);
+    let guest = net::join(ticket.unwrap(), 7, &[], "", BUILD + 1);
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut why = None;
     while why.is_none() {
@@ -317,7 +319,7 @@ fn a_guest_with_another_build_is_turned_away() {
 
 #[test]
 fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -326,12 +328,12 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
         }
         _ => false,
     });
-    let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
+    let first = net::join(ticket.clone().unwrap(), 7, &[], "", BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the first peer", |e| {
         matches!(e, Event::PeerJoined(_))
     });
-    let second = net::join(ticket.unwrap(), 11, "", BUILD);
+    let second = net::join(ticket.unwrap(), 11, &[], "", BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the second peer", |e| {
         matches!(e, Event::PeerJoined(_))
@@ -375,7 +377,7 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
 
 #[test]
 fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -384,12 +386,12 @@ fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
         }
         _ => false,
     });
-    let first = net::join(ticket.clone().unwrap(), 7, "", BUILD);
+    let first = net::join(ticket.clone().unwrap(), 7, &[], "", BUILD);
     wait_for(&first, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the first peer", |e| {
         matches!(e, Event::PeerJoined(_))
     });
-    let second = net::join(ticket.unwrap(), 11, "", BUILD);
+    let second = net::join(ticket.unwrap(), 11, &[], "", BUILD);
     wait_for(&second, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the second peer", |e| {
         matches!(e, Event::PeerJoined(_))
@@ -425,7 +427,7 @@ fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
 /// Opens a lobby and has `guests` join it, in order, each driving character 7 + its number. Waits
 /// until every session sees all of them in the lobby.
 fn lobby_of(guests: usize) -> (Session, Vec<Session>) {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -436,7 +438,7 @@ fn lobby_of(guests: usize) -> (Session, Vec<Session>) {
     });
     let guests: Vec<Session> = (0..guests)
         .map(|i| {
-            let guest = net::join(ticket.clone().unwrap(), 7 + i as u8, "", BUILD);
+            let guest = net::join(ticket.clone().unwrap(), 7 + i as u8, &[], "", BUILD);
             wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
             wait_for(&host, "a peer", |e| matches!(e, Event::PeerJoined(_)));
             guest
@@ -729,7 +731,7 @@ fn a_handover_is_turned_down_in_a_race() {
 
 #[test]
 fn the_hosts_bots_fill_the_race_and_their_pads_reach_the_guests() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -738,7 +740,7 @@ fn the_hosts_bots_fill_the_race_and_their_pads_reach_the_guests() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    let guest = net::join(ticket.unwrap(), 7, &[], "", BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
     std::thread::sleep(Duration::from_secs(2));
@@ -830,7 +832,7 @@ fn the_hosts_bots_fill_the_race_and_their_pads_reach_the_guests() {
 
 #[test]
 fn retail_bots_take_the_place_of_the_hosts_bots_and_fill_up_to_max_players() {
-    let host = net::host(3, "", BUILD);
+    let host = net::host(3, &[], "", BUILD);
     let mut ticket = None;
     wait_for(&host, "the lobby to open", |e| match e {
         Event::Open(t) => {
@@ -839,7 +841,7 @@ fn retail_bots_take_the_place_of_the_hosts_bots_and_fill_up_to_max_players() {
         }
         _ => false,
     });
-    let guest = net::join(ticket.unwrap(), 7, "", BUILD);
+    let guest = net::join(ticket.unwrap(), 7, &[], "", BUILD);
     wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
     wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
     std::thread::sleep(Duration::from_secs(2));
@@ -872,6 +874,133 @@ fn retail_bots_take_the_place_of_the_hosts_bots_and_fill_up_to_max_players() {
                 assert_eq!(players.len(), 2);
                 assert_eq!(retail.characters, (0..6).collect::<Vec<u8>>());
                 assert_eq!(retail.difficulty, 0xa0);
+                true
+            }
+            _ => false,
+        });
+    }
+}
+
+#[test]
+fn extra_players_take_slots_and_their_pads_reach_everyone() {
+    let host = net::host(3, &[5], "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7, &[8, 9], "", BUILD);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
+    std::thread::sleep(Duration::from_secs(2));
+    let sessions = [&host, &guest];
+    for s in sessions {
+        s.poll();
+    }
+    host.start(5, 0, 3, net::RetailBots::default());
+    // Host, guest, the host's extra, then the guest's.
+    let locals = [vec![0, 2], vec![1, 3, 4]];
+    for (i, session) in sessions.into_iter().enumerate() {
+        wait_for(session, "the start", |e| match e {
+            Event::Started { slot, locals: mine, characters, players, .. } => {
+                assert_eq!(characters, [3, 7, 5, 8, 9]);
+                assert_eq!(players.len(), 5);
+                assert_eq!(slot, i);
+                assert_eq!(mine, locals[i]);
+                true
+            }
+            _ => false,
+        });
+        session.ready();
+    }
+    let mut early: [Vec<(usize, u32, Vec<Pad>)>; 2] = Default::default();
+    for (i, session) in sessions.into_iter().enumerate() {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut go = false;
+        while !go {
+            assert!(Instant::now() < deadline, "timed out waiting for tick 0");
+            for event in session.poll() {
+                match event {
+                    Event::Go => go = true,
+                    Event::Pads { slot, first, pads } => early[i].push((slot, first, pads)),
+                    Event::Failed(why) => panic!("tick 0: failed: {why}"),
+                    _ => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    // Each makes the pads of all its slots, and gets those of the other's, in order.
+    let mut got = [[0u32; 5]; 2];
+    let mut made = 0;
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let done = |got: &[[u32; 5]; 2]| (0..5).all(|s| locals[0].contains(&s) || got[0][s] >= 60)
+        && (0..5).all(|s| locals[1].contains(&s) || got[1][s] >= 60);
+    while !done(&got) {
+        assert!(Instant::now() < deadline, "stalled at {got:?}");
+        if made < 90 {
+            host.extra_input(vec![pad(2, made)]);
+            host.input(pad(0, made));
+            guest.extra_input(vec![pad(3, made), pad(4, made)]);
+            guest.input(pad(1, made));
+        }
+        for (me, session) in sessions.into_iter().enumerate() {
+            let events = std::mem::take(&mut early[me])
+                .into_iter()
+                .map(|(slot, first, pads)| Event::Pads { slot, first, pads })
+                .chain(session.poll());
+            for event in events {
+                if let Event::Pads { slot, first, pads } = event {
+                    assert!(!locals[me].contains(&slot), "{me} got its own pads of {slot}");
+                    assert_eq!(first, got[me][slot], "pads of {slot} for {me} out of order");
+                    for (i, p) in pads.iter().enumerate() {
+                        assert_eq!(*p, pad(slot, first + i as u32));
+                    }
+                    got[me][slot] += pads.len() as u32;
+                }
+            }
+        }
+        made += 1;
+        std::thread::sleep(Duration::from_millis(33));
+    }
+}
+
+#[test]
+fn extras_changed_in_the_lobby_are_the_ones_that_race_unless_characters_are_fixed() {
+    let host = net::host(3, &[5], "", BUILD);
+    let mut ticket = None;
+    wait_for(&host, "the lobby to open", |e| match e {
+        Event::Open(t) => {
+            ticket = Some(t);
+            true
+        }
+        _ => false,
+    });
+    let guest = net::join(ticket.unwrap(), 7, &[8], "", BUILD);
+    wait_for(&guest, "joining", |e| matches!(e, Event::Joined(_)));
+    wait_for(&host, "the guest", |e| matches!(e, Event::PeerJoined(_)));
+    std::thread::sleep(Duration::from_secs(2));
+    let sessions = [&host, &guest];
+
+    // Both change their extras' racers: the host's and the guest's.
+    host.set_extras(&[10]);
+    guest.set_extras(&[11]);
+    std::thread::sleep(Duration::from_millis(500));
+    // With the characters fixed, a guest's change is not taken.
+    host.lock_characters(true);
+    std::thread::sleep(Duration::from_millis(500));
+    guest.set_extras(&[12]);
+    host.set_extras(&[13]);
+    std::thread::sleep(Duration::from_millis(500));
+    host.start(5, 0, 3, net::RetailBots::default());
+    for session in sessions {
+        wait_for(session, "the start", |e| match e {
+            Event::Started { characters, .. } => {
+                assert_eq!(characters, [3, 7, 10, 11]);
                 true
             }
             _ => false,

@@ -10,7 +10,7 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews, ViewKart};
 
 /// Where the blocks are: both from the top, TIME from the left and LAP from the right, in lines
 /// and pixels of retail's screen.
@@ -76,7 +76,7 @@ fn text(text: &str, font: Font, gradient: Gradient) -> CtrText {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     lobby: Res<crate::lobby::Lobby>,
     mut blocks: Query<(&HudView, &mut Visibility), Or<(With<TimeBlock>, With<LapBlock>)>>,
     time_blocks: Query<&HudView, With<TimeBlock>>,
@@ -90,7 +90,7 @@ fn show(
         Option<&RowTime>,
     )>,
 ) {
-    let missing = hud_view::missing(&sim, &drive, time_blocks.iter().copied());
+    let missing = hud.missing(time_blocks.iter().copied());
     if !missing.is_empty() {
         // The first frame, or of a new level (which took the nodes away).
         for view in missing {
@@ -110,9 +110,10 @@ fn show(
         return;
     }
     let race = &*sim.race;
-    for view in 0..hud_view::views(&sim, &drive) {
-        let slot = hud_view::slot_of(&sim, &drive, view);
-        let driver = &race.karts[slot].driver;
+    for ViewKart {
+        view, slot, driver, ..
+    } in hud.iter()
+    {
         let finished = driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
         let done = &race.lap_times[slot];
         // The time stops when we cross the line of the last lap: then it is the laps' times.

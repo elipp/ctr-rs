@@ -298,8 +298,8 @@ const LIST_TEXELS: usize = 180;
 const ROW_TEXELS: usize = Font::Middle.line_height() + 4;
 
 /// The panel behind the items, the line around it, and its shadow.
-const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
-const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
+pub(crate) const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
+pub(crate) const BORDER: Color = Color::srgb(0.5, 0.85, 0.85);
 const SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 
 /// The menu on screen, and what it was built for.

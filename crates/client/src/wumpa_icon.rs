@@ -8,7 +8,7 @@ use bevy::window::PrimaryWindow;
 use loader::model::Model;
 use render::mesh;
 
-use crate::hud_view::{self, HudView};
+use crate::hud_view::{HudView, HudViews, ViewKart};
 use crate::subtract::SubtractMaterial;
 use crate::{Textures, Track};
 
@@ -71,8 +71,7 @@ fn build(
     track: Res<Track>,
     textures: Res<Textures>,
     display: Res<FruitDisplay>,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     icon: Query<&HudView, With<WumpaIcon>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
@@ -83,7 +82,7 @@ fn build(
     if track.is_changed() {
         *none = false;
     }
-    let missing = hud_view::missing(&sim, &drive, icon.iter().copied());
+    let missing = hud.missing(icon.iter().copied());
     if missing.is_empty() || *none {
         return;
     }
@@ -167,7 +166,7 @@ fn build(
 /// the fruit of the level turn.
 fn show(
     sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     fixed: Res<Time<Fixed>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut icon: Query<(&WumpaIcon, &HudView, &mut Transform)>,
@@ -184,11 +183,13 @@ fn show(
     }
     *last = (ticks, turns);
     let angle = turns / crate::props::FRUIT_SPIN_TICKS * std::f32::consts::TAU;
-    let players = drive.views().len();
     for (icon, &HudView(view), mut transform) in &mut icon {
+        let Some(kart) = hud.get(view) else {
+            continue;
+        };
         // The camera looks at the middle of the window, with y up; the fruit is in the player's
         // part of it.
-        let rect = crate::drive::window_rect(view, players, window);
+        let rect = kart.rect(window);
         transform.translation = Vec3::new(
             rect.center().x - window.width() / 2.0 + FRUIT_X * crate::hud::PIXEL.x,
             window.height() / 2.0 - rect.min.y - ICON_MIDDLE_Y * crate::hud::PIXEL.y,
@@ -227,8 +228,7 @@ struct Flight {
 /// window.
 fn fly(
     mut commands: Commands,
-    sim: Res<crate::props::Sim>,
-    drive: Res<crate::drive::Drive>,
+    hud: HudViews,
     fixed: Res<Time<Fixed>>,
     textures: Res<Textures>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -243,8 +243,9 @@ fn fly(
     let Ok(window) = windows.single() else {
         return;
     };
-    let players = drive.views().len();
-    let absent = hud_view::missing(&sim, &drive, flying.iter().map(|(_, v, ..)| *v));
+    // (The views have a part of the window each; only the ones whose kart the race has are shown.)
+    let players = hud.len();
+    let absent = hud.missing(flying.iter().map(|(_, v, ..)| *v));
     if !absent.is_empty() {
         // The first frame of a level, which took the node away.
         if *missing {
@@ -277,12 +278,11 @@ fn fly(
     }
     flights.resize(players, Flight::default());
     for (wumpa, &HudView(view), mut node, mut visibility) in &mut flying {
-        if view >= players {
+        let Some(kart) = hud.get(view) else {
             continue;
-        }
-        let slot = hud_view::slot_of(&sim, &drive, view);
-        let driver = &sim.race.karts[slot].driver;
-        let rect = crate::drive::window_rect(view, players, window);
+        };
+        let ViewKart { slot, driver, .. } = kart;
+        let rect = kart.rect(window);
         let flight = &mut flights[view];
         // A fruit came in: the flight starts from the kart.
         let queued = driver.pickup_wumpa_collected;
