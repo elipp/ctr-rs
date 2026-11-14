@@ -356,6 +356,98 @@ impl Minimap {
     }
 }
 
+/// The camera path of an adventure hub (`ST1_CAMERA_PATH`, as `CAM_Path_Move` reads it): runs of
+/// points, one a frame, each a position and the camera's angles as stored. A racing track keeps
+/// its [`FlyIn`] in that entry instead, so this is read from the file on its own, like [`Minimap`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CameraPath {
+    pub runs: Vec<CameraRun>,
+}
+
+/// A run of a [`CameraPath`]: its flags (`CAM_Path_Move`'s `pathFlagsOut`) and its points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CameraRun {
+    pub flags: u16,
+    pub points: Vec<PosRot>,
+}
+
+impl CameraPath {
+    /// None if the level has no such entry, or an empty one.
+    pub fn parse(file: &DramFile) -> io::Result<Option<CameraPath>> {
+        const ST1_CAMERA_PATH: usize = 3;
+        let p = Payload(&file.data);
+        let at = match p.u32(LEVEL_SPAWN_TYPE_1)? {
+            0 => return Ok(None),
+            at => at as usize,
+        };
+        if p.u32(at)? as usize <= ST1_CAMERA_PATH {
+            return Ok(None);
+        }
+        let mut cursor = match p.u32(at + 4 + 4 * ST1_CAMERA_PATH)? {
+            0 => return Ok(None),
+            path => path as usize,
+        };
+        let mut runs = Vec::new();
+        loop {
+            let count = p.u16(cursor)?;
+            if count == 0 {
+                break;
+            }
+            let flags = p.u16(cursor + 2)?;
+            cursor += 4;
+            let points = (0..count as usize)
+                .map(|i| {
+                    let at = cursor + i * POS_ROT_SIZE;
+                    Ok(PosRot {
+                        pos: p.svec3(at)?,
+                        rot: p.svec3(at + 6)?,
+                    })
+                })
+                .collect::<io::Result<_>>()?;
+            cursor += count as usize * POS_ROT_SIZE;
+            runs.push(CameraRun { flags, points });
+        }
+        Ok((!runs.is_empty()).then_some(CameraPath { runs }))
+    }
+
+    /// `CAM_Path_GetNumPoints`: the frames of the whole path.
+    pub fn num_points(&self) -> i16 {
+        self.runs
+            .iter()
+            .fold(0u16, |n, run| n.wrapping_add(run.points.len() as u16)) as i16
+    }
+
+    /// `CAM_Path_Move`: the camera at `frame` (its position, and its angles as a push buffer
+    /// takes them), and the flags of its run; none past either end.
+    pub fn at(&self, frame: i32) -> Option<(PosRot, u16)> {
+        let mut frame = frame as i16;
+        if frame < 0 || frame >= self.num_points() {
+            return None;
+        }
+        for run in &self.runs {
+            let len = run.points.len() as i16;
+            if frame < len {
+                let point = run.points[frame as usize];
+                let rot = point.rot;
+                let turned = SVec3 {
+                    x: (((rot.x >> 4) as u16).wrapping_add(0x800) & 0xfff) as i16,
+                    y: (rot.y as u16 >> 4) as i16,
+                    z: (rot.z as u16 >> 4) as i16,
+                };
+                return Some((
+                    PosRot {
+                        pos: point.pos,
+                        rot: turned,
+                    },
+                    run.flags,
+                ));
+            }
+            frame -= len;
+        }
+        None
+    }
+}
+
 /// `struct RainBuffer` as the level file has it (`Level::rainBuffer`): the level's rain or snow,
 /// which every camera starts from. The counts are for one player.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]

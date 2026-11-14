@@ -56,8 +56,13 @@ impl Default for Confetti {
 impl Confetti {
     /// `PlayLevel_UpdateLapStats`, for a human who finished first: all of them at once.
     pub fn start(&mut self) {
-        self.max = PARTICLES;
-        self.vanish_rate = PARTICLES;
+        self.start_with(PARTICLES);
+    }
+
+    /// `particles` of them, all at once: `CS_Podium_FullScene_Init` has fewer than a race won.
+    pub fn start_with(&mut self, particles: i16) {
+        self.max = particles;
+        self.vanish_rate = particles;
     }
 
     /// How many pieces there are now.

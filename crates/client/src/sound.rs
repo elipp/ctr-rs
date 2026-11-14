@@ -153,7 +153,10 @@ impl Plugin for SoundPlugin {
             .add_systems(Startup, start_mixer)
             .add_systems(
                 Update,
-                (level_audio, stream_xa).run_if(crate::drive::driving),
+                (
+                    level_audio.run_if(crate::drive::driving),
+                    stream_xa.run_if(race_or_podium),
+                ),
             )
             .add_systems(Update, (mute, volumes).chain());
     }
@@ -201,6 +204,32 @@ impl Sounds {
     /// A sound of the menus, in the middle.
     pub fn menu(&self, id: u16) {
         self.lock().play(id, AntiSpam::CutRecent, howl::Sfx::FULL);
+    }
+
+    /// `OtherFX_Play(id, 1)`: a sound effect of a cutscene, in the middle.
+    pub fn play_fx(&self, id: u16) {
+        self.lock().play(id, AntiSpam::CutRecent, howl::Sfx::FULL);
+    }
+
+    /// `OtherFX_Stop2`: the end of sound effect `id`.
+    pub fn stop_fx(&self, id: u16) {
+        self.lock().stop_id(id);
+    }
+
+    /// The podium's music (`CS_Podium_FullScene_Init`): what the race played stops, and XA music
+    /// track `id` plays.
+    pub fn podium(&self, id: u16) {
+        let mut sounds = self.lock();
+        sounds.stop_all(true, true, true);
+        sounds.stop_xa();
+        sounds.clear_voicelines();
+        sounds.clear_state();
+        sounds.play_xa(loader::xa::Category::Music, id);
+    }
+
+    /// The podium is over: its music stops. (A race starts its own again, as at its start.)
+    pub fn podium_over(&self) {
+        self.lock().stop_xa();
     }
 
     /// `OptionsMenu_TestSound`: the sound to hear the volume `slider` by plays while it is
@@ -323,6 +352,13 @@ fn volumes(config: Res<crate::config::Config>, mute: Res<Mute>, sounds: Option<R
             unless(false, config.volume_voice),
         );
     }
+}
+
+fn race_or_podium(
+    drive: Option<Res<crate::drive::Drive>>,
+    podium: Option<Res<crate::podium::Podium>>,
+) -> bool {
+    drive.is_some() || podium.is_some()
 }
 
 /// `CDSYS_XAPauseAtEnd`, every frame (a pause's too): the XA that is over is, and the one that

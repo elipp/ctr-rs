@@ -43,6 +43,19 @@ const TRACKS: [(&str, &str, LevelId); 18] = [
     ("turbo_track", "Turbo Track", LevelId::TURBO_TRACK),
 ];
 
+/// Gem Stone Valley, the adventure hub where the podium of a cup stands: made from the disc with
+/// the racing tracks, but not one of them.
+const PODIUM: (&str, &str, LevelId) = (
+    "gem_stone_valley",
+    "Gem Stone Valley",
+    LevelId::GEM_STONE_VALLEY,
+);
+
+/// Every level made from the disc.
+fn all() -> impl Iterator<Item = &'static (&'static str, &'static str, LevelId)> {
+    TRACKS.iter().chain(std::iter::once(&PODIUM))
+}
+
 /// The game's track that is called `name` (see [`display_name`]), in any case.
 pub fn id_of_display_name(name: &str) -> Option<u32> {
     TRACKS
@@ -56,10 +69,10 @@ pub fn is_builtin_name(name: &str) -> bool {
     name.starts_with(PREFIX)
 }
 
-/// The track that a map named `name` stands in for; none if the name is not one of the tracks'.
+/// The level that a map named `name` stands in for; none if the name is not one of the levels'.
 pub fn level_of(name: &str) -> Option<LevelId> {
     let slug = name.strip_prefix(PREFIX)?;
-    TRACKS.iter().find(|t| t.0 == slug).map(|t| t.2)
+    all().find(|t| t.0 == slug).map(|t| t.2)
 }
 
 /// The name of the map of the game's racing track `id` (`__builtin__dingo_canyon`).
@@ -103,18 +116,17 @@ fn file_name(slug: &str) -> String {
 }
 
 fn missing(dir: &Path) -> Vec<&'static (&'static str, &'static str, LevelId)> {
-    TRACKS
-        .iter()
+    all()
         .filter(|t| !Map::is_current(&dir.join(file_name(t.0))))
         .collect()
 }
 
-/// How many racing tracks `dir` has no map of: what [`export`] would make.
+/// How many levels `dir` has no map of: what [`export`] would make.
 pub fn missing_count(dir: &Path) -> usize {
     missing(dir).len()
 }
 
-/// Makes the map of each racing track that `dir` has none of (or only one of an older version),
+/// Makes the map of each level that `dir` has none of (or only one of an older version),
 /// from the disc image `original`, and returns how many. The image is not opened if there is nothing to make.
 pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
     let missing = missing(dir);
@@ -151,13 +163,12 @@ pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
     })
 }
 
-/// The map of every racing track, made from the disc image `original` and only held in memory:
+/// The map of every level, made from the disc image `original` and only held in memory:
 /// for a client with no folder to keep them in (a browser). One after another, and not
 /// compressed, which is what [`export`] spends its time on.
 pub fn make_all(original: &Path) -> io::Result<Vec<Map>> {
     let (mut disc, big) = open_bigfile(original)?;
-    TRACKS
-        .iter()
+    all()
         .map(|&(slug, _, id)| {
             let mut read =
                 |file| big.read(&mut disc, BigIndex::level(id, Lod::OnePlayer, file).get());
@@ -185,6 +196,11 @@ mod tests {
             Some(LevelId::TURBO_TRACK)
         );
         assert_eq!(level_of("__builtin__nitro_court"), None);
+        assert_eq!(
+            level_of("__builtin__gem_stone_valley"),
+            Some(LevelId::GEM_STONE_VALLEY)
+        );
+        assert_eq!(display_name(LevelId::GEM_STONE_VALLEY.0), None);
         assert_eq!(level_of("dingo_canyon"), None);
         assert!(is_builtin_name("__builtin__anything"));
         assert_eq!(display_name(5), Some("Papu's Pyramid"));

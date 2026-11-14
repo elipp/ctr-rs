@@ -17,6 +17,12 @@
 //! menu.vrm        its texture pages
 //! KART.HWL        SOUNDS/KART.HWL, as on the disc
 //! ENG.XNF         XA/ENG.XNF, as on the disc
+//! podium/vram     the texture pages of the podium in Gem Stone Valley (PODIUM_VRMS)
+//! podium/stand    the podium's model (PODIUM)
+//! podium/dance/03 the dance of character 3 on the top step (DANCE_MODEL_WIN)
+//! podium/lose/03  its dance on a lower step (DANCE_MODEL_LOSE)
+//! podium/tawna/1  the second of the trophy girls (DANCE_TAWNA_GIRL)
+//! overlay/233     the cutscene overlay, for the scripts the dancers follow (OVERLAY_SECT3)
 //! xa/music/006    one XA track: the sectors of it, as `xa::read_track` makes them
 //! ```
 //!
@@ -69,6 +75,22 @@ pub enum Check {
 /// How many characters there are (`GAME_CHARACTER_IDS`): the models and packs have a file each.
 pub const CHARACTERS: u32 = 16;
 
+/// Which of the two files of the podium's groups Gem Stone Valley loads (`LOAD_GetAdvPackIndex`
+/// is 2 there, and the groups are indexed from 1).
+const PODIUM_PACK_FILE: u32 = 1;
+
+/// `LOAD_PODIUM_MODEL_FILE_STRIDE`: a model of the podium has a file for each of the two packs.
+const PODIUM_FILES_PER_MODEL: u32 = 2;
+
+/// How many trophy girls there are (`STATIC_TAWNA1` to `STATIC_TAWNA4`).
+pub const TAWNAS: u32 = 4;
+
+/// The character with no dance for the top step.
+const NITROS_OXIDE: u32 = 15;
+
+/// `OVERLAY_INDEX_PODIUMS`: overlay 233 among the threads' overlays (230 to 233).
+const CUTSCENE_OVERLAY: u32 = 3;
+
 /// The bytes of every need, if [`Source::hold`] has taken them.
 static HELD: OnceLock<HashMap<Need, Vec<u8>>> = OnceLock::new();
 
@@ -91,6 +113,16 @@ pub enum Need {
     Xnf,
     /// Track `id` of a category of XA audio.
     Xa(Category, u16),
+    /// The texture pages of what stands on the podium, as Gem Stone Valley loads them.
+    PodiumVram,
+    /// The podium's model.
+    PodiumStand,
+    /// The dance of a character on the podium: on its top step (`first`) or a lower one.
+    Dance { character: u32, first: bool },
+    /// One of the four trophy girls (`STATIC_TAWNA1` and on).
+    Tawna(u32),
+    /// Overlay 233, the cutscenes': the scripts that the podium's dancers follow are in it.
+    CutsceneOverlay,
 }
 
 impl Need {
@@ -104,6 +136,14 @@ impl Need {
             Need::MenuVram => "menu.vrm".into(),
             Need::Howl => "KART.HWL".into(),
             Need::Xnf => "ENG.XNF".into(),
+            Need::PodiumVram => "podium/vram".into(),
+            Need::PodiumStand => "podium/stand".into(),
+            Need::Dance { character, first } => {
+                let step = if first { "dance" } else { "lose" };
+                format!("podium/{step}/{character:02}")
+            }
+            Need::Tawna(t) => format!("podium/tawna/{t}"),
+            Need::CutsceneOverlay => "overlay/233".into(),
             Need::Xa(category, id) => {
                 let dir = match category {
                     Category::Music => "music",
@@ -123,7 +163,24 @@ impl Need {
             Need::SharedVram,
             Need::MenuLev,
             Need::MenuVram,
+            Need::PodiumVram,
+            Need::PodiumStand,
+            Need::CutsceneOverlay,
         ];
+        for character in 0..CHARACTERS {
+            // (Oxide has no dance for the top step: retail puts no one there.)
+            if character != NITROS_OXIDE {
+                all.push(Need::Dance {
+                    character,
+                    first: true,
+                });
+            }
+            all.push(Need::Dance {
+                character,
+                first: false,
+            });
+        }
+        all.extend((0..TAWNAS).map(Need::Tawna));
         all.extend((0..CHARACTERS).map(Need::Racer));
         all.extend((0..CHARACTERS).map(Need::Pack));
         for category in Category::ALL {
@@ -261,7 +318,7 @@ impl Source {
         for file in ["shared.vrm", "menu.lev", "menu.vrm", "KART.HWL", "ENG.XNF"] {
             gone(std::fs::remove_file(self.dir.join(file)))?;
         }
-        for dir in ["racer", "pack", "xa"] {
+        for dir in ["racer", "pack", "xa", "podium", "overlay"] {
             gone(std::fs::remove_dir_all(self.dir.join(dir)))?;
         }
         Ok(())
@@ -438,6 +495,30 @@ impl Image {
             Need::MenuVram => self.big.read(&mut self.disc, menu(LevFile::Vram)),
             Need::Howl => self.file("SOUNDS/KART.HWL"),
             Need::Xnf => self.file("XA/ENG.XNF"),
+            Need::PodiumVram => self.big.read(
+                &mut self.disc,
+                entry(BigIndex::PODIUM_VRMS, PODIUM_PACK_FILE),
+            ),
+            Need::PodiumStand => self
+                .big
+                .read(&mut self.disc, entry(BigIndex::PODIUM, PODIUM_PACK_FILE)),
+            Need::Dance { character, first } => {
+                let group = if first {
+                    BigIndex::DANCE_MODEL_WIN
+                } else {
+                    BigIndex::DANCE_MODEL_LOSE
+                };
+                let n = character * PODIUM_FILES_PER_MODEL + PODIUM_PACK_FILE;
+                self.big.read(&mut self.disc, entry(group, n))
+            }
+            Need::Tawna(t) => {
+                let n = t * PODIUM_FILES_PER_MODEL + PODIUM_PACK_FILE;
+                self.big
+                    .read(&mut self.disc, entry(BigIndex::DANCE_TAWNA_GIRL, n))
+            }
+            Need::CutsceneOverlay => self
+                .big
+                .read(&mut self.disc, entry(BigIndex::OVERLAY_SECT3, CUTSCENE_OVERLAY)),
             Need::Xa(category, id) => {
                 let track = xnf
                     .track(category, id)
@@ -494,7 +575,8 @@ mod tests {
     fn every_need_has_its_own_key() {
         let all = Need::all(&xnf());
         // The track that spans no sector is not one.
-        assert_eq!(all.len(), 5 + 2 * CHARACTERS as usize + 2);
+        let podium = 1 + 2 * CHARACTERS as usize - 1 + TAWNAS as usize;
+        assert_eq!(all.len(), 7 + podium + 2 * CHARACTERS as usize + 2);
         let mut keys: Vec<String> = all.iter().map(|n| n.key()).collect();
         keys.sort();
         keys.dedup();

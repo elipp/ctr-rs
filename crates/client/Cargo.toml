@@ -37,6 +37,7 @@ race = { path = "../race" }
 math = { path = "../math" }
 weapon = { path = "../weapon" }
 map = { path = "../map" }
+cutscene = { path = "../cutscene" }
 # Where a release build keeps its files (`paths.rs`).
 directories = "6.0.0"
 

@@ -300,8 +300,13 @@ pub(super) fn report(
     {
         lobby.standings = None;
     }
-    if new_standings.is_some() {
-        lobby.standings = new_standings;
+    // (A race that starts before our podium was shown takes it with it.)
+    if started_cup.is_some() {
+        lobby.podium = None;
+    }
+    if let Some(standings) = new_standings {
+        lobby.podium = super::cup::podium(&standings);
+        lobby.standings = Some(standings);
     }
     if stopped {
         lobby.cup_next = None;

@@ -2489,6 +2489,7 @@ dependencies = [
  "camera",
  "coll",
  "console_error_panic_hook",
+ "cutscene",
  "directories",
  "gte",
  "howl",
@@ -2949,6 +2950,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cutscene"
+version = "0.1.0"
+dependencies = [
+ "hadris-iso",
+ "loader",
+ "math",
+ "render",
 ]
 
 [[package]]

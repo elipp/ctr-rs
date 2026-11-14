@@ -69,9 +69,11 @@ mod minimap;
 mod names;
 mod nav;
 mod nav_edit;
+mod ordered;
 mod paths;
 mod pause;
 mod place;
+mod podium;
 mod portrait_row;
 mod probe;
 mod projectile;
@@ -343,7 +345,11 @@ fn main() {
         skid::SkidPlugin,
         nav_edit::NavEditPlugin,
     ));
-    app.add_plugins(wheels::WheelsPlugin);
+    app.add_plugins((
+        wheels::WheelsPlugin,
+        podium::PodiumPlugin,
+        ordered::OrderedPlugin,
+    ));
     app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
     app.add_systems(Update, fly.run_if(not(drive::driving)))
         .init_resource::<scene::Picked>()

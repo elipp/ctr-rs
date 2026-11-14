@@ -33,7 +33,7 @@ impl ChaseCamera {
 
 /// Where the camera is, what it looks at, and how it rolls.
 #[derive(Clone, Copy)]
-pub(super) struct View {
+pub(crate) struct View {
     eye: Vec3,
     target: Vec3,
     /// Turns, around the view direction.
@@ -42,7 +42,7 @@ pub(super) struct View {
 
 impl View {
     /// The camera at this view, as `chase` places it (without the orbit of the debug keys).
-    pub(super) fn transform(&self) -> Transform {
+    pub(crate) fn transform(&self) -> Transform {
         let mut transform = Transform::from_translation(self.eye).looking_at(self.target, Vec3::Y);
         transform.rotate_local_z(self.roll * std::f32::consts::TAU);
         transform
@@ -50,25 +50,30 @@ impl View {
 }
 
 pub(super) fn view_of(camera: &camera::CameraDc) -> View {
-    let at = |x: i32, y: i32, z: i32| Vec3::new(x as f32, y as f32, z as f32) * SCALE;
-    let p = camera.pb_pos;
+    let (p, r) = (camera.pb_pos, camera.pb_rot);
+    push_buffer_view(
+        Vec3::new(p.x as f32, p.y as f32, p.z as f32),
+        Vec3::new(r.x as f32, r.y as f32, r.z as f32),
+    )
+}
+
+/// The view of a push buffer at `pos` (level units) turned by `rot` (0x1000 a turn): fractions of
+/// either are for a camera between two ticks.
+pub(crate) fn push_buffer_view(pos: Vec3, rot: Vec3) -> View {
     // The push buffer looks along its rotation, away from where the camera
     // would sit behind the look-at point (it stays put while the mask holds the kart).
-    let turns = |angle: i32| (angle & 0xfff) as f32 / 4096.0 * std::f32::consts::TAU;
-    let (yaw, pitch) = (
-        turns(camera.pb_rot.y as i32),
-        turns(0x800 - camera.pb_rot.x as i32),
-    );
+    let turns = |angle: f32| angle.rem_euclid(4096.0) / 4096.0 * std::f32::consts::TAU;
+    let (yaw, pitch) = (turns(rot.y), turns(0x800 as f32 - rot.x));
     let back = Vec3::new(
         yaw.sin() * pitch.cos(),
         pitch.sin(),
         yaw.cos() * pitch.cos(),
     );
-    let eye = at(p.x as i32, p.y as i32, p.z as i32);
+    let eye = pos * SCALE;
     View {
         eye,
         target: eye - back * 256.0 * SCALE,
-        roll: camera.pb_rot.z as f32 / 4096.0,
+        roll: rot.z / 4096.0,
     }
 }
 
