@@ -303,18 +303,23 @@ fn flags_of(sim: &Sim, id: u32) -> Option<u16> {
     missile.map(|p| p.flags).or(warpball.map(|w| w.flags))
 }
 
-/// `/debug fx tracker`: a missile or warpball that chases every local player, for some ticks.
+/// `/debug fx tracker`: a missile or warpball that chases every local player, for some ticks (what
+/// is left, and all of them): it closes in from [`SPOOF_FAR`] to [`SPOOF_NEAR`] on the HUD's scale,
+/// and then it is gone, which is a hit.
 #[derive(Resource, Default)]
-pub struct Spoof(Option<(crate::fx::Chaser, u32)>);
+pub struct Spoof(Option<(crate::fx::Chaser, u32, u32)>);
 
 impl Spoof {
     /// The chaser to pretend of this tick, if any.
     fn chaser(&self) -> Option<Chaser> {
-        let (kind, _) = self.0?;
+        let (kind, left, total) = self.0?;
+        let progress = 1.0 - left.saturating_sub(1) as f32 / total.saturating_sub(1).max(1) as f32;
+        let distance = SPOOF_FAR + (SPOOF_NEAR - SPOOF_FAR) * progress;
+        // `step_state` takes the root of this over `DISTANCE_DIVISOR` for the distance.
+        let units = distance * DISTANCE_DIVISOR as f32;
         Some(Chaser {
             id: u32::MAX,
-            // A distance of 150 on the HUD's scale.
-            squared: 56_250_000,
+            squared: (units * units) as u32,
             flags: 0,
             along: (kind == crate::fx::Chaser::Warpball).then_some(0),
         })
@@ -325,10 +330,15 @@ fn spoof_requests(mut actions: MessageReader<crate::command::Action>, mut spoof:
     for action in actions.read() {
         if let crate::command::Action::DebugFx(crate::fx::Fx::Tracker(kind, ms)) = *action {
             let ticks = (ms as f64 * crate::GAME_TICK_HZ / 1000.0).round() as u32;
-            spoof.0 = Some((kind, ticks));
+            spoof.0 = Some((kind, ticks, ticks));
         }
     }
 }
+
+/// Where a spoofed missile starts and ends, in the HUD's distance (beeps go faster under 200 and
+/// 100).
+const SPOOF_FAR: f32 = 300.0;
+const SPOOF_NEAR: f32 = 20.0;
 
 /// What the HUD remembers for each local player, by view.
 #[derive(Resource, Default)]
@@ -355,7 +365,7 @@ pub fn step(
         states.0.resize_with(players, Tracker::default);
     }
     let fake = spoof.chaser();
-    spoof.0 = spoof.0.and_then(|(kind, left)| (left > 1).then_some((kind, left - 1)));
+    spoof.0 = spoof.0.and_then(|(kind, left, total)| (left > 1).then_some((kind, left - 1, total)));
     for (view, state) in states.0.iter_mut().enumerate() {
         if let Some(flags) = state.chasing.and_then(|id| flags_of(&sim, id)) {
             state.chasing_flags = flags;
