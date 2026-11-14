@@ -171,7 +171,10 @@ pub struct Row {
     pub name: String,
     /// The short key of its machine.
     pub key: String,
+    /// Its machine's key.
     pub id: EndpointId,
+    /// Which of the machine's players: 0 for the first, 1 for "name@2", and so on.
+    pub seat: u8,
     /// Whether it is the host's own.
     pub host: bool,
     /// Whether it is at our machine.
@@ -227,6 +230,7 @@ impl Lobby {
                 name: member.label.clone(),
                 key: member.key.clone(),
                 id: member.id,
+                seat: 0,
                 host: n == 0,
                 you: member.you,
             });
@@ -239,6 +243,7 @@ impl Lobby {
                     name: format!("{}@{}", member.label, n + 2),
                     key: member.key.clone(),
                     id: member.id,
+                    seat: n as u8 + 1,
                     host: false,
                     you: member.you,
                 });

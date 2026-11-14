@@ -135,11 +135,12 @@ pub fn points(players: usize, place: usize) -> u32 {
     }
 }
 
-/// Who crossed the line: a player, or a bot (by the character it drives, which is its own for
+/// Who crossed the line: a player, by its machine and its seat there (0 for the first, 1 for
+/// "name@2" of a split screen, ...), or a bot (by the character it drives, which is its own for
 /// the whole cup).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Who {
-    Player(EndpointId),
+    Player(EndpointId, u8),
     Bot(u8),
 }
 
@@ -147,13 +148,26 @@ impl Who {
     /// What [`net::Score`] says it is: a player's key, or a made-up one for a bot.
     pub(crate) fn id(&self) -> [u8; 32] {
         match self {
-            Who::Player(id) => *id.as_bytes(),
+            Who::Player(id, _) => *id.as_bytes(),
             Who::Bot(character) => {
                 let mut id = [BOT_ID; 32];
                 id[31] = *character;
                 id
             }
         }
+    }
+
+    /// What [`net::Score::seat`] says it is.
+    pub(crate) fn seat(&self) -> u8 {
+        match self {
+            Who::Player(_, seat) => *seat,
+            Who::Bot(_) => 0,
+        }
+    }
+
+    /// Whether `score` is this driver's.
+    pub(crate) fn matches(&self, score: &Score) -> bool {
+        score.id == self.id() && score.seat == self.seat()
     }
 
     /// Whether a [`net::Score`]'s id is a bot's.
@@ -268,6 +282,7 @@ impl Series {
             if place < shown {
                 gained.push(Score {
                     id: finisher.who.id(),
+                    seat: finisher.who.seat(),
                     name: finisher.name.clone(),
                     character: finisher.character,
                     points: won,
@@ -286,6 +301,7 @@ impl Series {
                 let driver = self.drivers.get(who);
                 Score {
                     id: who.id(),
+                    seat: who.seat(),
                     name: driver.map(|d| d.name.clone()).unwrap_or_default(),
                     character: driver.map_or(0, |d| d.character),
                     points: *total,
@@ -349,7 +365,7 @@ mod tests {
     fn finishers(n: u8) -> Vec<Finisher> {
         (0..n)
             .map(|i| Finisher {
-                who: Who::Player(net::SecretKey::from_bytes(&[i + 1; 32]).public()),
+                who: Who::Player(net::SecretKey::from_bytes(&[i + 1; 32]).public(), 0),
                 name: format!("p{i}"),
                 character: i,
             })
@@ -435,6 +451,24 @@ mod tests {
         assert_eq!(standings.totals[0].name, "p0");
         assert_eq!(standings.totals[0].character, 0);
         assert!(Series::single(1, 3).final_standings().is_none());
+    }
+
+    #[test]
+    fn a_split_screens_players_keep_their_own_points() {
+        let key = net::SecretKey::from_bytes(&[9; 32]).public();
+        let seat = |n: u8| Finisher {
+            who: Who::Player(key, n),
+            name: format!("p@{n}"),
+            character: n,
+        };
+        let mut series = Series::single(0, 3);
+        series.score(2, &[seat(0), seat(1)]);
+        let totals = series.totals();
+        assert_eq!(totals.len(), 2);
+        assert_eq!((totals[0].seat, totals[0].points), (0, 1));
+        assert_eq!((totals[1].seat, totals[1].points), (1, 0));
+        assert!(Who::Player(key, 1).matches(&totals[1]));
+        assert!(!Who::Player(key, 0).matches(&totals[1]));
     }
 
     #[test]

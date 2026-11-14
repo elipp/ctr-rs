@@ -11,7 +11,7 @@ use render::portraits::{HEIGHT, WIDTH};
 use crate::controls::Control;
 use crate::lobby::Lobby;
 use crate::lobby::cup::Who;
-use crate::portrait_row::{BACKGROUND, HIGHLIGHT, Portraits, portrait_rect, portraits};
+use crate::portrait_row::{HIGHLIGHT, Portraits, portrait_rect, portraits};
 
 /// How long the scoreboard shows by itself when a cup's standings come in.
 const STANDINGS_SECONDS: f32 = 10.0;
@@ -26,6 +26,9 @@ const COLUMNS: [f32; 6] = [32.0, 48.0, 240.0, 56.0, 64.0, 72.0];
 
 /// The colour of the headings, the points of the last race, the pings and the footer.
 const DIM: Color = Color::srgb(0.6, 0.6, 0.6);
+
+/// What the table is on: nearly opaque, as the race and the HUDs of a split screen are under it.
+const BACKGROUND: Color = Color::srgba(0.05, 0.05, 0.05, 0.97);
 
 /// The table, which is built anew whenever what it shows changes.
 #[derive(Component)]
@@ -111,7 +114,12 @@ fn show(
         commands.entity(board).despawn();
     }
     if let Some(table) = &table {
-        let image = portraits(&mut commands, loaded.as_deref(), &textures.vram, &mut images);
+        let image = portraits(
+            &mut commands,
+            loaded.as_deref(),
+            &textures.vram,
+            &mut images,
+        );
         spawn(&mut commands, table, &image);
     }
     shown.table = table;
@@ -129,32 +137,38 @@ fn table(lobby: &Lobby) -> Table {
             .get(key)
             .map_or("...".to_string(), |ping| format!("{} ms", ping.as_millis())),
     };
-    let score = |scores: &[net::Score], id: [u8; 32]| {
-        scores.iter().find(|s| s.id == id).map(|s| s.points)
-    };
+    let score =
+        |scores: &[net::Score], who: &Who| scores.iter().find(|s| who.matches(s)).map(|s| s.points);
     let mut lines: Vec<Line> = (drivers.iter())
-        .map(|driver| {
-            let id = driver.who.id();
-            Line {
-                character: driver.character,
-                name: driver.name.clone(),
-                gained: standings.and_then(|s| score(&s.gained, id)),
-                points: standings.and_then(|s| score(&s.totals, id)).unwrap_or(0),
-                ping: ping(driver),
-                you: driver.you,
-            }
+        .map(|driver| Line {
+            character: driver.character,
+            name: driver.name.clone(),
+            gained: standings.and_then(|s| score(&s.gained, &driver.who)),
+            points: standings
+                .and_then(|s| score(&s.totals, &driver.who))
+                .unwrap_or(0),
+            ping: ping(driver),
+            you: driver.you,
         })
         .collect();
     // The ones the cup scored who are not in the race or the lobby any more.
     for total in standings.map_or(&[][..], |s| &s.totals) {
-        if drivers.iter().all(|d| d.who.id() != total.id) {
+        if drivers.iter().all(|d| !d.who.matches(total)) {
+            let gained = (standings.into_iter())
+                .flat_map(|s| &s.gained)
+                .find(|g| (g.id, g.seat) == (total.id, total.seat));
             lines.push(Line {
                 character: total.character,
                 name: total.name.clone(),
-                gained: standings.and_then(|s| score(&s.gained, total.id)),
+                gained: gained.map(|g| g.points),
                 points: total.points,
                 // (Between races only the players are listed: a bot is still in the cup.)
-                ping: if Who::is_bot_id(&total.id) { "BOT" } else { "left" }.into(),
+                ping: if Who::is_bot_id(&total.id) {
+                    "BOT"
+                } else {
+                    "left"
+                }
+                .into(),
                 you: false,
             });
         }
@@ -198,7 +212,7 @@ fn drivers(lobby: &Lobby) -> Vec<Driver> {
     }
     (lobby.rows().into_iter())
         .map(|row| Driver {
-            who: Who::Player(row.id),
+            who: Who::Player(row.id, row.seat),
             character: row.character,
             name: row.name,
             key: Some(row.key),
@@ -246,13 +260,27 @@ fn spawn(commands: &mut Commands, table: &Table, image: &Handle<Image>) {
     let headings = ["#", "", "NAME", "RACE", "POINTS", "PING"];
     for (column, label) in headings.into_iter().enumerate() {
         if table.cup || !matches!(column, 3 | 4) {
-            text(commands, heading, label, FONT_SIZE, DIM, Some(COLUMNS[column]));
+            text(
+                commands,
+                heading,
+                label,
+                FONT_SIZE,
+                DIM,
+                Some(COLUMNS[column]),
+            );
         }
     }
     for (place, line) in table.lines.iter().enumerate() {
         let parent = row(commands);
         let color = if line.you { HIGHLIGHT } else { Color::WHITE };
-        text(commands, parent, &(place + 1).to_string(), FONT_SIZE, color, Some(COLUMNS[0]));
+        text(
+            commands,
+            parent,
+            &(place + 1).to_string(),
+            FONT_SIZE,
+            color,
+            Some(COLUMNS[0]),
+        );
         commands.spawn((
             // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
             ImageNode::new(image.clone())
@@ -260,20 +288,45 @@ fn spawn(commands: &mut Commands, table: &Table, image: &Handle<Image>) {
                 .with_mode(NodeImageMode::Stretch),
             Node {
                 width: Val::Px(COLUMNS[1]),
-                height: Val::Px(COLUMNS[1] * HEIGHT as f32 * crate::hud::PIXEL.y
-                    / (WIDTH as f32 * crate::hud::PIXEL.x)),
+                height: Val::Px(
+                    COLUMNS[1] * HEIGHT as f32 * crate::hud::PIXEL.y
+                        / (WIDTH as f32 * crate::hud::PIXEL.x),
+                ),
                 ..default()
             },
             Pickable::IGNORE,
             ChildOf(parent),
         ));
-        text(commands, parent, &line.name, FONT_SIZE, color, Some(COLUMNS[2]));
+        text(
+            commands,
+            parent,
+            &line.name,
+            FONT_SIZE,
+            color,
+            Some(COLUMNS[2]),
+        );
         if table.cup {
-            let gained = line.gained.map_or(String::new(), |points| format!("+{points}"));
+            let gained = line
+                .gained
+                .map_or(String::new(), |points| format!("+{points}"));
             text(commands, parent, &gained, FONT_SIZE, DIM, Some(COLUMNS[3]));
-            text(commands, parent, &line.points.to_string(), FONT_SIZE, color, Some(COLUMNS[4]));
+            text(
+                commands,
+                parent,
+                &line.points.to_string(),
+                FONT_SIZE,
+                color,
+                Some(COLUMNS[4]),
+            );
         }
-        text(commands, parent, &line.ping, FONT_SIZE, DIM, Some(COLUMNS[5]));
+        text(
+            commands,
+            parent,
+            &line.ping,
+            FONT_SIZE,
+            DIM,
+            Some(COLUMNS[5]),
+        );
     }
     if let Some(footer) = &table.footer {
         text(commands, root, footer, FONT_SIZE, DIM, None);

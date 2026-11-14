@@ -134,7 +134,12 @@ impl Online {
         let players = self.characters.len();
         match slot.checked_sub(players) {
             None if self.is_bot(slot) => Some(Who::Bot(self.characters[slot])),
-            None => self.ids.get(slot).copied().map(Who::Player),
+            None => {
+                let id = *self.ids.get(slot)?;
+                // (A machine's split-screen players come after its first: the seat counts them.)
+                let seat = (0..slot).filter(|&s| !self.is_bot(s) && self.ids[s] == id).count();
+                Some(Who::Player(id, seat as u8))
+            }
             Some(bot) => self.retail.characters.get(bot).copied().map(Who::Bot),
         }
     }

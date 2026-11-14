@@ -114,6 +114,9 @@ pub struct LobbyBots {
 pub struct Score {
     /// The player's endpoint id.
     pub id: [u8; 32],
+    /// Which of its machine's players: 0 for the first, 1 for "name@2" of a split screen, and so
+    /// on (0 for a bot).
+    pub seat: u8,
     /// What the player was called when the race was scored (it may have left since).
     pub name: String,
     /// The character it drove then, for its portrait.
@@ -521,12 +524,14 @@ mod tests {
                 races: 4,
                 gained: vec![Score {
                     id: [2; 32],
+                    seat: 1,
                     name: "Ripper".into(),
                     character: 4,
                     points: 3,
                 }],
                 totals: vec![Score {
                     id: [2; 32],
+                    seat: 1,
                     name: "Ripper".into(),
                     character: 4,
                     points: 5,
