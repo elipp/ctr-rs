@@ -174,8 +174,8 @@ pub struct Series {
     pub race: usize,
     /// Whether the races give points (a cup's do).
     pub scored: bool,
-    /// The bots of every race of it: the host's brain bots (of these characters), or retail
-    /// ones. One kind or none.
+    /// The bots of the races it starts: the host's brain bots (of these characters), or retail
+    /// ones. One kind or none. `/bots` changes them for the next race.
     pub brains: Vec<u8>,
     pub retail: net::RetailBots,
     /// `/cup pause` between races: the next one waits for `/cup resume`.

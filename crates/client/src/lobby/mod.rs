@@ -29,8 +29,8 @@
 //!   races with bots, the characters no player drives, up to eight karts: the learned policy's
 //!   (`learned.rs`, whose pads the host sends; the difficulty is their rubber band's,
 //!   `race::Band`), or retail's (`vehicle::bot`, which every client drives itself). A race has
-//!   one kind or the other, and a cup keeps
-//!   the bots it started with
+//!   one kind or the other. In a cup, a change applies from its next race, and bots keep their
+//!   points
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -318,27 +318,37 @@ impl Lobby {
             .collect()
     }
 
-    /// Starts the series, with the countdown to its first race (the host only). Its bots are
-    /// the ones of now, for all its races.
-    fn start_series(&mut self, mut series: Series, now: f32) {
-        let characters = self.bot_characters();
-        // (The difficulty goes with the retail bots, none of them for brain bots: it is their
-        // rubber band's, `race::Band`.)
-        series.retail = net::RetailBots {
-            characters: Vec::new(),
-            difficulty: self.bots.difficulty,
-            cup: series.scored,
-        };
-        match self.bots.kind {
-            BotKind::Brain => series.brains = characters,
-            BotKind::Retail => series.retail.characters = characters,
-        }
+    /// Starts the series, with the countdown to its first race (the host only).
+    fn start_series(&mut self, series: Series, now: f32) {
         let then = Then::Start {
             track: series.track(),
             laps: series.laps,
         };
         self.series = Some(series);
+        self.set_series_bots();
         self.count_down(then, now, COUNTDOWN_SECONDS);
+    }
+
+    /// Gives the series the bots `/bots` asks for now, for the races it starts from here on. A
+    /// bot drives the same character from race to race, so it keeps its points in a cup.
+    fn set_series_bots(&mut self) {
+        let characters = self.bot_characters();
+        let BotSettings { kind, difficulty, .. } = self.bots;
+        let Some(series) = &mut self.series else {
+            return;
+        };
+        let (brains, retail) = match kind {
+            BotKind::Brain => (characters, Vec::new()),
+            BotKind::Retail => (Vec::new(), characters),
+        };
+        series.brains = brains;
+        // (The difficulty goes with the retail bots, none of them for brain bots: it is their
+        // rubber band's, `race::Band`.)
+        series.retail = net::RetailBots {
+            characters: retail,
+            difficulty,
+            cup: series.scored,
+        };
     }
 
     /// The race of the series ended with these players over the line, in order, out of `players`

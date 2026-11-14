@@ -257,8 +257,16 @@ pub(super) fn run(
                 if bots.count > 0 {
                     text += ", as many as the grid has room for";
                 }
-                if changed && (lobby.online.is_some() || lobby.series.is_some()) {
-                    text += " (from the next race you start)";
+                if changed {
+                    lobby.set_series_bots();
+                    if lobby.online.is_some() {
+                        let cup = lobby.series.as_ref().is_some_and(|s| s.scored);
+                        text += if cup {
+                            " (from the cup's next race)"
+                        } else {
+                            " (from the next race you start)"
+                        };
+                    }
                 }
                 toasts.write(Toast::new(text, 3000));
                 continue;
