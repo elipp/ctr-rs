@@ -19,7 +19,19 @@ debug = ["bevy/debug"]
 webgpu = ["bevy/webgpu"]
 
 [dependencies]
-bevy = { version = "0.20.0", features = [
+# Not Bevy's defaults: the game draws no 2D sprites and uses no glTF, post-processing, anti-aliasing
+# or deferred rendering, whose systems would otherwise be registered anyway.
+bevy = { version = "0.20.0", default-features = false, features = [
+    "default_app",
+    "default_platform",
+    "ui_api",
+    "ui_bevy_render",
+    "3d_api",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "audio",
+    "picking",
     "gamepad",
 ] }
 coll = { path = "../coll" }
