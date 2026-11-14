@@ -111,6 +111,10 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrSaveTrackPicture)]
     pub fn save_track_picture(key: &str, bytes: &[u8]);
 
+    /// Hands the page a warning or an error that was logged, for it to show if the game crashes.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrLog)]
+    pub fn log_line(line: &str);
+
     /// Tells the page that the game has crashed, with what the panic said.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCrashed)]
     pub fn crashed(message: &str);

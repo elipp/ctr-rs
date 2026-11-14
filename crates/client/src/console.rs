@@ -257,6 +257,12 @@ impl<S: Subscriber> Layer<S> for ConsoleLayer {
         let mut message = Message(String::new());
         event.record(&mut message);
         let source = meta.target().rsplit("::").next().unwrap_or_default();
+        // The page keeps them for its report if the game crashes (a browser of a tablet has no
+        // console to look at).
+        #[cfg(target_arch = "wasm32")]
+        if !ours {
+            crate::web::log_line(&format!("{} {}: {}", meta.level(), meta.target(), message.0));
+        }
         for text in message.0.lines() {
             let mut line = Log::default();
             if !ours {
@@ -278,7 +284,7 @@ impl Plugin for ConsolePlugin {
             // (Before the layout, for one that appears to take its room right away.)
             .add_systems(PostUpdate, draw_small_portraits.before(UiSystems::Prepare));
         #[cfg(target_arch = "wasm32")]
-        app.add_systems(Update, sync_with_page);
+        app.add_systems(Update, (sync_with_page, report_exit));
     }
 }
 
@@ -334,6 +340,15 @@ pub(crate) fn spawn(mut commands: Commands) {
             command::input_row(),
         ],
     ));
+}
+
+/// An exit with an error (Bevy asks for one when rendering fails) is a crash for the page, which
+/// shows what was logged.
+#[cfg(target_arch = "wasm32")]
+fn report_exit(mut exits: MessageReader<AppExit>) {
+    if exits.read().any(|exit| exit.is_error()) {
+        crate::web::crashed("The game stopped because of an error");
+    }
 }
 
 /// Keeps the window, and so the command line, above the page's on-screen keyboard, and tells the

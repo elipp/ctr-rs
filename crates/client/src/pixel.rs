@@ -8,22 +8,16 @@
 //! the scale is 1: what is drawn in the scene by "the screen" reads it, and not the window's. A
 //! spot in the scene's picture is put on the window by [`RenderSize::to_window`].
 
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::camera::visibility::RenderLayers;
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::camera::{ClearColorConfig, RenderTarget};
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::render::render_resource::TextureFormat;
 use bevy::window::PrimaryWindow;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::config::Config;
 
 /// The render layer of the picture on the window, which only its camera draws.
-#[cfg(not(target_arch = "wasm32"))]
 const LAYER: usize = 6;
 
 /// The most the scale can be.
@@ -89,7 +83,6 @@ pub const HUD_ORDER: isize = PRESENT_ORDER + 20;
 pub const UI_ORDER: isize = PRESENT_ORDER + 50;
 
 /// The image that the scene's cameras draw into, while the scale is not 1.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource, Default)]
 struct Target(Option<Handle<Image>>);
 
@@ -103,12 +96,9 @@ impl Plugin for PixelPlugin {
             shown: 1.0,
             window: Vec2::ONE,
         });
-        // The browser has no pixel scale (the page's `render-scale` sizes the canvas instead):
-        // the scene's cameras always draw into the canvas, and Bevy picks the UI's camera itself.
-        #[cfg(not(target_arch = "wasm32"))]
+        // (The browser has no pixel scale, the page's `render-scale` sizes the canvas instead: the
+        // scale is 1 there, and the picture is only for a split screen.)
         app.init_resource::<Target>().add_systems(PreUpdate, follow);
-        #[cfg(target_arch = "wasm32")]
-        app.add_systems(PreUpdate, follow_window);
     }
 }
 
@@ -140,15 +130,6 @@ fn set_size(size: &mut ResMut<RenderSize>, wanted: RenderSize) {
     }
 }
 
-/// The browser's: what the cameras draw into is the canvas.
-#[cfg(target_arch = "wasm32")]
-fn follow_window(mut size: ResMut<RenderSize>, windows: Query<&Window, With<PrimaryWindow>>) {
-    if let Ok(window) = windows.single() {
-        set_size(&mut size, render_size(window, 1));
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 /// The camera that puts the picture on the window, and the picture, `shown` that big.
 fn spawn_present(
     commands: &mut Commands,
@@ -183,11 +164,17 @@ fn spawn_present(
         .id()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn target_image(size: UVec2) -> Image {
+    let (width, height) = (size.x.max(1), size.y.max(1));
+    // WebGL2 has no view formats (a texture seen as another format): the sRGB texture itself,
+    // which the cameras and the sprite see the same way as the view of the other.
+    #[cfg(target_arch = "wasm32")]
+    let mut image =
+        Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
+    #[cfg(not(target_arch = "wasm32"))]
     let mut image = Image::new_target_texture(
-        size.x.max(1),
-        size.y.max(1),
+        width,
+        height,
         TextureFormat::Rgba8Unorm,
         Some(TextureFormat::Rgba8UnormSrgb),
     );
@@ -195,7 +182,6 @@ fn target_image(size: UVec2) -> Image {
     image
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Sizes the picture to the window and the scale, points the scene's cameras at it (or back at
 /// the window when the scale is 1), and puts it on the window.
 ///
