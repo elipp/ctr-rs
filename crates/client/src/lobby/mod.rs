@@ -156,6 +156,20 @@ impl BotSettings {
     }
 }
 
+/// A kart of the lobby's next race, as [`Lobby::rows`] gives it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Row {
+    pub character: u8,
+    /// What it is called: its player's name, and for a split screen's other players, their number ("name@2"), as in the race.
+    pub name: String,
+    /// The short key of its machine.
+    pub key: String,
+    /// Whether it is the host's own.
+    pub host: bool,
+    /// Whether it is at our machine.
+    pub you: bool,
+}
+
 /// A player in the lobby, as the last [`Event::Lobby`] said.
 struct Member {
     id: EndpointId,
@@ -193,18 +207,35 @@ impl Lobby {
         }
     }
 
-    /// The players in the lobby, as the last [`Event::Lobby`] said: the character, the name
-    /// (the nickname, or the short key without one) and the short key of each.
-    pub fn members(&self) -> impl Iterator<Item = (u8, &str, &str)> {
-        self.roster
-            .iter()
-            .map(|m| (m.character, m.label.as_str(), m.key.as_str()))
-    }
-
-    /// Our place in [`members`](Self::members), if we drive (not if we only watch, or the lobby
-    /// has not told yet).
-    pub fn you(&self) -> Option<usize> {
-        self.roster.iter().position(|m| m.you)
+    /// The karts the lobby's players have in a race, as the last [`Event::Lobby`] said, one row
+    /// each: a player's, then those of the other players at its machine (split screen), as many
+    /// as the grid has room for. (The race gives the room to the host's extras first, then
+    /// each guest's, in this order.)
+    pub fn rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for (n, member) in self.roster.iter().enumerate() {
+            rows.push(Row {
+                character: member.character,
+                name: member.label.clone(),
+                key: member.key.clone(),
+                host: n == 0,
+                you: member.you,
+            });
+        }
+        // (The extras come after all the players, as they do in the race.)
+        for member in &self.roster {
+            for (n, &character) in member.extras.iter().enumerate() {
+                rows.push(Row {
+                    character,
+                    name: format!("{}@{}", member.label, n + 2),
+                    key: member.key.clone(),
+                    host: false,
+                    you: member.you,
+                });
+            }
+        }
+        rows.truncate(race::MAX_KARTS);
+        rows
     }
 
     /// Who the lobby could be handed to, the character and the name of each: the others, if we
@@ -433,7 +464,8 @@ impl Lobby {
     /// How many bots the next race of the lobby has, as far as we know: as many as the host's
     /// `/bots` asks and the grid has room for after the players.
     pub fn next_bots(&self) -> usize {
-        let room = race::MAX_KARTS.saturating_sub(self.roster.len().max(1));
+        let karts: usize = self.roster.iter().map(|m| 1 + m.extras.len()).sum();
+        let room = race::MAX_KARTS.saturating_sub(karts.max(1));
         (self.lobby_bots.count as usize).min(room)
     }
 
