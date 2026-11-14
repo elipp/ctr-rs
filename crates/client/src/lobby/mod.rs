@@ -112,8 +112,9 @@ pub struct Lobby {
     countdown: Option<Countdown>,
     /// The bots our races have, when we host (`/bots`). Kept when the lobby closes.
     pub bots: BotSettings,
-    /// The track of the cup's next race, as the standings of the race before told it: its start
-    /// brings the loading screen's flag in over the race before (`scene::switch_level`).
+    /// The track of the race that is about to start, as the standings of the race before told it
+    /// (a cup's next), or as its start did: its start brings the loading screen's flag in over
+    /// what is shown (`scene::switch_level`).
     pub(crate) cup_next: Option<u32>,
     /// The cup's latest standings (or its final ones), for the scoreboard.
     pub(crate) standings: Option<net::Standings>,

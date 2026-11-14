@@ -310,6 +310,10 @@ pub(super) fn report(
     }
     let new_race = started.is_some();
     if new_race {
+        // Every race's start brings the flag in (a cup's next one has it from its standings
+        // already): the players load at their own speeds, and the faster ones would show the
+        // scene before the race has put the karts on the grid, until everyone's go.
+        lobby.cup_next = started.as_ref().map(|online| online.track);
         lobby.online = started;
     }
     // (The session drops the pauses of older races, so one that came with a start is of the new

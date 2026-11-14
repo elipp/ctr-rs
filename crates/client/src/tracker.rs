@@ -183,7 +183,10 @@ fn step_state(state: &mut Tracker, closest: Option<Chaser>, tick: u32) {
     } else {
         &ANIM_CHASED
     };
-    let (x, y) = table[state.timer as usize];
+    // The arrival timer starts at 12 but the chased table has 8 frames: a new missile that
+    // shows up while the arrival is still playing switches tables mid-countdown, so hold the
+    // last frame rather than reading past the end.
+    let (x, y) = table[(state.timer as usize).min(table.len() - 1)];
     let closest_id = closest.map(|c| c.id);
     let reset = if state.timer == 0 && closest.is_none() {
         // It hit; or it is a warpball that went back to the path when the mask grabbed its
@@ -649,6 +652,21 @@ mod tests {
         assert_eq!(frames[12], Some(ANIM_ARRIVED[10]));
         assert_eq!(frames[21], Some(ANIM_ARRIVED[1]));
         assert!(frames[22..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_new_missile_during_the_arrival_does_not_read_past_the_chased_table() {
+        let mut state = Tracker::default();
+        for tick in 0..10 {
+            step_state(&mut state, missile(7, 400 * 400 * 2500), tick);
+        }
+        // It hits once the chased countdown is over: the arrival timer starts at 12, past the
+        // end of the chased table.
+        step_state(&mut state, None, 10);
+        assert!(state.timer > ANIM_CHASED.len() as i16);
+        // Another one is fired at us before the arrival is over.
+        step_state(&mut state, missile(8, 400 * 400 * 2500), 11);
+        assert!(state.frame.is_some());
     }
 
     #[test]
