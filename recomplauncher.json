@@ -1,0 +1,14 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "repo": "elipp/ctr-rs",
+  "game": {
+    "kind": "iso",
+    "label": "Your disc image of Crash Team Racing (USA, SCUS-94426).",
+    "check": { "iso9660": "SCUS_944.26" }
+  },
+  "start": {
+    "program": ["ctr-rs.exe", "ctr-rs", "ctr-rs.AppImage"],
+    "env": { "CTR_BIN": "{game}" }
+  }
+}

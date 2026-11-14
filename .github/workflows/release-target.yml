@@ -35,6 +35,7 @@ jobs:
         run: |
           name=ctr-rs-${{ inputs.target }}
           mkdir -p "$name" dist
+          cp recomplauncher.json "$name/"
           if [ "$RUNNER_OS" = Windows ]; then
               cp target/dist/client.exe "$name/ctr-rs.exe"
           elif [ "$RUNNER_OS" = macOS ]; then
@@ -70,6 +71,7 @@ jobs:
           cp "$name/ctr-rs" AppDir/usr/bin/
           ln -s usr/bin/ctr-rs AppDir/AppRun
           cp linux/ctr-rs.desktop AppDir/
+          cp recomplauncher.json AppDir/
           cp crates/client/icon.png AppDir/ctr-rs.png
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool AppDir "dist/$name.AppImage"
       - uses: actions/upload-artifact@v7
