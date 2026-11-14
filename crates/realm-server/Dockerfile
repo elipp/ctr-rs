@@ -10,7 +10,7 @@ COPY crates crates
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git-db,target=/usr/local/cargo/git/db \
     --mount=type=cache,id=realm-target,target=/src/target \
-    cargo build --release --locked -p realm-server \
+    cargo build --release --locked -p realm-server --features=telegram \
     && strip -o /realm-server target/release/realm-server
 
 FROM debian:trixie-slim
