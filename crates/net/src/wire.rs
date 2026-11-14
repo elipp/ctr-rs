@@ -80,6 +80,8 @@ pub struct Standings {
     /// The next race, if one follows: the track (its level id) and its name, as the host knows
     /// it (a guest may not have a custom track yet).
     pub next: Option<(u32, String)>,
+    /// The host stopped the cup: these are its final standings, and `gained` is empty.
+    pub stopped: bool,
 }
 
 /// The retail bots of a race (`vehicle::bot`), which every client adds after the players and
@@ -112,8 +114,13 @@ pub struct LobbyBots {
 pub struct Score {
     /// The player's endpoint id.
     pub id: [u8; 32],
+    /// Which of its machine's players: 0 for the first, 1 for "name@2" of a split screen, and so
+    /// on (0 for a bot).
+    pub seat: u8,
     /// What the player was called when the race was scored (it may have left since).
     pub name: String,
+    /// The character it drove then, for its portrait.
+    pub character: u8,
     pub points: u32,
 }
 
@@ -157,8 +164,8 @@ pub enum Message {
     /// own (`slot`), the next are its `extras`, in the order of their streams. The host's bots
     /// are its last.
     Start {
-        /// Which race this is (see [`Message::Restart`]): 0 for the first of the lobby. A start
-        /// after a race that is over takes new players in, and the ones that left out.
+        /// Which race this is: 0 for the first of the lobby. A start after another race takes in
+        /// the players there are now, without the ones that left.
         epoch: u32,
         slot: u8,
         characters: Vec<u8>,
@@ -194,15 +201,6 @@ pub enum Message {
         stream: u8,
         first: Tick,
         pads: Vec<Pad>,
-    },
-    /// Reliable, host to each client: the race starts again, on `track`. The same players, on
-    /// the same connections; `epoch` counts the races and tells their packets apart.
-    Restart {
-        epoch: u32,
-        track: u32,
-        hash: u64,
-        laps: u8,
-        retail: RetailBots,
     },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
@@ -278,8 +276,8 @@ pub enum Message {
         pads: Vec<Pad>,
     },
     /// Reliable, host to each client: the race of `epoch` is over, without a winner. The lobby
-    /// goes on, and the host can start the same players again. (A stop that comes after the
-    /// next race's [`Message::Restart`] is of the race before, and does not count.)
+    /// goes on, and the host can start another race. (A stop that comes after the next race's
+    /// [`Message::Start`] is of the race before, and does not count.)
     Stop { epoch: u32 },
     /// Reliable, host to a client: the lobby is handed over to the player `to` (an endpoint id).
     /// The host sends it to `to` first, which answers with [`Message::HandoffAck`]; once that
@@ -290,6 +288,9 @@ pub enum Message {
     /// Reliable, client to host: the answer to a [`Message::Handoff`] to us. We are ready to
     /// host when the host closes.
     HandoffAck,
+    /// Reliable, host to each client: the race of `epoch` pauses at tick `at` (a client already
+    /// past it pauses where it is), or resumes with `None`.
+    Pause { epoch: u32, at: Option<Tick> },
 }
 
 /// How often a player pings the ones it is connected to.
@@ -490,13 +491,6 @@ mod tests {
             Message::Handoff { to: [9; 32] },
             Message::HandoffAck,
             Message::Go,
-            Message::Restart {
-                epoch: 2,
-                track: 7,
-                hash: 0xfeed,
-                laps: 3,
-                retail: RetailBots::default(),
-            },
             Message::Want {
                 track: 0x8000_0001,
                 hash: 77,
@@ -530,16 +524,23 @@ mod tests {
                 races: 4,
                 gained: vec![Score {
                     id: [2; 32],
+                    seat: 1,
                     name: "Ripper".into(),
+                    character: 4,
                     points: 3,
                 }],
                 totals: vec![Score {
                     id: [2; 32],
+                    seat: 1,
                     name: "Ripper".into(),
+                    character: 4,
                     points: 5,
                 }],
                 next: Some((7, "Coco Park".into())),
+                stopped: false,
             }),
+            Message::Pause { epoch: 2, at: Some(900) },
+            Message::Pause { epoch: 2, at: None },
             Message::Say { text: "gg".into() },
             Message::Chat {
                 from: [5; 32],

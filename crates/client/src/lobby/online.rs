@@ -80,6 +80,8 @@ pub struct Online {
     /// Where the pads of the players that left end (`Event::Left`), for `drive_tick` to apply:
     /// (slot, first tick, pads).
     pub lefts: Vec<(usize, u32, Vec<Pad>)>,
+    /// The tick the host paused the race at (`/cup pause`): `drive_tick` plays no ticks from it on.
+    pub pause_at: Option<u32>,
 }
 
 /// A player whose sim has parted from ours.
@@ -132,9 +134,23 @@ impl Online {
         let players = self.characters.len();
         match slot.checked_sub(players) {
             None if self.is_bot(slot) => Some(Who::Bot(self.characters[slot])),
-            None => self.ids.get(slot).copied().map(Who::Player),
+            None => {
+                let id = *self.ids.get(slot)?;
+                // (A machine's split-screen players come after its first: the seat counts them.)
+                let seat = (0..slot).filter(|&s| !self.is_bot(s) && self.ids[s] == id).count();
+                Some(Who::Player(id, seat as u8))
+            }
             Some(bot) => self.retail.characters.get(bot).copied().map(Who::Bot),
         }
+    }
+
+    /// The kart of `slot` as a cup scores it.
+    pub fn finisher(&self, slot: usize) -> Option<super::cup::Finisher> {
+        Some(super::cup::Finisher {
+            who: self.who(slot)?,
+            name: self.kart_label(slot).to_string(),
+            character: *self.kart_characters().get(slot)?,
+        })
     }
 
     /// Whether we only watch: the slot is past the players', and there is no kart of ours.

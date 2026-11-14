@@ -158,13 +158,13 @@ fn endpoint_builder() -> Builder {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/17";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/18";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
 /// one, the host's pair with each guest included, so the host is no different from the others
 /// to the network.
-pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/3";
+pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/4";
 
 /// The most karts a race has: the host's bots fill it up to this (see [`Session::set_bots`]).
 pub const MAX_PLAYERS: usize = 8;
@@ -288,6 +288,9 @@ pub enum Event {
     },
     /// The host stopped the race (see [`Session::stop`]).
     Stopped,
+    /// The host paused the race at that tick, or resumed it (`None`): see [`Session::pause`].
+    /// The host gets its own as well.
+    Paused(Option<Tick>),
     /// The player in `slot` left the race. The game answers with [`Session::have`] once it has
     /// taken the pads that came in so far, and takes no more pads of that player.
     Gone { slot: usize },
@@ -385,12 +388,6 @@ enum Command {
         laps: u8,
         retail: RetailBots,
     },
-    Restart {
-        track: u32,
-        hash: u64,
-        laps: u8,
-        retail: RetailBots,
-    },
     Provide {
         track: u32,
         hash: u64,
@@ -425,6 +422,7 @@ enum Command {
     },
     NetInfo,
     Stop,
+    Pause(Option<Tick>),
     Public(Option<Public>),
     Promote(EndpointId),
 }
@@ -473,18 +471,6 @@ impl Session {
     /// it, or [`Event::BlobMissing`] says it cannot.
     pub fn fetch(&self, track: u32, hash: u64) {
         let _ = self.commands.send(Command::Fetch { track, hash });
-    }
-
-    /// Starts the race again on level `track`, if we host the lobby and a race has been started
-    /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
-    /// the way it did the first time.
-    pub fn restart(&self, track: u32, hash: u64, laps: u8, retail: RetailBots) {
-        let _ = self.commands.send(Command::Restart {
-            track,
-            hash,
-            laps,
-            retail,
-        });
     }
 
     /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host
@@ -590,9 +576,20 @@ impl Session {
     }
 
     /// Ends the race in progress for everyone, if we host the lobby: they get [`Event::Stopped`]
-    /// (we do not; we know). The lobby stays, and [`Session::restart`] starts the same players again.
+    /// (we do not; we know). The lobby stays, and [`Session::start`] starts another race.
     pub fn stop(&self) {
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// Pauses the race in progress for everyone at tick `at`, if we host the lobby. Everyone gets
+    /// [`Event::Paused`], we too. Nobody is removed for being silent while it is paused.
+    pub fn pause(&self, at: Tick) {
+        let _ = self.commands.send(Command::Pause(Some(at)));
+    }
+
+    /// Resumes the race that [`Session::pause`] paused.
+    pub fn resume(&self) {
+        let _ = self.commands.send(Command::Pause(None));
     }
 
     /// Hands the lobby over to the guest `to`, if we host it and no race is on: it hosts from

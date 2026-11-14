@@ -6,6 +6,7 @@ use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, BotKind, Lobby};
 use crate::command::{Action, PolicyChoice};
 use crate::console::{Log, console};
+use crate::controls::Control;
 use crate::maps;
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -84,7 +85,34 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::CupStart(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
+        Action::CupStart(_) if lobby.series.as_ref().is_some_and(|s| s.paused) => {
+            "A cup is paused (/cup resume, or /cup stop to end it)"
+        }
         Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => net::NOT_NOW,
+        Action::CupPause | Action::CupResume if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::CupPause | Action::CupResume
+            if lobby.online.is_none() && !lobby.series.as_ref().is_some_and(|s| s.scored) =>
+        {
+            "No race or cup in progress (/cup start)"
+        }
+        Action::CupPause if lobby.is_paused() => "Paused already (/cup resume)",
+        Action::CupNext | Action::CupPrevious if !lobby.is_open() || lobby.joined => {
+            "Only the host of a lobby can do that"
+        }
+        Action::CupNext | Action::CupPrevious
+            if !lobby.series.as_ref().is_some_and(|s| s.scored) =>
+        {
+            "No cup in progress (/cup start)"
+        }
+        Action::CupNext if !lobby.series.as_ref().is_some_and(|s| s.has_next()) => {
+            "This is the cup's last track"
+        }
+        Action::CupPrevious if lobby.series.as_ref().is_some_and(|s| s.race == 0) => {
+            "This is the cup's first track"
+        }
+        Action::CupResume if !lobby.is_paused() => "Not paused (/cup pause)",
         Action::StartRace | Action::RestartRace | Action::CupStart(_)
             if lobby.countdown.is_some() =>
         {
@@ -110,6 +138,28 @@ fn shuffle<T>(items: &mut [T]) {
     }
 }
 
+/// [`Control::PauseRace`] (G by default) is `/cup pause`, or `/cup resume` when paused. Only in a
+/// lobby; a guest gets the usual host-only refusal.
+pub(super) fn pause_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    config: Res<crate::config::Config>,
+    menu: Res<crate::pause::PauseMenu>,
+    lobby: Res<Lobby>,
+    mut actions: MessageWriter<Action>,
+) {
+    if menu.capturing.is_some()
+        || !lobby.is_open()
+        || !config.controls.just_pressed(Control::PauseRace, &keys)
+    {
+        return;
+    }
+    actions.write(if lobby.is_paused() {
+        Action::CupResume
+    } else {
+        Action::CupPause
+    });
+}
+
 /// Does what the keys and the command line ask (`command.rs`).
 pub(super) fn run(
     mut actions: MessageReader<Action>,
@@ -124,6 +174,7 @@ pub(super) fn run(
     mut config: ResMut<crate::config::Config>,
     mut brains: ResMut<crate::learned::Brains>,
     mut players: ResMut<crate::drive::LocalPlayers>,
+    sim: Res<crate::props::Sim>,
     mut toasts: MessageWriter<Toast>,
     mut logs: MessageWriter<Log>,
 ) {
@@ -220,8 +271,16 @@ pub(super) fn run(
                 if bots.count > 0 {
                     text += ", as many as the grid has room for";
                 }
-                if changed && (lobby.online.is_some() || lobby.series.is_some()) {
-                    text += " (from the next race you start)";
+                if changed {
+                    lobby.set_series_bots();
+                    if lobby.online.is_some() {
+                        let cup = lobby.series.as_ref().is_some_and(|s| s.scored);
+                        text += if cup {
+                            " (from the cup's next race)"
+                        } else {
+                            " (from the next race you start)"
+                        };
+                    }
                 }
                 toasts.write(Toast::new(text, 3000));
                 continue;
@@ -313,6 +372,22 @@ pub(super) fn run(
                 }
                 continue;
             }
+            Action::CupPause => {
+                lobby.pause(sim.race.tick());
+                continue;
+            }
+            Action::CupResume => {
+                lobby.resume(now);
+                continue;
+            }
+            Action::CupNext => {
+                lobby.step_cup(1, now);
+                continue;
+            }
+            Action::CupPrevious => {
+                lobby.step_cup(-1, now);
+                continue;
+            }
             Action::CupDelete(name) => {
                 let Some(cup) = config.cups.remove(name) else {
                     logs.write(Log::error(format!("No cup is called {name}")));
@@ -383,14 +458,8 @@ pub(super) fn run(
             Action::DebugRanking => {
                 // The others are told the race stopped; the host scores it like a finished one.
                 let Some(net) = &lobby.online else { continue };
-                let mut finishers: Vec<Finisher> = (0..net.karts())
-                    .filter_map(|slot| {
-                        Some(Finisher {
-                            who: net.who(slot)?,
-                            name: net.kart_label(slot).to_string(),
-                        })
-                    })
-                    .collect();
+                let mut finishers: Vec<Finisher> =
+                    (0..net.karts()).filter_map(|slot| net.finisher(slot)).collect();
                 shuffle(&mut finishers);
                 let players = finishers.len();
                 if let Some(session) = &lobby.session {
@@ -423,17 +492,26 @@ pub(super) fn run(
                     session.stop();
                 }
                 lobby.countdown = None;
-                let cup = lobby.series.take().is_some_and(|s| s.scored);
+                let series = lobby.series.take();
+                let cup = series.as_ref().is_some_and(|s| s.scored);
                 lobby.end_race();
-                let text = if cup { "Cup stopped" } else { "Race stopped" };
-                toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
+                // (The guests hear of a stopped race from the session; of a cup, only from us.)
+                if cup {
+                    lobby.announce("Cup stopped");
+                    if let Some(standings) = series.and_then(|s| s.final_standings())
+                        && let Some(session) = &lobby.session
+                    {
+                        session.standings(standings);
+                    }
+                } else {
+                    toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
+                }
                 continue;
             }
             Action::RestartRace => {
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart {
                         track: net.track,
-                        hash: net.hash,
                         laps: net.laps,
                     };
                     lobby.count_down(then, now, super::COUNTDOWN_SECONDS);

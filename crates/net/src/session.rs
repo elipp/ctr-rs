@@ -257,12 +257,12 @@ pub(crate) async fn run(
     let mut game_ready = false;
     let mut ready_sent = false;
     let mut running = false;
+    // The host paused the race (`Command::Pause`): nobody is removed for being silent meanwhile.
+    let mut paused = false;
     // The players that left the race on the way (everyone learns of it from the host).
     let mut departed: HashSet<EndpointId> = HashSet::new();
-    // Which race this is, counted from 0, and our slot, the characters, the roster and the bots
-    // in it.
+    // Which race this is, counted from 0.
     let mut epoch: u32 = 0;
-    let mut race_info: Option<(usize, Vec<u8>, Vec<EndpointId>, usize)> = None;
     let mut timer = send_interval();
     // The last round trip to each player, from the pings.
     let mut pings: HashMap<EndpointId, Duration> = HashMap::new();
@@ -394,30 +394,20 @@ pub(crate) async fn run(
                 {
                     send_reliably(connection, &Message::Want { track, hash }).await?;
                 },
-                // The same players again: new links, and everyone ready before tick 0 once more.
-                Command::Restart { .. } if host.is_some() && !departed.is_empty() => {
-                    let text = "A player left the race: start a new one instead of restarting".to_string();
-                    io.event(Event::Announce(text));
-                }
-                Command::Restart { track, hash, laps, mut retail } => if plan.is_some()
-                    && let Some(host) = &mut host
-                    && let Some((slot, characters, players, bots)) = race_info.clone()
+                Command::Pause(at) => if let Some(host) = &host
+                    && host.racing
                 {
-                    epoch += 1;
-                    // The same players, so the brain bots of the race before, and retail bots only
-                    // where they were (a race has one kind or the other), as many as fit.
-                    retail.characters.truncate(if bots > 0 { 0 } else { MAX_PLAYERS.saturating_sub(characters.len()) });
+                    paused = at.is_some();
+                    // The pause does not count as silence.
+                    if !paused {
+                        for link in links.values_mut() {
+                            link.advanced = Instant::now();
+                        }
+                    }
                     for guest in &host.guests {
-                        let restart = Message::Restart { epoch, track, hash, laps, retail: retail.clone() };
-                        let _ = send_reliably(&guest.connection, &restart).await;
+                        let _ = send_reliably(&guest.connection, &Message::Pause { epoch, at }).await;
                     }
-                    if let Some(plan) = &plan {
-                        start_over(&mut links, epoch, plan, me);
-                    }
-                    (running, game_ready, ready_sent) = (false, false, false);
-                    host.ready_from.clear();
-                    let locals = plan.as_ref().map_or_else(|| vec![slot], |plan| plan.locals_of(me));
-                    io.event(Event::Started { slot, locals, characters, players, track, hash, laps, bots, retail });
+                    io.event(Event::Paused(at));
                 },
                 Command::Stop => if let Some(host) = &host {
                     for guest in &host.guests {
@@ -516,6 +506,7 @@ pub(crate) async fn run(
                 Command::Ready => game_ready = true,
                 Command::RaceOver => {
                     race_on = false;
+                    paused = false;
                     if let Some(host) = &mut host {
                         host.racing = false;
                         // Whoever left during the race is out of the lobby now that it is over.
@@ -708,7 +699,7 @@ pub(crate) async fn run(
                         // Nothing of a race before is kept, as when a guest takes over.
                         host_id = from;
                         links.clear();
-                        (plan, race_info) = (None, None);
+                        plan = None;
                         departed.clear();
                         (running, game_ready, ready_sent) = (false, false, false);
                         io.event(Event::Announce(format!("{name} is now the lobby host")));
@@ -767,23 +758,9 @@ pub(crate) async fn run(
                         start_over(&mut links, epoch, &new_plan, me);
                         (running, game_ready, ready_sent) = (false, false, false);
                         dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
-                        race_info = Some((slot, characters.clone(), roster.clone(), bots));
                         let locals = new_plan.locals_of(me);
                         plan = Some(new_plan);
                         io.event(Event::Started { slot, locals, characters, players: roster, track, hash, laps, bots, retail });
-                    }
-                    Message::Restart { epoch: new, track, hash, laps, retail }
-                        if plan.is_some() && from == host_id && host.is_none() =>
-                    {
-                        if let Some((slot, characters, players, bots)) = race_info.clone()
-                            && let Some(plan) = &plan
-                        {
-                            epoch = new;
-                            start_over(&mut links, epoch, plan, me);
-                            (running, game_ready, ready_sent) = (false, false, false);
-                            let locals = plan.locals_of(me);
-                            io.event(Event::Started { slot, locals, characters, players, track, hash, laps, bots, retail });
-                        }
                     }
                     Message::Announce { text } => {
                         if from == host_id && host.is_none() {
@@ -966,13 +943,17 @@ pub(crate) async fn run(
                     Message::Snapshot { .. }
                     | Message::Reject { .. }
                     | Message::Start { .. }
-                    | Message::Restart { .. }
                     | Message::Handoff { .. }
                     | Message::HandoffAck
                     | Message::Lobby { .. } => {}
                     Message::Stop { epoch: stopped } => {
                         if stopped == epoch && from == host_id && host.is_none() {
                             io.event(Event::Stopped);
+                        }
+                    }
+                    Message::Pause { epoch: sent, at } => {
+                        if sent == epoch && from == host_id && host.is_none() {
+                            io.event(Event::Paused(at));
                         }
                     }
                     // (`listen` takes these.)
@@ -1104,6 +1085,7 @@ pub(crate) async fn run(
                 }
                 if let Some(host) = &mut host
                     && host.racing
+                    && !paused
                 {
                     let own = links.values().next().map(|link| link.sender.tick());
                     let heard: Vec<(EndpointId, Tick, Instant)> = links
@@ -1187,7 +1169,7 @@ pub(crate) async fn run(
                     host_connection = None;
                     host_id = me;
                     links.clear();
-                    (plan, race_info) = (None, None);
+                    plan = None;
                     departed.clear();
                     epoch += 1;
                     (running, game_ready, ready_sent) = (false, false, false);
@@ -1351,7 +1333,7 @@ pub(crate) async fn run(
             (running, game_ready, ready_sent) = (false, false, false);
             host.ready_from.clear();
             host.racing = true;
-            race_info = Some((0, characters.clone(), roster.clone(), bots));
+            paused = false;
             let locals = new_plan.locals_of(me);
             plan = Some(new_plan);
             io.event(Event::Started {

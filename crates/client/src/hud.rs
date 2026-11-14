@@ -42,6 +42,7 @@ impl PluginGroup for HudPlugins {
         bevy::app::PluginGroupBuilder::start::<Self>()
             .add(crate::leaderboard::LeaderboardPlugin)
             .add(crate::lobby_list::LobbyListPlugin)
+            .add(crate::scoreboard::ScoreboardPlugin)
             .add(crate::portrait_row::PortraitRowPlugin)
             .add(crate::lights::LightsPlugin)
             .add(crate::place::PlacePlugin)

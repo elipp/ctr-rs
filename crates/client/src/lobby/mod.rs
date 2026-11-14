@@ -13,6 +13,11 @@
 //!   `/cup delete <name>`, and `/cup start <name>` to drive it: its races one after another, points
 //!   for the first four to finish, and [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a
 //!   cup of one race with no points.
+//! * `/cup pause`: pause the race for everyone, or the countdown to a cup's next race (the host
+//!   only); `/cup resume` to go on
+//! * `/cup next`, `/cup previous`: stop the cup's race without points, and count down to its next
+//!   or previous track (the host only)
+//! * `/cup stop`: end the cup and its race, as `/race stop` does (the host only)
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/promote <player>`: hand the lobby over to a player, between races (the host only): they host it
 //!   from then on, a public lobby stays listed, and we are a guest of theirs
@@ -27,8 +32,8 @@
 //!   races with bots, the characters no player drives, up to eight karts: the learned policy's
 //!   (`learned.rs`, whose pads the host sends; the difficulty is their rubber band's,
 //!   `race::Band`), or retail's (`vehicle::bot`, which every client drives itself). A race has
-//!   one kind or the other, and a cup keeps
-//!   the bots it started with
+//!   one kind or the other. In a cup, a change applies from its next race, and bots keep their
+//!   points
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -40,7 +45,7 @@ use net::{EndpointId, Pad, Session, Ticket};
 use crate::console::Log;
 use crate::maps;
 
-use commands::run;
+use commands::{pause_key, run};
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
 use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
@@ -110,6 +115,8 @@ pub struct Lobby {
     /// The track of the cup's next race, as the standings of the race before told it: its start
     /// brings the loading screen's flag in over the race before (`scene::switch_level`).
     pub(crate) cup_next: Option<u32>,
+    /// The cup's latest standings (or its final ones), for the scoreboard.
+    pub(crate) standings: Option<net::Standings>,
     pub online: Option<Online>,
 }
 
@@ -164,6 +171,10 @@ pub struct Row {
     pub name: String,
     /// The short key of its machine.
     pub key: String,
+    /// Its machine's key.
+    pub id: EndpointId,
+    /// Which of the machine's players: 0 for the first, 1 for "name@2", and so on.
+    pub seat: u8,
     /// Whether it is the host's own.
     pub host: bool,
     /// Whether it is at our machine.
@@ -218,6 +229,8 @@ impl Lobby {
                 character: member.character,
                 name: member.label.clone(),
                 key: member.key.clone(),
+                id: member.id,
+                seat: 0,
                 host: n == 0,
                 you: member.you,
             });
@@ -229,6 +242,8 @@ impl Lobby {
                     character,
                     name: format!("{}@{}", member.label, n + 2),
                     key: member.key.clone(),
+                    id: member.id,
+                    seat: n as u8 + 1,
                     host: false,
                     you: member.you,
                 });
@@ -316,27 +331,37 @@ impl Lobby {
             .collect()
     }
 
-    /// Starts the series, with the countdown to its first race (the host only). Its bots are
-    /// the ones of now, for all its races.
-    fn start_series(&mut self, mut series: Series, now: f32) {
-        let characters = self.bot_characters();
-        // (The difficulty goes with the retail bots, none of them for brain bots: it is their
-        // rubber band's, `race::Band`.)
-        series.retail = net::RetailBots {
-            characters: Vec::new(),
-            difficulty: self.bots.difficulty,
-            cup: series.scored,
-        };
-        match self.bots.kind {
-            BotKind::Brain => series.brains = characters,
-            BotKind::Retail => series.retail.characters = characters,
-        }
+    /// Starts the series, with the countdown to its first race (the host only).
+    fn start_series(&mut self, series: Series, now: f32) {
         let then = Then::Start {
             track: series.track(),
             laps: series.laps,
         };
         self.series = Some(series);
+        self.set_series_bots();
         self.count_down(then, now, COUNTDOWN_SECONDS);
+    }
+
+    /// Gives the series the bots `/bots` asks for now, for the races it starts from here on. A
+    /// bot drives the same character from race to race, so it keeps its points in a cup.
+    fn set_series_bots(&mut self) {
+        let characters = self.bot_characters();
+        let BotSettings { kind, difficulty, .. } = self.bots;
+        let Some(series) = &mut self.series else {
+            return;
+        };
+        let (brains, retail) = match kind {
+            BotKind::Brain => (characters, Vec::new()),
+            BotKind::Retail => (Vec::new(), characters),
+        };
+        series.brains = brains;
+        // (The difficulty goes with the retail bots, none of them for brain bots: it is their
+        // rubber band's, `race::Band`.)
+        series.retail = net::RetailBots {
+            characters: retail,
+            difficulty,
+            cup: series.scored,
+        };
     }
 
     /// The race of the series ended with these players over the line, in order, out of `players`
@@ -359,6 +384,7 @@ impl Lobby {
             gained,
             totals: series.totals(),
             next: next.map(|track| (track, maps::name(track))),
+            stopped: false,
         };
         if let Some(session) = &self.session {
             session.standings(standings);
@@ -368,6 +394,81 @@ impl Lobby {
             self.series = Some(series);
             self.count_down(Then::Start { track, laps }, now, BETWEEN_RACES_SECONDS);
         }
+    }
+
+    /// Whether `/cup pause` is in effect, in a race or between the races of a cup.
+    pub(crate) fn is_paused(&self) -> bool {
+        self.online.as_ref().is_some_and(|net| net.pause_at.is_some())
+            || self.series.as_ref().is_some_and(|s| s.paused)
+    }
+
+    /// `/cup pause` (the host only): everyone's race stops at `tick`, our current one. Between
+    /// the races of a cup, the countdown to the next one stops instead.
+    fn pause(&mut self, tick: u32) {
+        if self.online.is_some() {
+            if let Some(session) = &self.session {
+                session.pause(tick);
+            }
+            return;
+        }
+        let Some(series) = self.series.as_mut().filter(|s| s.scored) else {
+            return;
+        };
+        series.paused = true;
+        if self.countdown.as_ref().is_some_and(|c| matches!(c.then, Then::Start { .. })) {
+            self.countdown = None;
+        }
+        self.announce("Cup paused");
+    }
+
+    /// `/cup resume`: the race goes on from where it stopped, or the countdown to the cup's next
+    /// race starts.
+    fn resume(&mut self, now: f32) {
+        if self.online.as_ref().is_some_and(|net| net.pause_at.is_some()) {
+            if let Some(session) = &self.session {
+                session.resume();
+            }
+            return;
+        }
+        let Some(series) = self.series.as_mut().filter(|s| s.paused) else {
+            return;
+        };
+        series.paused = false;
+        let then = Then::Start {
+            track: series.track(),
+            laps: series.laps,
+        };
+        self.announce("Cup resumed");
+        self.count_down(then, now, COUNTDOWN_SECONDS);
+    }
+
+    /// `/cup next` (`step` 1) and `/cup previous` (-1), the host only: the race in progress stops
+    /// without points, and the countdown goes to the track `step` away. Between races, `step`
+    /// counts from the race that was coming up.
+    fn step_cup(&mut self, step: isize, now: f32) {
+        let Some(series) = self.series.as_mut().filter(|s| s.scored) else {
+            return;
+        };
+        let Some(race) = (series.race.checked_add_signed(step)).filter(|&r| r < series.tracks.len())
+        else {
+            return;
+        };
+        series.race = race;
+        series.paused = false;
+        let track = series.track();
+        let then = Then::Start {
+            track,
+            laps: series.laps,
+        };
+        let text = format!("Race {} of {}: {}", race + 1, series.tracks.len(), maps::name(track));
+        if self.online.is_some() {
+            if let Some(session) = &self.session {
+                session.stop();
+            }
+            self.end_race();
+        }
+        self.announce(text);
+        self.count_down(then, now, COUNTDOWN_SECONDS);
     }
 
     /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,
@@ -597,19 +698,6 @@ impl Lobby {
         }
     }
 
-    /// Starts the race over on `track` (the host only), with the bots it had.
-    pub fn restart(&self, track: u32, hash: u64, laps: u8) {
-        if let Some(session) = &self.session {
-            self.provide(session, track);
-            let bots = self
-                .online
-                .as_ref()
-                .map(|o| o.retail.clone())
-                .unwrap_or_default();
-            session.restart(track, hash, laps, bots);
-        }
-    }
-
     /// Starts the race on `track` (the host only), with the bots of the series: its brain bots
     /// (the session takes as many as there is room for), or its retail ones.
     fn start(&self, track: u32, laps: u8) {
@@ -686,6 +774,7 @@ impl Plugin for LobbyPlugin {
             .add_systems(
                 Update,
                 (
+                    pause_key,
                     run,
                     countdown,
                     report,

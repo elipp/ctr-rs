@@ -138,12 +138,7 @@ pub(super) fn finish(
         order.sort();
         order
             .into_iter()
-            .filter_map(|(_, slot)| {
-                Some(Finisher {
-                    who: net.who(slot)?,
-                    name: net.kart_label(slot).to_string(),
-                })
-            })
+            .filter_map(|(_, slot)| net.finisher(slot))
             .collect()
     };
     lobby.end_race();

@@ -11,8 +11,9 @@ pub(super) const COUNTDOWN_SECONDS: u32 = 5;
 pub(super) enum Then {
     /// A race of the series, on this track, with this many laps.
     Start { track: u32, laps: u8 },
-    /// The same players again, on this track (and the hash of its contents, see [`Online::hash`]).
-    Restart { track: u32, hash: u64, laps: u8 },
+    /// The race again from the start, on this track. It is a new start, so it takes the players
+    /// and bots there are now.
+    Restart { track: u32, laps: u8 },
 }
 
 /// The countdown of a start or a restart: the seconds left, and when the last one was announced.
@@ -38,8 +39,9 @@ pub(super) fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
         c.at += 1.0;
         if c.left == 0 {
             match c.then {
-                Then::Start { track, laps } => lobby.start(track, laps),
-                Then::Restart { track, hash, laps } => lobby.restart(track, hash, laps),
+                Then::Start { track, laps } | Then::Restart { track, laps } => {
+                    lobby.start(track, laps)
+                }
             }
             return;
         }
