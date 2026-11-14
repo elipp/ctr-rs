@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
 
+use crate::tg::Alerts;
+
 use realm_proto::{
     Entry, Listing, MAX_LOBBIES, Reject, Request, Response, State, TRANSFER_SECONDS,
 };
@@ -35,9 +37,24 @@ struct Lobbies {
 #[derive(Default)]
 pub struct Realm {
     lobbies: Mutex<Lobbies>,
+    /// Told of the lobbies that open, race and close, if there is anywhere to tell.
+    alerts: Option<Alerts>,
 }
 
 impl Realm {
+    pub fn new(alerts: Option<Alerts>) -> Realm {
+        Realm {
+            lobbies: Mutex::default(),
+            alerts,
+        }
+    }
+
+    fn alert(&self, text: String) {
+        if let Some(alerts) = &self.alerts {
+            alerts.send(text);
+        }
+    }
+
     pub fn handle(&self, id: [u8; 32], connection: Connection, request: Request) -> Response {
         self.handle_at(Instant::now(), id, connection, request)
     }
@@ -50,7 +67,10 @@ impl Realm {
         request: Request,
     ) -> Response {
         let mut guard = self.lobbies.lock().unwrap();
-        let Lobbies { listed: lobbies, handed } = &mut *guard;
+        let Lobbies {
+            listed: lobbies,
+            handed,
+        } = &mut *guard;
         handed.retain(|_, h| h.until > now);
         match request {
             Request::Announce(listing) => {
@@ -81,10 +101,16 @@ impl Realm {
                     version,
                 } = &listing;
                 match was {
-                    None => info!(
-                        %host, %name, %track, %version, ?state, lobbies = lobbies.len(),
-                        "lobby listed ({players}/{max_players})"
-                    ),
+                    None => {
+                        info!(
+                            %host, %name, %track, %version, ?state, lobbies = lobbies.len(),
+                            "lobby listed ({players}/{max_players})"
+                        );
+                        self.alert(format!(
+                            "Lobby opened: {name}\ntrack {track}, {players}/{max_players}, v{version}\nhost {host}, {} open",
+                            lobbies.len()
+                        ));
+                    }
                     Some(was) if was.listing == listing => debug!(%host, %name, "announced again"),
                     Some(was) => {
                         let before = &was.listing;
@@ -95,7 +121,7 @@ impl Realm {
                         }
                         match (before.state, state) {
                             (State::Lobby, State::Racing) => {
-                                info!(%host, %name, %track, "race started")
+                                info!(%host, %name, %track, "race started");
                             }
                             (State::Racing, State::Lobby) => info!(%host, %name, "race over"),
                             _ => {}
@@ -123,7 +149,13 @@ impl Realm {
                     "lobby handed over"
                 );
                 let until = now + Duration::from_secs(TRANSFER_SECONDS);
-                handed.insert(to, Handed { listing: held.listing, until });
+                handed.insert(
+                    to,
+                    Handed {
+                        listing: held.listing,
+                        until,
+                    },
+                );
                 Response::Ok
             }
             Request::Claim => {
@@ -134,7 +166,13 @@ impl Realm {
                     return Response::Rejected(Reject::NothingToClaim);
                 };
                 info!(host = %short(&id), name = %handed.listing.name, "lobby claimed");
-                lobbies.insert(id, Held { connection, listing: handed.listing });
+                lobbies.insert(
+                    id,
+                    Held {
+                        connection,
+                        listing: handed.listing,
+                    },
+                );
                 Response::Ok
             }
             Request::List => {
@@ -291,7 +329,10 @@ mod tests {
             panic!("not a list");
         };
         assert_eq!(entries.len(), 1);
-        assert_eq!((entries[0].id, entries[0].listing.name.as_str()), ([2; 32], "a"));
+        assert_eq!(
+            (entries[0].id, entries[0].listing.name.as_str()),
+            ([2; 32], "a")
+        );
         // It lasts as long as the new connection.
         realm.closed([2; 32], 5);
         assert!(names(&realm).is_empty());
@@ -315,7 +356,11 @@ mod tests {
         let now = Instant::now();
         realm.handle_at(now, [1; 32], 1, Request::Announce(listing("a")));
         // Nothing listed for the sender, an old connection, or to itself.
-        for (id, connection, to) in [([9; 32], 9, [2; 32]), ([1; 32], 7, [2; 32]), ([1; 32], 1, [1; 32])] {
+        for (id, connection, to) in [
+            ([9; 32], 9, [2; 32]),
+            ([1; 32], 7, [2; 32]),
+            ([1; 32], 1, [1; 32]),
+        ] {
             let response = realm.handle_at(now, id, connection, Request::Transfer(to));
             assert_eq!(response, Response::Rejected(Reject::NotListed));
         }

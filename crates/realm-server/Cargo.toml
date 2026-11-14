@@ -8,9 +8,16 @@ edition = "2024"
 name = "realm-server"
 path = "src/main.rs"
 
+[features]
+# Alerts to a Telegram chat (`TG_BOT_TOKEN`, `TG_CHAT_ID`), for what happens in the realm.
+telegram = ["dep:reqwest", "dep:rustls", "dep:serde"]
+
 [dependencies]
 iroh = "1.4.1"
 realm-proto = { path = "../realm-proto" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] , optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.54", features = ["rt", "sync", "macros", "time", "signal"] }

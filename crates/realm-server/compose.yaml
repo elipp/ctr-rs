@@ -11,6 +11,11 @@ services:
     # port is the one that counts, not docker's own).
     network_mode: host
     restart: unless-stopped
+    # Telegram alerts: set both in the environment or in the .env file (not committed). Left
+    # unset, the realm runs without them.
+    environment:
+      - TG_BOT_TOKEN
+      - TG_CHAT_ID
     volumes:
       - realm-data:/data
 

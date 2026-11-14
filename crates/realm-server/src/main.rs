@@ -7,6 +7,7 @@
 //! `realm-server [--port <udp port>] [--key <key file>]`
 
 mod realm;
+mod tg;
 
 use std::fs;
 use std::io::{self, IsTerminal, Write};
@@ -123,7 +124,7 @@ async fn run() -> Result<(), Error> {
     info!("realm id: {}", endpoint.id());
     info!("listening on {:?}", endpoint.bound_sockets());
 
-    let realm = Arc::new(Realm::default());
+    let realm = Arc::new(Realm::new(tg::from_env()));
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
         let incoming = tokio::select! {
