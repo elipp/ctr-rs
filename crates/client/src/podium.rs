@@ -156,9 +156,38 @@ struct Figure {
     at: Vec3,
     root: Option<Entity>,
     parts: [Option<Handle<Mesh>>; PARTS],
-    /// The level of detail its meshes were built of, and the pose they show.
+    /// The level of detail its meshes were built of.
     built: Option<usize>,
-    shown: Option<(usize, i32)>,
+    /// Its poses of the last two ticks, the older first, which it is drawn between.
+    poses: [Option<Pose>; 2],
+}
+
+/// A dancer's pose at a tick: what its script has it show, and its vertices for that.
+#[derive(Clone)]
+struct Pose {
+    lod: usize,
+    anim: usize,
+    frame: i32,
+    yaw: i16,
+    /// The positions of the meshes' vertices (`mesh::model_positions`), made when first drawn.
+    positions: Option<[Vec<[f32; 3]>; PARTS]>,
+}
+
+/// How far a dancer may turn in a tick and be turned smoothly between: a script that turns it
+/// round at once (a range of another heading) is not swung through the turn.
+const MOST_TURN_BLENDED: i32 = 0x100;
+
+impl Pose {
+    /// Whether `next` comes from this pose by playing on: the same animation, a frame on or back
+    /// (or the same), and a small turn. A jump of the script, or a loop back to the start, is not
+    /// blended across.
+    fn plays_on_to(&self, next: &Pose) -> bool {
+        let turn = ((next.yaw as i32 - self.yaw as i32 + 0x800) & 0xfff) - 0x800;
+        self.lod == next.lod
+            && self.anim == next.anim
+            && (next.frame - self.frame).abs() <= 1
+            && turn.abs() <= MOST_TURN_BLENDED
+    }
 }
 
 /// The podium being shown.
@@ -459,7 +488,7 @@ fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
             root: None,
             parts: Default::default(),
             built: None,
-            shown: None,
+            poses: [None, None],
         });
         Ok(())
     };
@@ -932,6 +961,18 @@ fn dance(
                 warn!("the podium's {:?} stops: {why}", figure.place);
                 figure.dancer.ended = true;
             }
+            let lod = figure
+                .dancer
+                .lod()
+                .min(figure.model.headers.len().saturating_sub(1));
+            let pose = Pose {
+                lod,
+                anim: figure.dancer.anim,
+                frame: figure.dancer.frame,
+                yaw: figure.dancer.yaw(),
+                positions: None,
+            };
+            figure.poses = [figure.poses[1].take(), Some(pose)];
             let id = figure.dancer.particle_id;
             if let Some(spawns) = podium.spawns.get(id as u8 as usize)
                 && !hidden(figure, camera_frame)
@@ -962,11 +1003,13 @@ fn dance(
     }
 
     let camera_frame = podium.camera_frame();
+    // How far between the last two ticks the frame is.
+    let t = (podium.elapsed * TICKS_PER_SECOND - podium.ticks as f32).clamp(0.0, 1.0);
     for figure in &mut podium.figures {
-        let lod = figure
-            .dancer
-            .lod()
-            .min(figure.model.headers.len().saturating_sub(1));
+        // (Before its first tick it is not drawn.)
+        let Some(lod) = figure.poses[1].as_ref().map(|pose| pose.lod) else {
+            continue;
+        };
         let Some(header) = figure.model.headers.get(lod) else {
             continue;
         };
@@ -1002,12 +1045,48 @@ fn dance(
             );
             figure.root = Some(root);
             figure.built = Some(lod);
-            figure.shown = None;
         }
         let Some(root) = figure.root else {
             continue;
         };
         let hidden = hidden(figure, camera_frame);
+        // Its vertices at both ticks, where it played on from the older pose; at the newer only
+        // where it did not.
+        let [older, newer] = &mut figure.poses;
+        let Some(newer) = newer.as_mut() else {
+            continue;
+        };
+        let older = older.as_mut().filter(|older| older.plays_on_to(newer));
+        let positions_of = |pose: &mut Pose| -> Option<[Vec<[f32; 3]>; PARTS]> {
+            if pose.positions.is_none() {
+                let frame =
+                    crate::drive::animation_pose(header, pose.anim as u8, pose.frame as i16)?;
+                let scale = [cutscene::PODIUM_SCALE; 3];
+                pose.positions = Some(mesh::model_positions(header, &frame, scale));
+            }
+            pose.positions.clone()
+        };
+        let Some(to) = positions_of(newer) else {
+            continue;
+        };
+        let to_yaw = newer.yaw;
+        let (from, from_yaw) = match older {
+            Some(older) => (positions_of(older), older.yaw),
+            None => (None, to_yaw),
+        };
+        let positions = match from {
+            Some(from) if t < 1.0 => std::array::from_fn(|part| {
+                (from[part].iter().zip(&to[part]))
+                    .map(|(a, b)| std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t))
+                    .collect::<Vec<_>>()
+            }),
+            _ => to,
+        };
+        for (handle, positions) in figure.parts.iter().zip(positions) {
+            if let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+            }
+        }
         // (A root spawned this frame is not in the world yet: it is shown from the next.)
         if let Ok((mut transform, mut visibility)) = roots.get_mut(root) {
             *visibility = if hidden {
@@ -1015,24 +1094,8 @@ fn dance(
             } else {
                 Visibility::Inherited
             };
-            transform.rotation = crate::props::rotation_of(SVec3 {
-                y: figure.dancer.yaw(),
-                ..tilt
-            });
-        }
-        let pose = (figure.dancer.anim, figure.dancer.frame);
-        if figure.shown == Some(pose) {
-            continue;
-        }
-        let Some(frame) = crate::drive::animation_pose(header, pose.0 as u8, pose.1 as i16) else {
-            continue;
-        };
-        figure.shown = Some(pose);
-        let positions = mesh::model_positions(header, &frame, [cutscene::PODIUM_SCALE; 3]);
-        for (handle, positions) in figure.parts.iter().zip(positions) {
-            if let Some(mut mesh) = handle.as_ref().and_then(|h| meshes.get_mut(h)) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-            }
+            let turned = |yaw| crate::props::rotation_of(SVec3 { y: yaw, ..tilt });
+            transform.rotation = turned(from_yaw).slerp(turned(to_yaw), t);
         }
     }
 }
@@ -1099,6 +1162,33 @@ mod tests {
         let middle = camera_at(&path, 0.5).unwrap().rotation;
         let zero = camera_at(&self::path(&[0, 0]), 0.0).unwrap().rotation;
         assert!(middle.angle_between(zero) < 1e-3, "{middle:?}");
+    }
+
+    #[test]
+    fn a_pose_is_blended_into_the_next_only_where_it_plays_on() {
+        let pose = |anim, frame, yaw| Pose {
+            lod: 0,
+            anim,
+            frame,
+            yaw,
+            positions: None,
+        };
+        let at = pose(0, 10, 0x800);
+        assert!(at.plays_on_to(&pose(0, 11, 0x810)));
+        assert!(at.plays_on_to(&pose(0, 9, 0x800)));
+        assert!(at.plays_on_to(&pose(0, 10, 0x800)));
+        // Another animation, a jump, a loop back to the start, a turn round, another level of
+        // detail: each snaps.
+        assert!(!at.plays_on_to(&pose(1, 11, 0x800)));
+        assert!(!at.plays_on_to(&pose(0, 40, 0x800)));
+        assert!(!at.plays_on_to(&pose(0, 0, 0x800)));
+        assert!(!at.plays_on_to(&pose(0, 11, 0)));
+        assert!(!at.plays_on_to(&Pose {
+            lod: 1,
+            ..pose(0, 11, 0x800)
+        }));
+        // A small turn through the wrap of a full turn is blended.
+        assert!(pose(0, 10, 0xff0).plays_on_to(&pose(0, 11, 0x010)));
     }
 
     #[test]
