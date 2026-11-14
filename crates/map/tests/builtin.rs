@@ -10,7 +10,7 @@ use map::builtin::{level_of, name_of};
 /// into a folder of their own under the system's temporary one, so that what the client keeps in
 /// `assets/disc/maps` (stale or not) does not decide the result.
 #[test]
-fn needs_disc_every_racing_track_has_its_map() {
+fn needs_disc_every_racing_track_and_the_podium_hub_has_its_map() {
     let image = std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"));
@@ -24,8 +24,11 @@ fn needs_disc_every_racing_track_has_its_map() {
     let tracks = LevelId::DINGO_CANYON.0..=LevelId::TURBO_TRACK.0;
     let made = map::builtin::export(&image, &dir)
         .unwrap_or_else(|e| panic!("{}: {e}", image.display()));
-    assert_eq!(made, tracks.clone().count());
+    // And Gem Stone Valley, for the podium.
+    assert_eq!(made, tracks.clone().count() + 1);
     assert_eq!(map::builtin::missing_count(&dir), 0);
+    let hub = Map::read(&dir.join("__builtin__gem_stone_valley.ctrmap")).unwrap();
+    assert_eq!(level_of(&hub.name), Some(LevelId::GEM_STONE_VALLEY));
     for id in tracks {
         let name = name_of(id).expect("a racing track has a name");
         let path = dir.join(format!("{name}.ctrmap"));

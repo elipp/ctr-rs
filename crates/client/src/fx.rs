@@ -8,6 +8,9 @@
 //! * `freeze on|off`, `step`: the race stops, and goes on one tick at a time (offline)
 //! * `weather on|off`, `rain on|off`: the level's rain or snow, and the red beaker's rain
 //!
+//! Its last line is `/debug podium` (`podium.rs`): the podium of a cup's end, and back. The panel
+//! stays up there, though the podium is no race.
+//!
 //! A click on a line of the panel does the next of what it offers. The effects that are only drawn
 //! work online too; the ones that change the race (`finish`) or its clock do not, as the race is
 //! everyone's there.
@@ -149,11 +152,16 @@ impl Plugin for FxPlugin {
             .init_resource::<Picked>()
             .add_systems(
                 Update,
-                (act, online, keys, show)
-                    .chain()
-                    .run_if(crate::drive::driving),
+                (act, online, keys, show).chain().run_if(in_race_or_podium),
             );
     }
+}
+
+fn in_race_or_podium(
+    drive: Option<Res<crate::drive::Drive>>,
+    podium: Option<Res<crate::podium::Podium>>,
+) -> bool {
+    drive.is_some() || podium.is_some()
 }
 
 /// Does what `/debug fx` and the panel ask, but `finish`, which is `drive.rs`'s.
@@ -223,9 +231,10 @@ enum Item {
     Step,
     Weather,
     BeakerRain,
+    Podium,
 }
 
-const ITEMS: [Item; 8] = [
+const ITEMS: [Item; 9] = [
     Item::Confetti,
     Item::Flash,
     Item::Finish,
@@ -234,11 +243,12 @@ const ITEMS: [Item; 8] = [
     Item::Step,
     Item::Weather,
     Item::BeakerRain,
+    Item::Podium,
 ];
 
 impl Item {
     /// The line, in what the game's font has (capitals, digits, a little punctuation).
-    fn label(self, fx: &Effects) -> String {
+    fn label(self, fx: &Effects, podium: bool) -> String {
         let on_off = |on: bool| if on { "ON" } else { "OFF" };
         match self {
             Item::Confetti => format!("CONFETTI: {}", fx.confetti.name().to_uppercase()),
@@ -249,12 +259,13 @@ impl Item {
             Item::Step => "STEP ONE TICK".into(),
             Item::Weather => format!("WEATHER: {}", on_off(fx.weather)),
             Item::BeakerRain => format!("BEAKER RAIN: {}", on_off(fx.beaker_rain)),
+            Item::Podium => format!("PODIUM: {}", on_off(podium)),
         }
     }
 
     /// What a click asks for: the next setting, or the effect.
-    fn action(self, fx: &Effects) -> Fx {
-        match self {
+    fn action(self, fx: &Effects) -> Action {
+        let fx = match self {
             Item::Confetti => Fx::Confetti(fx.confetti.next()),
             Item::Flash => Fx::Flash,
             Item::Finish => Fx::Finish,
@@ -266,7 +277,9 @@ impl Item {
             Item::Step => Fx::Step,
             Item::Weather => Fx::Weather(!fx.weather),
             Item::BeakerRain => Fx::BeakerRain(!fx.beaker_rain),
-        }
+            Item::Podium => return Action::DebugPodium(Vec::new()),
+        };
+        Action::DebugFx(fx)
     }
 }
 
@@ -295,6 +308,8 @@ fn show(
     size: Res<TexelSize>,
     time: Res<Time<Real>>,
     picked: Res<Picked>,
+    podium: Option<Res<crate::podium::Podium>>,
+    mut podium_shown: Local<bool>,
     panels: Query<(Entity, &Panel)>,
     mut lines: Query<(&Line, &mut CtrText)>,
     mut rows: Query<(&Row, &mut BackgroundColor)>,
@@ -304,13 +319,16 @@ fn show(
     if let Some((entity, _)) = panel.filter(|_| stale || !fx.panel) {
         commands.entity(entity).despawn();
     }
+    let podium = podium.is_some();
     if fx.panel && (panel.is_none() || stale) {
-        spawn(&mut commands, &fx, &size);
+        *podium_shown = podium;
+        spawn(&mut commands, &fx, &size, podium);
         return;
     }
-    if fx.is_changed() {
+    if fx.is_changed() || *podium_shown != podium {
+        *podium_shown = podium;
         for (Line(item), mut text) in &mut lines {
-            let label = item.label(&fx);
+            let label = item.label(&fx, podium);
             if text.text != label {
                 text.text = label;
             }
@@ -322,7 +340,7 @@ fn show(
     }
 }
 
-fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize) {
+fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize, podium: bool) {
     let (panel, rows) = crate::rect_menu::spawn(commands, size, "EFFECTS", |node| {
         node.right = size.x(24);
         node.top = size.y(40);
@@ -344,7 +362,7 @@ fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize) {
             ))
             .with_child((
                 Line(item),
-                CtrText::new(item.label(fx), Font::Middle, crate::rect_menu::TEXT),
+                CtrText::new(item.label(fx, podium), Font::Middle, crate::rect_menu::TEXT),
                 Pickable::IGNORE,
             ))
             .observe(move |_: On<PointerOver>, mut picked: ResMut<Picked>| {
@@ -355,7 +373,7 @@ fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize) {
                       fx: Res<Effects>,
                       mut actions: MessageWriter<Action>| {
                     if click.button == PointerButton::Primary {
-                        actions.write(Action::DebugFx(item.action(&fx)));
+                        actions.write(item.action(&fx));
                     }
                 },
             );

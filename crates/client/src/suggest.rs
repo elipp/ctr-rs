@@ -464,6 +464,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ],
             ),
             leaf("viewer", "Race or fly-through viewer"),
+            takes(
+                "podium",
+                "A cup's podium, or back",
+                "[1st] [2nd] [3rd]",
+            ),
             node(
                 "hud",
                 "The race's dev text (alone: toggle)",

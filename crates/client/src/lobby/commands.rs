@@ -474,6 +474,7 @@ pub(super) fn run(
             | Action::DebugSetWumpa(_)
             | Action::DebugStall(_)
             | Action::DebugViewer
+            | Action::DebugPodium(_)
             | Action::DebugHud(_)
             | Action::DebugToast(_)
             | Action::DebugLevel(_)

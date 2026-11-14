@@ -117,6 +117,9 @@ pub struct Lobby {
     pub(crate) cup_next: Option<u32>,
     /// The cup's latest standings (or its final ones), for the scoreboard.
     pub(crate) standings: Option<net::Standings>,
+    /// Who stands on the podium of the cup that just ended (`podium.rs`), until it is shown: once
+    /// our race is over.
+    pub(crate) podium: Option<[Option<u8>; 3]>,
     pub online: Option<Online>,
 }
 

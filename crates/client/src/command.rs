@@ -123,6 +123,9 @@ pub enum Action {
     /// (Debug) Switch between the race and the fly-through viewer with the collision probe
     /// (`main.rs`).
     DebugViewer,
+    /// (Debug) Show the podium of a cup's end in Gem Stone Valley with these characters on its
+    /// steps, top first (none: us and the next two), or go back from it (`podium.rs`).
+    DebugPodium(Vec<u8>),
     /// (Debug) Show or hide the development text of the race (position, speed, reserves), or
     /// toggle it (`None`). The frame rate stays.
     DebugHud(Option<bool>),
@@ -196,7 +199,7 @@ const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | 
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
+const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -528,6 +531,32 @@ impl Action {
     }
 
     /// `/debug lag 75ms 15ms`: the delay, and the jitter (none if left out); `off` or 0 for none.
+    /// `/debug podium [first] [second] [third]`: characters by name, without their spaces and
+    /// dots (`ngin`, `fakecrash`).
+    fn podium(rest: &str) -> Result<Action, String> {
+        let squash = |name: &str| -> String {
+            name.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect()
+        };
+        let names: Vec<&str> = rest.split_whitespace().collect();
+        if names.len() > 3 {
+            return Err("Usage: /debug podium [first] [second] [third]".into());
+        }
+        names
+            .into_iter()
+            .map(|name| {
+                crate::CHARACTERS
+                    .iter()
+                    .position(|c| squash(c) == squash(name))
+                    .map(|c| c as u8)
+                    .ok_or_else(|| format!("No character is called {name}"))
+            })
+            .collect::<Result<_, _>>()
+            .map(Action::DebugPodium)
+    }
+
     fn lag(line: &str) -> Result<Action, String> {
         use crate::lobby::lag::{Lag, MAX_DELAY_MS, MAX_JITTER_MS};
         let usage = || {
@@ -604,6 +633,7 @@ impl Action {
             },
             "lag" => Action::lag(rest),
             "viewer" => Ok(Action::DebugViewer),
+            "podium" => Action::podium(rest),
             "ranking" => Ok(Action::DebugRanking),
             "hud" => match rest {
                 "" => Ok(Action::DebugHud(None)),

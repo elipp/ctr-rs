@@ -44,6 +44,7 @@ use overlay::{hud, reserves_hud, reward_hud, split_toast, wumpa_hud};
 use tick::{debug_actions, drive_tick};
 
 pub use follow::{ChaseCamera, MainView, ViewOf};
+pub(crate) use follow::push_buffer_view;
 pub use chooser::Chosen;
 pub(crate) use input::Pads;
 pub(crate) use local::LocalView;

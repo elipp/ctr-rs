@@ -329,6 +329,17 @@ impl Series {
     }
 }
 
+/// Who stands on the podium of a cup that ended: the three with the most points, the most first
+/// (`UI_CupStandings` ranks the cup's drivers so, and `Podium_InitModels` takes the top three).
+/// None for a cup that goes on, one the host stopped, or one where no one scored.
+pub fn podium(standings: &net::Standings) -> Option<[Option<u8>; 3]> {
+    if standings.stopped || standings.next.is_some() || standings.totals.is_empty() {
+        return None;
+    }
+    let mut top = standings.totals.iter().map(|score| score.character);
+    Some([top.next(), top.next(), top.next()])
+}
+
 /// The standings as the console shows them: the race's results, then the totals and what comes
 /// next.
 pub fn standings_text(standings: &net::Standings) -> String {
@@ -434,6 +445,31 @@ mod tests {
         // A third race, won by p1, breaks the tie.
         series.score(3, &[order[1].clone(), order[0].clone(), order[2].clone()]);
         assert_eq!(named(series.totals())[0], ("p1".to_string(), 4));
+    }
+
+    #[test]
+    fn the_top_three_of_a_finished_cup_go_on_the_podium() {
+        let def = CupDef {
+            name: "c".into(),
+            tracks: vec!["1".into()],
+            laps: 3,
+        };
+        let mut series = Series::cup(&def, vec![1]);
+        let mut order = finishers(4);
+        order.reverse();
+        series.score(4, &order);
+        let mut standings = series.final_standings().unwrap();
+        // Stopped: no podium.
+        assert_eq!(podium(&standings), None);
+        standings.stopped = false;
+        assert_eq!(podium(&standings), Some([Some(3), Some(2), Some(1)]));
+        // Another race follows: not yet.
+        standings.next = Some((2, "two".into()));
+        assert_eq!(podium(&standings), None);
+        // Two scored: the third step is empty.
+        standings.next = None;
+        standings.totals.truncate(2);
+        assert_eq!(podium(&standings), Some([Some(3), Some(2), None]));
     }
 
     #[test]

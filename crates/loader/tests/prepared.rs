@@ -27,7 +27,7 @@ fn needs_disc_every_need_loads_without_the_disc() {
         let bytes = source.get(need).unwrap_or_else(|e| panic!("{key}: {e}"));
         assert!(!bytes.is_empty(), "{key} is empty");
         match need {
-            Need::Racer(_) => {
+            Need::Racer(_) | Need::PodiumStand | Need::Dance { .. } | Need::Tawna(_) => {
                 let dram = DramFile::parse(&bytes).unwrap_or_else(|e| panic!("{key}: {e}"));
                 Model::parse(&dram).unwrap_or_else(|e| panic!("{key}: {e}"));
             }
@@ -40,11 +40,11 @@ fn needs_disc_every_need_loads_without_the_disc() {
                 let dram = DramFile::parse(&bytes).unwrap_or_else(|e| panic!("{key}: {e}"));
                 parse_level_icons(&dram).unwrap_or_else(|e| panic!("{key}: {e}"));
             }
-            Need::SharedVram | Need::MenuVram => {
+            Need::SharedVram | Need::MenuVram | Need::PodiumVram => {
                 let images = parse_vram_file(&bytes).unwrap_or_else(|e| panic!("{key}: {e}"));
                 assert!(!images.is_empty(), "{key} has no images");
             }
-            Need::Howl | Need::Xnf => {}
+            Need::Howl | Need::Xnf | Need::CutsceneOverlay => {}
             Need::Xa(..) => {
                 assert!(
                     !decode(&bytes).frames.is_empty(),

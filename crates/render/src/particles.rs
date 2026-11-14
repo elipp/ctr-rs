@@ -110,6 +110,71 @@ pub enum Entry {
     },
 }
 
+/// `struct ParticleEmitter` as the game keeps it: how big one is, and what tells the kinds apart.
+const EMITTER_SIZE: usize = 0x24;
+/// `PARTICLE_EMITTER_INIT_FUNC_OFFSET`: the "axis" of the entry of the particle's life.
+const FUNC_INIT_AXIS: u8 = 0x0c;
+/// `PARTICLE_EMITTER_FLAG_OSCILLATOR` and `PARTICLE_EMITTER_FLAG_OSCILLATOR_RANDOMIZE`.
+const EMITTER_OSCILLATOR: u16 = 0x40;
+const EMITTER_OSCILLATOR_RANDOMIZE: u16 = 0x80;
+
+impl Entry {
+    /// The emitter table at `at` of `bytes` (a list of `struct ParticleEmitter` that an entry of
+    /// no flags ends), as `Particle_Init` reads it. What is not supported here is an error: a
+    /// function of the particle's own, and the randomized oscillators.
+    pub fn parse_set(bytes: &[u8], at: usize) -> Result<Vec<Entry>, String> {
+        let mut set = Vec::new();
+        let mut at = at;
+        loop {
+            let emitter = bytes
+                .get(at..at + EMITTER_SIZE)
+                .ok_or_else(|| format!("no particle emitter at {at:#x}"))?;
+            let half = |o: usize| i16::from_le_bytes([emitter[o], emitter[o + 1]]);
+            let word = |o: usize| i32::from_le_bytes(emitter[o..o + 4].try_into().unwrap());
+            let flags = half(0) as u16;
+            if flags == 0 {
+                return Ok(set);
+            }
+            let axis = emitter[2];
+            if axis == FUNC_INIT_AXIS {
+                if flags & (EMITTER_OSCILLATOR | EMITTER_OSCILLATOR_RANDOMIZE) == 0 {
+                    if word(4) != 0 {
+                        return Err(format!("the particle emitter at {at:#x} has a function"));
+                    }
+                    set.push(Entry::Func {
+                        flags,
+                        color_flags: half(8) as u16,
+                        lifespan: half(10),
+                    });
+                }
+            } else if flags & EMITTER_OSCILLATOR_RANDOMIZE != 0 {
+                return Err(format!("the particle emitter at {at:#x} randomizes an oscillator"));
+            } else if flags & EMITTER_OSCILLATOR != 0 {
+                set.push(Entry::Oscillator {
+                    axis: axis as usize,
+                    flags: half(0x14) as u16,
+                    period: half(0x18) as u16,
+                    phase: half(0x1a),
+                    scale: half(0x1c) as u16,
+                    offset: half(0x1e),
+                    min: half(0x20),
+                    max: half(0x22),
+                });
+            } else if (axis as usize) < axis::COUNT {
+                set.push(Entry::Axis {
+                    flags,
+                    axis: axis as usize,
+                    base: [word(4), half(8) as i32, half(10) as i32],
+                    random: [word(12), half(16) as i32, half(18) as i32],
+                });
+            } else {
+                return Err(format!("the particle emitter at {at:#x} has axis {axis}"));
+            }
+            at += EMITTER_SIZE;
+        }
+    }
+}
+
 /// `ParticleOscillatorFlags` and `ParticleOscillatorMode`
 mod oscillator_flags {
     pub const MODE_MASK: u16 = 0x7;
@@ -1709,6 +1774,43 @@ mod tests {
 #[cfg(test)]
 mod spark_colour_tests {
     use super::*;
+
+    #[test]
+    fn an_emitter_table_reads_as_particle_init_reads_it() {
+        let mut bytes = vec![0u8; 0x24 * 3];
+        // The particle's life: no function, add-blended, 12 ticks.
+        bytes[0] = 1;
+        bytes[2] = 0x0c;
+        bytes[8..10].copy_from_slice(&0xa3u16.to_le_bytes());
+        bytes[10..12].copy_from_slice(&12i16.to_le_bytes());
+        // Its height: a start and a velocity, and a random start.
+        let y = &mut bytes[0x24..0x48];
+        y[0] = 0x0b;
+        y[2] = 1;
+        y[4..8].copy_from_slice(&0x800i32.to_le_bytes());
+        y[8..10].copy_from_slice(&2560i16.to_le_bytes());
+        y[12..16].copy_from_slice(&3072i32.to_le_bytes());
+        let set = Entry::parse_set(&bytes, 0).unwrap();
+        assert_eq!(
+            set,
+            [
+                Entry::Func {
+                    flags: 1,
+                    color_flags: 0xa3,
+                    lifespan: 12
+                },
+                Entry::Axis {
+                    flags: 0x0b,
+                    axis: 1,
+                    base: [0x800, 2560, 0],
+                    random: [3072, 0, 0]
+                },
+            ]
+        );
+        // A function of its own is not supported.
+        bytes[4] = 1;
+        assert!(Entry::parse_set(&bytes, 0).is_err());
+    }
 
     #[test]
     fn a_spat_tire_bounces_three_times_and_is_gone() {

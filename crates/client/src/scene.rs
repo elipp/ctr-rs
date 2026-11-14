@@ -515,6 +515,7 @@ pub(crate) fn setup(
     wheel_icons: Res<WheelIcons>,
     smoke_icon: Res<crate::SmokeIcon>,
     start: Option<Res<ViewerStart>>,
+    podium: Option<Res<crate::podium::Podium>>,
 ) {
     let level = &track.0;
     let data = mesh::level_mesh(
@@ -663,13 +664,14 @@ pub(crate) fn setup(
     };
     let spawn = level.driver_spawns[0].pos;
     let [x, y, z] = mesh::to_world(spawn);
+    // The game projects with a screen distance of 256 for a 512 pixel wide
+    // screen: 90 degrees across, 73.7 degrees up at 4:3.
+    let game_perspective = PerspectiveProjection {
+        fov: 2.0 * (0.75f32).atan(),
+        ..default()
+    };
     if driving.is_some() {
-        // The game projects with a screen distance of 256 for a 512 pixel wide
-        // screen: 90 degrees across, 73.7 degrees up at 4:3.
-        let perspective = PerspectiveProjection {
-            fov: 2.0 * (0.75f32).atan(),
-            ..default()
-        };
+        let perspective = game_perspective;
         if let Some(skybox) = &level.skybox {
             sky::spawn(
                 &mut commands,
@@ -732,6 +734,28 @@ pub(crate) fn setup(
             }),
             Transform::default(),
             RenderLayers::from_layers(&[crate::wumpa_icon::LAYER, crate::tracker::LAYER]),
+        ));
+    } else if podium.is_some() {
+        if let Some(skybox) = &level.skybox {
+            sky::spawn(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                skybox,
+                level.clear_colors[0],
+                game_perspective.clone(),
+            );
+        }
+        commands.spawn((
+            Camera3d::default(),
+            Camera {
+                clear_color: sky_clear,
+                ..default()
+            },
+            Projection::Perspective(game_perspective),
+            Transform::default(),
+            crate::podium::PodiumCamera,
+            drive::MainView(0),
         ));
     } else {
         if let Some(skybox) = &level.skybox {
