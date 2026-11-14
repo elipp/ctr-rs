@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
 
+use crate::tg::Alerts;
+
 use realm_proto::{
     Entry, Listing, MAX_LOBBIES, Reject, Request, Response, State, TRANSFER_SECONDS,
 };
@@ -35,9 +37,24 @@ struct Lobbies {
 #[derive(Default)]
 pub struct Realm {
     lobbies: Mutex<Lobbies>,
+    /// Told of the lobbies that open, race and close, if there is anywhere to tell.
+    alerts: Option<Alerts>,
 }
 
 impl Realm {
+    pub fn new(alerts: Option<Alerts>) -> Realm {
+        Realm {
+            lobbies: Mutex::default(),
+            alerts,
+        }
+    }
+
+    fn alert(&self, text: String) {
+        if let Some(alerts) = &self.alerts {
+            alerts.send(text);
+        }
+    }
+
     pub fn handle(&self, id: [u8; 32], connection: Connection, request: Request) -> Response {
         self.handle_at(Instant::now(), id, connection, request)
     }
@@ -81,10 +98,16 @@ impl Realm {
                     version,
                 } = &listing;
                 match was {
-                    None => info!(
-                        %host, %name, %track, %version, ?state, lobbies = lobbies.len(),
-                        "lobby listed ({players}/{max_players})"
-                    ),
+                    None => {
+                        info!(
+                            %host, %name, %track, %version, ?state, lobbies = lobbies.len(),
+                            "lobby listed ({players}/{max_players})"
+                        );
+                        self.alert(format!(
+                            "Lobby opened: {name}\ntrack {track}, {players}/{max_players}, v{version}\nhost {host}, {} open",
+                            lobbies.len()
+                        ));
+                    }
                     Some(was) if was.listing == listing => debug!(%host, %name, "announced again"),
                     Some(was) => {
                         let before = &was.listing;
@@ -95,7 +118,10 @@ impl Realm {
                         }
                         match (before.state, state) {
                             (State::Lobby, State::Racing) => {
-                                info!(%host, %name, %track, "race started")
+                                info!(%host, %name, %track, "race started");
+                                self.alert(format!(
+                                    "Race started: {name}\ntrack {track}, {players}/{max_players}"
+                                ));
                             }
                             (State::Racing, State::Lobby) => info!(%host, %name, "race over"),
                             _ => {}
@@ -110,6 +136,7 @@ impl Realm {
             Request::Withdraw => {
                 if let Some(held) = remove(lobbies, id, connection) {
                     info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby withdrawn");
+                    self.alert(format!("Lobby closed: {}\n{} open", held.listing.name, lobbies.len()));
                 }
                 Response::Ok
             }
@@ -157,6 +184,7 @@ impl Realm {
         let lobbies = &mut self.lobbies.lock().unwrap().listed;
         if let Some(held) = remove(lobbies, id, connection) {
             info!(host = %short(&id), name = %held.listing.name, lobbies = lobbies.len(), "lobby gone: its host disconnected");
+            self.alert(format!("Lobby gone: {}\n{} open", held.listing.name, lobbies.len()));
         }
     }
 
