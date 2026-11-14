@@ -5,6 +5,8 @@
 //!   [`net::NICK_MAX`] characters; none clears it). It can change at any time, in a race too, but
 //!   only every [`net::NICK_COOLDOWN`]
 //! * `/config set vsync on|off`: whether the window waits for the display (on at first)
+//! * `/config set fullscreen [on|off]`: whether the window fills the screen (off at first); with
+//!   no value, or F11, it toggles. In a browser, F11 makes the page fill it (`web/play.html`)
 //! * `/config set fps-max <number>`: the most frames a second to draw, 0 for no limit (the
 //!   default); the sim has its own clock, see `frame.rs`
 //! * `/config set msaa off|2|4`: how many samples of anti-aliasing the cameras draw with (off at
@@ -50,6 +52,7 @@ use std::path::PathBuf;
 use bevy::light::cluster::{ClusterConfig, GlobalClusterSettings};
 use bevy::prelude::*;
 use bevy::render::view::{DebandDither, Tonemapping};
+use bevy::window::{MonitorSelection, WindowMode};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Action, word};
@@ -99,6 +102,8 @@ pub struct Config {
     /// How many of the window's pixels make one of the game's, 1 for the window's own resolution
     /// (`/config set pixel-scale`).
     pub pixel_scale: u32,
+    /// Whether the window fills the screen (`/config set fullscreen`, F11).
+    pub fullscreen: bool,
 }
 
 /// The most relays that can be added; every one is probed when an endpoint starts.
@@ -125,6 +130,7 @@ impl Default for Config {
             render_scale: 1.0,
             cups: Cups::default(),
             pixel_scale: 1,
+            fullscreen: false,
         }
     }
 }
@@ -148,6 +154,15 @@ impl Config {
             bevy::window::PresentMode::AutoVsync
         } else {
             bevy::window::PresentMode::AutoNoVsync
+        }
+    }
+
+    /// The window's mode.
+    pub fn window_mode(&self) -> WindowMode {
+        if self.fullscreen {
+            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+        } else {
+            WindowMode::Windowed
         }
     }
 }
@@ -281,6 +296,8 @@ pub enum Setting {
     /// Already cleaned (see `net::clean_nick`).
     Nickname(String),
     Vsync(bool),
+    /// `None` toggles.
+    Fullscreen(Option<bool>),
     /// 0 for no limit.
     FpsMax(u32),
     /// 1 (off), 2 or 4 samples.
@@ -317,6 +334,7 @@ fn render_scale(value: &str) -> Option<f32> {
 #[cfg(not(target_arch = "wasm32"))]
 const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set vsync on|off\n\
+    /config set fullscreen [on|off]\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
     /config set msaa off|2|4\n\
     /config set shader-effects on|off\n\
@@ -341,6 +359,9 @@ impl Setting {
                 }
                 "msaa" => {
                     return Err("In a browser, anti-aliasing is off for the heat shimmer".into());
+                }
+                "fullscreen" => {
+                    return Err("In a browser, F11 makes the page fill the screen".into());
                 }
                 _ => {}
             }
@@ -374,6 +395,12 @@ impl Setting {
                 "on" => Ok(Setting::Vsync(true)),
                 "off" => Ok(Setting::Vsync(false)),
                 _ => Err("Usage: /config set vsync on|off".into()),
+            },
+            "fullscreen" => match value {
+                "" => Ok(Setting::Fullscreen(None)),
+                "on" => Ok(Setting::Fullscreen(Some(true))),
+                "off" => Ok(Setting::Fullscreen(Some(false))),
+                _ => Err("Usage: /config set fullscreen [on|off]".into()),
             },
             "fps-max" => value.parse().map(Setting::FpsMax).map_err(|_| {
                 "Usage: /config set fps-max <frames a second, 0 for no limit>".to_string()
@@ -420,8 +447,13 @@ pub struct ConfigPlugin;
 impl Plugin for ConfigPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, no_gpu_clustering)
-            .add_systems(Update, (apply, present_mode, net_transport, msaa))
+            .add_systems(
+                Update,
+                (apply, present_mode, window_mode, net_transport, msaa),
+            )
             .add_observer(new_camera_defaults);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Update, fullscreen_key);
     }
 }
 
@@ -473,6 +505,26 @@ fn present_mode(config: Res<Config>, mut windows: Query<&mut Window>) {
         if window.present_mode != config.present_mode() {
             window.present_mode = config.present_mode();
         }
+    }
+}
+
+/// The windows fill the screen, or not, as the config says, when it changes.
+fn window_mode(config: Res<Config>, mut windows: Query<&mut Window>) {
+    if !config.is_changed() {
+        return;
+    }
+    for mut window in &mut windows {
+        if window.mode != config.window_mode() {
+            window.mode = config.window_mode();
+        }
+    }
+}
+
+/// F11 toggles full screen. (A browser's page takes F11 itself.)
+#[cfg(not(target_arch = "wasm32"))]
+fn fullscreen_key(keys: Res<ButtonInput<KeyCode>>, mut actions: MessageWriter<Action>) {
+    if keys.just_pressed(KeyCode::F11) {
+        actions.write(Action::SetConfig(Setting::Fullscreen(None)));
     }
 }
 
@@ -529,6 +581,14 @@ fn apply(
                     format!("Vsync {}", if *on { "on" } else { "off" }),
                     2000,
                 ));
+            }
+            Setting::Fullscreen(on) => {
+                config.fullscreen = on.unwrap_or(!config.fullscreen);
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let state = if config.fullscreen { "on" } else { "off" };
+                toasts.write(Toast::new(format!("Full screen {state}"), 2000));
             }
             Setting::FpsMax(max) => {
                 config.fps_max = *max;

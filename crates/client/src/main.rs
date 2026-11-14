@@ -192,6 +192,7 @@ fn main() {
                     CHARACTERS[racer as usize]
                 ),
                 present_mode: config.present_mode(),
+                mode: config.window_mode(),
                 // In a browser, the page's canvas (`web/play.html`), as big as the page.
                 canvas: cfg!(target_arch = "wasm32").then(|| "#ctr".into()),
                 fit_canvas_to_parent: true,

@@ -1894,6 +1894,11 @@ mod tests {
         ));
         assert!(Action::parse("config set vsync maybe").is_err());
         assert!(matches!(
+            Action::parse("config set fullscreen"),
+            Ok(Action::SetConfig(crate::config::Setting::Fullscreen(None)))
+        ));
+        assert!(Action::parse("config set fullscreen maybe").is_err());
+        assert!(matches!(
             Action::parse("net relay only on"),
             Ok(Action::SetConfig(crate::config::Setting::RelayOnly(true)))
         ));
