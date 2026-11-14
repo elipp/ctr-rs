@@ -164,7 +164,7 @@ pub const ALPN: &[u8] = b"ctr-rust/lobby/18";
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
 /// one, the host's pair with each guest included, so the host is no different from the others
 /// to the network.
-pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/3";
+pub const MESH_ALPN: &[u8] = b"ctr-rust/mesh/4";
 
 /// The most karts a race has: the host's bots fill it up to this (see [`Session::set_bots`]).
 pub const MAX_PLAYERS: usize = 8;
@@ -388,12 +388,6 @@ enum Command {
         laps: u8,
         retail: RetailBots,
     },
-    Restart {
-        track: u32,
-        hash: u64,
-        laps: u8,
-        retail: RetailBots,
-    },
     Provide {
         track: u32,
         hash: u64,
@@ -477,18 +471,6 @@ impl Session {
     /// it, or [`Event::BlobMissing`] says it cannot.
     pub fn fetch(&self, track: u32, hash: u64) {
         let _ = self.commands.send(Command::Fetch { track, hash });
-    }
-
-    /// Starts the race again on level `track`, if we host the lobby and a race has been started
-    /// before. Everyone gets [`Event::Started`] again, with the same players, and the race goes
-    /// the way it did the first time.
-    pub fn restart(&self, track: u32, hash: u64, laps: u8, retail: RetailBots) {
-        let _ = self.commands.send(Command::Restart {
-            track,
-            hash,
-            laps,
-            retail,
-        });
     }
 
     /// Broadcasts `text` to everyone in the lobby, us included ([`Event::Announce`]), if we host
@@ -594,7 +576,7 @@ impl Session {
     }
 
     /// Ends the race in progress for everyone, if we host the lobby: they get [`Event::Stopped`]
-    /// (we do not; we know). The lobby stays, and [`Session::restart`] starts the same players again.
+    /// (we do not; we know). The lobby stays, and [`Session::start`] starts another race.
     pub fn stop(&self) {
         let _ = self.commands.send(Command::Stop);
     }

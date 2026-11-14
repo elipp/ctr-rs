@@ -157,8 +157,8 @@ pub enum Message {
     /// own (`slot`), the next are its `extras`, in the order of their streams. The host's bots
     /// are its last.
     Start {
-        /// Which race this is (see [`Message::Restart`]): 0 for the first of the lobby. A start
-        /// after a race that is over takes new players in, and the ones that left out.
+        /// Which race this is: 0 for the first of the lobby. A start after another race takes in
+        /// the players there are now, without the ones that left.
         epoch: u32,
         slot: u8,
         characters: Vec<u8>,
@@ -194,15 +194,6 @@ pub enum Message {
         stream: u8,
         first: Tick,
         pads: Vec<Pad>,
-    },
-    /// Reliable, host to each client: the race starts again, on `track`. The same players, on
-    /// the same connections; `epoch` counts the races and tells their packets apart.
-    Restart {
-        epoch: u32,
-        track: u32,
-        hash: u64,
-        laps: u8,
-        retail: RetailBots,
     },
     /// Reliable, client to host: send the custom track `track` whose contents hash to `hash`.
     Want { track: u32, hash: u64 },
@@ -278,8 +269,8 @@ pub enum Message {
         pads: Vec<Pad>,
     },
     /// Reliable, host to each client: the race of `epoch` is over, without a winner. The lobby
-    /// goes on, and the host can start the same players again. (A stop that comes after the
-    /// next race's [`Message::Restart`] is of the race before, and does not count.)
+    /// goes on, and the host can start another race. (A stop that comes after the next race's
+    /// [`Message::Start`] is of the race before, and does not count.)
     Stop { epoch: u32 },
     /// Reliable, host to a client: the lobby is handed over to the player `to` (an endpoint id).
     /// The host sends it to `to` first, which answers with [`Message::HandoffAck`]; once that
@@ -291,8 +282,7 @@ pub enum Message {
     /// host when the host closes.
     HandoffAck,
     /// Reliable, host to each client: the race of `epoch` pauses at tick `at` (a client already
-    /// past it pauses where it is), or resumes with `None`. (Last, so that the other messages
-    /// keep their tags.)
+    /// past it pauses where it is), or resumes with `None`.
     Pause { epoch: u32, at: Option<Tick> },
 }
 
@@ -494,13 +484,6 @@ mod tests {
             Message::Handoff { to: [9; 32] },
             Message::HandoffAck,
             Message::Go,
-            Message::Restart {
-                epoch: 2,
-                track: 7,
-                hash: 0xfeed,
-                laps: 3,
-                retail: RetailBots::default(),
-            },
             Message::Want {
                 track: 0x8000_0001,
                 hash: 77,
