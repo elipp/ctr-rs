@@ -17,6 +17,7 @@
 //!   only); `/cup resume` to go on
 //! * `/cup next`, `/cup previous`: stop the cup's race without points, and count down to its next
 //!   or previous track (the host only)
+//! * `/cup stop`: end the cup and its race, as `/race stop` does (the host only)
 //! * `/race restart`: start the race in progress over (the host only)
 //! * `/promote <player>`: hand the lobby over to a player, between races (the host only): they host it
 //!   from then on, a public lobby stays listed, and we are a guest of theirs

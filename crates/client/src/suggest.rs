@@ -272,6 +272,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("resume", "Resume after /cup pause (host only)"),
             leaf("next", "Skip to the cup's next track (host only)"),
             leaf("previous", "Back to the cup's previous track (host only)"),
+            leaf("stop", "End the cup and its race (host only)"),
             takes("delete", "Forget a cup", "<name>"),
         ],
     ),

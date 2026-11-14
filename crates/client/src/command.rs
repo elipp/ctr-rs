@@ -195,7 +195,7 @@ const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
-const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | pause | resume | next | previous | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
+const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
@@ -456,7 +456,9 @@ impl Action {
             "resume" if rest.is_empty() => Ok(Action::CupResume),
             "next" if rest.is_empty() => Ok(Action::CupNext),
             "previous" if rest.is_empty() => Ok(Action::CupPrevious),
-            "" | "start" | "delete" | "pause" | "resume" | "next" | "previous" => {
+            // (The same as `/race stop`, which ends the cup with its race.)
+            "stop" if rest.is_empty() => Ok(Action::StopRace),
+            "" | "start" | "delete" | "pause" | "resume" | "next" | "previous" | "stop" => {
                 Err(CUP_USAGE.into())
             }
             _ => Err(format!("Unknown command: /cup {sub}\n{CUP_USAGE}")),
@@ -2331,6 +2333,7 @@ mod tests {
         assert!(Action::parse("cup pause now").is_err());
         assert!(matches!(Action::parse("cup next"), Ok(Action::CupNext)));
         assert!(matches!(Action::parse("cup previous"), Ok(Action::CupPrevious)));
+        assert!(matches!(Action::parse("cup stop"), Ok(Action::StopRace)));
 
         // Typing narrows them down, in any case.
         let mut line = typed_with_cups("/cup start F");

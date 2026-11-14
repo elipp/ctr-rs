@@ -86,7 +86,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "Only the host of a lobby can do that"
         }
         Action::CupStart(_) if lobby.series.as_ref().is_some_and(|s| s.paused) => {
-            "A cup is paused (/cup resume, or /race stop to end it)"
+            "A cup is paused (/cup resume, or /cup stop to end it)"
         }
         Action::CupStart(_) if lobby.online.is_some() || lobby.series.is_some() => net::NOT_NOW,
         Action::CupPause | Action::CupResume if !lobby.is_open() || lobby.joined => {
@@ -500,8 +500,12 @@ pub(super) fn run(
                 lobby.countdown = None;
                 let cup = lobby.series.take().is_some_and(|s| s.scored);
                 lobby.end_race();
-                let text = if cup { "Cup stopped" } else { "Race stopped" };
-                toasts.write(Toast::new(text, 3000).color(ANNOUNCE_COLOR));
+                // (The guests hear of a stopped race from the session; of a cup, only from us.)
+                if cup {
+                    lobby.announce("Cup stopped");
+                } else {
+                    toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
+                }
                 continue;
             }
             Action::RestartRace => {
