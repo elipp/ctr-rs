@@ -37,6 +37,8 @@ pub struct Online {
     pub fresh: bool,
     /// Set once `remote::build` has put the other karts on the grid.
     pub built: bool,
+    /// We told the others we can start (`loading::tell_ready`).
+    pub ready: bool,
     /// Tick 0 has come: everyone is ready.
     pub go: bool,
     /// The kart of each slot, as the race takes them: set by `remote::build`, which has their

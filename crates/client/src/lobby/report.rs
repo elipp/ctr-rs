@@ -151,6 +151,7 @@ pub(super) fn report(
                     delayed: default(),
                     fresh: true,
                     built: false,
+                    ready: false,
                     go: false,
                     specs: Vec::new(),
                     retail,

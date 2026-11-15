@@ -106,6 +106,4 @@ pub fn build(
             Some((slot, &birth)),
         );
     }
-    // The race is built: the others can start once they are as well.
-    lobby.ready();
 }
