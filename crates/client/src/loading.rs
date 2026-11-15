@@ -197,20 +197,27 @@ fn rotation() -> Mat3 {
     Mat3::from_cols_array_2d(&rows).transpose()
 }
 
-/// One step of a wave (`RaceFlag_StepWave`): its phase on by its speed `times` over, and its amplitude and
-/// speed changing each time the phase goes round. The height and the light where it is, both 0
-/// to 8190.
+/// A wave's amplitude and speed where their angles are (retail's, from `RaceFlag_StepWave`).
+fn set_levels(wave: &mut [f32; 5]) {
+    wave[1] = (sine(wave[0]) + 4095.0) * 32.0 / 8192.0 + 150.0;
+    wave[3] = (sine(wave[2]) + 4095.0) * 64.0 / 8192.0 + 180.0;
+}
+
+/// One step of a wave (`RaceFlag_StepWave`): its phase on by its speed `times` over. The height and
+/// the light where it is, both 0 to 8190.
+///
+/// Retail waits for the phase to go round and then picks a new amplitude and speed at once, and the
+/// flag jumps as it does (every column after the first is stepped on from the one before, so a new
+/// speed moves them all). Here the angles of the amplitude and the speed turn with the phase, by
+/// the same amounts a round turn gives retail's, and so those change smoothly.
 fn step_wave(wave: &mut [f32; 5], times: f32) -> (f32, f32) {
-    wave[4] += wave[3] * times;
-    let mut phase = wave[4] / 32.0;
-    if phase > 4095.0 {
-        wave[4] %= 4096.0 * 32.0;
-        phase = wave[4] / 32.0;
-        wave[0] += 512.0;
-        wave[1] = ((sine(wave[0]) + 4095.0) * 32.0 / 8192.0).floor() + 150.0;
-        wave[2] += 200.0;
-        wave[3] = ((sine(wave[2]) + 4095.0) * 64.0 / 8192.0).floor() + 180.0;
-    }
+    const TURN: f32 = 4096.0;
+    let by = wave[3] * times / 32.0;
+    wave[4] = (wave[4] + wave[3] * times) % (TURN * 32.0);
+    wave[0] = (wave[0] + 512.0 * by / TURN) % TURN;
+    wave[2] = (wave[2] + 200.0 * by / TURN) % TURN;
+    set_levels(wave);
+    let phase = wave[4] / 32.0;
     (sine(phase) + 4095.0, sine(phase + 3200.0) + 4095.0)
 }
 
@@ -275,7 +282,11 @@ impl LoadingScreen {
     fn new(material: Handle<FlagMaterial>, letters: Vec<f32>, width: f32) -> LoadingScreen {
         LoadingScreen {
             material,
-            wave: WAVE,
+            wave: {
+                let mut wave = WAVE;
+                set_levels(&mut wave);
+                wave
+            },
             elapsed: 0.0,
             position: 0.0,
             speed: LEAVE_SPEED,
