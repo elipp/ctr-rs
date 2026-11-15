@@ -29,7 +29,7 @@ pub const MAX_LAPS: u8 = 20;
 pub const SCORED_PLACES: usize = 4;
 
 /// The pause between the end of a race of a cup and the start of the next.
-pub const BETWEEN_RACES_SECONDS: u32 = 10;
+pub const BETWEEN_RACES_SECONDS: u32 = 5;
 
 /// Whether a cup can be called that: `/cup start` reads its name as one word.
 pub fn valid_name(name: &str) -> bool {

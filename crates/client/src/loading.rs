@@ -87,7 +87,7 @@ const ENTER_SNAP: f32 = 8.0;
 const COVERED_AT: f32 = 500.0;
 
 /// The least time the flag stays between the races of a cup once it covers the window.
-const CUP_MIN_SECONDS: f32 = 3.0;
+const CUP_MIN_SECONDS: f32 = 1.5;
 
 /// The text, in the large font and the menus' orange, with its top at line 108.
 const TEXT: &str = "LOADING...";
