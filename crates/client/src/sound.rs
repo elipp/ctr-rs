@@ -244,13 +244,17 @@ fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds
     commands.spawn((AudioPlayer(mixer), PlaybackSettings::ONCE));
 }
 
-/// The key that steps through a map's soundtracks.
+/// The key that steps through a map's soundtracks, with shift held (plain `M` mutes the music).
 const SOUNDTRACK_KEY: KeyCode = KeyCode::KeyM;
+
+fn shift_held(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+}
 
 /// `Music_LoadBanks` and `Music_AsyncParseBanks`: a level that loads sets its reverb and loads
 /// its song pack. There are no boss races. A map brings what its patch changed (`map::Audio`),
 /// and has the game's for the track it was made over where it brings none. A map that has
-/// several soundtracks plays the first, and `M` steps through them (the choice is ours alone: it
+/// several soundtracks plays the first, and `Shift+M` steps through them (the choice is ours alone: it
 /// is only what we hear).
 fn level_audio(
     track: Res<Track>,
@@ -259,7 +263,7 @@ fn level_audio(
     mut chosen: Local<usize>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    let stepped = keys.just_pressed(SOUNDTRACK_KEY);
+    let stepped = keys.just_pressed(SOUNDTRACK_KEY) && shift_held(&keys);
     if !track.is_changed() && !stepped {
         return;
     }
@@ -272,7 +276,7 @@ fn level_audio(
         *chosen = 0;
         if count > 1 {
             toasts.write(crate::toast::Toast::new(
-                format!("This track has {count} soundtracks\nPress M to cycle"),
+                format!("This track has {count} soundtracks\nPress Shift+M to cycle"),
                 4000,
             ));
         }
@@ -327,7 +331,7 @@ fn mute(
     if menu.capturing.is_some() {
         return;
     }
-    if config.controls.just_pressed(Control::MuteMusic, &keys) {
+    if config.controls.just_pressed(Control::MuteMusic, &keys) && !shift_held(&keys) {
         mute.music = !mute.music;
         let text = if mute.music { "Music muted" } else { "Music on" };
         toasts.write(crate::toast::Toast::new(text, 1500));
