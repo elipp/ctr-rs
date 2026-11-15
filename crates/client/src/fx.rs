@@ -8,6 +8,7 @@
 //! * `freeze on|off`, `step`: the race stops, and goes on one tick at a time (offline)
 //! * `tracker missile|warp [duration]`: a spoofed missile (or warpball) chasing us, 5s if left out
 //! * `weather on|off`, `rain on|off`: the level's rain or snow, and the red beaker's rain
+//! * `loading-screen [duration]`: the flag comes in over the game, stays, and leaves (`loading.rs`)
 //!
 //! Its last line is `/debug podium` (`podium.rs`): the podium of a cup's end, and back. The panel
 //! stays up there, though the podium is no race.
@@ -45,6 +46,9 @@ pub enum Fx {
     BeakerRain(bool),
     /// Spoof a missile or warpball that chases us, for this many milliseconds (`tracker.rs`).
     Tracker(Chaser, u32),
+    /// Put the loading screen up for this many milliseconds once it covers the window, coming in
+    /// as it does before a race (`loading.rs`).
+    LoadingScreen(u32),
 }
 
 /// What the spoofed tracker warning is for.
@@ -210,7 +214,7 @@ fn act(
             }
             Fx::Weather(on) => fx.weather = on,
             Fx::BeakerRain(on) => fx.beaker_rain = on,
-            Fx::Tracker(..) => {}
+            Fx::Tracker(..) | Fx::LoadingScreen(_) => {}
         }
     }
 }

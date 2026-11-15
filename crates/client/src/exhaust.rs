@@ -271,7 +271,7 @@ pub fn spawn(
         let Some(icon) = icon else { continue };
         let layer = RenderLayers::layer(layer);
         let (image, width, height) = icon_image(icon, vram);
-        let image = images.add(image);
+        let image = crate::shared_image(images, image);
         let base = |alpha_mode| StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: Some(image.clone()),
@@ -300,7 +300,7 @@ pub fn spawn(
         ));
         // Half the sprite and half the picture behind it (the clods of mud), on the texels that
         // are semi-transparent.
-        let average = images.add(icon_image_blended(icon, vram, 128).0);
+        let average = crate::shared_image(images, icon_image_blended(icon, vram, 128).0);
         let blended = BillboardMaterial {
             base: StandardMaterial {
                 base_color_texture: Some(average),

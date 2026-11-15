@@ -130,7 +130,7 @@ pub fn spawn(
     );
     image.sampler = ImageSampler::nearest();
 
-    let image = images.add(image);
+    let image = crate::shared_image(images, image);
     let material = materials.add(WheelMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,

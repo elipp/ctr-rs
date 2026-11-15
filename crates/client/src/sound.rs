@@ -220,11 +220,14 @@ impl Sounds {
     /// track `id` plays.
     pub fn podium(&self, id: u16) {
         let mut sounds = self.lock();
-        sounds.stop_all(true, true, true);
-        sounds.stop_xa();
-        sounds.clear_voicelines();
-        sounds.clear_state();
+        silence(&mut sounds);
         sounds.play_xa(loader::xa::Category::Music, id);
+    }
+
+    /// The loading screen comes in before a race: the music and the sounds of what was shown stop.
+    /// (The race starts its own again at its go, as at any start.)
+    pub fn silence(&self) {
+        silence(&mut self.lock());
     }
 
     /// The podium is over: its music stops. (A race starts its own again, as at its start.)
@@ -237,6 +240,14 @@ impl Sounds {
     pub fn test_sound(&self, slider: Option<Slider>, character: u8, frame: u32) {
         self.lock().test_sound(slider, character, frame);
     }
+}
+
+/// Every sound, the songs and the XA stop, and the music's state is forgotten.
+fn silence(sounds: &mut Howl) {
+    sounds.stop_all(true, true, true);
+    sounds.stop_xa();
+    sounds.clear_voicelines();
+    sounds.clear_state();
 }
 
 fn start_mixer(mut commands: Commands, mut mixers: ResMut<Assets<Mixer>>, sounds: Res<Sounds>) {

@@ -31,8 +31,8 @@ pub fn build(
     loading: Option<Res<crate::loading::Loading>>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    // Not before the level of the race is up, and settled (`loading.rs`): the others wait for our
-    // ready.
+    // Not before the level of the race is up, and settled (`loading.rs`, which also tells the
+    // others we are ready, once the cup's flag allows).
     if loading.is_some() {
         return;
     }

@@ -61,11 +61,14 @@ impl AtlasBuilder<'_> {
     }
 
     pub(super) fn finish(self) -> Atlas {
-        let rows = self.tiles.len().div_ceil(TILE_COLUMNS);
-        let (width, height) = (TILE_COLUMNS * TILE, rows * TILE);
+        // As wide as the tiles need: a model has a few, and an atlas of the full row is megabytes
+        // of nothing for each of them (a kart has dozens of models' worth of atlases).
+        let columns = self.tiles.len().clamp(1, TILE_COLUMNS);
+        let rows = self.tiles.len().div_ceil(columns);
+        let (width, height) = (columns * TILE, rows * TILE);
         let mut rgba = vec![0u8; width * height * 4];
         for (n, tile) in self.tiles.iter().enumerate() {
-            let (ox, oy) = (n % TILE_COLUMNS * TILE, n / TILE_COLUMNS * TILE);
+            let (ox, oy) = (n % columns * TILE, n / columns * TILE);
             for row in 0..TILE {
                 rgba[((oy + row) * width + ox) * 4..][..TILE * 4]
                     .copy_from_slice(&tile[row * TILE * 4..][..TILE * 4]);

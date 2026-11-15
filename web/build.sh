@@ -30,6 +30,10 @@ else
     features=
     names=
 fi
+# FEATURES=wasm-debug adds the game's reports of its memory and load stages to the page's log.
+if [ -n "${FEATURES:-}" ]; then
+    features="$features --features=$FEATURES"
+fi
 backends="${2:-webgl2}"
 case "$backends" in
 webgl2 | webgpu) ;;

@@ -504,7 +504,6 @@ pub(super) fn run(
             | Action::DebugCrateBias(_)
             | Action::DebugFx(_)
             | Action::DebugNavPaths
-            | Action::DebugLoadingScreen(_)
             | Action::SetConfig(_)
             | Action::Character(_)
             | Action::Track(_)

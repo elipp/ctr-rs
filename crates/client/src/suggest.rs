@@ -484,11 +484,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("ranking", "Random ranking (host)"),
             leaf("navpaths", "Draw the bot paths in the race too (toggle)"),
             takes("stall", "Freeze this client, online", "<duration, like 3s>"),
-            takes(
-                "loading-screen",
-                "Show the loading screen",
-                "<duration, like 3s>",
-            ),
             Spec {
                 name: "lag",
                 about: "Hold back the others' pads here",
@@ -544,6 +539,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
                             leaf("missile", "Red brackets, then [duration, 5s]"),
                             leaf("warp", "Blue brackets, then [duration, 5s]"),
                         ],
+                    ),
+                    takes(
+                        "loading-screen",
+                        "Show the loading screen grid flag",
+                        "[duration, 3s]",
                     ),
                 ],
             ),
@@ -653,7 +653,7 @@ mod tests {
             names("/debug fx "),
             [
                 "confetti", "flash", "finish", "speed", "freeze", "step", "weather", "rain",
-                "tracker"
+                "tracker", "loading-screen"
             ]
         );
         assert_eq!(names("/debug fx f"), ["flash", "finish", "freeze"]);

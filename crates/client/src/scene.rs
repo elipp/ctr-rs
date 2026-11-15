@@ -19,6 +19,14 @@ use loader::model::Model;
 use render::mesh::{self, PARTS, Part};
 
 /// A drive-mode state for `track`: the kart on its first starting slot.
+/// Tells the page what the game is about to do (see `web::stage`); nothing off the web.
+pub(crate) fn stage(what: &str) {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::stage(what);
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = what;
+}
+
 pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive::Drive {
     let anim_num_frames = anim_num_frames(model);
     let spec = race::KartSpec {
@@ -153,7 +161,8 @@ pub(crate) fn switch_level(world: &mut World) {
         && lobby.cup_next == Some(track)
     {
         lobby.cup_next = None;
-        crate::loading::bring_in(world);
+        let same_level = track == world.resource::<LevelNumber>().0;
+        crate::loading::bring_in(world, same_level);
         return;
     }
     // The level shown before the race took the viewer to its own: back to it when the race is
@@ -220,7 +229,11 @@ pub(crate) fn switch_level(world: &mut World) {
     let character = (racer_step != 0).then(|| load_character(options.racer));
 
     if id != current {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::stage(&format!("loading level {id:#x}"));
         let LevelData { level, dram, vram } = load_level(id);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::stage("level loaded, old scene still up");
         let scene = world_scene(world);
         despawn(world, scene);
         world.insert_resource(Track(level, LevelId(id)));
@@ -230,7 +243,11 @@ pub(crate) fn switch_level(world: &mut World) {
         }
         world.insert_resource(LevelNumber(id));
         restart_drive(world, options);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::stage("building the scene");
         run_scene_systems(world, options);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::stage("scene built");
         world.write_message(toast::Toast::new(
             format!("Track: {}", maps::name(id)),
             2500,
@@ -261,9 +278,13 @@ pub(crate) fn switch_level(world: &mut World) {
 
 /// Builds the scene of the level shown, in the mode of `options`.
 pub(crate) fn run_scene_systems(world: &mut World, options: Options) {
-    for system in world.resource::<SceneSystems>().of(options.driving) {
+    let systems = world.resource::<SceneSystems>().of(options.driving);
+    let count = systems.len();
+    for (n, system) in systems.into_iter().enumerate() {
+        stage(&format!("scene system {} of {count}", n + 1));
         world.run_system(system).expect("scene system runs");
     }
+    stage("scene systems done");
 }
 
 /// Builds the scene of the level shown again, in the mode of `options` (the race starts from
@@ -373,6 +394,7 @@ pub(crate) fn despawn(world: &mut World, entities: Vec<Entity>) {
 /// The kart on the grid of the level shown, and what it is driven with, when driving; in the
 /// viewer there is no `Drive`.
 pub(crate) fn restart_drive(world: &mut World, options: Options) {
+    stage("starting the drive");
     if options.driving {
         let drive = new_drive(
             world.resource::<Track>(),
@@ -381,6 +403,7 @@ pub(crate) fn restart_drive(world: &mut World, options: Options) {
         );
         world.insert_resource(drive);
         world.insert_resource(exhaust::Particles::new());
+        stage("drive started");
     } else {
         world.remove_resource::<drive::Drive>();
     }
@@ -620,6 +643,7 @@ pub(crate) fn setup(
         handles,
     });
 
+    stage("setup: props");
     let objects = instance::Objects::new(level, &textures.dram);
     props::spawn(
         level,
@@ -637,6 +661,7 @@ pub(crate) fn setup(
     );
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();
+    stage("setup: fire");
     fire::spawn(
         fire::Sources {
             emitters: objects.fireballs.len() + objects.flame_jets.len(),
@@ -652,6 +677,7 @@ pub(crate) fn setup(
         &mut billboard_materials,
     );
     let specs: Vec<race::KartSpec> = driving.iter().map(|d| d.spec()).collect();
+    stage("setup: sim");
     let sim = props::Sim::new(level, objects, &specs);
 
     commands.insert_resource(sim);
@@ -670,6 +696,7 @@ pub(crate) fn setup(
         fov: 2.0 * (0.75f32).atan(),
         ..default()
     };
+    stage("setup: cameras");
     if driving.is_some() {
         let perspective = game_perspective;
         if let Some(skybox) = &level.skybox {
@@ -838,6 +865,31 @@ pub(crate) fn spawn_kart_parts(
 }
 
 /// The material of a kart model's parts: its texture atlas, unlit.
+/// The images made so far, by what is in them: the id of one that still lives.
+static SHARED_IMAGES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u64, AssetId<Image>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Adds `image`, unless an image of the very same texels is there already: then that one. A kart
+/// has dozens of pictures (the flames, masks, shields, wheels, shadow), and every kart on the grid
+/// has the same ones; each in its own copy was a gigabyte on a phone. An image that nothing
+/// holds is dropped by the assets, and then it is made again.
+pub(crate) fn shared_image(images: &mut Assets<Image>, image: Image) -> Handle<Image> {
+    use std::hash::{BuildHasher, Hash, Hasher};
+    let mut hasher = bevy::platform::hash::FixedHasher.build_hasher();
+    image.texture_descriptor.size.hash(&mut hasher);
+    image.texture_descriptor.format.hash(&mut hasher);
+    image.data.hash(&mut hasher);
+    let key = hasher.finish();
+    let mut shared = SHARED_IMAGES.lock().unwrap();
+    if let Some(handle) = shared.get(&key).and_then(|&id| images.get_strong_handle(id)) {
+        return handle;
+    }
+    let handle = images.add(image);
+    shared.insert(key, handle.id());
+    handle
+}
+
 pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> StandardMaterial {
     let mut atlas = Image::new(
         Extent3d {
@@ -853,7 +905,7 @@ pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> S
     atlas.sampler = ImageSampler::nearest();
     StandardMaterial {
         base_color: Color::WHITE,
-        base_color_texture: Some(images.add(atlas)),
+        base_color_texture: Some(shared_image(images, atlas)),
         unlit: true,
         cull_mode: None,
         double_sided: true,

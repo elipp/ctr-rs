@@ -87,6 +87,7 @@
     padding: 8px 12px; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere;
     color: #ff8a8a; background: rgb(0 0 0 / 0.35); font: inherit;
   }
+  #detail.note { color: #ffd23f; }
   #drop input { display: none; }
   #drop.hidden { display: none; }
 </style>
@@ -482,7 +483,10 @@ async function read(stream, size) {
 async function start(stream, size, copy = null) {
   if (drop.classList.contains("busy")) return;
   drop.classList.add("busy");
+  document.getElementById("detail").hidden = true;
+  crumb("reading the disc");
   disc = await read(stream, size);
+  crumb("reading the saved maps");
   trackPictures = await stored("trackPictures", "readonly", (s) => s.getAll()).catch((e) => {
     console.warn(`could not read the pictures of the tracks: ${e}`);
     return [];
@@ -492,6 +496,7 @@ async function start(stream, size, copy = null) {
     return [];
   });
   status.textContent = "Starting";
+  crumb("starting the game");
   try {
     const drawsWith = await backend;
     console.info(`ctr-rs: drawing through ${drawsWith}: client-${drawsWith}.js, of ${BUILT.join(", ")}`);
@@ -509,11 +514,12 @@ async function start(stream, size, copy = null) {
     // winit hands the event loop to the browser by throwing.
     if (!String(e).includes("Using exceptions for control flow")) {
       console.error(e);
-      crashed(String(e));
+      crashed(describe(e));
       return;
     }
   }
   if (crash !== null) return;
+  crumb("running");
   drop.classList.add("hidden");
   canvas.focus();
   touchGame.hidden = !hasTouch;
@@ -549,8 +555,88 @@ window.ctrLog = (line) => {
   if (logged[logged.length - 1] === line) return;
   logged.push(line);
   if (logged.length > 200) logged.shift();
+  if (phase !== "idle") crumb();
 };
 const report = () => (logged.length === 0 ? "" : `\n\nLogged before it:\n${logged.join("\n")}`);
+
+// iOS ends a page that uses too much memory (the disc image is held whole, and so is the game's own)
+// without any event or error: the page is simply gone, and a reload shows nothing of why. So the page
+// keeps a trail in its storage while it runs, and a `pagehide` that is a real leaving clears it; a
+// trail found on the next load means the page was ended from outside.
+const TRAIL = "ctr-rs.trail";
+let phase = "idle";
+let born = null;
+let lastWords = null;
+let trailTimer = null;
+function writeTrail(running = true) {
+  trailTimer = null;
+  try {
+    localStorage.setItem(
+      TRAIL,
+      JSON.stringify({
+        running,
+        phase,
+        seen: document.visibilityState,
+        up: born === null ? 0 : Math.round((Date.now() - born) / 1000),
+        beat,
+        stage,
+        logged: logged.slice(-40),
+      }),
+    );
+  } catch {}
+}
+function crumb(next) {
+  if (next !== undefined) phase = next;
+  if (born === null) born = Date.now();
+  if (trailTimer === null) trailTimer = setTimeout(writeTrail, 300);
+}
+addEventListener("pagehide", (e) => {
+  // Debugging: a real leaving keeps the log too (not running); the next load shows it.
+  if (!e.persisted && crash === null) writeTrail(false);
+});
+document.addEventListener("visibilitychange", () => phase !== "idle" && crumb());
+// What the last run left, if it did not end by itself.
+try {
+  const left = JSON.parse(localStorage.getItem(TRAIL));
+  if (left?.running) {
+    lastWords =
+      `The page went away without a word while "${left.phase}", ` +
+      `${left.up} s after it started, last seen ${left.seen}. ` +
+      `That is what iOS does when a page uses too much memory.` +
+      (left.stage ? `\nLast stage: ${left.stage}.` : "") +
+      (left.beat
+        ? `\nLast heartbeat: ` +
+          `${left.beat.mb} MB of wasm memory, ${left.beat.fps} fps, frame ${left.beat.frames}, ` +
+          `${left.beat.driving ? "in a race" : "not in a race"}.`
+        : "") +
+      (left.logged.length === 0 ? "" : `\n\nLogged before it:\n${left.logged.join("\n")}`);
+  }
+  else if (left?.logged?.length > 0) {
+    lastWords =
+      `The last run ended normally (${left.phase}, ${left.up} s).` +
+      `\n\nLogged during it:\n${left.logged.join("\n")}`;
+  }
+  localStorage.removeItem(TRAIL);
+} catch {}
+
+// What a report of a problem needs to know of the device.
+function environment() {
+  const gl = canvas.getContext("webgl2");
+  const info = gl?.getExtension("WEBGL_debug_renderer_info");
+  const parts = [
+    navigator.userAgent,
+    `screen ${screen.width}x${screen.height} @${devicePixelRatio}, canvas ${canvas.width}x${canvas.height}`,
+    gl
+      ? `webgl2: ${info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)}, ` +
+        `max texture ${gl.getParameter(gl.MAX_TEXTURE_SIZE)}, ${gl.isContextLost() ? "context lost" : "context ok"}`
+      : "no webgl2 context",
+    stage ? `stage: ${stage}` : "no stage",
+    `game: ${beat ? `${beat.mb} MB wasm, ${beat.fps} fps, frame ${beat.frames}` : "no heartbeat"}`,
+    `${phase}, up ${born === null ? 0 : Math.round((Date.now() - born) / 1000)} s, ${document.visibilityState}`,
+    `memory: ${navigator.deviceMemory ?? "?"} GB, ${performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) + " MB heap" : "heap unknown"}`,
+  ];
+  return parts.join("\n");
+}
 
 let crash = null;
 function crashed(message) {
@@ -562,8 +648,10 @@ function crashed(message) {
   document.activeElement?.blur();
   touchGame.hidden = touchLine.hidden = true;
   drop.classList.remove("hidden", "busy", "over");
+  document.getElementById("detail").classList.remove("note");
   document.getElementById("detail").textContent = message + report();
   document.getElementById("detail").hidden = false;
+  writeTrail(false);
   document.getElementById("note").hidden = true;
   let kept = false;
   try {
@@ -581,15 +669,57 @@ function crashed(message) {
   ]);
 }
 function copyCrash() {
-  navigator.clipboard.writeText(`ctr-rs crashed\n\n${crash}${report()}\n\n${navigator.userAgent}`).then(
+  navigator.clipboard.writeText(`ctr-rs crashed\n\n${crash}${report()}\n\n${environment()}`).then(
     () => (status.textContent = "The error is copied"),
     (e) => console.warn(`could not copy: ${e}`),
   );
 }
 window.ctrCrashed = crashed;
-const trap = (error) => error instanceof WebAssembly.RuntimeError && crashed(String(error));
-addEventListener("error", (e) => trap(e.error));
+// What the game said of itself last (once a second): the trail keeps it for a page that is ended
+// without a word, which is the memory and frame rate it went with.
+let beat = null;
+let stage = null;
+// Before work the browser may end the page in: written to the trail at once, as the timer would
+// not get to run. The time is of the page's own clock, so a gap between two stages is a stall.
+window.ctrStage = (what, memory) => {
+  stage = `${what}, ${Math.round(memory / 1048576)} MB, at ${Math.round(performance.now())} ms`;
+  window.ctrLog(`INFO stage: ${stage}`);
+  writeTrail();
+};
+window.ctrBeat = (memory, frames, fps, driving) => {
+  beat = { mb: Math.round(memory / 1048576), frames, fps: Math.round(fps), driving, at: Date.now() };
+  crumb();
+};
+// WebKit's errors are not always what the others' are: a memory that cannot grow is a `RangeError`,
+// and an error from a script may carry no `error` at all, only a message. Everything is logged (the
+// page shows the log with a crash); what ends the game is a wasm error or the memory running out.
+const describe = (error, e) =>
+  error instanceof Error
+    ? `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`
+    : error != null
+      ? String(error)
+      : e?.message
+        ? `${e.message} (${e.filename}:${e.lineno}:${e.colno})`
+        : "unknown error";
+const fatal = (error, text) =>
+  error instanceof WebAssembly.RuntimeError ||
+  error instanceof WebAssembly.CompileError ||
+  error instanceof WebAssembly.LinkError ||
+  /out of memory|memory|allocation failed|invalid array length/i.test(text);
+const trap = (error, e) => {
+  const text = describe(error, e);
+  window.ctrLog(`ERROR page: ${text.split("\n")[0]}`);
+  if (phase !== "idle" && fatal(error, text)) crashed(text);
+};
+addEventListener("error", (e) => trap(e.error, e));
 addEventListener("unhandledrejection", (e) => trap(e.reason));
+// A phone takes the GPU's memory back from a page that has used too much of it, and the picture
+// goes blank without the game knowing.
+canvas.addEventListener("webglcontextlost", (e) => {
+  e.preventDefault();
+  window.ctrLog("ERROR page: webgl context lost");
+  crashed("The graphics context was lost (the device ran out of graphics memory).");
+});
 
 function stored(name, mode, use) {
   return new Promise((resolve, reject) => {
@@ -769,6 +899,12 @@ input.addEventListener("change", () => {
 });
 
 fresh();
+if (lastWords !== null) {
+  const detail = document.getElementById("detail");
+  detail.classList.add("note");
+  detail.textContent = lastWords;
+  detail.hidden = false;
+}
 const saved = await recall();
 if (saved instanceof Blob) {
   offer(`${saved.name} was kept from last time`, [
