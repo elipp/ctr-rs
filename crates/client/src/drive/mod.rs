@@ -9,8 +9,8 @@
 //!   empty for the boost
 //! * M: use the item in hand (Circle): the mask is longer with 10 wumpa fruit. A bomb or a
 //!   potion is thrown backward with S held; a potion forward with E held (dropped with neither)
-//! * `/debug set wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
-//! * `/debug set weapon <N>`: (debug) drop what is in hand and roll item N (0 to 4, 6 to 8, 10 or 11), as the
+//! * `/debug wumpa <N>`: (debug) set the wumpa count (0 to 10, clamped)
+//! * `/debug weapon <N>`: (debug) drop what is in hand and roll item N (0 to 4, 6 to 8, 10 or 11), as the
 //!   roulette would (the item ids; 10 and 11 are the triple bomb and missile). Not online
 //! * Left mouse button held and mouse moves: turn the camera around the kart; scroll wheel:
 //!   closer or farther; double click or Home: back to the default view

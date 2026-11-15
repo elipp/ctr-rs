@@ -206,7 +206,7 @@ const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | 
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | random <tracks> [laps] | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
+const DEBUG_USAGE: &str = "Usage: /debug wumpa <0 to 10> | weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -232,7 +232,7 @@ fn milliseconds(text: &str) -> Option<f64> {
 impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
     /// and a subcommand (`/lobby join <address>`), which may have subcommands of its own
-    /// (`/debug set wumpa 10`).
+    /// (`/debug crate bias 3`).
     pub(crate) fn parse(line: &str) -> Result<Action, String> {
         let (name, rest) = word(line);
         match name {
@@ -645,31 +645,18 @@ impl Action {
     fn debug(line: &str) -> Result<Action, String> {
         let (sub, rest) = word(line);
         match sub {
-            "set" => {
-                let (what, value) = word(rest);
-                match what {
-                    "wumpa" => {
-                        value
-                            .parse::<i64>()
-                            .map(|n| {
-                                Action::DebugSetWumpa(
-                                    n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8
-                                )
-                            })
-                            .map_err(|_| "Usage: /debug set wumpa <number>".to_string())
-                    }
-                    "weapon" => value
-                        .parse()
-                        .ok()
-                        .filter(|n| vehicle::item::ENABLED.contains(n))
-                        .map(Action::DebugAddWeapon)
-                        .ok_or_else(|| {
-                            "Usage: /debug set weapon <0 to 4 or 6 to 11>".to_string()
-                        }),
-                    "" => Err(DEBUG_USAGE.into()),
-                    _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
-                }
-            }
+            "wumpa" => rest
+                .trim()
+                .parse::<i64>()
+                .map(|n| Action::DebugSetWumpa(n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8))
+                .map_err(|_| "Usage: /debug wumpa <number>".to_string()),
+            "weapon" => rest
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| vehicle::item::ENABLED.contains(n))
+                .map(Action::DebugAddWeapon)
+                .ok_or_else(|| "Usage: /debug weapon <0 to 4 or 6 to 11>".to_string()),
             "stall" => match milliseconds(rest) {
                 Some(ms) if (0.0..=STALL_MAX_MS).contains(&ms) => Ok(Action::DebugStall(
                     std::time::Duration::from_secs_f64(ms / 1000.0),
@@ -1898,7 +1885,7 @@ mod tests {
             Ok(Action::CupStart(name)) if name == "fast"
         ));
         assert!(matches!(
-            Action::parse("debug set wumpa 10"),
+            Action::parse("debug wumpa 10"),
             Ok(Action::DebugSetWumpa(10))
         ));
         assert!(matches!(Action::parse("net info"), Ok(Action::NetInfo)));
@@ -2050,11 +2037,11 @@ mod tests {
         assert_eq!(smoothing("net smoothing fast"), None);
         // Clamped to what a kart holds.
         assert!(matches!(
-            Action::parse("debug  set   wumpa 99"),
+            Action::parse("debug   wumpa 99"),
             Ok(Action::DebugSetWumpa(10))
         ));
         assert!(matches!(
-            Action::parse("debug set weapon 4"),
+            Action::parse("debug weapon 4"),
             Ok(Action::DebugAddWeapon(4))
         ));
     }
@@ -2072,10 +2059,10 @@ mod tests {
         line.enter();
         assert_eq!(line.text, "/debug fx flash");
         assert!(line.entered);
-        let mut line = typed("/debug set weapon 1");
+        let mut line = typed("/debug weapon 1");
         line.step(true);
         line.enter();
-        assert_eq!(line.text, "/debug set weapon 10");
+        assert_eq!(line.text, "/debug weapon 10");
         assert!(line.entered);
         // Round to the first is still a pick.
         let mut line = typed("/debug hud ");
@@ -2566,10 +2553,9 @@ mod tests {
         assert!(error("lobby").starts_with("Usage: /lobby"));
         assert!(error("lobby fly").contains("Unknown command: /lobby fly"));
         assert!(error("debug").starts_with("Usage: /debug"));
-        assert!(error("debug set").starts_with("Usage: /debug"));
-        assert!(error("debug set teapot 3").contains("/debug set teapot"));
-        assert!(error("debug set weapon 12").contains("0 to 4 or 6 to 11"));
-        assert!(error("debug set wumpa x").contains("<number>"));
+        assert!(error("debug teapot 3").contains("Unknown command: /debug teapot"));
+        assert!(error("debug weapon 12").contains("0 to 4 or 6 to 11"));
+        assert!(error("debug wumpa x").contains("<number>"));
         assert!(error("join-lobby abc").contains("Unknown command: /join-lobby"));
         assert!(error("lobby join nonsense").starts_with("Not a lobby address"));
     }

@@ -698,8 +698,8 @@ pub(super) fn drive_tick(
     sfx.tick(tick, &sim.race, &track.0, &ticks, &listeners, &places);
 }
 
-/// The debug commands that change our kart: `/debug set weapon <N>` drops what we hold and rolls
-/// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug set wumpa <N>`
+/// The debug commands that change our kart: `/debug weapon <N>` drops what we hold and rolls
+/// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug wumpa <N>`
 /// sets the wumpa count. Not online.
 pub(super) fn debug_actions(
     mut actions: MessageReader<Action>,
