@@ -77,9 +77,6 @@ pub(super) fn report(
             // (The scoreboard shows them: `scoreboard.rs`.)
             Event::Standings(standings) => {
                 cup_next = standings.next.as_ref().map(|(track, _)| *track);
-                for line in super::cup::standings_text(&standings).lines() {
-                    console!("{line}");
-                }
                 new_standings = Some(standings);
             }
             Event::Chat { from, text } => chats.push((from, text)),

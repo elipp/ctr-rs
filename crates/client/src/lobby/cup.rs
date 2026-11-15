@@ -5,8 +5,8 @@
 //! The host runs the series: it starts each race, scores it when it is over and starts the next
 //! after [`BETWEEN_RACES_SECONDS`]. `/cup pause` pauses the race for everyone, or the countdown
 //! to the next race, until `/cup resume`. Of a series, the guests only get the races and, after
-//! each race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
-//! ([`standings_text`]).
+//! each race of a cup, where it stands ([`net::Standings`]), which the scoreboard shows
+//! (`scoreboard.rs`).
 //!
 //! Bots race for points too, and with them in the race the points are retail's of a cup with
 //! bots (`cupPointsPerPosition`: 9, 6, 3 and 1).
@@ -338,35 +338,6 @@ pub fn podium(standings: &net::Standings) -> Option<[Option<u8>; 3]> {
     }
     let mut top = standings.totals.iter().map(|score| score.character);
     Some([top.next(), top.next(), top.next()])
-}
-
-/// The standings as the console shows them: the race's results, then the totals and what comes
-/// next.
-pub fn standings_text(standings: &net::Standings) -> String {
-    let totals: Vec<String> = (standings.totals.iter())
-        .map(|s| format!("{}: {}", s.name, s.points))
-        .collect();
-    if standings.stopped {
-        return format!("{}: stopped\n\nFinal standings\n{}", standings.cup, totals.join("\n"));
-    }
-    let gained: Vec<String> = (standings.gained.iter().enumerate())
-        .map(|(place, s)| format!("{}. {} +{}", place + 1, s.name, s.points))
-        .collect();
-    let gained = gained.join("\n");
-    let totals = totals.join("\n");
-    let mut text = format!(
-        "{}: race {} of {}\n\n{gained}",
-        standings.cup,
-        standings.race as usize + 1,
-        standings.races
-    );
-    match &standings.next {
-        Some((_, track)) => text += &format!(
-            "\n\nStandings\n{totals}\n\nNext: {track} in {BETWEEN_RACES_SECONDS} seconds"
-        ),
-        None => text += &format!("\n\nFinal standings\n{totals}"),
-    }
-    text
 }
 
 #[cfg(test)]
