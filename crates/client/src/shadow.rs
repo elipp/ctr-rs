@@ -66,7 +66,7 @@ pub fn spawn(
         MeshMaterial3d(materials.add(SubtractMaterial {
             base: StandardMaterial {
                 base_color: Color::WHITE,
-                base_color_texture: Some(images.add(image)),
+                base_color_texture: Some(crate::shared_image(images, image)),
                 unlit: true,
                 cull_mode: None,
                 double_sided: true,

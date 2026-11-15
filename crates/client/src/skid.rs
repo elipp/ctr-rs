@@ -129,7 +129,7 @@ pub fn spawn(
     kart: Entity,
 ) {
     let (image, _, _) = icon_image(icon, vram);
-    let image = images.add(image);
+    let image = crate::shared_image(images, image);
     let base = |alpha_mode| StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: Some(image.clone()),

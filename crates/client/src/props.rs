@@ -533,6 +533,9 @@ pub fn spawn(
     let mut turtles = Turtles::default();
     let mut banners = Banners::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
+    // The atlas of a model, made once: it holds the model's textures only, so every instance of
+    // it (a level has dozens of crates) shares the one image.
+    let mut atlases: HashMap<u32, Handle<Image>> = Default::default();
     // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
     let show_letters = std::env::var_os("CTR_LETTERS").is_some();
     for (n, inst) in level
@@ -603,21 +606,33 @@ pub fn spawn(
             .then(|| instance::reflect::split_line(level, inst))
             .flatten()
             .map(|line| (line as f32 * SCALE, data.parts.clone()));
-        let mut atlas = Image::new(
-            bevy::render::render_resource::Extent3d {
-                width: data.atlas.width as u32,
-                height: data.atlas.height as u32,
-                depth_or_array_layers: 1,
-            },
-            bevy::render::render_resource::TextureDimension::D2,
-            data.atlas.rgba,
-            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-            bevy::asset::RenderAssetUsages::RENDER_WORLD,
-        );
-        atlas.sampler = bevy::image::ImageSampler::nearest();
+        let make_atlas = || {
+            let mut atlas = Image::new(
+                bevy::render::render_resource::Extent3d {
+                    width: data.atlas.width as u32,
+                    height: data.atlas.height as u32,
+                    depth_or_array_layers: 1,
+                },
+                bevy::render::render_resource::TextureDimension::D2,
+                data.atlas.rgba.clone(),
+                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+            );
+            atlas.sampler = bevy::image::ImageSampler::nearest();
+            atlas
+        };
+        // (The banner's model is made over for it, so its atlas is its own.)
+        let atlas = if banner.is_some() {
+            images.add(make_atlas())
+        } else {
+            atlases
+                .entry(inst.model)
+                .or_insert_with(|| images.add(make_atlas()))
+                .clone()
+        };
         let base = StandardMaterial {
             base_color: Color::WHITE,
-            base_color_texture: Some(images.add(atlas)),
+            base_color_texture: Some(atlas),
             unlit: true,
             cull_mode: convex.then_some(bevy::render::render_resource::Face::Back),
             double_sided: !convex,

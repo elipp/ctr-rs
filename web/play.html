@@ -591,11 +591,8 @@ function crumb(next) {
   if (trailTimer === null) trailTimer = setTimeout(writeTrail, 300);
 }
 addEventListener("pagehide", (e) => {
-  if (!e.persisted && crash === null) {
-    try {
-      localStorage.removeItem(TRAIL);
-    } catch {}
-  }
+  // Debugging: a real leaving keeps the log too (not running); the next load shows it.
+  if (!e.persisted && crash === null) writeTrail(false);
 });
 document.addEventListener("visibilitychange", () => phase !== "idle" && crumb());
 // What the last run left, if it did not end by itself.
@@ -613,6 +610,11 @@ try {
           `${left.beat.driving ? "in a race" : "not in a race"}.`
         : "") +
       (left.logged.length === 0 ? "" : `\n\nLogged before it:\n${left.logged.join("\n")}`);
+  }
+  else if (left?.logged?.length > 0) {
+    lastWords =
+      `The last run ended normally (${left.phase}, ${left.up} s).` +
+      `\n\nLogged during it:\n${left.logged.join("\n")}`;
   }
   localStorage.removeItem(TRAIL);
 } catch {}

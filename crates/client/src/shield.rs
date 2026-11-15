@@ -137,7 +137,7 @@ fn spawn_part(
     let base = StandardMaterial {
         depth_bias: SHIELD_DEPTH_BIAS + order as f32 * DEPTH_BIAS_PER_ORDER,
         base_color: Color::WHITE,
-        base_color_texture: Some(images.add(atlas)),
+        base_color_texture: Some(crate::shared_image(images, atlas)),
         unlit: true,
         cull_mode: None,
         double_sided: true,

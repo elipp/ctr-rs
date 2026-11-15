@@ -83,7 +83,7 @@ pub fn spawn(
             atlas.sampler = ImageSampler::nearest();
             let base = StandardMaterial {
                 base_color: Color::WHITE,
-                base_color_texture: Some(images.add(atlas)),
+                base_color_texture: Some(crate::shared_image(images, atlas)),
                 unlit: true,
                 cull_mode: None,
                 double_sided: true,

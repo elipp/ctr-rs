@@ -865,6 +865,31 @@ pub(crate) fn spawn_kart_parts(
 }
 
 /// The material of a kart model's parts: its texture atlas, unlit.
+/// The images made so far, by what is in them: the id of one that still lives.
+static SHARED_IMAGES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u64, AssetId<Image>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Adds `image`, unless an image of the very same texels is there already: then that one. A kart
+/// has dozens of pictures (the flames, masks, shields, wheels, shadow), and every kart on the grid
+/// has the same ones; each in its own copy was a gigabyte on a phone. An image that nothing
+/// holds is dropped by the assets, and then it is made again.
+pub(crate) fn shared_image(images: &mut Assets<Image>, image: Image) -> Handle<Image> {
+    use std::hash::{BuildHasher, Hash, Hasher};
+    let mut hasher = bevy::platform::hash::FixedHasher.build_hasher();
+    image.texture_descriptor.size.hash(&mut hasher);
+    image.texture_descriptor.format.hash(&mut hasher);
+    image.data.hash(&mut hasher);
+    let key = hasher.finish();
+    let mut shared = SHARED_IMAGES.lock().unwrap();
+    if let Some(handle) = shared.get(&key).and_then(|&id| images.get_strong_handle(id)) {
+        return handle;
+    }
+    let handle = images.add(image);
+    shared.insert(key, handle.id());
+    handle
+}
+
 pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> StandardMaterial {
     let mut atlas = Image::new(
         Extent3d {
@@ -880,7 +905,7 @@ pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> S
     atlas.sampler = ImageSampler::nearest();
     StandardMaterial {
         base_color: Color::WHITE,
-        base_color_texture: Some(images.add(atlas)),
+        base_color_texture: Some(shared_image(images, atlas)),
         unlit: true,
         cull_mode: None,
         double_sided: true,
