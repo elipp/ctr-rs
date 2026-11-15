@@ -1,6 +1,7 @@
 //! Cups: a list of tracks the lobby drives one after another, and the points that add up over them
-//! (`/cup create`, `/cup start`, `/cup delete`). The cups are kept in the config. A single
-//! `/race start` is the same thing with one track and no points.
+//! (`/cup create`, `/cup start`, `/cup delete`). The cups are kept in the config, but for
+//! `/cup random`'s, of the game's racing tracks drawn at random. A single `/race start` is the
+//! same thing with one track and no points.
 //!
 //! The host runs the series: it starts each race, scores it when it is over and starts the next
 //! after [`BETWEEN_RACES_SECONDS`]. `/cup pause` pauses the race for everyone, or the countdown
@@ -65,6 +66,22 @@ impl CupDef {
             .map(|track| crate::maps::resolve(track))
             .collect()
     }
+}
+
+/// `count` of the game's racing tracks, none twice, in an order `seed` shuffles them to.
+pub fn random_tracks(count: usize, mut seed: u64) -> Vec<u32> {
+    let mut tracks: Vec<u32> = (0..race::RACING_TRACKS).collect();
+    // (Fisher-Yates, on splitmix64.)
+    for i in (1..tracks.len()).rev() {
+        seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = seed;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        tracks.swap(i, (z % (i as u64 + 1)) as usize);
+    }
+    tracks.truncate(count);
+    tracks
 }
 
 /// The cups made.
@@ -499,6 +516,17 @@ mod tests {
         let totals = series.totals();
         assert_eq!(totals[0].name, "bot5");
         assert_ne!(totals[0].id, totals[1].id);
+    }
+
+    #[test]
+    fn a_random_cup_has_no_track_twice() {
+        for seed in 0..50 {
+            let mut tracks = random_tracks(race::RACING_TRACKS as usize, seed);
+            tracks.sort();
+            assert_eq!(tracks, (0..race::RACING_TRACKS).collect::<Vec<_>>());
+        }
+        assert_eq!(random_tracks(5, 1).len(), 5);
+        assert_ne!(random_tracks(5, 1), random_tracks(5, 2));
     }
 
     #[test]

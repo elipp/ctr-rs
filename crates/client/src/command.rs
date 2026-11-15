@@ -95,6 +95,8 @@ pub enum Action {
     },
     /// Drive the cup of that name in the lobby (the host only).
     CupStart(String),
+    /// Drive a cup of this many of the game's racing tracks, drawn at random (the host only).
+    CupRandom { tracks: usize, laps: u8 },
     /// Forget the cup of that name.
     CupDelete(String),
     /// Pause the race for everyone, or the countdown to a cup's next race (the host only).
@@ -198,7 +200,7 @@ const RACE_USAGE: &str = "Usage: /race start | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
-const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
+const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | random <tracks> [laps] | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths | loading-screen <duration, like 3s>";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
@@ -454,6 +456,22 @@ impl Action {
                 })
             }
             "start" if rest.split_whitespace().count() == 1 => Ok(Action::CupStart(rest.into())),
+            "random" if (1..=2).contains(&rest.split_whitespace().count()) => {
+                let mut words = rest.split_whitespace();
+                let pool = race::RACING_TRACKS as usize;
+                let tracks = (words.next().unwrap().parse::<usize>().ok())
+                    .filter(|n| (1..=pool).contains(n))
+                    .ok_or_else(|| format!("A random cup has 1 to {pool} tracks"))?;
+                let laps = match words.next() {
+                    Some(laps) => laps
+                        .parse::<u8>()
+                        .ok()
+                        .filter(|n| (1..=MAX_LAPS).contains(n))
+                        .ok_or_else(|| format!("The laps are 1 to {MAX_LAPS}"))?,
+                    None => race::DEFAULT_LAPS,
+                };
+                Ok(Action::CupRandom { tracks, laps })
+            }
             "delete" if rest.split_whitespace().count() == 1 => Ok(Action::CupDelete(rest.into())),
             "pause" if rest.is_empty() => Ok(Action::CupPause),
             "resume" if rest.is_empty() => Ok(Action::CupResume),
@@ -461,7 +479,8 @@ impl Action {
             "previous" if rest.is_empty() => Ok(Action::CupPrevious),
             // (The same as `/race stop`, which ends the cup with its race.)
             "stop" if rest.is_empty() => Ok(Action::StopRace),
-            "" | "start" | "delete" | "pause" | "resume" | "next" | "previous" | "stop" => {
+            "" | "start" | "random" | "delete" | "pause" | "resume" | "next" | "previous"
+            | "stop" => {
                 Err(CUP_USAGE.into())
             }
             _ => Err(format!("Unknown command: /cup {sub}\n{CUP_USAGE}")),
@@ -2380,6 +2399,19 @@ mod tests {
         assert_eq!(line.text, "/cup start fast");
         assert!(line.entered);
         assert!(matches!(Action::parse("cup start fast"), Ok(Action::CupStart(name)) if name == "fast"));
+        assert!(matches!(
+            Action::parse("cup random 5"),
+            Ok(Action::CupRandom { tracks: 5, laps: race::DEFAULT_LAPS })
+        ));
+        assert!(matches!(
+            Action::parse("cup random 18 7"),
+            Ok(Action::CupRandom { tracks: 18, laps: 7 })
+        ));
+        assert!(Action::parse("cup random").is_err());
+        assert!(Action::parse("cup random 0").is_err());
+        assert!(Action::parse("cup random 19").is_err());
+        assert!(Action::parse("cup random 5 0").is_err());
+        assert!(Action::parse("cup random 5 3 1").is_err());
         assert!(matches!(Action::parse("cup pause"), Ok(Action::CupPause)));
         assert!(matches!(Action::parse("cup resume"), Ok(Action::CupResume)));
         assert!(Action::parse("cup pause now").is_err());
