@@ -268,6 +268,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[
             takes("create", "Make and keep a cup", "<name> <tracks> <laps>"),
             takes("start", "Count down to a cup's first race", "<name>"),
+            takes("random", "A cup of random tracks (host only)", "<tracks> [laps]"),
             leaf("pause", "Pause the race for everyone (host only)"),
             leaf("resume", "Resume after /cup pause (host only)"),
             leaf("next", "Skip to the cup's next track (host only)"),

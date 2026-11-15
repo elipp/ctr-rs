@@ -2,6 +2,9 @@
 //! stacked under any other toasts that are still up, fading out over the last moments. The stack
 //! starts under the weapon slot at the top of the screen.
 //!
+//! A text is not stacked twice: one that is up already stays up longer instead, and one written
+//! again within [`REPEAT_MS`] of the last time is dropped.
+//!
 //! A toast is in the game's font (`font.rs`), in capitals and a gradient of its colour, if the
 //! font has every character of it (a new line starts another line of glyphs); one that has others
 //! (an address, a list of options) is in Bevy's.
@@ -13,6 +16,9 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
@@ -20,6 +26,9 @@ use crate::font::CtrText;
 
 /// How long the fade at the end of a toast takes.
 const FADE_MS: u64 = 300;
+
+/// How soon after a text was shown it is dropped if written again.
+const REPEAT_MS: u64 = 1000;
 
 /// The color of a toast unless it says otherwise.
 pub const DEFAULT_COLOR: Color = Color::WHITE;
@@ -120,7 +129,8 @@ struct ToastColumn;
 /// A toast that is up, with the time it goes away.
 #[derive(Component)]
 struct Showing {
-    until: std::time::Duration,
+    text: String,
+    until: Duration,
     color: Color,
 }
 
@@ -169,20 +179,35 @@ fn show(
     mut commands: Commands,
     mut toasts: MessageReader<Toast>,
     columns: Query<Entity, With<ToastColumn>>,
+    mut showing: Query<&mut Showing>,
+    mut last_shown: Local<HashMap<String, Duration>>,
     time: Res<Time<Real>>,
 ) {
     if toasts.is_empty() {
         return;
     }
+    let now = time.elapsed();
+    let repeat = Duration::from_millis(REPEAT_MS);
+    last_shown.retain(|_, at| now.saturating_sub(*at) < repeat);
     let column = columns
         .iter()
         .next()
         .unwrap_or_else(|| column(&mut commands));
     for toast in toasts.read() {
+        if last_shown.contains_key(&toast.text) {
+            continue;
+        }
+        last_shown.insert(toast.text.clone(), now);
+        let until = now + Duration::from_millis(toast.millis);
+        if let Some(mut up) = showing.iter_mut().find(|s| s.text == toast.text) {
+            up.until = up.until.max(until);
+            continue;
+        }
         let shown = commands
             .spawn((
                 Showing {
-                    until: time.elapsed() + std::time::Duration::from_millis(toast.millis),
+                    text: toast.text.clone(),
+                    until,
                     color: toast.color,
                 },
                 Node {

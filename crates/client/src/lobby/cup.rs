@@ -1,12 +1,13 @@
 //! Cups: a list of tracks the lobby drives one after another, and the points that add up over them
-//! (`/cup create`, `/cup start`, `/cup delete`). The cups are kept in the config. A single
-//! `/race start` is the same thing with one track and no points.
+//! (`/cup create`, `/cup start`, `/cup delete`). The cups are kept in the config, but for
+//! `/cup random`'s, of the game's racing tracks drawn at random. A single `/race start` is the
+//! same thing with one track and no points.
 //!
 //! The host runs the series: it starts each race, scores it when it is over and starts the next
 //! after [`BETWEEN_RACES_SECONDS`]. `/cup pause` pauses the race for everyone, or the countdown
 //! to the next race, until `/cup resume`. Of a series, the guests only get the races and, after
-//! each race of a cup, where it stands ([`net::Standings`]), which every client shows its own way
-//! ([`standings_text`]).
+//! each race of a cup, where it stands ([`net::Standings`]), which the scoreboard shows
+//! (`scoreboard.rs`).
 //!
 //! Bots race for points too, and with them in the race the points are retail's of a cup with
 //! bots (`cupPointsPerPosition`: 9, 6, 3 and 1).
@@ -29,7 +30,7 @@ pub const MAX_LAPS: u8 = 20;
 pub const SCORED_PLACES: usize = 4;
 
 /// The pause between the end of a race of a cup and the start of the next.
-pub const BETWEEN_RACES_SECONDS: u32 = 10;
+pub const BETWEEN_RACES_SECONDS: u32 = 5;
 
 /// Whether a cup can be called that: `/cup start` reads its name as one word.
 pub fn valid_name(name: &str) -> bool {
@@ -65,6 +66,22 @@ impl CupDef {
             .map(|track| crate::maps::resolve(track))
             .collect()
     }
+}
+
+/// `count` of the game's racing tracks, none twice, in an order `seed` shuffles them to.
+pub fn random_tracks(count: usize, mut seed: u64) -> Vec<u32> {
+    let mut tracks: Vec<u32> = (0..race::RACING_TRACKS).collect();
+    // (Fisher-Yates, on splitmix64.)
+    for i in (1..tracks.len()).rev() {
+        seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = seed;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        tracks.swap(i, (z % (i as u64 + 1)) as usize);
+    }
+    tracks.truncate(count);
+    tracks
 }
 
 /// The cups made.
@@ -340,35 +357,6 @@ pub fn podium(standings: &net::Standings) -> Option<[Option<u8>; 3]> {
     Some([top.next(), top.next(), top.next()])
 }
 
-/// The standings as the console shows them: the race's results, then the totals and what comes
-/// next.
-pub fn standings_text(standings: &net::Standings) -> String {
-    let totals: Vec<String> = (standings.totals.iter())
-        .map(|s| format!("{}: {}", s.name, s.points))
-        .collect();
-    if standings.stopped {
-        return format!("{}: stopped\n\nFinal standings\n{}", standings.cup, totals.join("\n"));
-    }
-    let gained: Vec<String> = (standings.gained.iter().enumerate())
-        .map(|(place, s)| format!("{}. {} +{}", place + 1, s.name, s.points))
-        .collect();
-    let gained = gained.join("\n");
-    let totals = totals.join("\n");
-    let mut text = format!(
-        "{}: race {} of {}\n\n{gained}",
-        standings.cup,
-        standings.race as usize + 1,
-        standings.races
-    );
-    match &standings.next {
-        Some((_, track)) => text += &format!(
-            "\n\nStandings\n{totals}\n\nNext: {track} in {BETWEEN_RACES_SECONDS} seconds"
-        ),
-        None => text += &format!("\n\nFinal standings\n{totals}"),
-    }
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,6 +516,17 @@ mod tests {
         let totals = series.totals();
         assert_eq!(totals[0].name, "bot5");
         assert_ne!(totals[0].id, totals[1].id);
+    }
+
+    #[test]
+    fn a_random_cup_has_no_track_twice() {
+        for seed in 0..50 {
+            let mut tracks = random_tracks(race::RACING_TRACKS as usize, seed);
+            tracks.sort();
+            assert_eq!(tracks, (0..race::RACING_TRACKS).collect::<Vec<_>>());
+        }
+        assert_eq!(random_tracks(5, 1).len(), 5);
+        assert_ne!(random_tracks(5, 1), random_tracks(5, 2));
     }
 
     #[test]

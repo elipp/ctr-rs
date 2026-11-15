@@ -20,7 +20,8 @@
 //! Before an online race the flag comes in first, as retail's does
 //! (`RaceFlag_BeginTransition`): the next race's start brings it in over the race before, the
 //! level loads once it covers the window ([`entering`]), and it stays [`CUP_MIN_SECONDS`] at
-//! least, and until everyone is ready to start.
+//! least, and until everyone is ready to start. We are not ready before that least time is up
+//! ([`tell_ready`]), so the race does not start under the flag.
 //!
 //! `/debug loading-screen` puts the screen up for a while on its own, over the game as it goes on.
 
@@ -86,7 +87,7 @@ const ENTER_SNAP: f32 = 8.0;
 const COVERED_AT: f32 = 500.0;
 
 /// The least time the flag stays between the races of a cup once it covers the window.
-const CUP_MIN_SECONDS: f32 = 3.0;
+const CUP_MIN_SECONDS: f32 = 1.5;
 
 /// The text, in the large font and the menus' orange, with its top at line 108.
 const TEXT: &str = "LOADING...";
@@ -392,6 +393,28 @@ pub fn entering(world: &mut World) -> bool {
         .any(|s| !s.leaving && s.position > COVERED_AT)
 }
 
+/// Tells the others we can start once the race is built and the flag of a cup, if it is up, has
+/// had its least time: the go waits for every flag, so none is still up at the green light.
+fn tell_ready(
+    mut lobby: ResMut<crate::lobby::Lobby>,
+    screens: Query<&LoadingScreen>,
+    loading: Option<Res<Loading>>,
+) {
+    let held = screens
+        .iter()
+        .any(|s| matches!(s.hold, Hold::Cup(left) if left > 0.0));
+    if loading.is_some() || held {
+        return;
+    }
+    if !lobby.online.as_ref().is_some_and(|o| o.built && !o.ready) {
+        return;
+    }
+    if let Some(online) = &mut lobby.online {
+        online.ready = true;
+    }
+    lobby.ready();
+}
+
 /// Brings the flag in over the window before the next race of a cup.
 pub fn bring_in(world: &mut World) {
     spawn_screen(world, Hold::Cup(CUP_MIN_SECONDS), ENTER_FROM);
@@ -616,6 +639,7 @@ impl Plugin for LoadingPlugin {
                     debug_screen,
                     finish.run_if(resource_exists::<Loading>),
                     animate,
+                    tell_ready.run_if(resource_exists::<crate::lobby::Lobby>),
                 )
                     .chain(),
             );
