@@ -215,6 +215,9 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     let plugins = plugins.disable::<bevy::app::PanicHandlerPlugin>();
     app.add_plugins(plugins);
+    // The page keeps the last of these for when the browser ends it without a word.
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Last, web::beat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(window_icon::WindowIconPlugin);
     // Bevy's own font has no ä or ö: this one takes its place as the default.

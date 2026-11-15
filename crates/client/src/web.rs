@@ -115,6 +115,18 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrLog)]
     pub fn log_line(line: &str);
 
+    /// Tells the page, once a second, how the game is doing: the size of its memory in bytes, the
+    /// frames drawn so far, the frame rate and whether a race is being driven. If the browser
+    /// ends the page without a word, the page's trail has the last of these.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrBeat)]
+    fn beat_page(memory: f64, frames: f64, fps: f64, driving: bool);
+
+    /// Tells the page what the game is about to do and how big its memory is, in bytes; the
+    /// page writes it to its trail at once, as the browser may end the page in the work that
+    /// follows.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrStage)]
+    fn stage_page(what: &str, memory: f64);
+
     /// Tells the page that the game has crashed, with what the panic said.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCrashed)]
     pub fn crashed(message: &str);
@@ -162,4 +174,33 @@ pub fn take_dropped() -> Vec<(String, Vec<u8>)> {
             Some((name, bytes.to_vec()))
         })
         .collect()
+}
+
+/// Once a second, tells the page how the game is doing (`ctrBeat`). A page that a phone ends for
+/// using too much memory leaves nothing else behind.
+pub fn beat(
+    time: bevy::prelude::Res<bevy::prelude::Time<bevy::prelude::Real>>,
+    diagnostics: bevy::prelude::Res<bevy::diagnostic::DiagnosticsStore>,
+    drive: Option<bevy::prelude::Res<crate::drive::Drive>>,
+    mut frames: bevy::prelude::Local<u64>,
+    mut last: bevy::prelude::Local<f32>,
+) {
+    *frames += 1;
+    let now = time.elapsed_secs();
+    if now - *last < 1.0 {
+        return;
+    }
+    *last = now;
+    let fps = diagnostics
+        .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    let memory = core::arch::wasm32::memory_size(0) as f64 * 65536.0;
+    beat_page(memory, *frames as f64, fps, drive.is_some());
+}
+
+/// Tells the page what the game is about to do, with the size of its memory: for a load that the
+/// browser may end the page in, which leaves nothing else behind.
+pub fn stage(what: &str) {
+    stage_page(what, core::arch::wasm32::memory_size(0) as f64 * 65536.0);
 }
