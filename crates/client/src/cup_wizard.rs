@@ -7,7 +7,7 @@
 //! is the weapons page, which edits `Config` directly: the host reads it at each race's start
 //! (`lobby::rules`).
 
-use vehicle::item::{self, ENABLED};
+use vehicle::item::ENABLED;
 
 use crate::command::Action;
 use crate::config::Config;
@@ -198,7 +198,8 @@ fn weapon_icons(config: &Config, size: bevy::math::UVec2, columns: usize) -> Ico
                 render::weapons::cell(render::weapons::icon_id(weapon, false, 0)).unwrap_or(0)
             })
             .collect(),
-        names: ENABLED.iter().map(|&w| item::name(w).to_string()).collect(),
+        // Everyone knows them: no caption (user's call, 2026-11-15).
+        names: Vec::new(),
         columns,
         size,
         mode: Mode::Mask(icon_grid::mask_of(&ENABLED, &config.masked_weapons)),

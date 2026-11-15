@@ -112,25 +112,6 @@ pub fn mask(items: &[u8]) -> u16 {
         .fold(0, |mask, &item| mask | 1 << item)
 }
 
-/// What a player calls the item `item` (a `held::*` below the roulette).
-pub fn name(item: u8) -> &'static str {
-    match item {
-        held::TURBO => "Turbo",
-        held::BOMB_1X => "Bomb",
-        held::MISSILE_1X => "Missile",
-        held::TNT => "TNT",
-        held::POTION => "Potion",
-        held::SPRING => "Spring",
-        held::SHIELD => "Shield",
-        held::MASK => "Mask",
-        held::CLOCK => "Clock",
-        held::WARPBALL => "Warpball",
-        held::BOMB_3X => "Three bombs",
-        held::MISSILE_3X => "Three missiles",
-        _ => "Nothing",
-    }
-}
-
 /// `data.RNG_itemSetRace1`: by 20 entries, the more an item has, the likelier it is. 8/20 potion,
 /// 8/20 TNT, 2/20 bomb, 1/20 turbo, 1/20 shield.
 const RACE1: [u8; 20] = [4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 0, 6];

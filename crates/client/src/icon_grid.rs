@@ -114,7 +114,7 @@ pub enum Mode {
 pub struct Icons {
     pub sheet: SheetId,
     pub cells: Vec<usize>,
-    /// Same length as `cells`; shown as the caption at the cursor.
+    /// Same length as `cells`, shown as the caption at the cursor; empty for no caption.
     pub names: Vec<String>,
     pub columns: usize,
     /// In `TexelSize` texels, not sheet pixels: previews draw smaller than the sheet's cells.
@@ -212,7 +212,7 @@ pub struct GridCaption<R> {
 }
 
 /// A non-`interactive` grid (preview) has no observers, frames or caption, so [`update`] never
-/// touches it.
+/// touches it. Nor does a grid without names have a caption.
 pub fn spawn<R: HasIconGrid>(
     commands: &mut Commands,
     parent: Entity,
@@ -304,7 +304,7 @@ pub fn spawn<R: HasIconGrid>(
             .id();
         commands.spawn((ChildOf(frame), picture));
     }
-    if interactive {
+    if interactive && !icons.names.is_empty() {
         commands.spawn((
             ChildOf(holder),
             GridCaption::<R> {
