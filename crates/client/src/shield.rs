@@ -10,10 +10,7 @@
 //!
 //! The three layers and both colours are made for each kart (hidden); the ones the shield is, show.
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::model::Model;
 use loader::vram::Vram;
 use render::mesh;
@@ -114,18 +111,7 @@ fn spawn_part(
     };
     // Unscaled: the bubble's size is set on the entity.
     let data = mesh::model_mesh(header, &pose, vram, [0x1000; 3]);
-    let mut atlas = Image::new(
-        Extent3d {
-            width: data.atlas.width as u32,
-            height: data.atlas.height as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data.atlas.rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    atlas.sampler = ImageSampler::nearest();
+    let atlas = crate::hud::atlas_image(data.atlas, images);
     // The layers are the same sphere, so they fight over the depth buffer (the coloured one
     // flickers away): the dark one is farthest back. The coloured one and the highlight stand
     // together over it, as they did before, so that the highlight is not pulled in front of the
@@ -137,7 +123,7 @@ fn spawn_part(
     let base = StandardMaterial {
         depth_bias: SHIELD_DEPTH_BIAS + order as f32 * DEPTH_BIAS_PER_ORDER,
         base_color: Color::WHITE,
-        base_color_texture: Some(crate::shared_image(images, atlas)),
+        base_color_texture: Some(atlas),
         unlit: true,
         cull_mode: None,
         double_sided: true,

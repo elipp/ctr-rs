@@ -18,15 +18,16 @@ use loader::level::LevelId;
 use loader::model::Model;
 use render::mesh::{self, PARTS, Part};
 
-/// A drive-mode state for `track`: the kart on its first starting slot.
-/// Tells the page what the game is about to do (see `web::stage`); nothing off the web.
-pub(crate) fn stage(what: &str) {
-    #[cfg(target_arch = "wasm32")]
-    crate::web::stage(what);
-    #[cfg(not(target_arch = "wasm32"))]
+/// Tells the page what the game is about to do (`web::stage`), in a `wasm-debug` build; otherwise
+/// nothing, and `what` is not even formatted.
+pub(crate) fn stage(what: impl std::fmt::Display) {
+    #[cfg(all(target_arch = "wasm32", feature = "wasm-debug"))]
+    crate::web::stage(&what.to_string());
+    #[cfg(not(all(target_arch = "wasm32", feature = "wasm-debug")))]
     let _ = what;
 }
 
+/// A drive-mode state for `track`: the kart on its first starting slot.
 pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive::Drive {
     let anim_num_frames = anim_num_frames(model);
     let spec = race::KartSpec {
@@ -229,11 +230,9 @@ pub(crate) fn switch_level(world: &mut World) {
     let character = (racer_step != 0).then(|| load_character(options.racer));
 
     if id != current {
-        #[cfg(target_arch = "wasm32")]
-        crate::web::stage(&format!("loading level {id:#x}"));
+        stage(format_args!("loading level {id:#x}"));
         let LevelData { level, dram, vram } = load_level(id);
-        #[cfg(target_arch = "wasm32")]
-        crate::web::stage("level loaded, old scene still up");
+        stage("level loaded, old scene still up");
         let scene = world_scene(world);
         despawn(world, scene);
         world.insert_resource(Track(level, LevelId(id)));
@@ -243,11 +242,9 @@ pub(crate) fn switch_level(world: &mut World) {
         }
         world.insert_resource(LevelNumber(id));
         restart_drive(world, options);
-        #[cfg(target_arch = "wasm32")]
-        crate::web::stage("building the scene");
+        stage("building the scene");
         run_scene_systems(world, options);
-        #[cfg(target_arch = "wasm32")]
-        crate::web::stage("scene built");
+        stage("scene built");
         world.write_message(toast::Toast::new(
             format!("Track: {}", maps::name(id)),
             2500,
@@ -281,7 +278,7 @@ pub(crate) fn run_scene_systems(world: &mut World, options: Options) {
     let systems = world.resource::<SceneSystems>().of(options.driving);
     let count = systems.len();
     for (n, system) in systems.into_iter().enumerate() {
-        stage(&format!("scene system {} of {count}", n + 1));
+        stage(format_args!("scene system {} of {count}", n + 1));
         world.run_system(system).expect("scene system runs");
     }
     stage("scene systems done");
@@ -864,7 +861,6 @@ pub(crate) fn spawn_kart_parts(
     builder.spawn(model, &wheel_icons.0, placement, true, driven);
 }
 
-/// The material of a kart model's parts: its texture atlas, unlit.
 /// The images made so far, by what is in them: the id of one that still lives.
 static SHARED_IMAGES: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<u64, AssetId<Image>>>,
@@ -890,22 +886,11 @@ pub(crate) fn shared_image(images: &mut Assets<Image>, image: Image) -> Handle<I
     handle
 }
 
+/// The material of a kart model's parts: its texture atlas, unlit.
 pub(crate) fn kart_material(atlas: mesh::Atlas, images: &mut Assets<Image>) -> StandardMaterial {
-    let mut atlas = Image::new(
-        Extent3d {
-            width: atlas.width as u32,
-            height: atlas.height as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        atlas.rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    atlas.sampler = ImageSampler::nearest();
     StandardMaterial {
         base_color: Color::WHITE,
-        base_color_texture: Some(shared_image(images, atlas)),
+        base_color_texture: Some(crate::hud::atlas_image(atlas, images)),
         unlit: true,
         cull_mode: None,
         double_sided: true,

@@ -561,10 +561,13 @@ const report = () => (logged.length === 0 ? "" : `\n\nLogged before it:\n${logge
 
 // iOS ends a page that uses too much memory (the disc image is held whole, and so is the game's own)
 // without any event or error: the page is simply gone, and a reload shows nothing of why. So the page
-// keeps a trail in its storage while it runs, and a `pagehide` that is a real leaving clears it; a
-// trail found on the next load means the page was ended from outside.
+// keeps a trail in its storage while it runs, with the log. However the run ends, the next load reads
+// it and shows it: one that was still running was ended from outside, and that is always shown; one
+// that crashed or was left is shown too when the game was built with `wasm-debug` (`debug`, which the
+// game's reports turn on), so the log of any run can be read after it.
 const TRAIL = "ctr-rs.trail";
 let phase = "idle";
+let debug = false;
 let born = null;
 let lastWords = null;
 let trailTimer = null;
@@ -578,9 +581,11 @@ function writeTrail(running = true) {
         phase,
         seen: document.visibilityState,
         up: born === null ? 0 : Math.round((Date.now() - born) / 1000),
+        debug,
+        crash,
         beat,
         stage,
-        logged: logged.slice(-40),
+        logged,
       }),
     );
   } catch {}
@@ -590,14 +595,16 @@ function crumb(next) {
   if (born === null) born = Date.now();
   if (trailTimer === null) trailTimer = setTimeout(writeTrail, 300);
 }
+// A real leaving (not into the back-forward cache); a crash has written its trail already.
 addEventListener("pagehide", (e) => {
-  // Debugging: a real leaving keeps the log too (not running); the next load shows it.
   if (!e.persisted && crash === null) writeTrail(false);
 });
 document.addEventListener("visibilitychange", () => phase !== "idle" && crumb());
-// What the last run left, if it did not end by itself.
+// What the last run left.
 try {
   const left = JSON.parse(localStorage.getItem(TRAIL));
+  const log = (what) =>
+    left.logged.length === 0 ? "" : `\n\nLogged ${what}:\n${left.logged.join("\n")}`;
   if (left?.running) {
     lastWords =
       `The page went away without a word while "${left.phase}", ` +
@@ -609,12 +616,11 @@ try {
           `${left.beat.mb} MB of wasm memory, ${left.beat.fps} fps, frame ${left.beat.frames}, ` +
           `${left.beat.driving ? "in a race" : "not in a race"}.`
         : "") +
-      (left.logged.length === 0 ? "" : `\n\nLogged before it:\n${left.logged.join("\n")}`);
-  }
-  else if (left?.logged?.length > 0) {
-    lastWords =
-      `The last run ended normally (${left.phase}, ${left.up} s).` +
-      `\n\nLogged during it:\n${left.logged.join("\n")}`;
+      log("before it");
+  } else if (left?.debug && left.crash != null) {
+    lastWords = `The last run crashed (${left.phase}, ${left.up} s): ${left.crash}` + log("before it");
+  } else if (left?.debug) {
+    lastWords = `The last run ended normally (${left.phase}, ${left.up} s).` + log("during it");
   }
   localStorage.removeItem(TRAIL);
 } catch {}
@@ -682,11 +688,13 @@ let stage = null;
 // Before work the browser may end the page in: written to the trail at once, as the timer would
 // not get to run. The time is of the page's own clock, so a gap between two stages is a stall.
 window.ctrStage = (what, memory) => {
+  debug = true;
   stage = `${what}, ${Math.round(memory / 1048576)} MB, at ${Math.round(performance.now())} ms`;
   window.ctrLog(`INFO stage: ${stage}`);
   writeTrail();
 };
 window.ctrBeat = (memory, frames, fps, driving) => {
+  debug = true;
   beat = { mb: Math.round(memory / 1048576), frames, fps: Math.round(fps), driving, at: Date.now() };
   crumb();
 };
@@ -705,7 +713,8 @@ const fatal = (error, text) =>
   error instanceof WebAssembly.RuntimeError ||
   error instanceof WebAssembly.CompileError ||
   error instanceof WebAssembly.LinkError ||
-  /out of memory|memory|allocation failed|invalid array length/i.test(text);
+  (error instanceof RangeError && /memory/i.test(text)) ||
+  /out of memory|allocation failed|invalid array length/i.test(text);
 const trap = (error, e) => {
   const text = describe(error, e);
   window.ctrLog(`ERROR page: ${text.split("\n")[0]}`);

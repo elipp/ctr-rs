@@ -738,7 +738,7 @@ impl Race {
                 _ => 0,
             };
             let class = vehicle::stats::Stats::for_class(
-                vehicle::stats::CHARACTER_ENGINES[d.character as usize % vehicle::stats::CHARACTER_ENGINES.len()],
+                vehicle::stats::CHARACTER_ENGINES[d.character as usize],
             );
             let s = &mut d.stats;
             s.speed_class_stat = band.stat(&class, |c| c.speed_class_stat as i64, pull, true) as i16;

@@ -121,16 +121,21 @@ pub(super) fn report(
                 pads.clear();
                 sums.clear();
                 leads.clear();
-                // (A character past the roster, from a peer, is the first.)
-                let characters: Vec<u8> = characters
-                    .into_iter()
-                    .map(|c| if c < net::CHARACTERS { c } else { 0 })
-                    .collect();
+                // (A character past the roster, from the host, is the first: the players' and the
+                // retail bots'.)
+                let on_roster = |c: &mut u8| {
+                    if *c >= net::CHARACTERS {
+                        *c = 0;
+                    }
+                };
+                let mut characters = characters;
+                characters.iter_mut().for_each(on_roster);
                 let characters_len = characters.len();
                 let mut retail = retail;
                 retail
                     .characters
                     .truncate(race::MAX_KARTS.saturating_sub(characters_len));
+                retail.characters.iter_mut().for_each(on_roster);
                 stopped = false;
                 started_cup = Some(retail.cup);
                 let names: Vec<String> = players

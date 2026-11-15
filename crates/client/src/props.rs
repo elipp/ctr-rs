@@ -533,11 +533,9 @@ pub fn spawn(
     let mut turtles = Turtles::default();
     let mut banners = Banners::default();
     let mut models: HashMap<u32, Option<Model>> = Default::default();
-    // The atlas of a model, made once: it holds the model's textures only, so every instance of
-    // it (a level has dozens of crates) shares the one image.
-    let mut atlases: HashMap<u32, Handle<Image>> = Default::default();
-    // The parts of a model at a scale, before the instance winds them.
-    let mut mesh_parts: HashMap<(u32, [i16; 3]), [mesh::MeshPart; PARTS]> = Default::default();
+    // The parts of a model at a scale, before the instance winds them, and its atlas.
+    let mut built: HashMap<(u32, [i16; 3]), ([mesh::MeshPart; PARTS], Handle<Image>)> =
+        Default::default();
     // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
     let show_letters = std::env::var_os("CTR_LETTERS").is_some();
     for (n, inst) in level
@@ -588,16 +586,13 @@ pub fn spawn(
             }
         }
         // The mesh of a model at a scale is the same for every instance of it (the crates of a
-        // level are dozens), so it is built once, and with it the atlas. The flame jet is lit
-        // per instance and the banner is made over for it: those are built each time.
+        // level are dozens), so it is built once. The flame jet is lit per instance and the
+        // banner is made over for it: those are built each time. (Their atlases are shared all
+        // the same, by their texels.)
         let cacheable = banner.is_none() && inst.model_name != "flamejet";
         let key = (inst.model, inst_scale);
-        let cached = cacheable
-            .then(|| mesh_parts.get(&key).cloned())
-            .flatten()
-            .filter(|_| atlases.contains_key(&inst.model));
-        let (mut parts, atlas) = match cached {
-            Some(parts) => (parts, atlases[&inst.model].clone()),
+        let (mut parts, atlas) = match cacheable.then(|| built.get(&key)).flatten() {
+            Some(cached) => cached.clone(),
             None => {
                 let data = mesh::model_mesh(
                     banner.as_ref().map_or(header, |b| &b.header),
@@ -605,33 +600,11 @@ pub fn spawn(
                     vram,
                     inst_scale,
                 );
-                // (The banner's model is made over for it, so its atlas is its own.)
-                let atlas = match atlases.get(&inst.model) {
-                    Some(atlas) if banner.is_none() => atlas.clone(),
-                    _ => {
-                        let mut image = Image::new(
-                            bevy::render::render_resource::Extent3d {
-                                width: data.atlas.width as u32,
-                                height: data.atlas.height as u32,
-                                depth_or_array_layers: 1,
-                            },
-                            bevy::render::render_resource::TextureDimension::D2,
-                            data.atlas.rgba,
-                            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                            bevy::asset::RenderAssetUsages::RENDER_WORLD,
-                        );
-                        image.sampler = bevy::image::ImageSampler::nearest();
-                        let handle = images.add(image);
-                        if banner.is_none() {
-                            atlases.insert(inst.model, handle.clone());
-                        }
-                        handle
-                    }
-                };
+                let made = (data.parts, crate::hud::atlas_image(data.atlas, images));
                 if cacheable {
-                    mesh_parts.insert(key, data.parts.clone());
+                    built.insert(key, made.clone());
                 }
-                (data.parts, atlas)
+                made
             }
         };
 
