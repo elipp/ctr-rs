@@ -628,13 +628,18 @@ pub(crate) async fn run(
                                 Some((_, had)) if host.locked => had,
                                 _ => theirs,
                             };
+                            let theirs = if theirs < crate::CHARACTERS { theirs } else { 0 };
                             guest.hello = Some((seq, theirs));
                             guest.spectator = watches;
                             // (A spectator has no extras; the rest is cut to fit a race at the start.)
                             if watches {
                                 guest.extras = Vec::new();
                             } else if !fixed {
-                                guest.extras = theirs_extras.into_iter().take(MAX_PLAYERS - 1).collect();
+                                guest.extras = theirs_extras
+                                    .into_iter()
+                                    .take(MAX_PLAYERS - 1)
+                                    .map(|c| if c < crate::CHARACTERS { c } else { 0 })
+                                    .collect();
                             }
                             if seq >= guest.nick.0 {
                                 guest.nick = (seq, clean_nick(&theirs_nick));
