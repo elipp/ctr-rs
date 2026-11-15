@@ -99,9 +99,12 @@ pub struct Config {
     pub render_scale: f32,
     /// The cups made (`/cup create`).
     pub cups: Cups,
-    /// The weapons (`vehicle::item::held`) our lobby's races leave out, as the pause menu's cup
-    /// wizard masks them. Ours alone: not sent to the guests, and not in the roulette yet.
+    /// The weapons (`vehicle::item::held`) the roulette of the races we host leaves out, as the
+    /// pause menu's cup wizard masks them. (A list, not `Roulette::masked`'s bits, to stay
+    /// readable in the file.)
     pub masked_weapons: Vec<u8>,
+    /// The roulette of the races we host gives every weapon alike, not by retail's item sets.
+    pub even_weapon_odds: bool,
     /// How many of the window's pixels make one of the game's, 1 for the window's own resolution
     /// (`/config set pixel-scale`).
     pub pixel_scale: u32,
@@ -133,6 +136,7 @@ impl Default for Config {
             render_scale: 1.0,
             cups: Cups::default(),
             masked_weapons: Vec::new(),
+            even_weapon_odds: false,
             pixel_scale: 1,
             fullscreen: false,
         }

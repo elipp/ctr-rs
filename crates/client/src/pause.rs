@@ -675,7 +675,7 @@ fn input(
         }
         if let Some((i, way)) = menu.stepped.take()
             && let Some(entry) = items.get(i)
-            && step(entry.item, way, &mut menu, &config)
+            && step(entry.item, way, &mut menu, &mut config)
         {
             sound(MENU_MOVE_SFX);
         }
@@ -705,7 +705,7 @@ fn input(
                 kind: Kind::Cycle(_),
                 ..
             }) => {
-                if step(*item, 1, &mut menu, &config) {
+                if step(*item, 1, &mut menu, &mut config) {
                     sound(MENU_MOVE_SFX);
                 }
                 None
@@ -890,9 +890,11 @@ fn navigate(menu: &mut PauseMenu, items: &[Entry], way: IVec2) -> bool {
     true
 }
 
-fn step(item: Item, way: i32, menu: &mut PauseMenu, config: &Config) -> bool {
+fn step(item: Item, way: i32, menu: &mut PauseMenu, config: &mut Config) -> bool {
     match item {
-        Item::Cup(item) => cup_wizard::step(item, way, &mut menu.cup, config),
+        Item::Cup(item) => {
+            cup_wizard::step(item, way, &mut menu.cup, config, &mut menu.unsaved)
+        }
         _ => false,
     }
 }

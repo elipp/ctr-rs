@@ -167,7 +167,7 @@ pub(super) fn drive_tick(
             &track.0,
             &specs,
             own,
-            lobby.online.as_ref().map(|net| net.laps),
+            lobby.online.as_ref().map(|net| net.rules),
             spectator,
             bots,
             band,

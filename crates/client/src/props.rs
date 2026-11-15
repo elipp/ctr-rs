@@ -54,7 +54,7 @@ impl Sim {
         }
     }
 
-    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the laps of
+    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the rules of
     /// a race of a lobby, even if we are alone in it (None for a free drive). A `spectator`
     /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
     /// race after the players; the `band` is the learned bots' rubber band.
@@ -64,7 +64,7 @@ impl Sim {
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
-        online: Option<u8>,
+        online: Option<net::Rules>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
@@ -75,8 +75,17 @@ impl Sim {
             race.add_bots(level, setup, bots);
         }
         // An online race starts with the ceremony; offline the kart drives off at once.
-        if let Some(laps) = online {
-            race.laps = laps;
+        if let Some(rules) = online {
+            race.laps = rules.laps;
+            race.objects.random_number = i32::from(rules.seed);
+            race.roulette = vehicle::item::Roulette {
+                masked: rules.masked_weapons,
+                odds: if rules.even_odds {
+                    vehicle::item::Odds::Even
+                } else {
+                    vehicle::item::Odds::Retail
+                },
+            };
             race.start_ceremony(level);
         } else {
             race.laps = race::FREE_DRIVE_LAPS;
@@ -103,7 +112,7 @@ impl Sim {
         level: &Level,
         specs: &[KartSpec],
         own: usize,
-        online: Option<u8>,
+        online: Option<net::Rules>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,

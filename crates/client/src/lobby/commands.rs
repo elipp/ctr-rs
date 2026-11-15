@@ -539,7 +539,7 @@ pub(super) fn run(
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart {
                         track: net.track,
-                        laps: net.laps,
+                        laps: net.rules.laps,
                     };
                     lobby.count_down(then, now, super::COUNTDOWN_SECONDS);
                 }

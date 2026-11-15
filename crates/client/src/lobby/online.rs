@@ -26,8 +26,8 @@ pub struct Online {
     pub track: u32,
     /// The hash of the contents of the map, if it is a map (0 for the game's tracks).
     pub hash: u64,
-    /// How many laps the race has.
-    pub laps: u8,
+    /// The host's rules of the race (laps, weapons, seed).
+    pub rules: net::Rules,
     /// The pads of the others that have come in and are not in the sim yet: (slot, first tick,
     /// the pads).
     pub inbox: Vec<(usize, u32, Vec<Pad>)>,

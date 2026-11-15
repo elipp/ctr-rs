@@ -1,6 +1,7 @@
 //! The countdown before the host's race starts or starts over.
 
 use super::Lobby;
+use crate::config::Config;
 use bevy::prelude::*;
 
 /// The seconds of the countdown before the host's race starts, or starts over.
@@ -25,7 +26,7 @@ pub(super) struct Countdown {
 
 /// Counts a start or a restart down, which everyone sees (the host only). Closing the lobby
 /// cancels it.
-pub(super) fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
+pub(super) fn countdown(mut lobby: ResMut<Lobby>, config: Res<Config>, time: Res<Time<Real>>) {
     if lobby.joined || lobby.session.is_none() {
         lobby.countdown = None;
         return;
@@ -40,7 +41,7 @@ pub(super) fn countdown(mut lobby: ResMut<Lobby>, time: Res<Time<Real>>) {
         if c.left == 0 {
             match c.then {
                 Then::Start { track, laps } | Then::Restart { track, laps } => {
-                    lobby.start(track, laps)
+                    lobby.start(track, super::rules(laps, &config, now))
                 }
             }
             return;

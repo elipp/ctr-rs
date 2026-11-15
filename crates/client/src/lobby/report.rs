@@ -105,7 +105,7 @@ pub(super) fn report(
                 players,
                 track,
                 hash,
-                laps,
+                rules,
                 bots,
                 retail,
             } => {
@@ -153,7 +153,7 @@ pub(super) fn report(
                     ids: players,
                     track,
                     hash,
-                    laps,
+                    rules,
                     inbox: Vec::new(),
                     delayed: default(),
                     fresh: true,

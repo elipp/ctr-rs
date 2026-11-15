@@ -365,9 +365,9 @@ pub(crate) async fn run(
             }
             Some(command) = io.commands.recv() => match command {
                 // Goes ahead below, once every guest has said what it drives.
-                Command::Start { track, hash, laps, retail } => if let Some(host) = &mut host {
+                Command::Start { track, hash, rules, retail } => if let Some(host) = &mut host {
                     if host.handoff.is_none() {
-                        host.start_wanted = Some((track, hash, laps, retail));
+                        host.start_wanted = Some((track, hash, rules, retail));
                     }
                 },
                 Command::Promote(to) => if let Some(host) = &mut host {
@@ -745,7 +745,7 @@ pub(crate) async fn run(
                         heirs.handed_over = false;
                         io.event(Event::Lobby { players, spectators, you, locked, bots });
                     }
-                    Message::Start { epoch: new, slot, characters, track, hash, laps, retail, roster, hard, bots }
+                    Message::Start { epoch: new, slot, characters, track, hash, rules, retail, roster, hard, bots }
                         if from == host_id && host.is_none() =>
                     {
                         let roster: Vec<EndpointId> = roster
@@ -765,7 +765,7 @@ pub(crate) async fn run(
                         dial_links(&endpoint, &roster, &hard, &links, &dialed_tx);
                         let locals = new_plan.locals_of(me);
                         plan = Some(new_plan);
-                        io.event(Event::Started { slot, locals, characters, players: roster, track, hash, laps, bots, retail });
+                        io.event(Event::Started { slot, locals, characters, players: roster, track, hash, rules, bots, retail });
                     }
                     Message::Announce { text } => {
                         if from == host_id && host.is_none() {
@@ -1257,7 +1257,7 @@ pub(crate) async fn run(
 
         // The host starts the race once every guest has said what it drives.
         if let Some(host) = &mut host
-            && let Some((track, hash, laps, mut retail)) = host
+            && let Some((track, hash, rules, mut retail)) = host
                 .start_wanted
                 .take_if(|_| host.guests.iter().all(|g| g.hello.is_some()))
         {
@@ -1319,7 +1319,7 @@ pub(crate) async fn run(
                     characters: characters.clone(),
                     track,
                     hash,
-                    laps,
+                    rules,
                     retail: retail.clone(),
                     roster: roster.iter().map(|id| *id.as_bytes()).collect(),
                     hard: hard.clone(),
@@ -1348,7 +1348,7 @@ pub(crate) async fn run(
                 players: roster,
                 track,
                 hash,
-                laps,
+                rules,
                 bots,
                 retail,
             });

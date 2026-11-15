@@ -4,8 +4,8 @@
 //! Firing is ported for the turbo, the mask, the shield, the bomb, the missile and the warpball
 //! (which the `weapon` crate flies), TNT and the potion (which it drops, or throws), and the clock
 //! (which hurts every other driver, see [`clock`]): see [`Launch`]. The rest stay held until they
-//! are ported (see [`fireable`]). The pick is a placeholder: `VehPhysGeneral_SetHeldItem`'s fallback for a driver without a
-//! place (`MixRNG_Scramble() % 12`), not the item sets by place that retail rolls from.
+//! are ported (see [`fireable`]). The pick is `VehPhysGeneral_SetHeldItem`'s for a race: an item
+//! set by place, under the race's [`Roulette`] rules.
 
 use crate::fire::{self, turbo_type};
 use crate::{Driver, Effect, Sound3D, actions, kart_state, rain_cloud, stuck};
@@ -65,6 +65,52 @@ pub const ENABLED: [u8; 11] = [
     held::BOMB_3X,
     held::MISSILE_3X,
 ];
+
+/// How the roulette weighs the weapons it may give.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Odds {
+    /// Retail's item sets by place, less the weapons left out (the rest keep their odds within
+    /// the set).
+    #[default]
+    Retail,
+    /// Every weapon not left out alike, whatever the place.
+    Even,
+}
+
+/// The roulette's rules for a race. Not retail: retail gives everything in [`ENABLED`] by
+/// [`Odds::Retail`], which the default is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Roulette {
+    /// The weapons left out: a bit per `held::*` (see [`mask`]).
+    pub masked: u16,
+    pub odds: Odds,
+}
+
+impl Roulette {
+    pub fn gives(self, item: u8) -> bool {
+        ENABLED.contains(&item) && self.masked & 1 << item == 0
+    }
+
+    /// The weapons it may give, in [`ENABLED`] order.
+    pub fn weapons(self) -> impl Iterator<Item = u8> {
+        ENABLED.into_iter().filter(move |&item| self.gives(item))
+    }
+
+    fn without(self, item: u8) -> Roulette {
+        Roulette {
+            masked: self.masked | 1 << item,
+            ..self
+        }
+    }
+}
+
+/// The [`Roulette::masked`] bits of `items` (`held::*`; others are ignored).
+pub fn mask(items: &[u8]) -> u16 {
+    items
+        .iter()
+        .filter(|&&item| ENABLED.contains(&item))
+        .fold(0, |mask, &item| mask | 1 << item)
+}
 
 /// What a player calls the item `item` (a `held::*` below the roulette).
 pub fn name(item: u8) -> &'static str {
@@ -143,20 +189,26 @@ fn item_set(racers: usize, place: usize, lap: u8, random_number: &mut i32) -> us
     set
 }
 
-/// Draws an item from `set`'s table: the entry that `rng` lands on, or if that is not enabled the
-/// next one that is, wrapping round.
-fn draw(set: usize, rng: u32) -> u8 {
+/// Draws an item from `set`'s table, the entry that `rng` (0 to [`RNG_BUCKETS`]) lands on, with
+/// the entries `roulette` leaves out taken out first. Unmasked, that is retail's draw: every
+/// entry of the tables is in [`ENABLED`]. A set with nothing left, and [`Odds::Even`], draw from
+/// every weapon given alike. None if none is.
+fn draw(set: usize, rng: u32, roulette: Roulette) -> Option<u8> {
     let table: &[u8] = match set {
         0 => &RACE1,
         1 => &RACE2,
         2 => &RACE3,
         _ => &RACE4,
     };
-    let start = (rng * table.len() as u32 / RNG_BUCKETS) as usize;
-    (0..table.len())
-        .map(|n| table[(start + n) % table.len()])
-        .find(|item| ENABLED.contains(item))
-        .unwrap_or(held::TURBO)
+    let mut pool: Vec<u8> = match roulette.odds {
+        Odds::Retail => table.iter().copied().filter(|&i| roulette.gives(i)).collect(),
+        Odds::Even => Vec::new(),
+    };
+    if pool.is_empty() {
+        pool = roulette.weapons().collect();
+    }
+    pool.get((rng * pool.len() as u32 / RNG_BUCKETS) as usize)
+        .copied()
 }
 
 /// A driver with nothing in hand.
@@ -184,15 +236,28 @@ pub fn start_roulette(d: &mut Driver) {
 
 /// The roulette, one game tick (`VehPhysProc`'s item roll): it counts down and then picks.
 /// `random_number` is `sdata->randomNumber`, `warpball_held` the race's `WARPBALL_HELD`.
-pub fn tick(d: &mut Driver, racers: usize, random_number: &mut i32, warpball_held: &mut bool) {
+pub fn tick(
+    d: &mut Driver,
+    racers: usize,
+    roulette: Roulette,
+    random_number: &mut i32,
+    warpball_held: &mut bool,
+) {
     if d.held_item_id != held::ROULETTE {
+        return;
+    }
+    // Here rather than in `start_roulette`, so the crates need not know the rules: it goes the
+    // tick it started, before anything shows it.
+    if roulette.weapons().next().is_none() {
+        empty(d);
+        d.item_roll_timer = 0;
         return;
     }
     if d.item_roll_timer != 0 {
         d.item_roll_timer -= 1;
         return;
     }
-    set_held_item(d, racers, random_number, warpball_held);
+    set_held_item(d, racers, roulette, random_number, warpball_held);
 }
 
 /// The weapons that can be fired so far. A driver that holds another one throws it away with the
@@ -237,6 +302,20 @@ pub enum Launch {
     /// The warpball, which flies along the track to the leader (or, with 10 wumpa fruit, to each
     /// kart ahead in turn).
     Warpball,
+}
+
+impl Launch {
+    /// The weapon that launches it: the single one of a bomb or missile, which is what a retail
+    /// bot fires (and a [`Roulette`] masks for it).
+    pub fn held(self) -> u8 {
+        match self {
+            Launch::Bomb => held::BOMB_1X,
+            Launch::Missile => held::MISSILE_1X,
+            Launch::Mine => held::TNT,
+            Launch::Potion => held::POTION,
+            Launch::Warpball => held::WARPBALL,
+        }
+    }
 }
 
 /// `SOUND_BOMB_LAUNCH`, `SOUND_MISSILE_LAUNCH`, `VOICELINE_BOMB_LAUNCH`, `VOICELINE_MISSILE_LAUNCH`,
@@ -478,15 +557,28 @@ pub fn debug_roll(d: &mut Driver, item: u8) {
 }
 
 /// `VehPhysGeneral_SetHeldItem` for the rain cloud, which picks the weapon when it ends.
-pub fn pick(d: &mut Driver, racers: usize, random_number: &mut i32, warpball_held: &mut bool) {
-    set_held_item(d, racers, random_number, warpball_held);
+pub fn pick(
+    d: &mut Driver,
+    racers: usize,
+    roulette: Roulette,
+    random_number: &mut i32,
+    warpball_held: &mut bool,
+) {
+    set_held_item(d, racers, roulette, random_number, warpball_held);
 }
 
 /// `VehPhysGeneral_SetHeldItem` for a race of `racers`. (Battle and the crystal challenge are not
 /// here.) Only one warpball is had at a time: while `warpball_held` (`WARPBALL_HELD`), another
 /// is three missiles instead, and the one given sets it (until it fades away, see
 /// `weapon::warpball`).
-fn set_held_item(d: &mut Driver, racers: usize, random_number: &mut i32, warpball_held: &mut bool) {
+fn set_held_item(
+    d: &mut Driver,
+    racers: usize,
+    roulette: Roulette,
+    random_number: &mut i32,
+    warpball_held: &mut bool,
+) {
+    // (Drawn under `Odds::Even` too, which ignores it, so the odds do not shift the RNG.)
     let set = item_set(
         racers,
         d.driver_rank.max(0) as usize,
@@ -495,15 +587,17 @@ fn set_held_item(d: &mut Driver, racers: usize, random_number: &mut i32, warpbal
     );
     // (`MixRNG_Scramble() >> 3) % 200`; the shift is of an unsigned word.)
     let rng = (math::mix_rng_scramble(random_number) as u32 >> RNG_SHIFT) % RNG_BUCKETS;
-    let mut item = draw(set, rng);
-    if item == held::WARPBALL {
-        if *warpball_held {
-            item = held::MISSILE_3X;
-        } else {
+    let mut item = draw(set, rng, roulette);
+    if item == Some(held::WARPBALL) {
+        if !*warpball_held {
             *warpball_held = true;
+        } else if roulette.gives(held::MISSILE_3X) {
+            item = Some(held::MISSILE_3X);
+        } else {
+            item = draw(set, rng, roulette.without(held::WARPBALL));
         }
     }
-    give(d, item);
+    give(d, item.unwrap_or(held::NONE));
 }
 
 /// What the roulette does with the item it picked.
@@ -536,10 +630,10 @@ mod tests {
         assert_eq!(d.held_item_id, held::ROULETTE);
         let mut rng = 1;
         for _ in 0..ROLL_TICKS {
-            tick(&mut d, 8, &mut rng, &mut false);
+            tick(&mut d, 8, Roulette::default(), &mut rng, &mut false);
             assert_eq!(d.held_item_id, held::ROULETTE);
         }
-        tick(&mut d, 8, &mut rng, &mut false);
+        tick(&mut d, 8, Roulette::default(), &mut rng, &mut false);
         assert!(d.held_item_id <= held::MISSILE_3X);
         assert_ne!(d.held_item_id, held::SPRING);
     }
@@ -702,7 +796,7 @@ mod tests {
         for seed in 0..200 {
             let mut d = driver();
             let mut rng = seed;
-            set_held_item(&mut d, 8, &mut rng, &mut false);
+            set_held_item(&mut d, 8, Roulette::default(), &mut rng, &mut false);
             let triple = matches!(d.held_item_id, held::BOMB_3X | held::MISSILE_3X);
             assert_eq!(d.num_held_items, if triple { 3 } else { 0 });
         }
@@ -710,6 +804,7 @@ mod tests {
 
     #[test]
     fn the_tables_are_drawn_from_as_the_game_does() {
+        let draw = |set, rng| draw(set, rng, Roulette::default()).unwrap();
         // Race 1: entry 0 of 20 is a potion, the last is a shield.
         assert_eq!(draw(0, 0), held::POTION);
         assert_eq!(draw(0, 199), held::SHIELD);
@@ -724,6 +819,73 @@ mod tests {
                 assert!(ENABLED.contains(&draw(set, rng)));
             }
         }
+    }
+
+    fn odds(set: usize, roulette: Roulette) -> Vec<(u8, usize)> {
+        let mut counts = std::collections::BTreeMap::new();
+        for rng in 0..RNG_BUCKETS {
+            *counts.entry(draw(set, rng, roulette).unwrap()).or_default() += 1;
+        }
+        counts.into_iter().collect()
+    }
+
+    #[test]
+    fn a_masked_weapons_share_spreads_over_the_rest_of_the_set() {
+        // Race 1 is 8 potions, 8 TNT, 2 bombs, a turbo and a shield in 20: without the potion,
+        // the TNT is 8 of 12, not 16 of 20.
+        let roulette = Roulette {
+            masked: mask(&[held::POTION]),
+            ..Roulette::default()
+        };
+        // (Of the 200 buckets, which 12 do not divide.)
+        assert_eq!(
+            odds(0, roulette),
+            [
+                (held::TURBO, 17),
+                (held::BOMB_1X, 33),
+                (held::TNT, 134),
+                (held::SHIELD, 16)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_set_with_nothing_left_draws_from_every_weapon_given() {
+        // No clock in race 1.
+        let roulette = Roulette {
+            masked: mask(&ENABLED) & !mask(&[held::CLOCK]),
+            ..Roulette::default()
+        };
+        assert_eq!(odds(0, roulette), [(held::CLOCK, 200)]);
+        let none = Roulette {
+            masked: mask(&ENABLED),
+            ..Roulette::default()
+        };
+        assert_eq!(draw(0, 0, none), None);
+    }
+
+    #[test]
+    fn even_odds_ignore_the_place() {
+        let roulette = Roulette {
+            masked: mask(&[held::TURBO, held::BOMB_1X, held::MISSILE_1X]),
+            odds: Odds::Even,
+        };
+        let even = odds(0, roulette);
+        assert_eq!(even, odds(3, roulette));
+        assert_eq!(even.len(), ENABLED.len() - 3);
+        assert!(even.iter().all(|&(_, n)| n == 200 / 8));
+    }
+
+    #[test]
+    fn a_roulette_with_nothing_to_give_is_gone() {
+        let mut d = driver();
+        start_roulette(&mut d);
+        let none = Roulette {
+            masked: mask(&ENABLED),
+            ..Roulette::default()
+        };
+        tick(&mut d, 8, none, &mut 1, &mut false);
+        assert_eq!((d.held_item_id, d.item_roll_timer), (held::NONE, 0));
     }
 
     #[test]
@@ -742,7 +904,7 @@ mod tests {
             d.driver_rank = 7;
             d.lap_index = 1;
             let mut r = rng;
-            set_held_item(&mut d, 8, &mut r, held);
+            set_held_item(&mut d, 8, Roulette::default(), &mut r, held);
             (d.held_item_id, d.num_held_items)
         };
         let mut held = false;

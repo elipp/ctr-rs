@@ -704,7 +704,7 @@ impl Lobby {
 
     /// Starts the race on `track` (the host only), with the bots of the series: its brain bots
     /// (the session takes as many as there is room for), or its retail ones.
-    fn start(&self, track: u32, laps: u8) {
+    fn start(&self, track: u32, rules: net::Rules) {
         if let Some(session) = &self.session {
             self.provide(session, track);
             let (brains, retail) = self
@@ -713,7 +713,7 @@ impl Lobby {
                 .map(|s| (s.brains.clone(), s.retail.clone()))
                 .unwrap_or_default();
             session.set_bots(brains);
-            session.start(track, Self::hash_of(track), laps, retail);
+            session.start(track, Self::hash_of(track), rules, retail);
             self.list(&maps::name(track));
         }
     }
@@ -767,6 +767,18 @@ impl Lobby {
         if let Some(session) = &self.session {
             session.ready();
         }
+    }
+}
+
+/// The rules of a race we host with `laps` laps. Read at each start, so the wizard's weapons
+/// apply from the next race on, a cup's included. Without a seed every race's RNG would start at
+/// `RANDOM_NUMBER_INIT`.
+fn rules(laps: u8, config: &crate::config::Config, now: f32) -> net::Rules {
+    net::Rules {
+        laps,
+        masked_weapons: vehicle::item::mask(&config.masked_weapons),
+        even_odds: config.even_weapon_odds,
+        seed: cup::random_seed(now) as u16,
     }
 }
 

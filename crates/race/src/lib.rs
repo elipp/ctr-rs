@@ -369,6 +369,8 @@ pub struct Race {
     pub kart_collisions: bool,
     /// How many laps the race has (`gGT->numLaps`). A rule of the race, like the one above.
     pub laps: u8,
+    /// What the weapon roulette gives, and the retail bots fire. A rule of the race.
+    pub roulette: vehicle::item::Roulette,
     /// How many karts have finished the race (`numPlayersFinishedRace`): the next to finish is
     /// that place.
     pub finished: i16,
@@ -424,6 +426,7 @@ impl Race {
             tick: 0,
             kart_collisions,
             laps: DEFAULT_LAPS,
+            roulette: vehicle::item::Roulette::default(),
             finished: 0,
             finish_ticks: Vec::new(),
             winner: None,
@@ -992,6 +995,7 @@ impl Race {
             vehicle::cloud::tick(
                 &mut kart.driver,
                 racers,
+                self.roulette,
                 env.elapsed_time_ms,
                 &mut self.objects.random_number,
                 &mut self.weapons.warpball_held,
@@ -1006,6 +1010,7 @@ impl Race {
             vehicle::item::tick(
                 &mut kart.driver,
                 racers,
+                self.roulette,
                 &mut self.objects.random_number,
                 &mut self.weapons.warpball_held,
             );
@@ -1212,6 +1217,10 @@ impl Race {
     /// and then (Nitro or red after the first lap, half the time), or fires a bomb or a missile;
     /// the one behind a missile (not on its last lap) or a bomb. Then it waits a while
     /// (`weaponCooldown`). The weapons go off on the next tick, as ones fired this tick do.
+    ///
+    /// Not retail: a weapon the race's roulette leaves out is not fired (a TNT or beaker is the
+    /// other one, if that is not left out too). The RNG is drawn all the same, so that a race
+    /// without a mask is retail's.
     fn bot_weapons(
         &mut self,
         level: &Level,
@@ -1246,23 +1255,30 @@ impl Race {
                         }
                         // (Retail picks by the parity of the race's milliseconds, which here go
                         // by 32: the tick's stands in.)
-                        let launch = if self.tick & 1 != 0 {
-                            vehicle::item::Launch::Mine
+                        let (mine, potion) =
+                            (vehicle::item::Launch::Mine, vehicle::item::Launch::Potion);
+                        let (picked, other) = if self.tick & 1 != 0 {
+                            (mine, potion)
                         } else {
-                            vehicle::item::Launch::Potion
+                            (potion, mine)
                         };
-                        Some((launch, BOT_VOICE_MINE))
+                        [picked, other]
+                            .into_iter()
+                            .find(|l| self.roulette.gives(l.held()))
+                            .map(|launch| (launch, BOT_VOICE_MINE))
                     }
                     1 => Some((vehicle::item::Launch::Bomb, BOT_VOICE_BOMB)),
                     2 => Some((vehicle::item::Launch::Missile, BOT_VOICE_MISSILE)),
                     _ => None,
-                };
+                }
+                .filter(|(launch, _)| self.roulette.gives(launch.held()));
                 if let Some((launch, voice)) = shot {
                     self.bot_fires(bot, launch, voice, level, doors, ticks);
-                    if roll == 0 {
-                        self.karts[bot].driver.num_wumpas = 0;
-                    }
                     self.bot_cooldown(bot);
+                }
+                // (Also for a shot left out, which would leave the bot juiced.)
+                if roll == 0 {
+                    self.karts[bot].driver.num_wumpas = 0;
                 }
             }
             let p = &self.karts[player].driver;
@@ -1281,7 +1297,8 @@ impl Race {
                     Some(vehicle::item::Launch::Bomb)
                 } else {
                     None
-                };
+                }
+                .filter(|launch| self.roulette.gives(launch.held()));
                 if let Some(launch) = launch {
                     self.bot_fires(bot, launch, BOT_VOICE_MISSILE, level, doors, ticks);
                     self.bot_cooldown(bot);

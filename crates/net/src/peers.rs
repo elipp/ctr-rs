@@ -33,8 +33,8 @@ pub(crate) struct HostState {
     /// The players of the race that left it. They are not told of in the lobby, and go from
     /// `guests` when the next race starts.
     pub(crate) gone: HashSet<EndpointId>,
-    /// The track, its hash and the laps of a start that waits for the Hellos.
-    pub(crate) start_wanted: Option<(u32, u64, u8, crate::RetailBots)>,
+    /// The track, its hash and the rules of a start that waits for the Hellos.
+    pub(crate) start_wanted: Option<(u32, u64, crate::Rules, crate::RetailBots)>,
     /// The maps being sent.
     pub(crate) transfers: Transfers,
     /// Who is ready, before tick 0.

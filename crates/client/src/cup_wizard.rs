@@ -3,10 +3,9 @@
 //! item. Each `Kind` is handled generically there.
 //!
 //! Every effect is an [`Action`], so `lobby::commands::refusal` gates the wizard exactly as it
-//! gates the command line. Don't pre-check lobby state here beyond hiding items.
-//!
-//! `Config::masked_weapons` is deliberately not networked and not read by the roulette yet
-//! (user's call, 2026-11-15).
+//! gates the command line. Don't pre-check lobby state here beyond hiding items. The exception
+//! is the weapons page, which edits `Config` directly: the host reads it at each race's start
+//! (`lobby::rules`).
 
 use vehicle::item::{self, ENABLED};
 
@@ -42,6 +41,7 @@ pub(crate) enum CupItem {
     WeaponGrid,
     AllWeapons,
     NoWeapons,
+    Odds,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,11 +214,29 @@ pub(crate) fn weapon_items(config: &Config) -> Vec<Entry> {
         ),
         entry(Item::Cup(CupItem::AllWeapons), "All on"),
         entry(Item::Cup(CupItem::NoWeapons), "All off"),
+        Entry::new(
+            Item::Cup(CupItem::Odds),
+            "Odds",
+            Kind::Cycle(if config.even_weapon_odds { "Even" } else { "Retail" }.into()),
+        )
+        .inline(),
         entry(Item::Back, "Back"),
     ]
 }
 
-pub(crate) fn step(item: CupItem, way: i32, slot: &mut Option<Draft>, config: &Config) -> bool {
+/// `changed` is `PauseMenu::unsaved`, for the items that step `config` rather than the draft.
+pub(crate) fn step(
+    item: CupItem,
+    way: i32,
+    slot: &mut Option<Draft>,
+    config: &mut Config,
+    changed: &mut bool,
+) -> bool {
+    if item == CupItem::Odds {
+        config.even_weapon_odds ^= true;
+        *changed = true;
+        return true;
+    }
     let draft = draft(slot, config);
     match item {
         CupItem::Saved => {
@@ -304,7 +322,12 @@ pub(crate) fn take(item: CupItem, take: Take) -> Go {
     };
     match item {
         // Handled by kind in pause.rs (Cycle, Field, Grid).
-        CupItem::Saved | CupItem::Track(_) | CupItem::Laps | CupItem::Name | CupItem::WeaponGrid => {}
+        CupItem::Saved
+        | CupItem::Track(_)
+        | CupItem::Laps
+        | CupItem::Name
+        | CupItem::WeaponGrid
+        | CupItem::Odds => {}
         CupItem::AddTrack => {
             let draft = draft(slot, config);
             let all = maps::cycle();
@@ -397,14 +420,14 @@ mod tests {
 
     #[test]
     fn the_laps_stay_in_range() {
-        let config = Config::default();
+        let mut config = Config::default();
         let mut slot = None;
         for _ in 0..50 {
-            step(CupItem::Laps, 1, &mut slot, &config);
+            step(CupItem::Laps, 1, &mut slot, &mut config, &mut false);
         }
         assert_eq!(slot.as_ref().unwrap().laps, MAX_LAPS);
         for _ in 0..50 {
-            step(CupItem::Laps, -1, &mut slot, &config);
+            step(CupItem::Laps, -1, &mut slot, &mut config, &mut false);
         }
         assert_eq!(slot.as_ref().unwrap().laps, 1);
     }

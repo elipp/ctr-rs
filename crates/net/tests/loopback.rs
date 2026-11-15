@@ -5,6 +5,13 @@ use net::{Event, Pad, Session};
 /// The version of the sim the sessions say they play.
 const BUILD: u32 = 1;
 
+const RULES: net::Rules = net::Rules {
+    laps: 3,
+    masked_weapons: 0x0300,
+    even_odds: true,
+    seed: 1234,
+};
+
 fn wait_for(session: &Session, what: &str, mut f: impl FnMut(Event) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
@@ -64,7 +71,7 @@ fn a_host_and_two_peers_race_over_a_mesh() {
         difficulty: 0xf0,
         cup: false,
     };
-    host.start(5, 0, 3, retail.clone());
+    host.start(5, 0, RULES, retail.clone());
 
     // Everyone hears of the race and its bots, and says it is ready.
     let mut slots = [0; 3];
@@ -77,13 +84,13 @@ fn a_host_and_two_peers_race_over_a_mesh() {
                 players,
                 track,
                 hash,
-                laps,
+                rules,
                 bots,
                 retail: heard,
             } => {
                 assert_eq!(hash, 0);
                 assert_eq!(bots, 0);
-                assert_eq!(laps, 3);
+                assert_eq!(rules, RULES);
                 assert_eq!(heard, retail);
                 assert_eq!(characters, [4, 9, 11]);
                 assert_eq!(players.len(), 3);
@@ -183,7 +190,7 @@ fn a_character_changed_between_races_is_the_one_that_races() {
     std::thread::sleep(Duration::from_secs(2));
     let sessions = [&host, &guest];
 
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in sessions {
         wait_for(session, "the first start", |e| match e {
             Event::Started { characters, .. } => {
@@ -201,7 +208,7 @@ fn a_character_changed_between_races_is_the_one_that_races() {
     host.set_character(4);
     guest.set_character(9);
     std::thread::sleep(Duration::from_millis(500));
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in sessions {
         wait_for(session, "the second start", |e| match e {
             Event::Started { characters, .. } => {
@@ -339,7 +346,7 @@ fn a_player_who_leaves_ends_with_the_most_pads_anyone_had() {
         matches!(e, Event::PeerJoined(_))
     });
     std::thread::sleep(Duration::from_secs(8));
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in [&host, &first, &second] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
         session.ready();
@@ -397,7 +404,7 @@ fn a_player_who_left_the_race_is_not_in_the_lobby_after_it() {
         matches!(e, Event::PeerJoined(_))
     });
     std::thread::sleep(Duration::from_secs(8));
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in [&host, &first, &second] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
         session.ready();
@@ -491,7 +498,7 @@ fn the_first_guest_hosts_the_lobby_when_the_host_leaves() {
     }
     // It works as a lobby: the new host starts a race with the guest.
     std::thread::sleep(Duration::from_secs(1));
-    first.start(5, 0, 3, net::RetailBots::default());
+    first.start(5, 0, RULES, net::RetailBots::default());
     for session in [&first, &second] {
         wait_for(session, "the start", |e| match e {
             Event::Started { characters, .. } => {
@@ -543,7 +550,7 @@ fn the_last_guest_hosts_a_lobby_of_one() {
 fn the_race_stops_and_the_lobby_goes_on_when_the_host_leaves_it() {
     let (host, guests) = lobby_of(2);
     let [first, second] = <[Session; 2]>::try_from(guests).ok().unwrap();
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in [&host, &first, &second] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
         session.ready();
@@ -581,7 +588,7 @@ fn the_race_stops_and_the_lobby_goes_on_when_the_host_leaves_it() {
 #[test]
 fn every_player_has_one_connection_to_each_other_in_a_race() {
     let (host, guests) = lobby_of(2);
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     let sessions = [&host, &guests[0], &guests[1]];
     for session in sessions {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
@@ -679,7 +686,7 @@ fn the_host_hands_the_lobby_over_to_a_guest() {
     }
     // It works as a lobby, and the old host is a guest in it: the new host starts the race.
     std::thread::sleep(Duration::from_secs(1));
-    first.start(5, 0, 3, net::RetailBots::default());
+    first.start(5, 0, RULES, net::RetailBots::default());
     for session in [&first, &second, &host] {
         wait_for(session, "the start", |e| match e {
             Event::Started { characters, .. } => {
@@ -713,7 +720,7 @@ fn a_handover_is_turned_down_in_a_race() {
     let (host, guests) = lobby_of(1);
     let [guest] = <[Session; 1]>::try_from(guests).ok().unwrap();
     let ids = lobby_ids(&host, 2);
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in [&host, &guest] {
         wait_for(session, "the start", |e| matches!(e, Event::Started { .. }));
     }
@@ -750,7 +757,7 @@ fn the_hosts_bots_fill_the_race_and_their_pads_reach_the_guests() {
     }
     // More characters than it takes: the race is filled up to `MAX_PLAYERS`, no further.
     host.set_bots((0..10).collect());
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     let players = net::MAX_PLAYERS;
     let bots = players - 2;
     for (i, session) in sessions.into_iter().enumerate() {
@@ -857,7 +864,7 @@ fn retail_bots_take_the_place_of_the_hosts_bots_and_fill_up_to_max_players() {
         difficulty: 0xa0,
         cup: false,
     };
-    host.start(5, 0, 3, retail);
+    host.start(5, 0, RULES, retail);
     for (i, session) in sessions.into_iter().enumerate() {
         wait_for(session, "the start", |e| match e {
             Event::Started {
@@ -900,7 +907,7 @@ fn extra_players_take_slots_and_their_pads_reach_everyone() {
     for s in sessions {
         s.poll();
     }
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     // Host, guest, the host's extra, then the guest's.
     let locals = [vec![0, 2], vec![1, 3, 4]];
     for (i, session) in sessions.into_iter().enumerate() {
@@ -996,7 +1003,7 @@ fn extras_changed_in_the_lobby_are_the_ones_that_race_unless_characters_are_fixe
     guest.set_extras(&[12]);
     host.set_extras(&[13]);
     std::thread::sleep(Duration::from_millis(500));
-    host.start(5, 0, 3, net::RetailBots::default());
+    host.start(5, 0, RULES, net::RetailBots::default());
     for session in sessions {
         wait_for(session, "the start", |e| match e {
             Event::Started { characters, .. } => {
