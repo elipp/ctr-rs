@@ -80,7 +80,8 @@ fn pack() -> DramFile {
     DramFile::parse(&pack).expect("parse racer pack")
 }
 
-/// A picture of the HUD as a texture, for the UI to cut from.
+/// An atlas as a texture, sampled nearest: the HUD's, for the UI to cut from, or a model's. Shared
+/// with any other of the same texels ([`crate::shared_image`]).
 pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>) -> Handle<Image> {
     let mut image = Image::new(
         Extent3d {
@@ -94,5 +95,5 @@ pub(crate) fn atlas_image(atlas: render::mesh::Atlas, images: &mut Assets<Image>
         RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::nearest();
-    images.add(image)
+    crate::shared_image(images, image)
 }

@@ -230,7 +230,3 @@ pub fn beat(
 pub fn stage(what: &str) {
     stage_page(what, core::arch::wasm32::memory_size(0) as f64 * 65536.0);
 }
-
-/// Without `wasm-debug` the page is told nothing.
-#[cfg(not(feature = "wasm-debug"))]
-pub fn stage(_what: &str) {}

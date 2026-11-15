@@ -4,10 +4,7 @@
 
 use std::io;
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use loader::dram::DramFile;
 use loader::model::{Model, parse_pack_models};
 use loader::vram::Vram;
@@ -69,21 +66,10 @@ pub fn spawn(
         for pipe in 0..2 {
             // Unscaled: the fire's own size is set every frame.
             let data = mesh::model_mesh(header, pose, vram, [0x1000; 3]);
-            let mut atlas = Image::new(
-                Extent3d {
-                    width: data.atlas.width as u32,
-                    height: data.atlas.height as u32,
-                    depth_or_array_layers: 1,
-                },
-                TextureDimension::D2,
-                data.atlas.rgba,
-                TextureFormat::Rgba8UnormSrgb,
-                RenderAssetUsages::RENDER_WORLD,
-            );
-            atlas.sampler = ImageSampler::nearest();
+            let atlas = crate::hud::atlas_image(data.atlas, images);
             let base = StandardMaterial {
                 base_color: Color::WHITE,
-                base_color_texture: Some(crate::shared_image(images, atlas)),
+                base_color_texture: Some(atlas),
                 unlit: true,
                 cull_mode: None,
                 double_sided: true,
