@@ -17,6 +17,10 @@ debug = ["bevy/debug"]
 # The browser build draws through WebGPU instead of WebGL2 (`web/build.sh release webgpu`). Bevy
 # picks the backend as it is compiled: a browser without WebGPU gets no picture from this build.
 webgpu = ["bevy/webgpu"]
+# The browser build tells the page how it is doing (memory, frame rate, what it is about to load and
+# how many images and meshes there are), for the page to show after a crash or a page that the
+# browser ended: `FEATURES=wasm-debug web/build.sh`. Off, the game sends the page none of it.
+wasm-debug = []
 
 [dependencies]
 # Not Bevy's defaults: the game draws no 2D sprites and uses no glTF, post-processing, anti-aliasing

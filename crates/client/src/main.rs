@@ -216,7 +216,7 @@ fn main() {
     let plugins = plugins.disable::<bevy::app::PanicHandlerPlugin>();
     app.add_plugins(plugins);
     // The page keeps the last of these for when the browser ends it without a word.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "wasm-debug"))]
     app.add_systems(Last, web::beat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(window_icon::WindowIconPlugin);

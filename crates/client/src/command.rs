@@ -511,10 +511,10 @@ impl Action {
 
     /// Nothing (the panel), `confetti auto|on|off`, `flash`, `finish`, `speed <factor>`,
     /// `freeze on|off`, `step`, `weather on|off`, `rain on|off`, `tracker ..` or
-    /// `loading-screen <duration>`.
+    /// `loading-screen [duration]`, 3s if left out.
     fn fx(line: &str) -> Result<crate::fx::Fx, String> {
         use crate::fx::{Chaser, Force, Fx, SPEED_RANGE};
-        const USAGE: &str = "Usage: /debug fx [confetti auto|on|off | flash | finish | speed <factor> | freeze on|off | step | weather on|off | rain on|off | tracker missile|warp [duration, 5s] | loading-screen <duration, like 3s>]";
+        const USAGE: &str = "Usage: /debug fx [confetti auto|on|off | flash | finish | speed <factor> | freeze on|off | step | weather on|off | rain on|off | tracker missile|warp [duration, 5s] | loading-screen [duration, 3s]]";
         let (what, value) = word(line);
         let on_off = || match value {
             "on" => Ok(true),
@@ -561,7 +561,11 @@ impl Action {
                 }
                 Fx::Tracker(kind, ms as u32)
             }
-            "loading-screen" => match milliseconds(value) {
+            "loading-screen" => match if value.is_empty() {
+                Some(3000.0)
+            } else {
+                milliseconds(value)
+            } {
                 Some(ms) if (0.0..=LOADING_SCREEN_MAX_MS).contains(&ms) => {
                     Fx::LoadingScreen(ms as u32)
                 }
@@ -1938,7 +1942,7 @@ mod tests {
             fx("debug fx loading-screen 3s"),
             Some(Fx::LoadingScreen(3000))
         );
-        assert_eq!(fx("debug fx loading-screen"), None);
+        assert_eq!(fx("debug fx loading-screen"), Some(Fx::LoadingScreen(3000)));
         assert_eq!(fx("debug fx loading-screen 61s"), None);
         assert!(Action::parse("debug fx speed 0").is_err());
         assert!(Action::parse("debug fx speed fast").is_err());

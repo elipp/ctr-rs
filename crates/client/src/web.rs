@@ -118,12 +118,14 @@ extern "C" {
     /// Tells the page, once a second, how the game is doing: the size of its memory in bytes, the
     /// frames drawn so far, the frame rate and whether a race is being driven. If the browser
     /// ends the page without a word, the page's trail has the last of these.
+    #[cfg(feature = "wasm-debug")]
     #[wasm_bindgen(js_namespace = window, js_name = ctrBeat)]
     fn beat_page(memory: f64, frames: f64, fps: f64, driving: bool);
 
     /// Tells the page what the game is about to do and how big its memory is, in bytes; the
     /// page writes it to its trail at once, as the browser may end the page in the work that
     /// follows.
+    #[cfg(feature = "wasm-debug")]
     #[wasm_bindgen(js_namespace = window, js_name = ctrStage)]
     fn stage_page(what: &str, memory: f64);
 
@@ -178,12 +180,16 @@ pub fn take_dropped() -> Vec<(String, Vec<u8>)> {
 
 /// Once a second, tells the page how the game is doing (`ctrBeat`). A page that a phone ends for
 /// using too much memory leaves nothing else behind.
+#[cfg(feature = "wasm-debug")]
 pub fn beat(
     time: bevy::prelude::Res<bevy::prelude::Time<bevy::prelude::Real>>,
     diagnostics: bevy::prelude::Res<bevy::diagnostic::DiagnosticsStore>,
     drive: Option<bevy::prelude::Res<crate::drive::Drive>>,
+    images: bevy::prelude::Res<bevy::prelude::Assets<bevy::prelude::Image>>,
+    meshes: bevy::prelude::Res<bevy::prelude::Assets<bevy::prelude::Mesh>>,
     mut frames: bevy::prelude::Local<u64>,
     mut last: bevy::prelude::Local<f32>,
+    mut shown: bevy::prelude::Local<(usize, usize, u64)>,
 ) {
     *frames += 1;
     let now = time.elapsed_secs();
@@ -197,10 +203,34 @@ pub fn beat(
         .unwrap_or(0.0);
     let memory = core::arch::wasm32::memory_size(0) as f64 * 65536.0;
     beat_page(memory, *frames as f64, fps, drive.is_some());
+
+    // What the assets add up to, logged when it changes (the page keeps the last lines): the
+    // images' texels as the GPU holds them, and the meshes' vertex data.
+    let texels: u64 = images
+        .iter()
+        .map(|(_, i)| {
+            let size = i.texture_descriptor.size;
+            let bytes = i.texture_descriptor.format.block_copy_size(None).unwrap_or(4);
+            size.width as u64 * size.height as u64 * size.depth_or_array_layers as u64 * bytes as u64
+        })
+        .sum();
+    let counts = (images.len(), meshes.len(), texels >> 20);
+    if counts != *shown {
+        *shown = counts;
+        log_line(&format!(
+            "INFO assets: {} images, {} MB of texels, {} meshes",
+            counts.0, counts.2, counts.1
+        ));
+    }
 }
 
 /// Tells the page what the game is about to do, with the size of its memory: for a load that the
 /// browser may end the page in, which leaves nothing else behind.
+#[cfg(feature = "wasm-debug")]
 pub fn stage(what: &str) {
     stage_page(what, core::arch::wasm32::memory_size(0) as f64 * 65536.0);
 }
+
+/// Without `wasm-debug` the page is told nothing.
+#[cfg(not(feature = "wasm-debug"))]
+pub fn stage(_what: &str) {}

@@ -8,7 +8,7 @@
 //! * `freeze on|off`, `step`: the race stops, and goes on one tick at a time (offline)
 //! * `tracker missile|warp [duration]`: a spoofed missile (or warpball) chasing us, 5s if left out
 //! * `weather on|off`, `rain on|off`: the level's rain or snow, and the red beaker's rain
-//! * `loading-screen <duration>`: the flag comes in over the game, stays, and leaves (`loading.rs`)
+//! * `loading-screen [duration]`: the flag comes in over the game, stays, and leaves (`loading.rs`)
 //!
 //! Its last line is `/debug podium` (`podium.rs`): the podium of a cup's end, and back. The panel
 //! stays up there, though the podium is no race.

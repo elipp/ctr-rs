@@ -542,8 +542,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ),
                     takes(
                         "loading-screen",
-                        "Bring the loading screen in over the game",
-                        "<duration, like 3s>",
+                        "Show the loading screen grid flag",
+                        "[duration, 3s]",
                     ),
                 ],
             ),

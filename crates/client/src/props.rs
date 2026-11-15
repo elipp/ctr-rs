@@ -536,6 +536,8 @@ pub fn spawn(
     // The atlas of a model, made once: it holds the model's textures only, so every instance of
     // it (a level has dozens of crates) shares the one image.
     let mut atlases: HashMap<u32, Handle<Image>> = Default::default();
+    // The parts of a model at a scale, before the instance winds them.
+    let mut mesh_parts: HashMap<(u32, [i16; 3]), [mesh::MeshPart; PARTS]> = Default::default();
     // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
     let show_letters = std::env::var_os("CTR_LETTERS").is_some();
     for (n, inst) in level
@@ -585,12 +587,53 @@ pub fn spawn(
                 ),
             }
         }
-        let mut data = mesh::model_mesh(
-            banner.as_ref().map_or(header, |b| &b.header),
-            frame,
-            vram,
-            inst_scale,
-        );
+        // The mesh of a model at a scale is the same for every instance of it (the crates of a
+        // level are dozens), so it is built once, and with it the atlas. The flame jet is lit
+        // per instance and the banner is made over for it: those are built each time.
+        let cacheable = banner.is_none() && inst.model_name != "flamejet";
+        let key = (inst.model, inst_scale);
+        let cached = cacheable
+            .then(|| mesh_parts.get(&key).cloned())
+            .flatten()
+            .filter(|_| atlases.contains_key(&inst.model));
+        let (mut parts, atlas) = match cached {
+            Some(parts) => (parts, atlases[&inst.model].clone()),
+            None => {
+                let data = mesh::model_mesh(
+                    banner.as_ref().map_or(header, |b| &b.header),
+                    frame,
+                    vram,
+                    inst_scale,
+                );
+                // (The banner's model is made over for it, so its atlas is its own.)
+                let atlas = match atlases.get(&inst.model) {
+                    Some(atlas) if banner.is_none() => atlas.clone(),
+                    _ => {
+                        let mut image = Image::new(
+                            bevy::render::render_resource::Extent3d {
+                                width: data.atlas.width as u32,
+                                height: data.atlas.height as u32,
+                                depth_or_array_layers: 1,
+                            },
+                            bevy::render::render_resource::TextureDimension::D2,
+                            data.atlas.rgba,
+                            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                        );
+                        image.sampler = bevy::image::ImageSampler::nearest();
+                        let handle = images.add(image);
+                        if banner.is_none() {
+                            atlases.insert(inst.model, handle.clone());
+                        }
+                        handle
+                    }
+                };
+                if cacheable {
+                    mesh_parts.insert(key, data.parts.clone());
+                }
+                (data.parts, atlas)
+            }
+        };
 
         // The camera can be inside a crate or a roller, which then must not be there: they are
         // culled like the level.
@@ -599,37 +642,13 @@ pub fn spawn(
             Some(Slot::Crate(_) | Slot::Roller(_) | Slot::Drum(_) | Slot::Fruit(_))
         );
         if convex {
-            mesh::wind_outward(&mut data.parts);
+            mesh::wind_outward(&mut parts);
         }
         // (A crate or a fruit on ice; as if there were one player.)
         let mirror = matches!(by_instance.get(&n), Some(Slot::Crate(_) | Slot::Fruit(_)))
             .then(|| instance::reflect::split_line(level, inst))
             .flatten()
-            .map(|line| (line as f32 * SCALE, data.parts.clone()));
-        let make_atlas = || {
-            let mut atlas = Image::new(
-                bevy::render::render_resource::Extent3d {
-                    width: data.atlas.width as u32,
-                    height: data.atlas.height as u32,
-                    depth_or_array_layers: 1,
-                },
-                bevy::render::render_resource::TextureDimension::D2,
-                data.atlas.rgba.clone(),
-                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            );
-            atlas.sampler = bevy::image::ImageSampler::nearest();
-            atlas
-        };
-        // (The banner's model is made over for it, so its atlas is its own.)
-        let atlas = if banner.is_some() {
-            images.add(make_atlas())
-        } else {
-            atlases
-                .entry(inst.model)
-                .or_insert_with(|| images.add(make_atlas()))
-                .clone()
-        };
+            .map(|line| (line as f32 * SCALE, parts.clone()));
         let base = StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: Some(atlas),
@@ -694,7 +713,7 @@ pub fn spawn(
                 }
                 let mut s = shown(slot);
                 s.parts = spawn_parts(
-                    data.parts,
+                    parts,
                     &base,
                     Transform::default(),
                     Some(parent),
@@ -724,7 +743,7 @@ pub fn spawn(
             Some(&slot @ Slot::Turtle(_)) => {
                 let mut s = shown(slot);
                 s.parts = spawn_parts(
-                    data.parts,
+                    parts,
                     &base,
                     transform,
                     None,
@@ -795,7 +814,7 @@ pub fn spawn(
             );
         }
         let parts = spawn_parts(
-            data.parts,
+            parts,
             base,
             transform,
             parent,
