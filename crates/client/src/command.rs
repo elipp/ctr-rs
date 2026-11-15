@@ -97,6 +97,13 @@ pub enum Action {
     CupStart(String),
     /// Drive a cup of this many of the game's racing tracks, drawn at random (the host only).
     CupRandom { tracks: usize, laps: u8 },
+    /// For the cup wizard's Start: `CupStart` only takes a saved cup's name, and the draft may be
+    /// unsaved. Not a command.
+    CupDrive {
+        name: String,
+        tracks: Vec<u32>,
+        laps: u8,
+    },
     /// Forget the cup of that name.
     CupDelete(String),
     /// Pause the race for everyone, or the countdown to a cup's next race (the host only).

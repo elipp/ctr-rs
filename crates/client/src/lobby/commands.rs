@@ -82,15 +82,15 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "Only the host of a lobby can do that"
         }
         Action::StopRace if lobby.online.is_none() && lobby.series.is_none() => "No race to stop",
-        Action::CupStart(_) | Action::CupRandom { .. } if !lobby.is_open() || lobby.joined => {
+        Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. } if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::CupStart(_) | Action::CupRandom { .. }
+        Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.series.as_ref().is_some_and(|s| s.paused) =>
         {
             "A cup is paused (/cup resume, or /cup stop to end it)"
         }
-        Action::CupStart(_) | Action::CupRandom { .. }
+        Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.online.is_some() || lobby.series.is_some() =>
         {
             net::NOT_NOW
@@ -119,7 +119,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "This is the cup's first track"
         }
         Action::CupResume if !lobby.is_paused() => "Not paused (/cup pause)",
-        Action::StartRace | Action::RestartRace | Action::CupStart(_) | Action::CupRandom { .. }
+        Action::StartRace | Action::RestartRace | Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.countdown.is_some() =>
         {
             net::NOT_NOW
@@ -153,7 +153,7 @@ pub(super) fn pause_key(
     lobby: Res<Lobby>,
     mut actions: MessageWriter<Action>,
 ) {
-    if menu.capturing.is_some()
+    if menu.takes_keys()
         || !lobby.is_open()
         || !config.controls.just_pressed(Control::PauseRace, &keys)
     {
@@ -379,12 +379,7 @@ pub(super) fn run(
                 continue;
             }
             Action::CupRandom { tracks, laps } => {
-                // (The time mixed in for the web, whose `RandomState` is not random.)
-                let seed = std::hash::BuildHasher::hash_one(
-                    &std::collections::hash_map::RandomState::new(),
-                    now.to_bits(),
-                );
-                let tracks = super::cup::random_tracks(*tracks, seed);
+                let tracks = super::cup::random_tracks(*tracks, super::cup::random_seed(now));
                 let names: Vec<String> = tracks.iter().map(|&id| maps::name(id)).collect();
                 console!("Random cup, {laps} laps each: {}", names.join(", "));
                 let def = CupDef {
@@ -393,6 +388,15 @@ pub(super) fn run(
                     laps: *laps,
                 };
                 lobby.start_series(Series::cup(&def, tracks), now);
+                continue;
+            }
+            Action::CupDrive { name, tracks, laps } => {
+                let def = CupDef {
+                    name: name.clone(),
+                    tracks: tracks.iter().map(|&id| maps::stable_name(id)).collect(),
+                    laps: *laps,
+                };
+                lobby.start_series(Series::cup(&def, tracks.clone()), now);
                 continue;
             }
             Action::CupPause => {

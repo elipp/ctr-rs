@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use bevy::camera::visibility::VisibilitySystems;
 use bevy::ui::UiSystems;
 use bevy::ui::widget::NodeImageMode;
 use bevy::window::PrimaryWindow;
@@ -153,7 +154,13 @@ impl Plugin for FontPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(TexelSize(Vec2::ONE)).add_systems(
             PostUpdate,
-            (texel_size, lay_out).chain().before(UiSystems::Prepare),
+            (texel_size, lay_out)
+                .chain()
+                .before(UiSystems::Prepare)
+                // Glyphs are respawned on every text change. Spawned after propagation, they'd
+                // keep `InheritedVisibility(false)` for a frame: text blinks, a respawned menu
+                // flashes.
+                .before(VisibilitySystems::VisibilityPropagate),
         );
     }
 }

@@ -84,6 +84,15 @@ pub fn random_tracks(count: usize, mut seed: u64) -> Vec<u32> {
     tracks
 }
 
+/// A seed for [`random_tracks`], new each call. (The time `now` is mixed in for the web, whose
+/// `RandomState` is not random.)
+pub fn random_seed(now: f32) -> u64 {
+    std::hash::BuildHasher::hash_one(
+        &std::collections::hash_map::RandomState::new(),
+        now.to_bits(),
+    )
+}
+
 /// The cups made.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(transparent)]

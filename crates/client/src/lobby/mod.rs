@@ -731,6 +731,11 @@ impl Lobby {
         self.session.is_some() && !self.joined
     }
 
+    /// The races we, the host, are running, if any.
+    pub(crate) fn series(&self) -> Option<&Series> {
+        self.series.as_ref()
+    }
+
     /// Lists the lobby in the realm, if it is public, with the track it is on (empty for none).
     fn list(&self, track: &str) {
         if let (Some(name), Some(session)) = (&self.public, &self.session) {

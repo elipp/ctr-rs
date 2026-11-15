@@ -21,6 +21,11 @@
 //!
 //! "About" has the version, and the licenses (`about.rs`) in an accordion (`accordion.rs`).
 //!
+//! Rows are generic: `input` handles each [`Kind`] once and only calls item-specific code
+//! through `step`/`remove`/`field`/`commit`/`take_icon`. A new row type should be a `Kind`, not
+//! a special case on an `Item`. The menu is respawned whenever the `Vec<Entry>` compares unequal,
+//! so per-frame state (pick, grid cursor, scroll) lives in `PauseMenu`, not in entries.
+//!
 //! Offline the race stops while the menu is open. Online it goes on, as the others are still
 //! racing: the menu only takes our controls, and our kart gets no input until it closes.
 //!
@@ -29,11 +34,12 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{KeyboardFocusLost, KeyboardInput};
 use bevy::input::mouse::MouseWheel;
-use bevy::picking::events::{PointerClick, PointerMove, PointerOver, PointerPress, PointerRelease};
+use bevy::picking::events::{PointerClick, PointerMove, PointerPress, PointerRelease};
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -45,10 +51,13 @@ use crate::accordion::{self, Accordion, HasAccordion, Steer};
 use crate::command::Action;
 use crate::config::Config;
 use crate::controls::{self, Control};
+use crate::cup_wizard::{self, CupItem, Draft, Go};
 use crate::font::{CtrText, TexelSize};
+use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
 use crate::lobby::Lobby;
 use crate::public_lobbies::{self, PublicLobbies, Status};
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
+use crate::text_field::{TextField, Typed};
 use crate::toast::Toast;
 use crate::version::VERSION;
 
@@ -81,6 +90,36 @@ pub struct PauseMenu {
     scroll: f32,
     /// The pick was moved by a key or a pad: scroll the list to show it, once it is laid out.
     follow: bool,
+    /// `None` until first edited; see `cup_wizard::draft`.
+    cup: Option<Draft>,
+    /// While set, the typing branch of `input` runs first and returns early, so Backspace,
+    /// Escape and P never reach the menu's own handling.
+    typing: Option<(Item, TextField)>,
+    /// One cursor for the whole view: assumes at most one `Kind::Grid` per view.
+    grid_cursor: usize,
+    /// Arrow clicks and Left/Right both funnel through here so `step` runs in one place.
+    stepped: Option<(usize, i32)>,
+    /// Set from observers, which lack `Config`; applied in `input`.
+    icon_taken: Option<(usize, usize)>,
+}
+
+impl PauseMenu {
+    /// Systems with their own hotkeys (mute, `/cup pause` key, racer menu) must check this.
+    pub fn takes_keys(&self) -> bool {
+        self.capturing.is_some() || self.typing.is_some()
+    }
+}
+
+impl HasIconGrid for PauseMenu {
+    fn point_icon(&mut self, grid: usize, icon: usize) {
+        self.selected = grid;
+        self.grid_cursor = icon;
+    }
+
+    fn take_icon(&mut self, grid: usize, icon: usize) {
+        self.point_icon(grid, icon);
+        self.icon_taken = Some((grid, icon));
+    }
 }
 
 impl HasAccordion for PauseMenu {
@@ -91,7 +130,7 @@ impl HasAccordion for PauseMenu {
 
 /// What the menu is showing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum View {
+pub(crate) enum View {
     #[default]
     Main,
     /// The public lobbies.
@@ -102,6 +141,8 @@ enum View {
     Controls,
     /// The version and the licenses.
     About,
+    CupWizard,
+    Weapons,
 }
 
 impl View {
@@ -109,6 +150,7 @@ impl View {
     fn parent(self) -> View {
         match self {
             View::Controls => View::Options,
+            View::Weapons => View::CupWizard,
             _ => View::Main,
         }
     }
@@ -116,7 +158,7 @@ impl View {
 
 /// Something the menu offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Item {
+pub(crate) enum Item {
     Resume,
     Restart,
     LeaveLobby,
@@ -126,6 +168,8 @@ enum Item {
     Options,
     /// Shows the version and the licenses.
     About,
+    CupWizard,
+    Cup(CupItem),
     Quit,
     /// A volume, which Left and Right change.
     Volume(Slider),
@@ -144,20 +188,60 @@ enum Item {
     Info,
 }
 
-/// An item and the text it has, and what it is set to, shown at its right.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Entry {
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Entry {
     item: Item,
     label: String,
-    value: Option<String>,
+    kind: Kind,
+    section: bool,
+    inline: bool,
 }
 
-fn entry(item: Item, label: impl Into<String>) -> Entry {
-    Entry {
-        item,
-        label: label.into(),
-        value: None,
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Kind {
+    Button,
+    Value(String),
+    Cycle(String),
+    Field { text: String, editing: bool },
+    Slider(Slider),
+    Preview(Icons),
+    Grid(Icons),
+}
+
+impl Entry {
+    pub(crate) fn new(item: Item, label: impl Into<String>, kind: Kind) -> Entry {
+        Entry {
+            item,
+            label: label.into(),
+            kind,
+            section: false,
+            inline: false,
+        }
     }
+
+    /// Label and value on one centred line ("Name abc"), instead of in the two columns.
+    pub(crate) fn inline(mut self) -> Entry {
+        self.inline = true;
+        self
+    }
+
+    /// Space above this row, to set a group of rows apart. A group ends where the next starts.
+    pub(crate) fn starts_section(mut self) -> Entry {
+        self.section = true;
+        self
+    }
+
+    /// Unpaired rows span both columns, centred. An empty label unpairs any kind, so e.g. a
+    /// cycle can carry its own numbering in its value ("1. Dingo Canyon").
+    fn paired(&self) -> bool {
+        !self.inline
+            && !self.label.is_empty()
+            && !matches!(self.kind, Kind::Button | Kind::Grid(_))
+    }
+}
+
+pub(crate) fn entry(item: Item, label: impl Into<String>) -> Entry {
+    Entry::new(item, label, Kind::Button)
 }
 
 /// The title of the menu and what it offers now. An online race cannot be restarted by one
@@ -173,11 +257,19 @@ fn items(
         View::Options => return ("Options".into(), options_items()),
         View::Controls => return ("Controls".into(), controls_items(config, menu.capturing)),
         View::About => return ("About".into(), vec![entry(Item::Back, "Back")]),
+        View::CupWizard => {
+            let items = cup_wizard::items(&menu.cup, lobby, config);
+            return ("Cup wizard".into(), typed_into(items, menu));
+        }
+        View::Weapons => return ("Weapons".into(), cup_wizard::weapon_items(config)),
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
     if lobby.online.is_none() {
         items.push(entry(Item::Restart, "Restart"));
+    }
+    if lobby.is_host() {
+        items.push(entry(Item::CupWizard, "Cup wizard"));
     }
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
@@ -200,12 +292,27 @@ fn items(
     (title.into(), items)
 }
 
+/// Item builders don't know about typing; the live text is overlaid here so they stay pure.
+fn typed_into(mut items: Vec<Entry>, menu: &PauseMenu) -> Vec<Entry> {
+    if let Some((typing, field)) = &menu.typing
+        && let Some(entry) = items.iter_mut().find(|e| e.item == *typing)
+        && let Kind::Field { .. } = entry.kind
+    {
+        entry.kind = Kind::Field {
+            text: field.text.clone(),
+            editing: true,
+        };
+    }
+    items
+}
+
 /// The volumes, as retail has them (`Options_StringIDs_Audio`).
 fn options_items() -> Vec<Entry> {
+    let volume = |slider, label| Entry::new(Item::Volume(slider), label, Kind::Slider(slider));
     vec![
-        entry(Item::Volume(Slider::Fx), "FX"),
-        entry(Item::Volume(Slider::Music), "Music"),
-        entry(Item::Volume(Slider::Voice), "Voice"),
+        volume(Slider::Fx, "FX"),
+        volume(Slider::Music, "Music"),
+        volume(Slider::Voice, "Voice"),
         entry(Item::Controls, "Controls"),
         entry(Item::Back, "Back"),
     ]
@@ -215,14 +322,13 @@ fn options_items() -> Vec<Entry> {
 fn controls_items(config: &Config, capturing: Option<Control>) -> Vec<Entry> {
     let mut items: Vec<Entry> = Control::ALL
         .iter()
-        .map(|&control| Entry {
-            item: Item::Control(control),
-            label: control.label().into(),
-            value: Some(if capturing == Some(control) {
+        .map(|&control| {
+            let value = if capturing == Some(control) {
                 "Press a key".into()
             } else {
                 config.controls.describe(control)
-            }),
+            };
+            Entry::new(Item::Control(control), control.label(), Kind::Value(value))
         })
         .collect();
     items.push(entry(Item::ResetControls, "Reset"));
@@ -300,6 +406,10 @@ const ABOUT_TEXELS: f32 = 5.0;
 const LIST_TEXELS: usize = 180;
 /// An item's height: a line of the middle font and its padding.
 const ROW_TEXELS: usize = Font::Middle.line_height() + 4;
+const ROW_PADDING: usize = 2;
+const SECTION_GAP: usize = 10;
+/// Between an inline row's label and its value.
+const INLINE_GAP: usize = 8;
 
 /// The panel behind the items, the line around it, and its shadow.
 pub(crate) const PANEL: Color = Color::srgba(0.04, 0.04, 0.06, 0.75);
@@ -329,13 +439,40 @@ struct Knob(Slider);
 #[derive(Resource)]
 struct Wedge(Handle<Image>);
 
+/// Item index, for re-tinting with the row's pick.
+#[derive(Component)]
+struct Arrow(usize);
+
+/// White so that `ImageNode::color` can tint them like the row's text.
+#[derive(Resource)]
+struct Arrows {
+    left: Handle<Image>,
+    right: Handle<Image>,
+}
+
+#[derive(SystemParam)]
+struct Art<'w> {
+    wedge: Res<'w, Wedge>,
+    arrows: Res<'w, Arrows>,
+    sheets: ResMut<'w, icon_grid::Sheets>,
+    textures: Res<'w, crate::Textures>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
+const ARROW: usize = 4;
+const ARROW_HEIGHT: usize = 7;
+const ARROW_GAP: usize = 4;
+
+const CARET: usize = 2;
+
 pub struct PausePlugin;
 
 impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
             .init_resource::<PublicLobbies>()
-            .add_systems(Startup, make_wedge)
+            .init_resource::<icon_grid::Sheets>()
+            .add_systems(Startup, (make_wedge, make_arrows))
             .add_systems(Update, public_lobbies::poll.run_if(crate::drive::driving))
             .add_systems(
                 PreUpdate,
@@ -372,7 +509,8 @@ fn input(
     let mut first_press = None;
     // With the repeats, for the about page.
     let mut list_keys = 0i32;
-    for event in key_events.read() {
+    let key_events: Vec<KeyboardInput> = key_events.read().cloned().collect();
+    for event in &key_events {
         if event.state == ButtonState::Pressed && !event.repeat {
             first_press = first_press.or(Some(event.key_code));
         }
@@ -426,6 +564,8 @@ fn input(
     let pushed = IVec2::new(way(stick.x), way(stick.y));
     let stick_tap = |y: i32| pushed.y == y && menu.stick.y != y;
     let (stick_up, stick_down) = (stick_tap(1), stick_tap(-1));
+    let stick_tap_x = |x: i32| pushed.x == x && menu.stick.x != x;
+    let (stick_left, stick_right) = (stick_tap_x(-1), stick_tap_x(1));
     menu.stick = pushed;
     if let Some(control) = menu.capturing.filter(|_| menu.open) {
         menu.clicked = None;
@@ -451,6 +591,25 @@ fn input(
         save(&mut menu, &config, &mut toasts);
         return finish(was_open, &menu, &mut keys);
     }
+    if let Some((item, mut field)) = menu.typing.take().filter(|_| menu.open) {
+        menu.clicked = None;
+        let mut typed = key_events
+            .iter()
+            .map(|event| field.key(event))
+            .find(|typed| *typed != Typed::Typing);
+        if pad(GamepadButton::North) || pad(GamepadButton::Start) {
+            typed = Some(Typed::Cancelled(String::new()));
+        }
+        match typed {
+            None | Some(Typed::Typing) => menu.typing = Some((item, field)),
+            Some(Typed::Done(text)) => {
+                commit(item, text, &mut menu, &config);
+                sound(MENU_TAKE_SFX);
+            }
+            Some(Typed::Cancelled(_)) => sound(MENU_BACK_SFX),
+        }
+        return finish(was_open, &menu, &mut keys);
+    }
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         menu.open = !menu.open;
         menu.view = View::Main;
@@ -458,6 +617,8 @@ fn input(
         menu.scroll = 0.0;
         menu.clicked = None;
         menu.capturing = None;
+        menu.typing = None;
+        menu.grid_cursor = 0;
         test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
         if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
             if menu.open {
@@ -471,7 +632,6 @@ fn input(
         return finish(was_open, &menu, &mut keys);
     } else if menu.open {
         let (_, items) = items(&lobby, &menu, &public, &config);
-        let count = items.len();
         let enter = key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
             || pad(GamepadButton::South);
         let about = menu.view == View::About;
@@ -491,21 +651,46 @@ fn input(
                 sound(MENU_TAKE_SFX);
             }
         } else {
-            if key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up {
-                menu.selected = (menu.selected + count - 1) % count;
+            let up = key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up;
+            let down = key(&[KeyCode::ArrowDown, KeyCode::KeyS])
+                || pad(GamepadButton::DPadDown)
+                || stick_down;
+            let left = key(&[KeyCode::ArrowLeft, KeyCode::KeyA])
+                || pad(GamepadButton::DPadLeft)
+                || stick_left;
+            let right = key(&[KeyCode::ArrowRight, KeyCode::KeyD])
+                || pad(GamepadButton::DPadRight)
+                || stick_right;
+            let way = IVec2::new(right as i32 - left as i32, down as i32 - up as i32);
+            if way != IVec2::ZERO && navigate(&mut menu, &items, way) {
                 menu.follow = true;
                 sound(MENU_MOVE_SFX);
             }
-            if key(&[KeyCode::ArrowDown, KeyCode::KeyS])
-                || pad(GamepadButton::DPadDown)
-                || stick_down
-            {
-                menu.selected = (menu.selected + 1) % count;
-                menu.follow = true;
-                sound(MENU_MOVE_SFX);
+            let cycle = matches!(items.get(menu.selected), Some(Entry { kind: Kind::Cycle(_), .. }));
+            if way.x != 0 && cycle && menu.stepped.is_none() {
+                menu.stepped = Some((menu.selected, way.x));
             }
             // (`show` keeps it within the list.)
             menu.scroll += wheeled_px;
+        }
+        if let Some((i, way)) = menu.stepped.take()
+            && let Some(entry) = items.get(i)
+            && step(entry.item, way, &mut menu, &config)
+        {
+            sound(MENU_MOVE_SFX);
+        }
+        if (key(&[KeyCode::Delete]) || pad(GamepadButton::West))
+            && let Some(entry) = items.get(menu.selected)
+            && remove(entry.item, &mut menu, &config)
+        {
+            sound(MENU_BACK_SFX);
+        }
+        if let Some((grid, icon)) = menu.icon_taken.take()
+            && let Some(entry) = items.get(grid)
+            && take_icon(entry.item, icon, &mut config)
+        {
+            menu.unsaved = true;
+            sound(MENU_TAKE_SFX);
         }
         // (On the about page taking is for the list, and Back is clicked.)
         let taken = if enter && menu.view != View::About {
@@ -513,12 +698,51 @@ fn input(
         } else {
             menu.clicked.take()
         };
-        let taken_item = taken.and_then(|i| items.get(i)).map(|e| e.item);
-        if taken_item.is_some_and(|item| !matches!(item, Item::Volume(_))) {
-            sound(MENU_TAKE_SFX);
-        }
+        let taken_entry = taken.and_then(|i| items.get(i));
+        let taken_item = match taken_entry {
+            Some(Entry {
+                item,
+                kind: Kind::Cycle(_),
+                ..
+            }) => {
+                if step(*item, 1, &mut menu, &config) {
+                    sound(MENU_MOVE_SFX);
+                }
+                None
+            }
+            Some(Entry {
+                item,
+                kind: Kind::Field { .. },
+                ..
+            }) => {
+                menu.typing = field(*item, &mut menu, &config).map(|field| (*item, field));
+                sound(MENU_TAKE_SFX);
+                None
+            }
+            Some(Entry {
+                item,
+                kind: Kind::Grid(_),
+                ..
+            }) => {
+                let icon = menu.grid_cursor;
+                if take_icon(*item, icon, &mut config) {
+                    menu.unsaved = true;
+                    sound(MENU_TAKE_SFX);
+                }
+                None
+            }
+            Some(Entry {
+                kind: Kind::Slider(_),
+                ..
+            }) => None,
+            Some(entry) => {
+                sound(MENU_TAKE_SFX);
+                Some(entry.item)
+            }
+            None => None,
+        };
         if let Some(&Entry {
-            item: Item::Volume(slider),
+            kind: Kind::Slider(slider),
             ..
         }) = items.get(menu.selected)
         {
@@ -590,6 +814,31 @@ fn input(
                     menu.open = false;
                 }
             }
+            Some(Item::CupWizard) => {
+                menu.view = View::CupWizard;
+                menu.selected = 0;
+            }
+            Some(Item::Cup(item)) => {
+                let menu = &mut *menu;
+                let go = cup_wizard::take(
+                    item,
+                    cup_wizard::Take {
+                        slot: &mut menu.cup,
+                        config: &mut config,
+                        actions: &mut actions,
+                        now: time.elapsed_secs(),
+                        changed: &mut menu.unsaved,
+                    },
+                );
+                match go {
+                    Go::Stay => {}
+                    Go::To(view) => {
+                        menu.view = view;
+                        menu.selected = 0;
+                    }
+                    Go::Close => menu.open = false,
+                }
+            }
             Some(Item::Info | Item::Volume(_)) | None => {}
             Some(Item::Quit) => {
                 exit.write(AppExit::Success);
@@ -598,6 +847,7 @@ fn input(
         // Another view starts at its top.
         if menu.view != view {
             menu.scroll = 0.0;
+            menu.grid_cursor = 0;
         }
         test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
         // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
@@ -609,6 +859,70 @@ fn input(
     }
     save(&mut menu, &config, &mut toasts);
     finish(was_open, &menu, &mut keys);
+}
+
+/// `way` is screen order (+y down). A grid gets first claim on the move; only `Steered::Off`
+/// moves the selection out of it. Across moves on non-grid rows return false: cycles step
+/// separately, via `stepped`.
+fn navigate(menu: &mut PauseMenu, items: &[Entry], way: IVec2) -> bool {
+    let grid = |entry: Option<&Entry>| match entry {
+        Some(Entry {
+            kind: Kind::Grid(icons),
+            ..
+        }) => Some((icons.cells.len(), icons.columns)),
+        _ => None,
+    };
+    if let Some((len, columns)) = grid(items.get(menu.selected)) {
+        match icon_grid::steer(&mut menu.grid_cursor, len, columns, way) {
+            Steered::Moved => return true,
+            Steered::Stayed => return false,
+            Steered::Off(_) => {}
+        }
+    }
+    if way.y == 0 || items.is_empty() {
+        return false;
+    }
+    let count = items.len() as i32;
+    menu.selected = (menu.selected as i32 + way.y.signum()).rem_euclid(count) as usize;
+    if let Some((len, columns)) = grid(items.get(menu.selected)) {
+        menu.grid_cursor = icon_grid::entered(len, columns, way.y.signum());
+    }
+    true
+}
+
+fn step(item: Item, way: i32, menu: &mut PauseMenu, config: &Config) -> bool {
+    match item {
+        Item::Cup(item) => cup_wizard::step(item, way, &mut menu.cup, config),
+        _ => false,
+    }
+}
+
+fn remove(item: Item, menu: &mut PauseMenu, config: &Config) -> bool {
+    match item {
+        Item::Cup(item) => cup_wizard::remove(item, &mut menu.cup, config),
+        _ => false,
+    }
+}
+
+fn field(item: Item, menu: &mut PauseMenu, config: &Config) -> Option<TextField> {
+    match item {
+        Item::Cup(item) => cup_wizard::field(item, &mut menu.cup, config),
+        _ => None,
+    }
+}
+
+fn commit(item: Item, text: String, menu: &mut PauseMenu, config: &Config) {
+    if let Item::Cup(item) = item {
+        cup_wizard::commit(item, text, &mut menu.cup, config);
+    }
+}
+
+/// Returns whether the config changed (the caller marks it unsaved).
+fn take_icon(item: Item, icon: usize, config: &mut Config) -> bool {
+    match item {
+        Item::Cup(item) => cup_wizard::take_icon(item, icon, config),
+        _ => false,
+    }
 }
 
 /// Moves volume `slider` the `way` a key is held (-1, 0 or 1) for `seconds`, in whole percents.
@@ -704,13 +1018,16 @@ fn show(
     public: Res<PublicLobbies>,
     config: Res<Config>,
     size: Res<TexelSize>,
-    wedge: Res<Wedge>,
+    mut art: Art,
     shown: Query<(Entity, &Shown)>,
     rows: Query<(&Row, &Children, &ComputedNode, &UiGlobalTransform)>,
     mut list: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<List>>,
-    mut texts: Query<&mut CtrText>,
+    mut texts: Query<&mut CtrText, Without<icon_grid::GridCaption<PauseMenu>>>,
     mut knobs: Query<(&Knob, &mut Node)>,
+    mut arrows: Query<(&Arrow, &mut ImageNode)>,
     mut about_lines: accordion::Lines<PauseMenu>,
+    mut frames: icon_grid::Frames<PauseMenu>,
+    mut captions: icon_grid::Captions<PauseMenu>,
 ) {
     let wanted = menu.open.then(|| {
         let (title, items) = items(&lobby, &menu, &public, &config);
@@ -732,7 +1049,8 @@ fn show(
             menu.selected = menu.selected.min(wanted.items.len() - 1);
             let about = menu.about.as_ref().filter(|_| menu.view == View::About);
             let scroll = menu.scroll;
-            spawn(&mut commands, wanted, menu.selected, scroll, about, &size, &wedge);
+            let layout = PageLayout::of(menu.view);
+            spawn(&mut commands, wanted, menu.selected, scroll, about, layout, &size, &mut art);
         }
         return;
     }
@@ -780,6 +1098,50 @@ fn show(
             }
         }
     }
+    for (arrow, mut image) in &mut arrows {
+        let tint = tint(arrow.0 == menu.selected);
+        if image.color != tint {
+            image.color = tint;
+        }
+    }
+    let on_grid = shown.single().ok().and_then(|(_, shown)| {
+        let entry = shown.items.get(menu.selected)?;
+        matches!(entry.kind, Kind::Grid(_)).then_some((menu.selected, menu.grid_cursor))
+    });
+    icon_grid::update(on_grid, &mut frames, &mut captions);
+}
+
+/// Per-page geometry, in texels.
+#[derive(Clone, Copy)]
+struct PageLayout {
+    /// The cup wizard's rows change width as tracks are stepped through, and the panel is
+    /// centred, so without a minimum it jumps around.
+    min_width: usize,
+    /// Left padding in both columns of paired rows, on top of the panel's own.
+    indent: usize,
+}
+
+impl PageLayout {
+    fn of(view: View) -> PageLayout {
+        match view {
+            View::CupWizard | View::Weapons => PageLayout {
+                // Fits a typical `cup::MAX_NAME` name without the panel growing (and, centred,
+                // shifting) as it is typed. All-W names still overflow it.
+                min_width: 280,
+                // No paired rows on these pages (all inline or full-width).
+                indent: 0,
+            },
+            _ => PageLayout {
+                min_width: 0,
+                indent: 8,
+            },
+        }
+    }
+}
+
+fn tint(picked: bool) -> Color {
+    let [r, g, b] = gradient(picked).top;
+    Color::srgb_u8(r, g, b)
 }
 
 /// The picked item is white, the others orange.
@@ -792,14 +1154,16 @@ fn gradient(picked: bool) -> Gradient {
 }
 
 /// The menu, and the about page's list if it shows it.
+#[allow(clippy::too_many_arguments)]
 fn spawn(
     commands: &mut Commands,
     shown: Shown,
     selected: usize,
     scroll: f32,
     about: Option<&Accordion>,
+    layout: PageLayout,
     size: &TexelSize,
-    wedge: &Wedge,
+    art: &mut Art,
 ) {
     let items = shown.items.clone();
     let title = shown.title.clone();
@@ -844,8 +1208,8 @@ fn spawn(
     if let Some(list) = about {
         spawn_about(commands, panel, list, size);
     }
-    // Two columns: the labels, and the values and volumes left-aligned beside them. An item
-    // without either spans both.
+    // Second column left-aligned (user's choice; centre and right were tried). Centred, typed
+    // text shifted left with every char.
     let list = commands
         .spawn((
             ChildOf(panel),
@@ -855,6 +1219,7 @@ fn spawn(
                 grid_template_columns: RepeatedGridTrack::auto(2),
                 align_self: AlignSelf::Stretch,
                 max_height: size.y(LIST_TEXELS),
+                min_width: size.x(layout.min_width),
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
@@ -862,56 +1227,164 @@ fn spawn(
         ))
         .id();
     for (i, item) in items.into_iter().enumerate() {
-        let text = CtrText::new(item.label, Font::Middle, gradient(i == selected));
-        let paired = item.value.is_some() || matches!(item.item, Item::Volume(_));
-        if !paired {
-            let only = cell(commands, list, i, size, |node| {
+        let picked = i == selected;
+        // Padding, not margin: a margin would be a dead strip for pointer picking.
+        let top = size.y(ROW_PADDING + if item.section { SECTION_GAP } else { 0 });
+        let text = |text: String| CtrText::new(text, Font::Middle, gradient(picked));
+        let value_cell = if item.paired() {
+            // (The label's padding is the gap, so that pointing between the two still picks.)
+            let label = cell(commands, list, i, size, true, |node| {
+                node.padding.left = size.x(layout.indent);
+                node.padding.right = size.x(16);
+                node.padding.top = top;
+            });
+            commands.spawn((ChildOf(label), text(item.label)));
+            cell(commands, list, i, size, true, |node| {
+                node.padding.left = size.x(layout.indent);
+                node.padding.top = top;
+            })
+        } else {
+            // A grid's cell doesn't take: a click in the gaps between icons would take the icon
+            // at the keyboard cursor.
+            let takes = !matches!(item.kind, Kind::Grid(_));
+            let only = cell(commands, list, i, size, takes, |node| {
                 node.grid_column = GridPlacement::span(2);
                 node.justify_content = JustifyContent::Center;
+                node.padding.top = top;
             });
-            commands.spawn((ChildOf(only), text));
-            continue;
-        }
-        // (The label's padding is the gap, so that pointing between the two still picks.)
-        let label = cell(commands, list, i, size, |node| {
-            node.padding.right = size.x(16);
-        });
-        commands.spawn((ChildOf(label), text));
-        let value_cell = cell(commands, list, i, size, |_| {});
-        if let Some(value) = item.value {
-            commands.spawn((
-                ChildOf(value_cell),
-                CtrText::new(value, Font::Middle, gradient(i == selected)),
-            ));
-        } else if let Item::Volume(slider) = item.item {
-            spawn_track(commands, value_cell, slider, size, wedge);
+            if !item.label.is_empty() {
+                let gap = if item.kind == Kind::Button { 0 } else { INLINE_GAP };
+                commands.spawn((
+                    ChildOf(only),
+                    text(item.label),
+                    Node {
+                        margin: UiRect::right(size.x(gap)),
+                        ..default()
+                    },
+                ));
+            }
+            only
+        };
+        match item.kind {
+            Kind::Value(value) => {
+                commands.spawn((ChildOf(value_cell), text(value)));
+            }
+            Kind::Cycle(value) => {
+                spawn_arrow(commands, value_cell, i, -1, picked, size, &art.arrows);
+                commands.spawn((
+                    ChildOf(value_cell),
+                    text(value),
+                    Node {
+                        margin: UiRect::horizontal(size.x(ARROW_GAP)),
+                        ..default()
+                    },
+                ));
+                spawn_arrow(commands, value_cell, i, 1, picked, size, &art.arrows);
+            }
+            Kind::Field { text: typed, editing } => {
+                commands.spawn((ChildOf(value_cell), text(typed)));
+                if editing {
+                    commands.spawn((
+                        ChildOf(value_cell),
+                        Node {
+                            width: size.x(CARET),
+                            height: size.y(Font::Middle.line_height()),
+                            margin: UiRect::left(size.x(1)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                }
+            }
+            Kind::Slider(slider) => spawn_track(commands, value_cell, slider, size, &art.wedge),
+            Kind::Preview(icons) => {
+                let sheet = art.sheets.get(icons.sheet, &art.textures.vram, &mut art.images);
+                icon_grid::spawn::<PauseMenu>(commands, value_cell, i, &icons, sheet, size, false);
+            }
+            Kind::Grid(icons) => {
+                let sheet = art.sheets.get(icons.sheet, &art.textures.vram, &mut art.images);
+                icon_grid::spawn::<PauseMenu>(commands, value_cell, i, &icons, sheet, size, true);
+            }
+            Kind::Button => {}
         }
     }
 }
 
+/// `way`: -1 left, 1 right.
+fn spawn_arrow(
+    commands: &mut Commands,
+    parent: Entity,
+    i: usize,
+    way: i32,
+    picked: bool,
+    size: &TexelSize,
+    arrows: &Arrows,
+) {
+    let image = if way < 0 { &arrows.left } else { &arrows.right };
+    let step = move |menu: &mut PauseMenu| {
+        menu.selected = i;
+        menu.stepped = Some((i, way));
+    };
+    commands
+        .spawn((
+            ChildOf(parent),
+            Arrow(i),
+            ImageNode::new(image.clone())
+                .with_color(tint(picked))
+                .with_mode(NodeImageMode::Stretch),
+            Node {
+                width: size.x(ARROW),
+                height: size.y(ARROW_HEIGHT),
+                ..default()
+            },
+        ))
+        // Stop propagation: the row cell takes a click on a cycle as a step +1, which would
+        // step twice.
+        .observe(move |mut click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
+            click.propagate(false);
+            if click.button == PointerButton::Primary {
+                step(&mut menu);
+            }
+        })
+        .observe(
+            move |mut release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
+                if matches!(release.pointer.id, PointerId::Touch(_)) {
+                    release.propagate(false);
+                    step(&mut menu);
+                }
+            },
+        );
+}
+
 /// A cell of item `i` in `list`, laid out as `style` changes it: pointing at it picks the item,
-/// and clicking or tapping it takes it.
+/// and clicking or tapping it takes it if it `takes`.
 fn cell(
     commands: &mut Commands,
     list: Entity,
     i: usize,
     size: &TexelSize,
+    takes: bool,
     style: impl FnOnce(&mut Node),
 ) -> Entity {
     let mut node = Node {
         align_items: AlignItems::Center,
-        padding: UiRect::vertical(size.y(2)),
+        padding: UiRect::vertical(size.y(ROW_PADDING)),
         ..default()
     };
     style(&mut node);
     commands
         .spawn((ChildOf(list), Row(i), node))
-        .observe(move |_: On<PointerOver>, mut menu: ResMut<PauseMenu>| {
-            menu.selected = i;
+        // Not PointerOver: the menu respawns on every change, centred, so rows land under a
+        // still mouse, fire Over, and steal the pick.
+        .observe(move |_: On<PointerMove>, mut menu: ResMut<PauseMenu>| {
+            if menu.selected != i {
+                menu.selected = i;
+            }
         })
         .observe(
             move |click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
-                if click.button == PointerButton::Primary {
+                if takes && click.button == PointerButton::Primary {
                     menu.clicked = Some(i);
                 }
             },
@@ -920,7 +1393,7 @@ fn cell(
         // no press on the cell, and so no click.
         .observe(
             move |release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
-                if matches!(release.pointer.id, PointerId::Touch(_)) {
+                if takes && matches!(release.pointer.id, PointerId::Touch(_)) {
                     menu.clicked = Some(i);
                 }
             },
@@ -1068,4 +1541,36 @@ fn make_wedge(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     );
     image.sampler = ImageSampler::nearest();
     commands.insert_resource(Wedge(images.add(image)));
+}
+
+fn make_arrows(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let mut arrow = |left: bool| {
+        let mut rgba = vec![0; ARROW * ARROW_HEIGHT * 4];
+        let middle = ARROW_HEIGHT / 2;
+        for y in 0..ARROW_HEIGHT {
+            let wide = ARROW - (y.abs_diff(middle) * ARROW).div_ceil(middle + 1);
+            for x in 0..wide {
+                let x = if left { ARROW - 1 - x } else { x };
+                rgba[(y * ARROW + x) * 4..][..4].fill(0xff);
+            }
+        }
+        let mut image = Image::new(
+            Extent3d {
+                width: ARROW as u32,
+                height: ARROW_HEIGHT as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            rgba,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        image.sampler = ImageSampler::nearest();
+        images.add(image)
+    };
+    let arrows = Arrows {
+        left: arrow(true),
+        right: arrow(false),
+    };
+    commands.insert_resource(arrows);
 }
