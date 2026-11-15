@@ -239,6 +239,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("hard", "Hard bots"),
             leaf("brain", "Bots the learned policy drives (the default)"),
             leaf("retail", "Retail's bots, on the bot paths"),
+            leaf("ordered", "Characters in pool order, repeating (the default)"),
+            leaf("random", "Characters drawn at random, repeating once the pool runs out"),
+            Spec {
+                name: "pool",
+                about: "The characters the bots may drive",
+                options: &[leaf("all", "Every character")],
+                arg: Some("<mask> | <character,character,...>"),
+            },
             // (The web has no files to read a policy from: `lobby::commands::refusal`.)
             #[cfg(not(target_arch = "wasm32"))]
             Spec {

@@ -1,4 +1,4 @@
-//! Reusable icon grid: Mask mode (cup wizard's weapons, later the bots' character pool) and Pick
+//! Reusable icon grid: Mask mode (cup wizard's weapons, the bots' character pool) and Pick
 //! mode (meant for replacing the text list in `drive/chooser.rs`).
 //!
 //! Stateless by design: the owner keeps the real state (e.g. `Config::masked_weapons`) and the
@@ -45,7 +45,6 @@ pub enum SheetId {
     Weapons,
     /// Cells are character numbers (`render::portraits::ICON_IDS` order). Builds a second copy
     /// of the portraits, separate from `portrait_row::Portraits`; share it if memory matters.
-    #[allow(dead_code, reason = "for the racer picker and the bots' pool, which are to come")]
     Portraits,
 }
 

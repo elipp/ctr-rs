@@ -71,17 +71,25 @@ impl CupDef {
 /// `count` of the game's racing tracks, none twice, in an order `seed` shuffles them to.
 pub fn random_tracks(count: usize, mut seed: u64) -> Vec<u32> {
     let mut tracks: Vec<u32> = (0..race::RACING_TRACKS).collect();
-    // (Fisher-Yates, on splitmix64.)
-    for i in (1..tracks.len()).rev() {
-        seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^= z >> 31;
-        tracks.swap(i, (z % (i as u64 + 1)) as usize);
-    }
+    shuffle(&mut tracks, &mut seed);
     tracks.truncate(count);
     tracks
+}
+
+/// Fisher-Yates, on [`splitmix`].
+pub(crate) fn shuffle<T>(items: &mut [T], seed: &mut u64) {
+    for i in (1..items.len()).rev() {
+        items.swap(i, (splitmix(seed) % (i as u64 + 1)) as usize);
+    }
+}
+
+/// splitmix64: the next number of the sequence `seed` is at.
+pub(crate) fn splitmix(seed: &mut u64) -> u64 {
+    *seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = *seed;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 /// A seed for [`random_tracks`], new each call. (The time `now` is mixed in for the web, whose
@@ -162,8 +170,10 @@ pub fn points(players: usize, place: usize) -> u32 {
 }
 
 /// Who crossed the line: a player, by its machine and its seat there (0 for the first, 1 for
-/// "name@2" of a split screen, ...), or a bot (by the character it drives, which is its own for
-/// the whole cup).
+/// "name@2" of a split screen, ...), or a bot, by its place among the series' bots
+/// (`Series::brains` / `retail.characters`, fixed for the cup). Not by character: with
+/// `BotPick`'s repeats two bots can drive the same one, and would share their points.
+/// Only `Score::character` tells a guest the character; the id's last byte is just a key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Who {
     Player(EndpointId, u8),
@@ -175,9 +185,9 @@ impl Who {
     pub(crate) fn id(&self) -> [u8; 32] {
         match self {
             Who::Player(id, _) => *id.as_bytes(),
-            Who::Bot(character) => {
+            Who::Bot(bot) => {
                 let mut id = [BOT_ID; 32];
-                id[31] = *character;
+                id[31] = *bot;
                 id
             }
         }
@@ -509,11 +519,11 @@ mod tests {
         let mut series = Series::single(0, 3);
         series.retail.characters = vec![3, 4, 5];
         let mut order = finishers(1);
-        for character in [3, 4, 5] {
+        for (bot, character) in [3, 4, 5].into_iter().enumerate() {
             order.insert(
                 0,
                 Finisher {
-                    who: Who::Bot(character),
+                    who: Who::Bot(bot as u8),
                     name: format!("bot{character}"),
                     character,
                 },

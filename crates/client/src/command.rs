@@ -77,6 +77,12 @@ pub enum Action {
         count: Option<u8>,
         difficulty: Option<u16>,
         kind: Option<crate::lobby::BotKind>,
+        /// `BotSettings::pool`.
+        pool: Option<u16>,
+        pick: Option<crate::lobby::BotPick>,
+        /// No toast of the settings: the pause menu's bots page shows them itself. Refusals
+        /// still toast.
+        quiet: bool,
     },
     /// The policy the brain bots drive with (`/bots policy`), from the next race on.
     BotPolicy(PolicyChoice),
@@ -195,6 +201,36 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
+/// A bot pool (`BotSettings::pool`): `all`, a mask (`0x` for hex), or characters by name.
+fn pool(text: &str) -> Result<u16, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Usage: /bots pool all | <mask> | <character,character,...>".into());
+    }
+    if text == "all" {
+        return Ok(crate::lobby::ALL_CHARACTERS);
+    }
+    let number = match text.strip_prefix("0x") {
+        Some(hex) => u16::from_str_radix(hex, 16).ok(),
+        None => text.parse::<u16>().ok(),
+    };
+    if let Some(mask) = number {
+        return Ok(mask);
+    }
+    text.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .try_fold(0u16, |mask, name| {
+            crate::CHARACTERS
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(name))
+                .map(|c| mask | 1 << c)
+                .ok_or_else(|| {
+                    format!("No character is called {name}: {}", crate::CHARACTERS.join(", "))
+                })
+        })
+}
+
 const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
@@ -202,7 +238,7 @@ const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
+const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | random <tracks> [laps] | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
@@ -381,7 +417,7 @@ impl Action {
 
     fn bots(line: &str) -> Result<Action, String> {
         use vehicle::bot::difficulty_level::{EASY, HARD, MEDIUM};
-        use crate::lobby::BotKind;
+        use crate::lobby::{BotKind, BotPick};
         // (The rest is a path, which may have spaces in it.)
         if let ("policy", rest) = word(line) {
             return Ok(Action::BotPolicy(match rest {
@@ -390,12 +426,24 @@ impl Action {
                 path => PolicyChoice::File(path.to_string()),
             }));
         }
-        let (mut count, mut difficulty, mut kind) = (None, None, None);
+        if let ("pool", rest) = word(line) {
+            return Ok(Action::Bots {
+                count: None,
+                difficulty: None,
+                kind: None,
+                pool: Some(pool(rest)?),
+                pick: None,
+                quiet: false,
+            });
+        }
+        let (mut count, mut difficulty, mut kind, mut pick) = (None, None, None, None);
         for word in line.split_whitespace() {
             match word {
                 "off" => count = Some(0),
                 "brain" => kind = Some(BotKind::Brain),
                 "retail" => kind = Some(BotKind::Retail),
+                "ordered" => pick = Some(BotPick::Ordered),
+                "random" => pick = Some(BotPick::Random),
                 "easy" => difficulty = Some(EASY as u16),
                 "medium" => difficulty = Some(MEDIUM as u16),
                 "hard" => difficulty = Some(HARD as u16),
@@ -409,6 +457,9 @@ impl Action {
             count,
             difficulty,
             kind,
+            pool: None,
+            pick,
+            quiet: false,
         })
     }
 
@@ -1779,6 +1830,9 @@ mod tests {
                 count,
                 difficulty,
                 kind: _,
+                pool: _,
+                pick: _,
+                quiet: _,
             }) => Some((count, difficulty)),
             _ => None,
         };
@@ -1797,6 +1851,12 @@ mod tests {
         assert_eq!(kind("bots 7 retail hard"), Some(crate::lobby::BotKind::Retail));
         assert_eq!(kind("bots brain"), Some(crate::lobby::BotKind::Brain));
         assert_eq!(kind("bots 3"), None);
+        let pick = |line| match Action::parse(line) {
+            Ok(Action::Bots { pick, .. }) => pick,
+            _ => None,
+        };
+        assert_eq!(pick("bots 3 random"), Some(crate::lobby::BotPick::Random));
+        assert_eq!(pick("bots ordered"), Some(crate::lobby::BotPick::Ordered));
         let policy = |line| match Action::parse(line) {
             Ok(Action::BotPolicy(choice)) => Some(choice),
             _ => None,
@@ -1807,6 +1867,17 @@ mod tests {
             policy("bots policy  target/my run/policy-00500.safetensors "),
             Some(PolicyChoice::File("target/my run/policy-00500.safetensors".into()))
         );
+        let pool = |line| match Action::parse(line) {
+            Ok(Action::Bots { pool, .. }) => pool,
+            _ => None,
+        };
+        assert_eq!(pool("bots pool all"), Some(crate::lobby::ALL_CHARACTERS));
+        assert_eq!(pool("bots pool 0x0f"), Some(0x0f));
+        assert_eq!(pool("bots pool 5"), Some(5));
+        assert_eq!(pool("bots pool crash, n. gin,coco"), Some(1 | 1 << 4 | 1 << 3));
+        assert_eq!(pool("bots pool nobody"), None);
+        assert_eq!(pool("bots pool"), None);
+        assert_eq!(pool("bots 3"), None);
     }
 
     #[test]

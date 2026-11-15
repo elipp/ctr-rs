@@ -130,19 +130,19 @@ impl Online {
     }
 
     /// Who drives the kart of `slot`, for a cup to score: a player, or a bot of either kind (by
-    /// its character).
+    /// its place among the bots; a race has one kind only, so the two never clash).
     pub fn who(&self, slot: usize) -> Option<super::cup::Who> {
         use super::cup::Who;
         let players = self.characters.len();
         match slot.checked_sub(players) {
-            None if self.is_bot(slot) => Some(Who::Bot(self.characters[slot])),
+            None if self.is_bot(slot) => Some(Who::Bot((slot - self.bot_slots().start) as u8)),
             None => {
                 let id = *self.ids.get(slot)?;
                 // (A machine's split-screen players come after its first: the seat counts them.)
                 let seat = (0..slot).filter(|&s| !self.is_bot(s) && self.ids[s] == id).count();
                 Some(Who::Player(id, seat as u8))
             }
-            Some(bot) => self.retail.characters.get(bot).copied().map(Who::Bot),
+            Some(bot) => (bot < self.retail.characters.len()).then_some(Who::Bot(bot as u8)),
         }
     }
 

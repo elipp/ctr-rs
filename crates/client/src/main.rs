@@ -36,6 +36,7 @@ mod config;
 mod console;
 mod controls;
 mod crash;
+mod bots_menu;
 mod cup_wizard;
 mod disc;
 mod drop_map;

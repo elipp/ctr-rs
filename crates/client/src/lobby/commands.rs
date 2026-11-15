@@ -128,6 +128,8 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::Bots { .. } | Action::BotPolicy(_) if lobby.joined => {
             "Only the host of a lobby can do that"
         }
+        // (Every bit is a character, so any other mask has one.)
+        Action::Bots { pool: Some(0), .. } => "The pool needs at least one character",
         Action::BotPolicy(_) if cfg!(target_arch = "wasm32") => {
             "Not on the web: the brain bots drive with the built-in policy"
         }
@@ -253,8 +255,15 @@ pub(super) fn run(
                 count,
                 difficulty,
                 kind,
+                pool,
+                pick,
+                quiet,
             } => {
-                let changed = count.is_some() || difficulty.is_some() || kind.is_some();
+                let changed = count.is_some()
+                    || difficulty.is_some()
+                    || kind.is_some()
+                    || pool.is_some()
+                    || pick.is_some();
                 if let Some(count) = count {
                     lobby.bots.count = *count;
                 }
@@ -264,10 +273,17 @@ pub(super) fn run(
                 if let Some(kind) = kind {
                     lobby.bots.kind = *kind;
                 }
+                if let Some(pool) = pool {
+                    lobby.bots.pool = *pool;
+                }
+                if let Some(pick) = pick {
+                    lobby.bots.pick = *pick;
+                }
                 let bots = lobby.bots;
+                let difficulty = super::difficulty_name(bots.difficulty);
                 let what = match bots.kind {
-                    BotKind::Brain => format!("{} brain", bots.difficulty_name()),
-                    BotKind::Retail => format!("{} retail", bots.difficulty_name()),
+                    BotKind::Brain => format!("{difficulty} brain"),
+                    BotKind::Retail => format!("{difficulty} retail"),
                 };
                 let mut text = match bots.count {
                     0 => format!("No bots ({what} when there are)"),
@@ -277,8 +293,17 @@ pub(super) fn run(
                 if bots.count > 0 {
                     text += ", as many as the grid has room for";
                 }
+                if bots.pool != super::ALL_CHARACTERS {
+                    text += &match bots.pool.count_ones() {
+                        1 => ", of 1 character".to_string(),
+                        n => format!(", of {n} characters"),
+                    };
+                }
+                if bots.pick == super::BotPick::Random {
+                    text += ", picked at random";
+                }
                 if changed {
-                    lobby.set_series_bots();
+                    lobby.set_series_bots(now);
                     if lobby.online.is_some() {
                         let cup = lobby.series.as_ref().is_some_and(|s| s.scored);
                         text += if cup {
@@ -288,7 +313,9 @@ pub(super) fn run(
                         };
                     }
                 }
-                toasts.write(Toast::new(text, 3000));
+                if !quiet {
+                    toasts.write(Toast::new(text, 3000));
+                }
                 continue;
             }
             Action::BotPolicy(choice) => {

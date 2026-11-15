@@ -48,6 +48,7 @@ use render::font::{Font, Gradient};
 
 use crate::about;
 use crate::accordion::{self, Accordion, HasAccordion, Steer};
+use crate::bots_menu::{self, BotsItem};
 use crate::command::Action;
 use crate::config::Config;
 use crate::controls::{self, Control};
@@ -101,6 +102,8 @@ pub struct PauseMenu {
     stepped: Option<(usize, i32)>,
     /// Set from observers, which lack `Config`; applied in `input`.
     icon_taken: Option<(usize, usize)>,
+    /// The pool page's draft: only meaningful in `View::BotPool` (see `bots_menu.rs`).
+    bot_pool: u16,
 }
 
 impl PauseMenu {
@@ -143,6 +146,8 @@ pub(crate) enum View {
     About,
     CupWizard,
     Weapons,
+    Bots,
+    BotPool,
 }
 
 impl View {
@@ -151,6 +156,7 @@ impl View {
         match self {
             View::Controls => View::Options,
             View::Weapons => View::CupWizard,
+            View::BotPool => View::Bots,
             _ => View::Main,
         }
     }
@@ -170,6 +176,8 @@ pub(crate) enum Item {
     About,
     CupWizard,
     Cup(CupItem),
+    BotsMenu,
+    Bots(BotsItem),
     Quit,
     /// A volume, which Left and Right change.
     Volume(Slider),
@@ -262,14 +270,18 @@ fn items(
             return ("Cup wizard".into(), typed_into(items, menu));
         }
         View::Weapons => return ("Weapons".into(), cup_wizard::weapon_items(config)),
+        View::Bots => return ("Bots".into(), bots_menu::items(lobby)),
+        View::BotPool => return ("Character pool".into(), bots_menu::pool_items(menu.bot_pool)),
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
     if lobby.online.is_none() {
         items.push(entry(Item::Restart, "Restart"));
     }
+    // (Bots only race in a lobby's series: offline there's nothing for them to fill.)
     if lobby.is_host() {
         items.push(entry(Item::CupWizard, "Cup wizard"));
+        items.push(entry(Item::BotsMenu, "Bots"));
     }
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
@@ -611,6 +623,10 @@ fn input(
         return finish(was_open, &menu, &mut keys);
     }
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
+        if menu.open && !leave(&menu, &lobby, &mut actions, &mut toasts) {
+            sound(MENU_BACK_SFX);
+            return finish(was_open, &menu, &mut keys);
+        }
         menu.open = !menu.open;
         menu.view = View::Main;
         menu.selected = 0;
@@ -675,7 +691,7 @@ fn input(
         }
         if let Some((i, way)) = menu.stepped.take()
             && let Some(entry) = items.get(i)
-            && step(entry.item, way, &mut menu, &mut config)
+            && step(entry.item, way, &mut menu, &mut config, &lobby, &mut actions)
         {
             sound(MENU_MOVE_SFX);
         }
@@ -687,9 +703,8 @@ fn input(
         }
         if let Some((grid, icon)) = menu.icon_taken.take()
             && let Some(entry) = items.get(grid)
-            && take_icon(entry.item, icon, &mut config)
+            && take_icon(entry.item, icon, &mut menu, &mut config)
         {
-            menu.unsaved = true;
             sound(MENU_TAKE_SFX);
         }
         // (On the about page taking is for the list, and Back is clicked.)
@@ -705,7 +720,7 @@ fn input(
                 kind: Kind::Cycle(_),
                 ..
             }) => {
-                if step(*item, 1, &mut menu, &mut config) {
+                if step(*item, 1, &mut menu, &mut config, &lobby, &mut actions) {
                     sound(MENU_MOVE_SFX);
                 }
                 None
@@ -725,8 +740,7 @@ fn input(
                 ..
             }) => {
                 let icon = menu.grid_cursor;
-                if take_icon(*item, icon, &mut config) {
-                    menu.unsaved = true;
+                if take_icon(*item, icon, &mut menu, &mut config) {
                     sound(MENU_TAKE_SFX);
                 }
                 None
@@ -761,8 +775,10 @@ fn input(
         if key(&[KeyCode::Backspace]) || pad(GamepadButton::North) {
             sound(MENU_BACK_SFX);
             if menu.view != View::Main {
-                menu.view = menu.view.parent();
-                menu.selected = 0;
+                if leave(&menu, &lobby, &mut actions, &mut toasts) {
+                    menu.view = menu.view.parent();
+                    menu.selected = 0;
+                }
             } else {
                 menu.open = false;
             }
@@ -793,8 +809,10 @@ fn input(
             }
             Some(Item::Refresh) => public.refresh(),
             Some(Item::Back) => {
-                menu.view = menu.view.parent();
-                menu.selected = 0;
+                if leave(&menu, &lobby, &mut actions, &mut toasts) {
+                    menu.view = menu.view.parent();
+                    menu.selected = 0;
+                }
             }
             Some(Item::Controls) => {
                 menu.view = View::Controls;
@@ -837,6 +855,16 @@ fn input(
                         menu.selected = 0;
                     }
                     Go::Close => menu.open = false,
+                }
+            }
+            Some(Item::BotsMenu) => {
+                menu.view = View::Bots;
+                menu.selected = 0;
+            }
+            Some(Item::Bots(item)) => {
+                if let Some(view) = bots_menu::take(item, lobby.bots, &mut menu.bot_pool) {
+                    menu.view = view;
+                    menu.selected = 0;
                 }
             }
             Some(Item::Info | Item::Volume(_)) | None => {}
@@ -890,13 +918,51 @@ fn navigate(menu: &mut PauseMenu, items: &[Entry], way: IVec2) -> bool {
     true
 }
 
-fn step(item: Item, way: i32, menu: &mut PauseMenu, config: &mut Config) -> bool {
+/// Returns whether anything changed, for the sound. `actions`: for rows whose state isn't the
+/// menu's or the config's (the bots, in `Lobby`), which change once the action has run.
+fn step(
+    item: Item,
+    way: i32,
+    menu: &mut PauseMenu,
+    config: &mut Config,
+    lobby: &Lobby,
+    actions: &mut MessageWriter<Action>,
+) -> bool {
     match item {
         Item::Cup(item) => {
             cup_wizard::step(item, way, &mut menu.cup, config, &mut menu.unsaved)
         }
+        Item::Bots(item) => write(actions, bots_menu::step(item, way, lobby.bots)),
         _ => false,
     }
+}
+
+/// Whether the view may be left (Back, Backspace, or closing the menu), with what leaving it
+/// sends. Every way out of a view must ask: a view's draft is only sent from here.
+fn leave(
+    menu: &PauseMenu,
+    lobby: &Lobby,
+    actions: &mut MessageWriter<Action>,
+    toasts: &mut MessageWriter<Toast>,
+) -> bool {
+    let left = match menu.view {
+        View::BotPool => bots_menu::leave_pool(menu.bot_pool, lobby.bots),
+        _ => Ok(None),
+    };
+    match left {
+        Ok(action) => {
+            write(actions, action);
+            true
+        }
+        Err(why) => {
+            toasts.write(Toast::new(why, 2000).color(Color::srgb(1.0, 0.4, 0.4)));
+            false
+        }
+    }
+}
+
+fn write(actions: &mut MessageWriter<Action>, action: Option<Action>) -> bool {
+    action.map(|action| actions.write(action)).is_some()
 }
 
 fn remove(item: Item, menu: &mut PauseMenu, config: &Config) -> bool {
@@ -919,10 +985,20 @@ fn commit(item: Item, text: String, menu: &mut PauseMenu, config: &Config) {
     }
 }
 
-/// Returns whether the config changed (the caller marks it unsaved).
-fn take_icon(item: Item, icon: usize, config: &mut Config) -> bool {
+/// Returns whether anything changed, for the sound; marks the config unsaved itself.
+fn take_icon(
+    item: Item,
+    icon: usize,
+    menu: &mut PauseMenu,
+    config: &mut Config,
+) -> bool {
     match item {
-        Item::Cup(item) => cup_wizard::take_icon(item, icon, config),
+        Item::Cup(item) => {
+            let changed = cup_wizard::take_icon(item, icon, config);
+            menu.unsaved |= changed;
+            changed
+        }
+        Item::Bots(item) => bots_menu::take_icon(item, icon, &mut menu.bot_pool),
         _ => false,
     }
 }
