@@ -77,6 +77,12 @@ pub enum Action {
         count: Option<u8>,
         difficulty: Option<u16>,
         kind: Option<crate::lobby::BotKind>,
+        /// `BotSettings::pool`.
+        pool: Option<u16>,
+        pick: Option<crate::lobby::BotPick>,
+        /// No toast of the settings: the pause menu's bots page shows them itself. Refusals
+        /// still toast.
+        quiet: bool,
     },
     /// The policy the brain bots drive with (`/bots policy`), from the next race on.
     BotPolicy(PolicyChoice),
@@ -97,6 +103,13 @@ pub enum Action {
     CupStart(String),
     /// Drive a cup of this many of the game's racing tracks, drawn at random (the host only).
     CupRandom { tracks: usize, laps: u8 },
+    /// For the cup wizard's Start: `CupStart` only takes a saved cup's name, and the draft may be
+    /// unsaved. Not a command.
+    CupDrive {
+        name: String,
+        tracks: Vec<u32>,
+        laps: u8,
+    },
     /// Forget the cup of that name.
     CupDelete(String),
     /// Pause the race for everyone, or the countdown to a cup's next race (the host only).
@@ -188,6 +201,36 @@ pub(crate) fn word(text: &str) -> (&str, &str) {
         .map_or((text, ""), |(w, rest)| (w, rest.trim()))
 }
 
+/// A bot pool (`BotSettings::pool`): `all`, a mask (`0x` for hex), or characters by name.
+fn pool(text: &str) -> Result<u16, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Usage: /bots pool all | <mask> | <character,character,...>".into());
+    }
+    if text == "all" {
+        return Ok(crate::lobby::ALL_CHARACTERS);
+    }
+    let number = match text.strip_prefix("0x") {
+        Some(hex) => u16::from_str_radix(hex, 16).ok(),
+        None => text.parse::<u16>().ok(),
+    };
+    if let Some(mask) = number {
+        return Ok(mask);
+    }
+    text.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .try_fold(0u16, |mask, name| {
+            crate::CHARACTERS
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(name))
+                .map(|c| mask | 1 << c)
+                .ok_or_else(|| {
+                    format!("No character is called {name}: {}", crate::CHARACTERS.join(", "))
+                })
+        })
+}
+
 const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
 const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
@@ -195,11 +238,11 @@ const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
 const RACE_USAGE: &str = "Usage: /race start | restart | stop";
-const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail], or /bots off, or /bots policy [<file> | default]";
+const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | random <tracks> [laps] | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
-const DEBUG_USAGE: &str = "Usage: /debug set wumpa <0 to 10> | set weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
+const DEBUG_USAGE: &str = "Usage: /debug wumpa <0 to 10> | weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
 const NET_USAGE: &str =
     "Usage: /net info | smoothing ping|replay|<duration, like 120ms> | rollbacks on|off | relay add <url> | relay clear | relay only on|off";
 
@@ -225,7 +268,7 @@ fn milliseconds(text: &str) -> Option<f64> {
 impl Action {
     /// The action a line without its `/` asks for, or what is wrong with it. Commands are a name
     /// and a subcommand (`/lobby join <address>`), which may have subcommands of its own
-    /// (`/debug set wumpa 10`).
+    /// (`/debug crate bias 3`).
     pub(crate) fn parse(line: &str) -> Result<Action, String> {
         let (name, rest) = word(line);
         match name {
@@ -374,7 +417,7 @@ impl Action {
 
     fn bots(line: &str) -> Result<Action, String> {
         use vehicle::bot::difficulty_level::{EASY, HARD, MEDIUM};
-        use crate::lobby::BotKind;
+        use crate::lobby::{BotKind, BotPick};
         // (The rest is a path, which may have spaces in it.)
         if let ("policy", rest) = word(line) {
             return Ok(Action::BotPolicy(match rest {
@@ -383,12 +426,24 @@ impl Action {
                 path => PolicyChoice::File(path.to_string()),
             }));
         }
-        let (mut count, mut difficulty, mut kind) = (None, None, None);
+        if let ("pool", rest) = word(line) {
+            return Ok(Action::Bots {
+                count: None,
+                difficulty: None,
+                kind: None,
+                pool: Some(pool(rest)?),
+                pick: None,
+                quiet: false,
+            });
+        }
+        let (mut count, mut difficulty, mut kind, mut pick) = (None, None, None, None);
         for word in line.split_whitespace() {
             match word {
                 "off" => count = Some(0),
                 "brain" => kind = Some(BotKind::Brain),
                 "retail" => kind = Some(BotKind::Retail),
+                "ordered" => pick = Some(BotPick::Ordered),
+                "random" => pick = Some(BotPick::Random),
                 "easy" => difficulty = Some(EASY as u16),
                 "medium" => difficulty = Some(MEDIUM as u16),
                 "hard" => difficulty = Some(HARD as u16),
@@ -402,6 +457,9 @@ impl Action {
             count,
             difficulty,
             kind,
+            pool: None,
+            pick,
+            quiet: false,
         })
     }
 
@@ -638,31 +696,18 @@ impl Action {
     fn debug(line: &str) -> Result<Action, String> {
         let (sub, rest) = word(line);
         match sub {
-            "set" => {
-                let (what, value) = word(rest);
-                match what {
-                    "wumpa" => {
-                        value
-                            .parse::<i64>()
-                            .map(|n| {
-                                Action::DebugSetWumpa(
-                                    n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8
-                                )
-                            })
-                            .map_err(|_| "Usage: /debug set wumpa <number>".to_string())
-                    }
-                    "weapon" => value
-                        .parse()
-                        .ok()
-                        .filter(|n| vehicle::item::ENABLED.contains(n))
-                        .map(Action::DebugAddWeapon)
-                        .ok_or_else(|| {
-                            "Usage: /debug set weapon <0 to 4 or 6 to 11>".to_string()
-                        }),
-                    "" => Err(DEBUG_USAGE.into()),
-                    _ => Err(format!("Unknown command: /debug set {what}\n{DEBUG_USAGE}")),
-                }
-            }
+            "wumpa" => rest
+                .trim()
+                .parse::<i64>()
+                .map(|n| Action::DebugSetWumpa(n.clamp(0, vehicle::wumpa::MAX_COUNT as i64) as u8))
+                .map_err(|_| "Usage: /debug wumpa <number>".to_string()),
+            "weapon" => rest
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| vehicle::item::ENABLED.contains(n))
+                .map(Action::DebugAddWeapon)
+                .ok_or_else(|| "Usage: /debug weapon <0 to 4 or 6 to 11>".to_string()),
             "stall" => match milliseconds(rest) {
                 Some(ms) if (0.0..=STALL_MAX_MS).contains(&ms) => Ok(Action::DebugStall(
                     std::time::Duration::from_secs_f64(ms / 1000.0),
@@ -1785,6 +1830,9 @@ mod tests {
                 count,
                 difficulty,
                 kind: _,
+                pool: _,
+                pick: _,
+                quiet: _,
             }) => Some((count, difficulty)),
             _ => None,
         };
@@ -1803,6 +1851,12 @@ mod tests {
         assert_eq!(kind("bots 7 retail hard"), Some(crate::lobby::BotKind::Retail));
         assert_eq!(kind("bots brain"), Some(crate::lobby::BotKind::Brain));
         assert_eq!(kind("bots 3"), None);
+        let pick = |line| match Action::parse(line) {
+            Ok(Action::Bots { pick, .. }) => pick,
+            _ => None,
+        };
+        assert_eq!(pick("bots 3 random"), Some(crate::lobby::BotPick::Random));
+        assert_eq!(pick("bots ordered"), Some(crate::lobby::BotPick::Ordered));
         let policy = |line| match Action::parse(line) {
             Ok(Action::BotPolicy(choice)) => Some(choice),
             _ => None,
@@ -1813,6 +1867,17 @@ mod tests {
             policy("bots policy  target/my run/policy-00500.safetensors "),
             Some(PolicyChoice::File("target/my run/policy-00500.safetensors".into()))
         );
+        let pool = |line| match Action::parse(line) {
+            Ok(Action::Bots { pool, .. }) => pool,
+            _ => None,
+        };
+        assert_eq!(pool("bots pool all"), Some(crate::lobby::ALL_CHARACTERS));
+        assert_eq!(pool("bots pool 0x0f"), Some(0x0f));
+        assert_eq!(pool("bots pool 5"), Some(5));
+        assert_eq!(pool("bots pool crash, n. gin,coco"), Some(1 | 1 << 4 | 1 << 3));
+        assert_eq!(pool("bots pool nobody"), None);
+        assert_eq!(pool("bots pool"), None);
+        assert_eq!(pool("bots 3"), None);
     }
 
     #[test]
@@ -1891,7 +1956,7 @@ mod tests {
             Ok(Action::CupStart(name)) if name == "fast"
         ));
         assert!(matches!(
-            Action::parse("debug set wumpa 10"),
+            Action::parse("debug wumpa 10"),
             Ok(Action::DebugSetWumpa(10))
         ));
         assert!(matches!(Action::parse("net info"), Ok(Action::NetInfo)));
@@ -2043,11 +2108,11 @@ mod tests {
         assert_eq!(smoothing("net smoothing fast"), None);
         // Clamped to what a kart holds.
         assert!(matches!(
-            Action::parse("debug  set   wumpa 99"),
+            Action::parse("debug   wumpa 99"),
             Ok(Action::DebugSetWumpa(10))
         ));
         assert!(matches!(
-            Action::parse("debug set weapon 4"),
+            Action::parse("debug weapon 4"),
             Ok(Action::DebugAddWeapon(4))
         ));
     }
@@ -2065,10 +2130,10 @@ mod tests {
         line.enter();
         assert_eq!(line.text, "/debug fx flash");
         assert!(line.entered);
-        let mut line = typed("/debug set weapon 1");
+        let mut line = typed("/debug weapon 1");
         line.step(true);
         line.enter();
-        assert_eq!(line.text, "/debug set weapon 10");
+        assert_eq!(line.text, "/debug weapon 10");
         assert!(line.entered);
         // Round to the first is still a pick.
         let mut line = typed("/debug hud ");
@@ -2559,10 +2624,9 @@ mod tests {
         assert!(error("lobby").starts_with("Usage: /lobby"));
         assert!(error("lobby fly").contains("Unknown command: /lobby fly"));
         assert!(error("debug").starts_with("Usage: /debug"));
-        assert!(error("debug set").starts_with("Usage: /debug"));
-        assert!(error("debug set teapot 3").contains("/debug set teapot"));
-        assert!(error("debug set weapon 12").contains("0 to 4 or 6 to 11"));
-        assert!(error("debug set wumpa x").contains("<number>"));
+        assert!(error("debug teapot 3").contains("Unknown command: /debug teapot"));
+        assert!(error("debug weapon 12").contains("0 to 4 or 6 to 11"));
+        assert!(error("debug wumpa x").contains("<number>"));
         assert!(error("join-lobby abc").contains("Unknown command: /join-lobby"));
         assert!(error("lobby join nonsense").starts_with("Not a lobby address"));
     }

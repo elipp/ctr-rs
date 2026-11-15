@@ -126,7 +126,7 @@ pub(super) fn input(
     mut actions: MessageWriter<Action>,
 ) {
     // The pause menu has the controls (and the pads' buttons are its own then).
-    if pause.open || pause.capturing.is_some() {
+    if pause.open || pause.takes_keys() {
         return;
     }
     let sound = |id| {

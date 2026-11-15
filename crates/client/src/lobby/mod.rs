@@ -28,12 +28,14 @@
 //! * `/net rollbacks on|off`: a toast for each rollback (on at first)
 //! * `/net relay add <url>`: use that relay too, besides the public ones (kept in the config; `clear` drops them all)
 //! * `/race stop`: end the race in progress for everyone, with no winner (the host only)
-//! * `/bots [count] [easy|medium|hard] [brain|retail]`, `/bots off`: fill the grid of the host's
-//!   races with bots, the characters no player drives, up to eight karts: the learned policy's
+//! * `/bots [count] [easy|medium|hard] [brain|retail] [ordered|random]`, `/bots off`: fill the
+//!   grid of the host's races with bots, up to eight karts: the learned policy's
 //!   (`learned.rs`, whose pads the host sends; the difficulty is their rubber band's,
 //!   `race::Band`), or retail's (`vehicle::bot`, which every client drives itself). A race has
 //!   one kind or the other. In a cup, a change applies from its next race, and bots keep their
-//!   points
+//!   points. `/bots pool` limits the characters they may drive (a mask, or names); see
+//!   [`BotPick`] for how they're drawn. The pause menu's "Bots" page sets all of it too
+//!   (`bots_menu.rs`)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
 //! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
@@ -131,7 +133,26 @@ pub struct BotSettings {
     /// `vehicle::bot::difficulty_level`: the retail bots', or the brain bots' rubber band's.
     pub difficulty: u16,
     pub kind: BotKind,
+    /// Bit `c` set: character `c` may be a bot. Never empty (`commands::refusal`; the pause
+    /// menu's pool page won't be left empty), which [`pick_bots`] relies on.
+    pub pool: u16,
+    pub pick: BotPick,
 }
+
+/// How the bots' characters are drawn from the pool. Either way the free ones (no player drives
+/// them) come first, and once they run out characters repeat, so the count is always met.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BotPick {
+    /// In pool order, starting over from the pool's first when it runs out.
+    #[default]
+    Ordered,
+    /// The free ones shuffled, then any of the pool's, with repeats.
+    Random,
+}
+
+/// Every character in [`BotSettings::pool`].
+pub const ALL_CHARACTERS: u16 = u16::MAX;
+const _: () = assert!(crate::CHARACTERS.len() == u16::BITS as usize);
 
 /// Who drives the bots of a race.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -151,19 +172,37 @@ impl Default for BotSettings {
             count: 0,
             difficulty: vehicle::bot::difficulty_level::MEDIUM as u16,
             kind: BotKind::default(),
+            pool: ALL_CHARACTERS,
+            pick: BotPick::default(),
         }
     }
 }
 
-impl BotSettings {
-    /// The difficulty as `/bots` names it.
-    pub fn difficulty_name(&self) -> &'static str {
-        use vehicle::bot::difficulty_level::{EASY, HARD};
-        match self.difficulty as i16 {
-            EASY => "easy",
-            HARD => "hard",
-            _ => "medium",
+/// `count` characters from `pool` (see [`BotPick`]), those in `taken` last.
+fn pick_bots(pool: u16, pick: BotPick, taken: &[u8], count: usize, mut seed: u64) -> Vec<u8> {
+    let pool: Vec<u8> = (0..crate::CHARACTERS.len() as u8)
+        .filter(|c| pool & 1 << c != 0)
+        .collect();
+    let mut free: Vec<u8> = pool.iter().copied().filter(|c| !taken.contains(c)).collect();
+    let repeats: Box<dyn Iterator<Item = u8>> = match pick {
+        BotPick::Ordered => Box::new(pool.iter().copied().cycle()),
+        BotPick::Random => {
+            cup::shuffle(&mut free, &mut seed);
+            Box::new(std::iter::repeat_with(move || {
+                pool[(cup::splitmix(&mut seed) % pool.len() as u64) as usize]
+            }))
         }
+    };
+    free.into_iter().chain(repeats).take(count).collect()
+}
+
+/// The difficulty as `/bots` names it.
+pub fn difficulty_name(difficulty: u16) -> &'static str {
+    use vehicle::bot::difficulty_level::{EASY, HARD};
+    match difficulty as i16 {
+        EASY => "easy",
+        HARD => "hard",
+        _ => "medium",
     }
 }
 
@@ -324,15 +363,13 @@ impl Lobby {
         });
     }
 
-    /// The characters of the bots of a race the players in the lobby now drive in: the first
-    /// that none of them drives, as many as `/bots` asks and the grid has room for.
-    fn bot_characters(&self) -> Vec<u8> {
+    /// The characters of the bots of a race the players in the lobby now drive in, as many as
+    /// `/bots` asks and the grid has room for.
+    fn bot_characters(&self, seed: u64) -> Vec<u8> {
         let taken: Vec<u8> = self.roster.iter().map(|m| m.character).collect();
         let room = race::MAX_KARTS.saturating_sub(taken.len().max(1));
-        (0..crate::CHARACTERS.len() as u8)
-            .filter(|c| !taken.contains(c))
-            .take((self.bots.count as usize).min(room))
-            .collect()
+        let count = (self.bots.count as usize).min(room);
+        pick_bots(self.bots.pool, self.bots.pick, &taken, count, seed)
     }
 
     /// Starts the series, with the countdown to its first race (the host only).
@@ -342,14 +379,15 @@ impl Lobby {
             laps: series.laps,
         };
         self.series = Some(series);
-        self.set_series_bots();
+        self.set_series_bots(now);
         self.count_down(then, now, COUNTDOWN_SECONDS);
     }
 
     /// Gives the series the bots `/bots` asks for now, for the races it starts from here on. A
-    /// bot drives the same character from race to race, so it keeps its points in a cup.
-    fn set_series_bots(&mut self) {
-        let characters = self.bot_characters();
+    /// bot drives the same character from race to race (a random pick is drawn here, once), so
+    /// it keeps its points in a cup.
+    fn set_series_bots(&mut self, now: f32) {
+        let characters = self.bot_characters(cup::random_seed(now));
         let BotSettings { kind, difficulty, .. } = self.bots;
         let Some(series) = &mut self.series else {
             return;
@@ -557,13 +595,8 @@ impl Lobby {
     /// What the host's bots are, as the lobby shows them: "medium, brain", in the order `/bots` takes them.
     pub fn next_bots_kind(&self) -> String {
         let b = self.lobby_bots;
-        let settings = BotSettings {
-            count: b.count,
-            difficulty: b.difficulty,
-            kind: if b.retail { BotKind::Retail } else { BotKind::Brain },
-        };
         let kind = if b.retail { "retail" } else { "brain" };
-        format!("{}, {kind}", settings.difficulty_name())
+        format!("{}, {kind}", difficulty_name(b.difficulty))
     }
 
     /// How many bots the next race of the lobby has, as far as we know: as many as the host's
@@ -704,7 +737,7 @@ impl Lobby {
 
     /// Starts the race on `track` (the host only), with the bots of the series: its brain bots
     /// (the session takes as many as there is room for), or its retail ones.
-    fn start(&self, track: u32, laps: u8) {
+    fn start(&self, track: u32, rules: net::Rules) {
         if let Some(session) = &self.session {
             self.provide(session, track);
             let (brains, retail) = self
@@ -713,7 +746,7 @@ impl Lobby {
                 .map(|s| (s.brains.clone(), s.retail.clone()))
                 .unwrap_or_default();
             session.set_bots(brains);
-            session.start(track, Self::hash_of(track), laps, retail);
+            session.start(track, Self::hash_of(track), rules, retail);
             self.list(&maps::name(track));
         }
     }
@@ -729,6 +762,11 @@ impl Lobby {
     /// Whether we host the lobby we are in.
     pub fn is_host(&self) -> bool {
         self.session.is_some() && !self.joined
+    }
+
+    /// The races we, the host, are running, if any.
+    pub(crate) fn series(&self) -> Option<&Series> {
+        self.series.as_ref()
     }
 
     /// Lists the lobby in the realm, if it is public, with the track it is on (empty for none).
@@ -765,6 +803,18 @@ impl Lobby {
     }
 }
 
+/// The rules of a race we host with `laps` laps. Read at each start, so the wizard's weapons
+/// apply from the next race on, a cup's included. Without a seed every race's RNG would start at
+/// `RANDOM_NUMBER_INIT`.
+fn rules(laps: u8, config: &crate::config::Config, now: f32) -> net::Rules {
+    net::Rules {
+        laps,
+        masked_weapons: vehicle::item::mask(&config.masked_weapons),
+        even_odds: config.even_weapon_odds,
+        seed: cup::random_seed(now) as u16,
+    }
+}
+
 pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
@@ -797,3 +847,23 @@ impl Plugin for LobbyPlugin {
 
 /// What the host says to everyone is yellow.
 const ANNOUNCE_COLOR: Color = Color::srgb(1.0, 0.9, 0.2);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_free_characters_go_first_then_the_pool_repeats() {
+        let pool = 1 << 2 | 1 << 5 | 1 << 9;
+        assert_eq!(pick_bots(pool, BotPick::Ordered, &[5], 6, 0), [2, 9, 2, 5, 9, 2]);
+        assert_eq!(pick_bots(pool, BotPick::Ordered, &[], 2, 0), [2, 5]);
+        for seed in 0..20 {
+            let picked = pick_bots(pool, BotPick::Random, &[5], 6, seed);
+            assert_eq!(picked.len(), 6);
+            let mut first = picked[..2].to_vec();
+            first.sort();
+            assert_eq!(first, [2, 9]);
+            assert!(picked.iter().all(|&c| pool & 1 << c != 0));
+        }
+    }
+}

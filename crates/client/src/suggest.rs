@@ -239,6 +239,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
             leaf("hard", "Hard bots"),
             leaf("brain", "Bots the learned policy drives (the default)"),
             leaf("retail", "Retail's bots, on the bot paths"),
+            leaf("ordered", "Bots in pool order, then repeats (the default)"),
+            leaf("random", "Bots at random, then repeats"),
+            Spec {
+                name: "pool",
+                about: "The characters the bots may drive",
+                options: &[leaf("all", "Every character")],
+                arg: Some("<mask | names>"),
+            },
             // (The web has no files to read a policy from: `lobby::commands::refusal`.)
             #[cfg(not(target_arch = "wasm32"))]
             Spec {
@@ -408,28 +416,22 @@ pub(crate) const COMMANDS: &[Spec] = &[
         "debug",
         "For testing",
         &[
+            takes("wumpa", "Set our wumpa count", "<0 to 10>"),
             node(
-                "set",
-                "Set what our kart has",
+                "weapon",
+                "Set the weapon in our hand",
                 &[
-                    takes("wumpa", "The wumpa count", "<0 to 10>"),
-                    node(
-                        "weapon",
-                        "The weapon in hand",
-                        &[
-                            leaf("0", "Turbo"),
-                            leaf("1", "Bomb"),
-                            leaf("2", "Missile"),
-                            leaf("3", "TNT"),
-                            leaf("4", "Potion"),
-                            leaf("6", "Shield"),
-                            leaf("7", "Mask"),
-                            leaf("8", "Clock"),
-                            leaf("9", "Warpball"),
-                            leaf("10", "Three bombs"),
-                            leaf("11", "Three missiles"),
-                        ],
-                    ),
+                    leaf("0", "Turbo"),
+                    leaf("1", "Bomb"),
+                    leaf("2", "Missile"),
+                    leaf("3", "TNT"),
+                    leaf("4", "Potion"),
+                    leaf("6", "Shield"),
+                    leaf("7", "Mask"),
+                    leaf("8", "Clock"),
+                    leaf("9", "Warpball"),
+                    leaf("10", "Three bombs"),
+                    leaf("11", "Three missiles"),
                 ],
             ),
             node(
@@ -648,7 +650,7 @@ mod tests {
         assert_eq!(names("/r"), ["race"]);
         assert_eq!(names("/race "), ["start", "restart", "stop"]);
         assert_eq!(names("/race st"), ["start", "stop"]);
-        assert_eq!(names("/debug set weapon 1"), ["1", "10", "11"]);
+        assert_eq!(names("/debug weapon 1"), ["1", "10", "11"]);
         assert_eq!(
             names("/debug fx "),
             [

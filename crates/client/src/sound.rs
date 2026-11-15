@@ -339,7 +339,7 @@ fn mute(
     mut mute: ResMut<Mute>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    if menu.capturing.is_some() {
+    if menu.takes_keys() {
         return;
     }
     if config.controls.just_pressed(Control::MuteMusic, &keys) && !shift_held(&keys) {

@@ -84,6 +84,19 @@ pub struct Standings {
     pub stopped: bool,
 }
 
+/// The rules of a race, which every peer's sim has to share: the host's, in [`Message::Start`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct Rules {
+    pub laps: u8,
+    /// The weapons the roulette leaves out: `vehicle::item::Roulette::masked`.
+    pub masked_weapons: u16,
+    /// The roulette gives every weapon alike, not by retail's item sets
+    /// (`vehicle::item::Odds::Even`).
+    pub even_odds: bool,
+    /// `sdata->randomNumber` at tick 0 (its generator is 16-bit).
+    pub seed: u16,
+}
+
 /// The retail bots of a race (`vehicle::bot`), which every client adds after the players and
 /// drives itself: they take no pads. (The other kind, the host's brain bots, are streams of the
 /// host's: see [`Message::Start`].) A race has one kind or the other.
@@ -171,8 +184,7 @@ pub enum Message {
         characters: Vec<u8>,
         track: u32,
         hash: u64,
-        /// The laps of the race.
-        laps: u8,
+        rules: Rules,
         /// The retail bots, after the players (and before the spectators).
         retail: RetailBots,
         roster: Vec<[u8; 32]>,
@@ -477,7 +489,12 @@ mod tests {
                 characters: vec![0, 5, 15],
                 track: 4,
                 hash: 0,
-                laps: 5,
+                rules: Rules {
+                    laps: 5,
+                    masked_weapons: 0x0102,
+                    even_odds: true,
+                    seed: 0xbeef,
+                },
                 retail: RetailBots {
                     characters: vec![1, 2],
                     difficulty: 0xa0,

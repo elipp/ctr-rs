@@ -82,15 +82,15 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "Only the host of a lobby can do that"
         }
         Action::StopRace if lobby.online.is_none() && lobby.series.is_none() => "No race to stop",
-        Action::CupStart(_) | Action::CupRandom { .. } if !lobby.is_open() || lobby.joined => {
+        Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. } if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::CupStart(_) | Action::CupRandom { .. }
+        Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.series.as_ref().is_some_and(|s| s.paused) =>
         {
             "A cup is paused (/cup resume, or /cup stop to end it)"
         }
-        Action::CupStart(_) | Action::CupRandom { .. }
+        Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.online.is_some() || lobby.series.is_some() =>
         {
             net::NOT_NOW
@@ -119,7 +119,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "This is the cup's first track"
         }
         Action::CupResume if !lobby.is_paused() => "Not paused (/cup pause)",
-        Action::StartRace | Action::RestartRace | Action::CupStart(_) | Action::CupRandom { .. }
+        Action::StartRace | Action::RestartRace | Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.countdown.is_some() =>
         {
             net::NOT_NOW
@@ -128,6 +128,8 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::Bots { .. } | Action::BotPolicy(_) if lobby.joined => {
             "Only the host of a lobby can do that"
         }
+        // (Every bit is a character, so any other mask has one.)
+        Action::Bots { pool: Some(0), .. } => "The pool needs at least one character",
         Action::BotPolicy(_) if cfg!(target_arch = "wasm32") => {
             "Not on the web: the brain bots drive with the built-in policy"
         }
@@ -153,7 +155,7 @@ pub(super) fn pause_key(
     lobby: Res<Lobby>,
     mut actions: MessageWriter<Action>,
 ) {
-    if menu.capturing.is_some()
+    if menu.takes_keys()
         || !lobby.is_open()
         || !config.controls.just_pressed(Control::PauseRace, &keys)
     {
@@ -253,8 +255,15 @@ pub(super) fn run(
                 count,
                 difficulty,
                 kind,
+                pool,
+                pick,
+                quiet,
             } => {
-                let changed = count.is_some() || difficulty.is_some() || kind.is_some();
+                let changed = count.is_some()
+                    || difficulty.is_some()
+                    || kind.is_some()
+                    || pool.is_some()
+                    || pick.is_some();
                 if let Some(count) = count {
                     lobby.bots.count = *count;
                 }
@@ -264,10 +273,17 @@ pub(super) fn run(
                 if let Some(kind) = kind {
                     lobby.bots.kind = *kind;
                 }
+                if let Some(pool) = pool {
+                    lobby.bots.pool = *pool;
+                }
+                if let Some(pick) = pick {
+                    lobby.bots.pick = *pick;
+                }
                 let bots = lobby.bots;
+                let difficulty = super::difficulty_name(bots.difficulty);
                 let what = match bots.kind {
-                    BotKind::Brain => format!("{} brain", bots.difficulty_name()),
-                    BotKind::Retail => format!("{} retail", bots.difficulty_name()),
+                    BotKind::Brain => format!("{difficulty} brain"),
+                    BotKind::Retail => format!("{difficulty} retail"),
                 };
                 let mut text = match bots.count {
                     0 => format!("No bots ({what} when there are)"),
@@ -277,8 +293,17 @@ pub(super) fn run(
                 if bots.count > 0 {
                     text += ", as many as the grid has room for";
                 }
+                if bots.pool != super::ALL_CHARACTERS {
+                    text += &match bots.pool.count_ones() {
+                        1 => ", of 1 character".to_string(),
+                        n => format!(", of {n} characters"),
+                    };
+                }
+                if bots.pick == super::BotPick::Random {
+                    text += ", picked at random";
+                }
                 if changed {
-                    lobby.set_series_bots();
+                    lobby.set_series_bots(now);
                     if lobby.online.is_some() {
                         let cup = lobby.series.as_ref().is_some_and(|s| s.scored);
                         text += if cup {
@@ -288,7 +313,9 @@ pub(super) fn run(
                         };
                     }
                 }
-                toasts.write(Toast::new(text, 3000));
+                if !quiet {
+                    toasts.write(Toast::new(text, 3000));
+                }
                 continue;
             }
             Action::BotPolicy(choice) => {
@@ -379,12 +406,7 @@ pub(super) fn run(
                 continue;
             }
             Action::CupRandom { tracks, laps } => {
-                // (The time mixed in for the web, whose `RandomState` is not random.)
-                let seed = std::hash::BuildHasher::hash_one(
-                    &std::collections::hash_map::RandomState::new(),
-                    now.to_bits(),
-                );
-                let tracks = super::cup::random_tracks(*tracks, seed);
+                let tracks = super::cup::random_tracks(*tracks, super::cup::random_seed(now));
                 let names: Vec<String> = tracks.iter().map(|&id| maps::name(id)).collect();
                 console!("Random cup, {laps} laps each: {}", names.join(", "));
                 let def = CupDef {
@@ -393,6 +415,15 @@ pub(super) fn run(
                     laps: *laps,
                 };
                 lobby.start_series(Series::cup(&def, tracks), now);
+                continue;
+            }
+            Action::CupDrive { name, tracks, laps } => {
+                let def = CupDef {
+                    name: name.clone(),
+                    tracks: tracks.iter().map(|&id| maps::stable_name(id)).collect(),
+                    laps: *laps,
+                };
+                lobby.start_series(Series::cup(&def, tracks.clone()), now);
                 continue;
             }
             Action::CupPause => {
@@ -535,7 +566,7 @@ pub(super) fn run(
                 if let Some(net) = &lobby.online {
                     let then = Then::Restart {
                         track: net.track,
-                        laps: net.laps,
+                        laps: net.rules.laps,
                     };
                     lobby.count_down(then, now, super::COUNTDOWN_SECONDS);
                 }
