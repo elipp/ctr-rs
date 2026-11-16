@@ -140,7 +140,7 @@ impl Audio {
 }
 
 /// FNV-1a over `bytes`, 64 bits.
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
         (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3)
     })
