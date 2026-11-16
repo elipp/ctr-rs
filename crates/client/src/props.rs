@@ -71,7 +71,7 @@ impl Sim {
     ) -> Rollback<Race> {
         let solo = rules.and_then(|(rules, mode)| Some((rules, race::solo::Kind::of(mode)?)));
         if let Some((rules, (kind, laps))) = solo {
-            // `/race relic|trial` refuses a lobby, split screen and bots.
+            // `/race relic|time-trial` refuses a lobby, split screen and bots.
             let [spec] = specs else {
                 panic!("a solo run is for one kart, not {}", specs.len());
             };
