@@ -1,8 +1,10 @@
 //! The browser build. A page has no files, so the disc image is the one the player dropped on it
 //! (`web/play.html`): the page holds it, and the program reads it from there as the image at
-//! [`DISC`] (`loader::disc::keep_external`) for `disc.rs` to find. Once everything the game reads
-//! of it is taken into memory (`disc::prepare`, `maps::make_builtins`), the page lets go of it
-//! ([`release_disc`]): a wasm program's memory never shrinks, so the image is never copied in. The clipboard is
+//! [`DISC`] (`loader::disc::keep_external`) for `disc.rs` to find. What the game makes of it
+//! (`disc::prepare`, `maps::make_builtins`) goes to `loader::store`, which the page keeps in its
+//! IndexedDB ([`take_kept`]): a later start needs no image, as a native one doesn't. Once that is
+//! made, the page lets go of the image ([`release_disc`]): a wasm program's memory never shrinks,
+//! so the image is never copied in. The clipboard is
 //! the page's as well, and so are the settings (`config.rs`) and the maps other players sent
 //! (`maps.rs`), which it keeps in its storage, and a panic is told to it (`crash.rs`). On a touch
 //! screen its buttons and text field stand in for the keyboard (`command.rs`).
@@ -28,6 +30,26 @@ extern "C" {
     /// Lets the page let go of the image.
     #[wasm_bindgen(js_namespace = window, js_name = ctrReleaseDisc)]
     fn release_disc_bytes();
+
+    /// Whether the page was given an image: it starts the game without one when it has kept
+    /// what was made of one.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrHasDisc)]
+    fn has_disc() -> bool;
+
+    /// Asks the page for the image, which it does on a reload: the files it kept are not enough
+    /// (another version of the game, or the browser evicted some). `why` is shown.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrNeedDisc)]
+    pub fn need_disc(why: &str);
+
+    /// What the page kept of `loader::store`, as `[path, Uint8Array]` pairs, once.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeKept)]
+    fn take_kept_files() -> js_sys::Array;
+
+    #[wasm_bindgen(js_namespace = window, js_name = ctrKeep)]
+    fn keep_file(path: &str, bytes: &[u8]);
+
+    #[wasm_bindgen(js_namespace = window, js_name = ctrUnkeep)]
+    fn unkeep_file(path: &str);
 
     /// Puts `text` on the clipboard; a failure is only reported on the console.
     #[wasm_bindgen(js_namespace = window, js_name = ctrCopy)]
@@ -111,6 +133,13 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrSaveTrackPicture)]
     pub fn save_track_picture(key: &str, bytes: &[u8]);
 
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakePbs)]
+    fn take_saved_pbs() -> js_sys::Array;
+
+    /// Keeps a solo run's personal best (`pb.rs`), under `key`.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSavePb)]
+    pub fn save_pb(key: &str, bytes: &[u8]);
+
     /// Hands the page a warning or an error that was logged, for it to show if the game crashes.
     #[wasm_bindgen(js_namespace = window, js_name = ctrLog)]
     pub fn log_line(line: &str);
@@ -150,8 +179,38 @@ pub fn take_track_pictures() -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Reads the dropped image from the page from now on.
+/// The solo runs' personal bests the page keeps, once.
+pub fn take_pbs() -> Vec<Vec<u8>> {
+    take_saved_pbs()
+        .iter()
+        .map(|bytes| bytes.unchecked_into::<js_sys::Uint8Array>().to_vec())
+        .collect()
+}
+
+/// Fills `loader::store` with what the page kept, and has it keep every change from now on.
+/// Before anything reads the store.
+pub fn take_kept() {
+    let kept = take_kept_files().into_iter().filter_map(|pair| {
+        let pair: js_sys::Array = pair.dyn_into().ok()?;
+        let path = pair.get(0).as_string()?;
+        let bytes = pair.get(1).dyn_into::<js_sys::Uint8Array>().ok()?;
+        Some((PathBuf::from(path), bytes.to_vec()))
+    });
+    loader::store::preload(kept);
+    loader::store::on_change(|path, bytes| {
+        let key = path.to_string_lossy();
+        match bytes {
+            Some(bytes) => keep_file(&key, bytes),
+            None => unkeep_file(&key),
+        }
+    });
+}
+
+/// Reads the dropped image from the page from now on, if it has one.
 pub fn take_disc_image() {
+    if !has_disc() {
+        return;
+    }
     loader::disc::keep_external(PathBuf::from(DISC), disc_size() as u64, |at, buf| {
         read_disc(at as f64, buf);
         Ok(())

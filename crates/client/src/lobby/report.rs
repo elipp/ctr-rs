@@ -1,10 +1,10 @@
 //! What the session reports (`net::Event`), taken in once a frame.
 
 use super::commands::{copy_to_clipboard, net_info_text};
-use super::online::Online;
 use super::{ANNOUNCE_COLOR, Lobby, Member};
 use crate::console::{Log, console};
 use crate::maps;
+use crate::race_on::{CurrentRace, NetRace, RaceOn};
 use crate::toast::Toast;
 use bevy::prelude::*;
 use net::Event;
@@ -15,6 +15,7 @@ pub(super) const LEAD_SMOOTHING: f32 = 0.1;
 
 pub(super) fn report(
     mut lobby: ResMut<Lobby>,
+    mut race_on: ResMut<RaceOn>,
     mut lag: ResMut<super::lag::FakeLag>,
     time: Res<Time<Real>>,
     mut toasts: MessageWriter<Toast>,
@@ -90,7 +91,7 @@ pub(super) fn report(
                 debug!(
                     "{} left{}",
                     id.fmt_short(),
-                    if lobby.online.is_some() {
+                    if race_on.is_on() {
                         " (their kart idles for the rest of the race)"
                     } else {
                         ""
@@ -130,54 +131,17 @@ pub(super) fn report(
                 };
                 let mut characters = characters;
                 characters.iter_mut().for_each(on_roster);
-                let characters_len = characters.len();
                 let mut retail = retail;
                 retail
                     .characters
-                    .truncate(race::MAX_KARTS.saturating_sub(characters_len));
+                    .truncate(race::MAX_KARTS.saturating_sub(characters.len()));
                 retail.characters.iter_mut().for_each(on_roster);
                 stopped = false;
                 started_cup = Some(retail.cup);
-                let names: Vec<String> = players
-                    .iter()
-                    .map(|id| id.fmt_short().to_string())
-                    .collect();
-                started = Some(Online {
-                    slot,
-                    locals,
-                    characters,
-                    bots,
-                    // (Named after the nicknames below.)
-                    labels: names.clone(),
-                    names,
-                    ids: players,
-                    track,
-                    hash,
-                    rules,
-                    inbox: Vec::new(),
-                    delayed: default(),
-                    fresh: true,
-                    built: false,
-                    ready: false,
-                    go: false,
-                    specs: Vec::new(),
-                    retail,
-                    retail_specs: Vec::new(),
-                    corrections: 0,
-                    replayed: 0,
-                    ahead: vec![0.0; characters_len],
-                    buffered: 0.0,
-                    checks: race::desync::Checks::new(characters_len, slot),
-                    desync: Vec::new(),
-                    announced: 0,
-                    gone: vec![false; characters_len],
-                    finished: vec![false; characters_len],
-                    watching: if slot < characters_len { slot } else { 0 },
-                    asked: Vec::new(),
-                    frozen: vec![false; characters_len],
-                    lefts: Vec::new(),
-                    pause_at: None,
-                });
+                let net = NetRace::new(players, slot);
+                started = Some(CurrentRace::new(
+                    slot, locals, characters, bots, track, hash, rules, retail, Some(net),
+                ));
             }
             Event::Go => go = true,
             Event::Gone { slot } => gones.push(slot),
@@ -318,7 +282,7 @@ pub(super) fn report(
     }
     if stopped {
         lobby.cup_next = None;
-        lobby.end_race();
+        lobby.end_race(&mut race_on);
         toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
     }
     let new_race = started.is_some();
@@ -326,13 +290,13 @@ pub(super) fn report(
         // Every race's start brings the flag in (a cup's next one has it from its standings
         // already): the players load at their own speeds, and the faster ones would show the
         // scene before the race has put the karts on the grid, until everyone's go.
-        lobby.cup_next = started.as_ref().map(|online| online.track);
-        lobby.online = started;
+        lobby.cup_next = started.as_ref().map(|race| race.track);
+        race_on.0 = started;
     }
     // (The session drops the pauses of older races, so one that came with a start is of the new
     // race.)
     if let Some(at) = paused
-        && let Some(net) = &mut lobby.online
+        && let Some(net) = race_on.get_mut().and_then(|race| race.net.as_mut())
     {
         net.pause_at = at;
         let text = if at.is_some() {
@@ -363,7 +327,7 @@ pub(super) fn report(
         warn!("{why}");
         toasts.write(Toast::new(why, 6000).color(Color::srgb(1.0, 0.3, 0.3)));
         // The race cannot start without the map: the others would wait for us for good.
-        lobby.close();
+        lobby.close(&mut race_on);
         return;
     }
     if let Some((players, spectators, you, locked, bots)) = roster {
@@ -439,52 +403,53 @@ pub(super) fn report(
     }
     // The race is named after the nicknames when it starts, and again when one changes.
     if new_race || nicks_told {
-        lobby.refresh_labels();
+        lobby.refresh_labels(&mut race_on);
     }
     // (After the lobby: a player who joined and spoke at once is known by now.)
     for (from, text) in chats {
         logs.write(lobby.chat_line(from, &text));
     }
     let mut answers = Vec::new();
-    if let Some(online) = &mut lobby.online {
-        online.go |= go;
+    if let Some(race) = race_on.get_mut()
+        && let Some(net) = race.net.as_mut()
+    {
+        race.go |= go;
         // (`/debug lag` holds the pads back a while; with no lag they go through at once.)
         let now = time.elapsed();
-        online.delayed.hold(pads, now, &mut lag);
+        net.delayed.hold(pads, now, &mut lag);
         // The pads of a player we reported on are not taken: the report is where they end.
-        online.inbox.extend(
-            online
-                .delayed
-                .release(now, &lag)
+        let released = net.delayed.release(now, &lag);
+        net.inbox.extend(
+            released
                 .into_iter()
-                .filter(|(slot, ..)| !online.frozen.get(*slot).copied().unwrap_or(false)),
+                .filter(|(slot, ..)| !net.frozen.get(*slot).copied().unwrap_or(false)),
         );
         for slot in gones {
-            if !online.go {
+            if !race.go {
                 // The sim has none of its pads yet, and takes none now.
-                online.inbox.retain(|(from, ..)| *from != slot);
-                online.delayed.forget(slot);
-                if let Some(frozen) = online.frozen.get_mut(slot) {
+                net.inbox.retain(|(from, ..)| *from != slot);
+                net.delayed.forget(slot);
+                if let Some(frozen) = net.frozen.get_mut(slot) {
                     *frozen = true;
                 }
                 answers.push(slot);
             } else {
-                online.asked.push(slot);
+                net.asked.push(slot);
             }
         }
-        online.lefts.extend(lefts);
+        net.lefts.extend(lefts);
         for (slot, ahead) in leads {
-            if let Some(smoothed) = online.ahead.get_mut(slot) {
+            if let Some(smoothed) = net.ahead.get_mut(slot) {
                 *smoothed += (ahead - *smoothed) * LEAD_SMOOTHING;
             }
         }
         for (slot, tick, hash) in sums {
-            let found = online.checks.theirs(slot, tick, hash);
-            online.found(found);
+            let found = net.checks.theirs(slot, tick, hash);
+            net.found(found);
         }
-        for d in online.desync.iter_mut().filter(|d| !d.told) {
+        for d in net.desync.iter_mut().filter(|d| !d.told) {
             d.told = true;
-            let who = online.labels.get(d.slot).map_or("?", String::as_str);
+            let who = race.labels.get(d.slot).map_or("?", String::as_str);
             let hashes = d.hashes.map_or_else(
                 || "(a pad is missing, not a hash)".to_string(),
                 |h| format!("ours {:016x}, theirs {:016x}", h.ours, h.theirs),
@@ -494,12 +459,12 @@ pub(super) fn report(
                  We are player {} of {}; track {:#x}, map hash {:#018x}; characters {:?}; players {:?}",
                 d.slot,
                 d.tick,
-                online.slot,
-                online.characters.len(),
-                online.track,
-                online.hash,
-                online.characters,
-                online.names,
+                race.slot,
+                race.characters.len(),
+                race.track,
+                race.hash,
+                race.characters,
+                net.names,
             );
             toasts.write(
                 Toast::new(
@@ -515,7 +480,7 @@ pub(super) fn report(
     }
     if let Some(why) = failed {
         // Back to where we started: no lobby, no race.
-        lobby.close();
+        lobby.close(&mut race_on);
         toasts.write(
             Toast::new(format!("Left the lobby: {why}"), 5000).color(Color::srgb(1.0, 0.3, 0.3)),
         );

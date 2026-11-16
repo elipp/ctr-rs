@@ -108,39 +108,14 @@ fn build(
         *none = true;
         return;
     };
-    let data = mesh::model_mesh(&header, &frame, &textures.vram, scale);
-    let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    for position in data.parts.iter().flat_map(|p| &p.positions) {
-        low = low.min(Vec3::from_array(*position));
-        high = high.max(Vec3::from_array(*position));
-    }
-    let middle = (low + high) / 2.0;
-    let mut atlas = Image::new(
-        bevy::render::render_resource::Extent3d {
-            width: data.atlas.width as u32,
-            height: data.atlas.height as u32,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
-        data.atlas.rgba,
-        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    );
-    atlas.sampler = bevy::image::ImageSampler::nearest();
-    let base = StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(images.add(atlas)),
-        unlit: true,
-        cull_mode: None,
-        double_sided: true,
-        ..default()
-    };
+    let model = HudModel::new(mesh::model_mesh(&header, &frame, &textures.vram, scale), &mut images);
+    let middle = (model.low + model.high) / 2.0;
     // One for each view, all drawn by the camera over the whole window.
     for view in missing {
         let pivot = commands
             .spawn((
                 WumpaIcon {
-                    diameter: (high - low).max_element(),
+                    diameter: (model.high - model.low).max_element(),
                     rest,
                 },
                 HudView(view),
@@ -148,28 +123,94 @@ fn build(
                 Visibility::default(),
             ))
             .id();
-        crate::spawn_parts(
-            data.parts.clone(),
-            &base,
+        model.spawn(
             Transform::from_translation(-middle),
-            Some(pivot),
+            pivot,
             &mut commands,
             &mut meshes,
             &mut materials,
             &mut subtract_materials,
+        );
+    }
+}
+
+/// A model of the level for the HUD camera: its parts, the box around them, and their unlit
+/// material.
+pub(crate) struct HudModel {
+    parts: [mesh::MeshPart; mesh::PARTS],
+    pub low: Vec3,
+    pub high: Vec3,
+    base: StandardMaterial,
+}
+
+impl HudModel {
+    pub fn new(data: mesh::ModelMesh, images: &mut Assets<Image>) -> HudModel {
+        let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for position in data.parts.iter().flat_map(|p| &p.positions) {
+            low = low.min(Vec3::from_array(*position));
+            high = high.max(Vec3::from_array(*position));
+        }
+        let mut atlas = Image::new(
+            bevy::render::render_resource::Extent3d {
+                width: data.atlas.width as u32,
+                height: data.atlas.height as u32,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            data.atlas.rgba,
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        );
+        atlas.sampler = bevy::image::ImageSampler::nearest();
+        let base = StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(images.add(atlas)),
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            ..default()
+        };
+        HudModel {
+            parts: data.parts,
+            low,
+            high,
+            base,
+        }
+    }
+
+    /// The model under `pivot`, moved by `transform`, on the HUD camera's [`LAYER`].
+    pub fn spawn(
+        &self,
+        transform: Transform,
+        pivot: Entity,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        subtract_materials: &mut Assets<SubtractMaterial>,
+    ) {
+        crate::spawn_parts(
+            self.parts.clone(),
+            &self.base,
+            transform,
+            Some(pivot),
+            commands,
+            meshes,
+            materials,
+            subtract_materials,
             LAYER,
         );
     }
 }
 
 /// Puts the fruit in the corner of the window, as tall as the HUD wants it, and turns it as
-/// the fruit of the level turn.
+/// the fruit of the level turn. A solo run has none (`UI_INSTANCE_InitAll`).
 fn show(
     sim: Res<crate::props::Sim>,
+    race_on: Res<crate::race_on::RaceOn>,
     hud: HudViews,
     fixed: Res<Time<Fixed>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut icon: Query<(&WumpaIcon, &HudView, &mut Transform)>,
+    mut icon: Query<(&WumpaIcon, &HudView, &mut Transform, &mut Visibility)>,
     mut last: Local<(u32, f32)>,
 ) {
     let Ok(window) = windows.single() else {
@@ -183,7 +224,13 @@ fn show(
     }
     *last = (ticks, turns);
     let angle = turns / crate::props::FRUIT_SPIN_TICKS * std::f32::consts::TAU;
-    for (icon, &HudView(view), mut transform) in &mut icon {
+    let visibility = if race_on.solo().is_some() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    for (icon, &HudView(view), mut transform, mut shown) in &mut icon {
+        shown.set_if_neq(visibility);
         let Some(kart) = hud.get(view) else {
             continue;
         };

@@ -119,6 +119,7 @@ pub(super) fn input(
     mut sim: ResMut<Sim>,
     mut chosen: ResMut<Chosen>,
     lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     pause: Res<PauseMenu>,
     sounds: Option<Res<Sounds>>,
     karts: Query<(Entity, &KartSlot), With<Extra>>,
@@ -134,7 +135,7 @@ pub(super) fn input(
             sounds.menu(id);
         }
     };
-    let locked = lobby.online.is_some() || lobby.characters_locked();
+    let locked = race_on.is_on() || lobby.characters_locked();
     let taken: Vec<Entity> = drive.views.iter().filter_map(|v| v.device.pad()).collect();
     let mut picked = Vec::new();
     for view in 0..drive.views.len() {
@@ -206,6 +207,7 @@ pub(super) fn sync(
     mut sim: ResMut<Sim>,
     mut chosen: ResMut<Chosen>,
     lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     karts: Query<(Entity, &KartSlot), With<Extra>>,
     mut builder: KartBuilder,
 ) {
@@ -215,7 +217,7 @@ pub(super) fn sync(
         return;
     }
     // (The race has its own karts, from the start.)
-    if lobby.online.is_some() {
+    if race_on.is_on() {
         return;
     }
     let Some(acked) = lobby.own_extras() else {

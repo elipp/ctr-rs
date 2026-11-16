@@ -243,6 +243,7 @@ struct Prompt;
 fn toggle(
     mut actions: MessageReader<Action>,
     lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     podium: Option<Res<Podium>>,
     mut toasts: MessageWriter<toast::Toast>,
     mut commands: Commands,
@@ -252,7 +253,7 @@ fn toggle(
         let Action::DebugPodium(named) = action else {
             continue;
         };
-        if !shown && (lobby.is_open() || lobby.online.is_some()) {
+        if !shown && (lobby.is_open() || race_on.is_on()) {
             toasts.write(
                 toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
                     .color(Color::srgb(1.0, 0.4, 0.4)),
@@ -315,8 +316,7 @@ fn from_lobby(world: &mut World) {
         return;
     }
     let shown = world.contains_resource::<Podium>();
-    let mut lobby = world.resource_mut::<crate::lobby::Lobby>();
-    if lobby.online.is_some() {
+    if world.resource::<crate::race_on::RaceOn>().is_on() {
         if shown {
             leave(world);
         }
@@ -325,7 +325,7 @@ fn from_lobby(world: &mut World) {
     if shown {
         return;
     }
-    let Some(places) = lobby.podium.take() else {
+    let Some(places) = world.resource_mut::<crate::lobby::Lobby>().podium.take() else {
         return;
     };
     if let Err(why) = enter(world, places) {
@@ -436,7 +436,7 @@ fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
         mut level,
         dram,
         mut vram,
-    } = crate::load_level(LEVEL.0);
+    } = crate::load_level(LEVEL.0, instance::lev_init::LevMode::Arcade);
     let path = CameraPath::parse(&dram)
         .map_err(|e| e.to_string())?
         .ok_or("Gem Stone Valley has no camera path")?;
@@ -583,7 +583,7 @@ fn leave(world: &mut World) {
     let mut options = *world.resource::<Options>();
     options.driving = driving;
     world.insert_resource(options);
-    show(world, level, crate::load_level(level), options, false);
+    show(world, level, crate::load_level(level, instance::lev_init::LevMode::Arcade), options, false);
 }
 
 /// Builds the scene of `level` in place of the one shown. The podium's has the scene's common
@@ -591,7 +591,7 @@ fn leave(world: &mut World) {
 fn show(world: &mut World, id: u32, data: LevelData, options: Options, podium: bool) {
     let scene = crate::world_scene(world);
     crate::despawn(world, scene);
-    world.insert_resource(Track(data.level, LevelId(id)));
+    world.insert_resource(Track(data.level, LevelId(id), instance::lev_init::LevMode::Arcade));
     world.insert_resource(Textures {
         dram: data.dram,
         vram: data.vram,

@@ -26,8 +26,9 @@
 //! a special case on an `Item`. The menu is respawned whenever the `Vec<Entry>` compares unequal,
 //! so per-frame state (pick, grid cursor, scroll) lives in `PauseMenu`, not in entries.
 //!
-//! Offline the race stops while the menu is open. Online it goes on, as the others are still
-//! racing: the menu only takes our controls, and our kart gets no input until it closes.
+//! A free drive or a race alone stops while the menu is open. A lobby's race goes on, as the
+//! others are still racing: the menu only takes our controls, and our kart gets no input until
+//! it closes.
 //!
 //! While it is open it takes the keyboard, as the command line does: its keys do not drive the
 //! kart, open the command line or switch the level.
@@ -56,6 +57,7 @@ use crate::cup_wizard::{self, CupItem, Draft, Go};
 use crate::font::{CtrText, TexelSize};
 use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
 use crate::lobby::Lobby;
+use crate::race_on::RaceOn;
 use crate::public_lobbies::{self, PublicLobbies, Status};
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 use crate::text_field::{TextField, Typed};
@@ -256,6 +258,7 @@ pub(crate) fn entry(item: Item, label: impl Into<String>) -> Entry {
 /// player.
 fn items(
     lobby: &Lobby,
+    race_on: &RaceOn,
     menu: &PauseMenu,
     public: &PublicLobbies,
     config: &Config,
@@ -266,7 +269,7 @@ fn items(
         View::Controls => return ("Controls".into(), controls_items(config, menu.capturing)),
         View::About => return ("About".into(), vec![entry(Item::Back, "Back")]),
         View::CupWizard => {
-            let items = cup_wizard::items(&menu.cup, lobby, config);
+            let items = cup_wizard::items(&menu.cup, lobby, race_on, config);
             return ("Cup wizard".into(), typed_into(items, menu));
         }
         View::Weapons => return ("Weapons".into(), cup_wizard::weapon_items(config)),
@@ -275,7 +278,7 @@ fn items(
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
-    if lobby.online.is_none() {
+    if !race_on.shared() {
         items.push(entry(Item::Restart, "Restart"));
     }
     // (Bots only race in a lobby's series: offline there's nothing for them to fill.)
@@ -295,8 +298,8 @@ fn items(
     if cfg!(not(target_arch = "wasm32")) {
         items.push(entry(Item::Quit, "Quit"));
     }
-    // Online the race goes on.
-    let title = if lobby.online.is_none() {
+    // A lobby's race goes on.
+    let title = if !race_on.shared() {
         "Paused"
     } else {
         "Menu"
@@ -509,6 +512,7 @@ fn input(
     size: Res<TexelSize>,
     pads: crate::drive::Pads,
     lobby: Res<Lobby>,
+    race_on: Res<RaceOn>,
     mut public: ResMut<PublicLobbies>,
     mut config: ResMut<Config>,
     time: Res<Time<Real>>,
@@ -557,7 +561,7 @@ fn input(
         .sum();
     let view = menu.view;
     let was_open = menu.open;
-    let offline = lobby.online.is_none();
+    let offline = !race_on.shared();
     let sound = |id| {
         if let Some(sounds) = &sounds {
             sounds.menu(id);
@@ -635,7 +639,7 @@ fn input(
         menu.capturing = None;
         menu.typing = None;
         menu.grid_cursor = 0;
-        test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
+        test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
         if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
             if menu.open {
                 sounds.pause();
@@ -647,7 +651,7 @@ fn input(
         save(&mut menu, &config, &mut toasts);
         return finish(was_open, &menu, &mut keys);
     } else if menu.open {
-        let (_, items) = items(&lobby, &menu, &public, &config);
+        let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
         let enter = key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
             || pad(GamepadButton::South);
         let about = menu.view == View::About;
@@ -785,6 +789,12 @@ fn input(
         }
         match taken_item {
             Some(Item::Resume) => menu.open = false,
+            // A race alone starts over as a race, with its lights (the lobby's); a free drive
+            // only puts the kart back on the grid (`drive_tick`).
+            Some(Item::Restart) if race_on.is_on() => {
+                menu.open = false;
+                actions.write(Action::RestartRace);
+            }
             Some(Item::Restart) => {
                 menu.open = false;
                 menu.restart = true;
@@ -877,7 +887,7 @@ fn input(
             menu.scroll = 0.0;
             menu.grid_cursor = 0;
         }
-        test_sound(&menu, &lobby, &config, &time, sounds.as_deref());
+        test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
         // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
         if !menu.open
             && let Some(sounds) = sounds.as_ref().filter(|_| offline)
@@ -1047,7 +1057,7 @@ fn volume_mut(config: &mut Config, slider: Slider) -> &mut u8 {
 /// the race's song plays on, and is the music's.
 fn test_sound(
     menu: &PauseMenu,
-    lobby: &Lobby,
+    race_on: &RaceOn,
     config: &Config,
     time: &Time<Real>,
     sounds: Option<&Sounds>,
@@ -1058,7 +1068,7 @@ fn test_sound(
     let picked = (menu.open && menu.view == View::Options)
         .then(options_items)
         .and_then(|items| match items.get(menu.selected)?.item {
-            Item::Volume(Slider::Music) if lobby.online.is_some() => None,
+            Item::Volume(Slider::Music) if race_on.shared() => None,
             Item::Volume(slider) => Some(slider),
             _ => None,
         });
@@ -1092,7 +1102,7 @@ fn finish(was_open: bool, menu: &PauseMenu, keys: &mut ButtonInput<KeyCode>) {
 fn show(
     mut commands: Commands,
     mut menu: ResMut<PauseMenu>,
-    lobby: Res<Lobby>,
+    (lobby, race_on): (Res<Lobby>, Res<RaceOn>),
     public: Res<PublicLobbies>,
     config: Res<Config>,
     size: Res<TexelSize>,
@@ -1108,7 +1118,7 @@ fn show(
     mut captions: icon_grid::Captions<PauseMenu>,
 ) {
     let wanted = menu.open.then(|| {
-        let (title, items) = items(&lobby, &menu, &public, &config);
+        let (title, items) = items(&lobby, &race_on, &menu, &public, &config);
         Shown { items, title }
     });
     let current = shown.single().ok();

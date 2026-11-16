@@ -4,16 +4,11 @@
 //! reproduce a drive from the starting grid. Only the ticks on which the input changed are
 //! stored, which is also what an online simulation would send. `buttons_tapped` is not
 //! stored: it follows from the held buttons of the tick before.
-//!
-//! The text form is a header line, `demo 1 <character>`, then one `<tick> <held> <lx> <ly>
-//! <ry>` line per change (held in hex).
 
 use crate::Input;
 
-const HEADER: &str = "demo 1";
-
 /// One change of the controller: from `tick` on, until the next change, this is held.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct Change {
     pub tick: u32,
     pub buttons_held: u32,
@@ -38,7 +33,7 @@ impl Change {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct Demo {
     pub character: usize,
     pub changes: Vec<Change>,
@@ -86,57 +81,10 @@ impl Demo {
         })
     }
 
-    pub fn to_text(&self) -> String {
-        let mut text = format!("{HEADER} {}\n", self.character);
-        for c in &self.changes {
-            text += &format!(
-                "{} {:x} {} {} {}\n",
-                c.tick, c.buttons_held, c.stick_lx, c.stick_ly, c.stick_ry
-            );
-        }
-        text += &format!("end {}\n", self.length);
-        text
-    }
-
-    pub fn from_text(text: &str) -> Result<Demo, String> {
-        let mut lines = text.lines();
-        let head = lines.next().ok_or("empty demo")?;
-        let character = head
-            .strip_prefix(HEADER)
-            .and_then(|rest| rest.trim().parse().ok())
-            .ok_or_else(|| format!("not a demo: '{head}'"))?;
-        let mut demo = Demo::new(character);
-        let mut ended = false;
-        for line in lines.filter(|l| !l.trim().is_empty()) {
-            let bad = || format!("bad demo line '{line}'");
-            let mut words = line.split_whitespace();
-            if let Some(("end", length)) = line.split_once(' ') {
-                demo.length = length.trim().parse().map_err(|_| bad())?;
-                ended = true;
-                continue;
-            }
-            let tick = words.next().and_then(|w| w.parse().ok()).ok_or_else(bad)?;
-            let buttons_held = words
-                .next()
-                .and_then(|w| u32::from_str_radix(w, 16).ok())
-                .ok_or_else(bad)?;
-            let mut stick = || words.next().and_then(|w| w.parse().ok()).ok_or_else(bad);
-            let (stick_lx, stick_ly, stick_ry) = (stick()?, stick()?, stick()?);
-            if demo.changes.last().is_some_and(|last| last.tick >= tick) {
-                return Err(format!("demo ticks out of order at '{line}'"));
-            }
-            demo.changes.push(Change {
-                tick,
-                buttons_held,
-                stick_lx,
-                stick_ly,
-                stick_ry,
-            });
-        }
-        if !ended {
-            return Err("demo has no end line (cut short?)".into());
-        }
-        Ok(demo)
+    /// Ends the demo before `length`: the changes from then on go.
+    pub fn truncate(&mut self, length: u32) {
+        self.length = self.length.min(length);
+        self.changes.retain(|c| c.tick < self.length);
     }
 }
 
@@ -212,19 +160,5 @@ mod tests {
             })
             .collect();
         assert_eq!(tapped, [0, buttons::CROSS, 0, 0, buttons::CIRCLE, 0]);
-    }
-
-    #[test]
-    fn text_round_trips() {
-        let demo = sample();
-        assert_eq!(Demo::from_text(&demo.to_text()), Ok(demo));
-    }
-
-    #[test]
-    fn a_cut_short_file_is_refused() {
-        let text = sample().to_text();
-        let cut = &text[..text.rfind("end").unwrap()];
-        assert!(Demo::from_text(cut).is_err());
-        assert!(Demo::from_text("hello").is_err());
     }
 }

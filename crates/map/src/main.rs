@@ -3,21 +3,26 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use std::sync::Arc;
+
 use map::Map;
 
 const USAGE: &str = "ctr-map: maps from community patches.
 
 usage:
-  ctr-map import PATCH.xdelta [-o OUT.ctrmap] [--level N] [--song-pack N] [--reverb N] [--disc BIN]
+  ctr-map import PATCH.xdelta [-o OUT] [--level N] [--song-pack N] [--reverb N] [--disc BIN]
       reads the patch against the USA disc image (CTR_BIN, or assets/ctr-u.bin; --disc picks
-      one), finds where the patch put its map (a track's slot, or the entries that CTR Editor
-      uses; --level N when it changes several different tracks, --entries LEV,VRAM to name
-      the BIGFILE entries by hand; every song pack the patch changes is a soundtrack of the map, which can be
-      stepped through in the client; --song-pack N makes pack N of KART.HWL the one that plays
-      first (see `audio`); when the patch changes several packs, it lists them and asks, unless
-      the option is given; --reverb N, 0 to 4, sets the
-      map's reverb mode; the patch's reverbs are asked for in the same way when it changes
-      some, and the track's own is the default), and saves it (default: assets/.cache/custom-tracks/NAME.ctrmap)
+      one), finds where the patch put its maps (a map for each track slot with a level file of
+      its own, with the slot's relic LEV if the patch changes that too; or the entries that CTR
+      Editor uses; --level N takes one slot, --entries LEV,VRAM names the BIGFILE entries by
+      hand), lists what else it changes (code, menus: not followed), and saves each map (-o is
+      the file for one map, the folder for several; default assets/.cache/custom-tracks/).
+      With several maps, each takes its slot's song pack and the patch's reverb for it.
+      With one: every song pack the patch changes is a soundtrack, which can be stepped
+      through in the client; --song-pack N makes pack N of KART.HWL the one that plays first
+      (see `audio`), and when the patch changes several packs it lists them and asks; --reverb
+      N, 0 to 4, sets the reverb mode, asked for in the same way when the patch changes some,
+      the track's own by default
   ctr-map audio PATCH.xdelta [--disc BIN]
       whether the patch changes the game's audio: the song packs of SOUNDS/KART.HWL, and the
       executable's tables of each level's song and reverb
@@ -37,9 +42,9 @@ fn disc() -> PathBuf {
 /// (only its author knows), so the packs are listed and a number is asked for. Nothing is asked
 /// when no one is there to answer, or when there is not a choice (one pack is taken); an empty answer takes the
 /// pack of the track's own slot.
-fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Result<Option<u8>> {
+fn ask_song_pack(disc: &std::path::Path, patch: &Arc<[u8]>) -> std::io::Result<Option<u8>> {
     use std::io::{BufRead, IsTerminal, Write};
-    let changes = map::audio::changed_packs(disc, &std::fs::read(patch)?)?;
+    let changes = map::audio::changed_packs(disc, patch)?;
     match changes.as_slice() {
         [] => return Ok(None),
         [only] => {
@@ -85,9 +90,9 @@ fn ask_song_pack(disc: &std::path::Path, patch: &std::path::Path) -> std::io::Re
 /// When the patch gives levels other reverbs (`data.reverbMode`), which is the map's: one change
 /// is taken, several are listed and a number is asked for, which can be any of the game's modes
 /// (0 to 4); an empty answer leaves it to the track's own. Nothing is asked of no one.
-fn ask_reverb(patch: &std::path::Path, disc: &std::path::Path) -> std::io::Result<Option<u8>> {
+fn ask_reverb(patch: &Arc<[u8]>, disc: &std::path::Path) -> std::io::Result<Option<u8>> {
     use std::io::{BufRead, IsTerminal, Write};
-    let changes = map::audio::changed_reverbs(disc, &std::fs::read(patch)?)?;
+    let changes = map::audio::changed_reverbs(disc, patch)?;
     match changes.as_slice() {
         [] => return Ok(None),
         [(level, was, now)] => {
@@ -163,33 +168,56 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 }
             }
             let patch = patch.ok_or("import needs a patch")?;
-            if reverb.is_none() {
-                reverb = ask_reverb(&patch, &disc_path)
-                    .map_err(|e| format!("{}: {e}", patch.display()))?;
+            let failed = |e: std::io::Error| format!("{}: {e}", patch.display());
+            let bytes: Arc<[u8]> = std::fs::read(&patch).map_err(failed)?.into();
+            let name = patch
+                .file_stem()
+                .map_or_else(|| "map".into(), |s| s.to_string_lossy().into_owned());
+            let mut scan = map::import::Scan::new(&disc_path, name, bytes.clone()).map_err(failed)?;
+            let sources = scan.sources(level, entries).map_err(failed)?;
+            if sources.len() == 1 {
+                if reverb.is_none() {
+                    reverb = ask_reverb(&bytes, &disc_path).map_err(failed)?;
+                }
+                if song_pack.is_none() {
+                    song_pack = ask_song_pack(&disc_path, &bytes).map_err(failed)?;
+                }
+            } else if song_pack.is_some() || reverb.is_some() {
+                println!(
+                    "--song-pack and --reverb are for a patch of one track: each of these {} maps \
+                     takes its slot's own (--level N imports one)",
+                    sources.len()
+                );
             }
-            if song_pack.is_none() {
-                song_pack = ask_song_pack(&disc_path, &patch)
-                    .map_err(|e| format!("{}: {e}", patch.display()))?;
-            }
-            let done = map::import::import(&disc_path, &patch, level, entries, song_pack, reverb)
-                .map_err(|e| format!("{}: {e}", patch.display()))?;
-            let out = out.unwrap_or_else(|| {
-                PathBuf::from("assets/.cache/custom-tracks").join(format!("{}.ctrmap", done.map.name))
-            });
-            if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
-                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            }
-            done.map
-                .write(&out)
-                .map_err(|e| format!("{}: {e}", out.display()))?;
+            let done = scan.import(&sources, song_pack, reverb).map_err(failed)?;
             println!(
-                "{}: read from {}; the patch changes {} entries of BIGFILE.BIG (tracks {:?})",
-                done.map.name,
-                done.source,
+                "the patch changes {} entries of BIGFILE.BIG (tracks {:?})",
                 done.changed.len(),
                 done.tracks
             );
-            println!("saved {}", out.display());
+            let path = |map: &Map| match (&out, done.maps.len()) {
+                (Some(file), 1) => file.clone(),
+                (Some(dir), _) => dir.join(format!("{}.ctrmap", map.name)),
+                (None, _) => PathBuf::from("assets/.cache/custom-tracks")
+                    .join(format!("{}.ctrmap", map.name)),
+            };
+            for made in &done.maps {
+                let out = path(&made.map);
+                if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                }
+                made.map
+                    .write(&out)
+                    .map_err(|e| format!("{}: {e}", out.display()))?;
+                let relic = if made.map.relic.is_some() { ", with its relic LEV" } else { "" };
+                println!("{}: read from {}{relic}; saved {}", made.map.name, made.source, out.display());
+            }
+            if !done.unfollowed.is_empty() {
+                println!(
+                    "the patch also changes what no map carries (the port plays retail rules there): {}",
+                    done.unfollowed.join(", ")
+                );
+            }
             Ok(())
         }
         Some("audio") => {
@@ -229,6 +257,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let map = Map::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let l = &map.level;
             println!("name: {}", map.name);
+            match &map.relic {
+                Some(r) => println!(
+                    "relic: {} quad blocks, {} instances, {} vram images",
+                    r.level.quad_blocks.len(),
+                    r.level.instances.len(),
+                    r.vram.len()
+                ),
+                None => println!("relic: none (the 1P level is every mode's)"),
+            }
             println!("id: {:#x}", map.id().map_err(|e| e.to_string())?);
             println!(
                 "level: {} quad blocks, {} vertices, {} instances, {} restart points",

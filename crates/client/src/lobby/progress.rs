@@ -2,6 +2,7 @@
 
 use super::cup::{self, Finisher};
 use super::{ANNOUNCE_COLOR, Lobby};
+use crate::race_on::{RaceOn, SoloEnd};
 use crate::toast::Toast;
 use bevy::prelude::*;
 
@@ -72,19 +73,21 @@ mod tests {
 /// start another race.
 pub(super) fn finish(
     mut lobby: ResMut<Lobby>,
+    mut race_on: ResMut<RaceOn>,
     sim: Res<crate::props::Sim>,
+    track: Res<crate::Track>,
     time: Res<Time<Real>>,
     mut toasts: MessageWriter<Toast>,
 ) {
-    let Some(net) = lobby.online.as_mut().filter(|net| net.go && !net.fresh) else {
+    let Some(race) = race_on.get_mut().filter(|race| race.racing()) else {
         return;
     };
     let settled = sim.race.settled();
-    while let Some(&at) = sim.race.finish_ticks.get(net.announced)
+    while let Some(&at) = sim.race.finish_ticks.get(race.announced)
         && at < settled
     {
-        let place = net.announced;
-        net.announced += 1;
+        let place = race.announced;
+        race.announced += 1;
         let finished = |kart: &race::Kart| {
             kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0
                 && kart.driver.driver_rank == place as i16
@@ -92,14 +95,38 @@ pub(super) fn finish(
         let Some(slot) = sim.race.karts.iter().position(finished) else {
             continue;
         };
-        let text = format!("{} finished {}", net.kart_label(slot), ordinal(place));
+        // A solo run's finish is told by its ceremony (`solo_end.rs`).
+        if let Some(kind) = race.solo
+            && let Some(ms) = sim.race.final_ms(slot)
+        {
+            use crate::pb::Verdict;
+            debug!("{kind:?} run finished in {} (tick {at})", crate::laps::clock(ms));
+            let verdict = crate::pb::finished(&track.0, &sim, race);
+            let relic = kind == race::solo::Kind::Relic;
+            let earned = |ms| relic.then(|| race::relic::earned(race.track, race.rules.laps, ms)).flatten();
+            let (new_best, had, best) = match verdict {
+                Some(Verdict::First) => (true, None, None),
+                Some(Verdict::Better { old }) => (true, earned(old.final_ms), None),
+                Some(Verdict::Worse { best }) => (false, None, Some(best.final_ms)),
+                None => (false, None, None),
+            };
+            race.solo_end = Some(SoloEnd {
+                at,
+                perfect: sim.race.perfect(slot),
+                new_best,
+                best,
+                relic: earned(ms).filter(|&tier| new_best && Some(tier) > had),
+            });
+            continue;
+        }
+        let text = format!("{} finished {}", race.kart_label(slot), ordinal(place));
         debug!("{text} (tick {at})");
         toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
     }
     // The race is over when the players that score have crossed the line (the ones that left
     // will not, and are not waited for), and the aftermath has passed.
-    let players = net.characters.len();
-    let bots = net.bots > 0 || !net.retail.characters.is_empty();
+    let players = race.characters.len();
+    let bots = race.bots > 0 || !race.retail.characters.is_empty();
     let finished =
         |kart: &race::Kart| kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
     let finish_at = |slot: usize| {
@@ -111,17 +138,23 @@ pub(super) fn finish(
     };
     let last_waited = if bots {
         (0..players)
-            .filter(|&slot| !net.is_bot(slot) && !net.gone[slot])
+            .filter(|&slot| !race.is_bot(slot) && !race.gone(slot))
             .try_fold(0, |last: u32, slot| Some(last.max(finish_at(slot)?)))
     } else {
-        let present = net.gone.iter().filter(|gone| !**gone).count();
+        let present = (0..players).filter(|&slot| !race.gone(slot)).count();
         let waited_for = cup::places_waited_for(present);
         sim.race
             .finish_ticks
             .get(waited_for.saturating_sub(1))
             .copied()
     };
-    let over_at = last_waited.map(|at| at + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32);
+    // A solo run goes on for its ceremony, which has no time of its own until it is settled.
+    let aftermath = match (race.solo, race.solo_end) {
+        (None, _) => AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32,
+        (Some(_), Some(_)) => crate::solo_end::TICKS,
+        (Some(_), None) => return,
+    };
+    let over_at = last_waited.map(|at| at + aftermath);
     if !over_at.is_some_and(|at| at < settled) {
         return;
     }
@@ -138,10 +171,10 @@ pub(super) fn finish(
         order.sort();
         order
             .into_iter()
-            .filter_map(|(_, slot)| net.finisher(slot))
+            .filter_map(|(_, slot)| race.finisher(slot))
             .collect()
     };
-    lobby.end_race();
+    lobby.end_race(&mut race_on);
     if lobby.is_host() {
         lobby.race_over(players, &finishers, time.elapsed_secs());
     }
@@ -153,11 +186,15 @@ pub(super) fn finish(
 /// only the ticks that have all of them, and keeps a few of those in hand.
 /// Offline it runs as fast as the effects panel says (`/debug fx speed`).
 pub(super) fn pace(
-    lobby: Res<Lobby>,
+    race_on: Res<RaceOn>,
     fx: Option<Res<crate::fx::Effects>>,
     mut time: ResMut<Time<Virtual>>,
 ) {
-    let running = lobby.online.as_ref().filter(|net| net.go);
+    // (A race alone has nobody to keep up with: it runs as a free drive does.)
+    let running = race_on
+        .get()
+        .filter(|race| race.go)
+        .and_then(|race| Some((race, race.net.as_ref()?)));
     let max_delta = if running.is_some() {
         CATCH_UP
     } else {
@@ -168,16 +205,16 @@ pub(super) fn pace(
     }
     // (A player that has finished is left out: the race does not wait for its pads, so being
     // ahead of it is no matter.)
-    let ahead = running.map_or(0.0, |net| {
+    let ahead = running.map_or(0.0, |(race, net)| {
         net.ahead
             .iter()
             .enumerate()
-            .filter(|&(slot, _)| slot != net.slot && !net.finished.get(slot).copied().unwrap_or(false))
+            .filter(|&(slot, _)| slot != race.slot && !race.finished.get(slot).copied().unwrap_or(false))
             .fold(0.0_f32, |most, (_, &a)| most.max(a))
     });
     let speed = match &fx {
-        Some(fx) if lobby.online.is_none() => fx.speed,
-        _ if let Some(net) = running.filter(|net| net.watches()) => (1.0
+        Some(fx) if !race_on.shared() => fx.speed,
+        _ if let Some((_, net)) = running.filter(|(race, _)| race.watches()) => (1.0
             + SPECTATE_GAIN * (net.buffered - SPECTATE_BUFFER))
             .clamp(SLOWEST, SPECTATE_FASTEST),
         _ => (1.0 - SLOWDOWN_PER_TICK * (ahead - LEAD_ALLOWED).max(0.0)).max(SLOWEST),
@@ -203,12 +240,12 @@ pub(super) const ROLLBACK_WARN_TICKS: u32 = 4;
 /// Shows a short toast for the rollbacks of the last frame: the ticks they replayed, and how
 /// many there were if more than one.
 pub(super) fn rollback_toasts(
-    lobby: Res<Lobby>,
+    race_on: Res<RaceOn>,
     on: Res<RollbackToasts>,
     mut seen: Local<(u32, u32)>,
     mut toasts: MessageWriter<Toast>,
 ) {
-    let Some(net) = &lobby.online else {
+    let Some(net) = race_on.net() else {
         *seen = (0, 0);
         return;
     };

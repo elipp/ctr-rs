@@ -140,6 +140,69 @@ impl BigIndex {
     }
 }
 
+/// Every group of the index, in order: what [`BigIndex::describe`] names an entry by.
+const GROUPS: [(&str, BigIndex); 36] = [
+    ("arcade tracks", BigIndex::ARCADE_TRACKS),
+    ("battle tracks", BigIndex::BATTLE_TRACKS),
+    ("adventure hubs", BigIndex::ADVENTURE_HUB),
+    ("main menu level", BigIndex::MAIN_MENU_FILE),
+    ("overlay 221-225", BigIndex::OVERLAY_SECT1),
+    ("overlay 226-229", BigIndex::OVERLAY_SECT2),
+    ("overlay 230-233", BigIndex::OVERLAY_SECT3),
+    ("language file", BigIndex::LANGUAGE_FILE),
+    ("racer model hi", BigIndex::RACER_MODEL_HI),
+    ("shared mpk vrm", BigIndex::SHARED_MPK_VRM),
+    ("arcade 1P pack", BigIndex::ARCADE_1P_PACK),
+    ("adventure pack", BigIndex::ADVENTURE_PACK),
+    ("time trial pack", BigIndex::TIME_TRIAL_PACK),
+    ("racer model med", BigIndex::RACER_MODEL_MED),
+    ("arcade 2P pack", BigIndex::ARCADE_2P_PACK),
+    ("racer model low", BigIndex::RACER_MODEL_LOW),
+    ("arcade 4P pack", BigIndex::ARCADE_4P_PACK),
+    ("podium vrms", BigIndex::PODIUM_VRMS),
+    ("dance win", BigIndex::DANCE_MODEL_WIN),
+    ("dance lose", BigIndex::DANCE_MODEL_LOSE),
+    ("dance tawna", BigIndex::DANCE_TAWNA_GIRL),
+    ("uka head", BigIndex::UKA_HEAD),
+    ("aku head", BigIndex::AKU_HEAD),
+    ("dingo fire", BigIndex::DINGO_FIRE),
+    ("podium", BigIndex::PODIUM),
+    ("boss head", BigIndex::BOSS_HEAD),
+    ("lose head", BigIndex::LOSE_HEAD),
+    ("boss body", BigIndex::BOSS_BODY),
+    ("vlc table", BigIndex::VLC_TABLE),
+    ("thumbnails", BigIndex::THUMBS),
+    ("loading screens", BigIndex::LOADING_SCREENS),
+    ("nd box", BigIndex::ND_BOX),
+    ("intro cutscenes", BigIndex::CUTSCENES_INTRO),
+    ("outro cutscenes", BigIndex::CUTSCENES_OUTRO),
+    ("credits", BigIndex::CREDITS),
+    ("scrapbook", BigIndex::SCRAPBOOK),
+];
+
+impl BigIndex {
+    /// Which group the entry is in, and its place there (`#226 (overlay 226-229 +0)`).
+    pub fn describe(self) -> String {
+        match GROUPS.iter().rev().find(|(_, start)| start.0 <= self.0) {
+            Some((name, start)) => format!("#{} ({name} +{})", self.0, self.0 - start.0),
+            None => format!("#{}", self.0),
+        }
+    }
+
+    /// Whether the entry is one of an arcade or battle track's files (any LOD).
+    pub fn is_track_file(self) -> bool {
+        self < Self::ADVENTURE_HUB
+    }
+
+    /// Whether the entry is one of a retail level's files: a track's, a hub's, the main menu's,
+    /// a cutscene's, the credits', the scrapbook's. (The groups between are code, packs and
+    /// models.)
+    pub fn is_level_file(self) -> bool {
+        let last = Self::level(LevelId::SCRAPBOOK, Lod::OnePlayer, LevFile::Ptr);
+        self < Self::OVERLAY_SECT1 || (Self::ND_BOX <= self && self <= last)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

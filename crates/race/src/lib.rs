@@ -10,6 +10,8 @@ pub mod bot;
 pub mod desync;
 pub mod infer;
 pub mod nn;
+pub mod relic;
+pub mod solo;
 pub mod rev;
 pub mod rng;
 pub mod rollback;
@@ -29,7 +31,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 11;
+pub const SIM_VERSION: u32 = 12;
 
 const UNSORTED: i16 = -1;
 
@@ -302,6 +304,14 @@ pub enum Light {
     Green,
 }
 
+/// A beat of the frozen clock of a relic race (`MainFrame_GameLogic`): every 6th tick while it is
+/// frozen, every other one higher.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockBeat {
+    Tick,
+    Tock,
+}
+
 /// When each light comes on: the timer goes to or under this.
 const LIGHT_AT_MS: [(i32, Light); 4] = [
     (0xb40, Light::Red1),
@@ -331,8 +341,41 @@ pub const DEFAULT_LAPS: u8 = 3;
 /// How many checkpoints a lap is cut by (see [`Race::splits`]).
 pub const CHECKPOINTS_PER_LAP: usize = 2;
 
-/// The laps of a free drive, which has no end: more than anyone drives.
-pub const FREE_DRIVE_LAPS: u8 = u8::MAX;
+/// What is being played: a rule of the race, the same for everyone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Driving with no end: nobody finishes, and there is no wrong way.
+    FreeDrive,
+    /// `laps` laps to the line (`gGT->numLaps`).
+    Race { laps: u8 },
+    /// A race against the clock, on the level as `lev_init::LevMode::Relic` leaves it: the time
+    /// crates freeze the clock, and breaking all of them takes [`PERFECT_BONUS_MS`] off the
+    /// final time.
+    Relic { laps: u8 },
+    /// A race against the clock alone, on the relic LEV as `lev_init::LevMode::TimeTrial` leaves
+    /// it (no pickups of any kind).
+    TimeTrial { laps: u8 },
+}
+
+/// `MainGameEnd_SoloRaceGetReward`: what a relic race's final time loses when every time crate
+/// of the level was broken (`numTimeCrates == timeCratesInLEV`).
+pub const PERFECT_BONUS_MS: i32 = 0x2580;
+
+impl Mode {
+    /// `gGT->numLaps`, as the ported code reads it. A free drive has more than anyone drives,
+    /// so that the code needs no case of its own for it (retail has none).
+    pub fn lap_limit(self) -> u8 {
+        match self {
+            Mode::FreeDrive => u8::MAX,
+            Mode::Race { laps } | Mode::Relic { laps } | Mode::TimeTrial { laps } => laps,
+        }
+    }
+
+    /// Whether it ends at a finish line.
+    pub fn is_race(self) -> bool {
+        !matches!(self, Mode::FreeDrive)
+    }
+}
 
 /// Where the weapons fired this tick go: the level, the karts as they were before any of them
 /// fired, the temple doors, and the tick's milliseconds.
@@ -367,8 +410,8 @@ pub struct Race {
     /// Whether karts bump into each other (retail has it off online). A rule of the race: it has
     /// to be the same for everyone.
     pub kart_collisions: bool,
-    /// How many laps the race has (`gGT->numLaps`). A rule of the race, like the one above.
-    pub laps: u8,
+    /// A rule of the race, like the one above.
+    pub mode: Mode,
     /// What the weapon roulette gives, and the retail bots fire. A rule of the race.
     pub roulette: vehicle::item::Roulette,
     /// How many karts have finished the race (`numPlayersFinishedRace`): the next to finish is
@@ -396,6 +439,8 @@ pub struct Race {
     pub intro_ticks: u32,
     /// The light that came on in the last tick, if one did.
     pub light: Option<Light>,
+    /// The frozen clock's beat that sounded in the last tick, if one did.
+    pub clock_beat: Option<ClockBeat>,
     /// `elapsedEventTime`: the milliseconds since the green light (since tick 0 in a race with
     /// no ceremony). The lap times are of this clock.
     pub event_ms: i32,
@@ -425,7 +470,7 @@ impl Race {
             feedback: Feedback::default(),
             tick: 0,
             kart_collisions,
-            laps: DEFAULT_LAPS,
+            mode: Mode::Race { laps: DEFAULT_LAPS },
             roulette: vehicle::item::Roulette::default(),
             finished: 0,
             finish_ticks: Vec::new(),
@@ -436,6 +481,7 @@ impl Race {
             lights_ms: 0,
             intro_ticks: 0,
             light: None,
+            clock_beat: None,
             event_ms: 0,
             bots: None,
             band: None,
@@ -543,7 +589,7 @@ impl Race {
             .iter_mut()
             .map(|kart| {
                 let d = &mut kart.driver;
-                let lap = vehicle::lap::update(d, level, self.laps, event_time);
+                let lap = vehicle::lap::update(d, level, self.mode.lap_limit(), event_time);
                 if lap.finished {
                     d.driver_rank = self.finished;
                     self.finished += 1;
@@ -606,7 +652,7 @@ impl Race {
             // The kart does not pass more than the race has.
             if progress < zones[zone]
                 && progress > zones[zone + 1]
-                && passed <= self.laps as usize * CHECKPOINTS_PER_LAP
+                && passed <= self.mode.lap_limit() as usize * CHECKPOINTS_PER_LAP
             {
                 self.splits[slot].push(self.event_ms);
                 self.checkpoints[slot] += 1;
@@ -687,6 +733,34 @@ impl Race {
             vehicle::item::launch_effects(&kart.driver, launch, at, effects);
             kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
         }
+    }
+
+    /// `gGT->timeCratesInLEV`. Retail counts them only in a relic race, which is the only race
+    /// this is read in.
+    pub fn time_crates(&self) -> usize {
+        let time = instance::pickup::crates::Kind::Time;
+        self.objects.crates.iter().filter(|c| c.sim.kind == time).count()
+    }
+
+    /// Whether the kart in `slot` broke every time crate of the level in a relic race (none to
+    /// break is not a perfect: retail compares the counts, but has no relic level without crates).
+    pub fn perfect(&self, slot: usize) -> bool {
+        let crates = self.time_crates();
+        matches!(self.mode, Mode::Relic { .. })
+            && crates > 0
+            && self.karts[slot].driver.num_time_crates as usize == crates
+    }
+
+    /// The time the kart in `slot` finished in, its laps' added up: None before it has. A relic
+    /// race takes [`PERFECT_BONUS_MS`] off a [`perfect`](Self::perfect) run.
+    pub fn final_ms(&self, slot: usize) -> Option<i32> {
+        let driver = &self.karts[slot].driver;
+        if driver.actions_flag_set & actions::RACE_FINISHED == 0 {
+            return None;
+        }
+        let laps: i32 = self.lap_times[slot].iter().sum();
+        let bonus = self.perfect(slot);
+        Some(laps - if bonus { PERFECT_BONUS_MS } else { 0 })
     }
 
     /// The checkpoint `kart` passed last, as (its number, the time it passed it at, and how
@@ -922,7 +996,7 @@ impl Race {
             let bot_env = vehicle::bot::Env {
                 elapsed_time_ms: env.elapsed_time_ms,
                 traffic_lights_timer: self.lights_ms,
-                laps: self.laps,
+                laps: self.mode.lap_limit(),
                 timer: self.tick,
                 kart_collisions: self.kart_collisions,
             };
@@ -1050,8 +1124,23 @@ impl Race {
             tick.lap = lap;
         }
         self.update_splits(level);
+        self.clock_beat = None;
         if self.lights_ms < 1 {
-            self.event_ms += env.elapsed_time_ms;
+            let frozen = &mut self.objects.frozen_ms;
+            if *frozen < 1 {
+                self.event_ms += env.elapsed_time_ms;
+            } else {
+                // The last decrement, the one that would go below 0, is silent.
+                let left = *frozen - env.elapsed_time_ms;
+                *frozen = left.max(0);
+                if left >= 0 && self.tick % 6 == 0 {
+                    self.clock_beat = Some(if self.tick % 12 == 0 {
+                        ClockBeat::Tick
+                    } else {
+                        ClockBeat::Tock
+                    });
+                }
+            }
         }
         self.tick += 1;
         ticks
@@ -1283,14 +1372,14 @@ impl Race {
             }
             let p = &self.karts[player].driver;
             let still_racing =
-                p.lap_index < self.laps || p.distance_to_finish_curr > BOT_TRAILING_NEAR_FINISH;
+                p.lap_index < self.mode.lap_limit() || p.distance_to_finish_curr > BOT_TRAILING_NEAR_FINISH;
             if rank < 3
                 && still_racing
                 && let Some(bot) = rank_of(&self.karts, rank + 1)
                 && self.bot_may_fire(bot, player)
             {
                 let roll = math::mix_rng_scramble(&mut self.objects.random_number) % 800;
-                let last_lap = self.karts[bot].driver.lap_index as i32 == self.laps as i32 - 1;
+                let last_lap = self.karts[bot].driver.lap_index as i32 == self.mode.lap_limit() as i32 - 1;
                 let launch = if roll < 2 && !last_lap {
                     Some(vehicle::item::Launch::Missile)
                 } else if roll < 4 {
@@ -1390,10 +1479,12 @@ impl Race {
         let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
         let _ = writeln!(
             hash,
-            "{} {} {} {} {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
+            "{} {} {} {} {} {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
             self.tick,
             self.event_ms,
-            self.laps,
+            self.objects.frozen_ms,
+            // (The number, not the mode: the hashes stay those of the clients before `Mode`.)
+            self.mode.lap_limit(),
             self.finished,
             self.winner,
             self.lights_ms,

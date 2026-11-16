@@ -1,5 +1,4 @@
 use std::fs::File;
-use std::io::Write;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -258,6 +257,14 @@ impl Seek for FileDisc {
 
 /// Opens the disc image at `path` (a `.bin`, or a CHD, told by its first bytes) as the bytes of a
 /// `.bin`.
+/// The size of the disc image at `path`, which may be the [external](keep_external) one.
+pub fn image_len(path: &Path) -> io::Result<u64> {
+    match EXTERNAL.get() {
+        Some(&(ref at, len, _)) if at == path => Ok(len),
+        _ => Ok(std::fs::metadata(path)?.len()),
+    }
+}
+
 pub fn open_file(path: &Path) -> io::Result<FileDisc> {
     let mut disc = match EXTERNAL.get() {
         Some(&(ref at, len, read)) if at == path => FileDisc::External { pos: 0, len, read },
@@ -374,27 +381,68 @@ pub fn open_xa_with<R: Read + Seek>(
     Ok((xnf, XaFiles::new(open()?, starts)))
 }
 
-/// Writes `path` (and the directories above it) by `write`, under another name until it is done.
-pub(crate) fn write_atomically(
-    path: &Path,
-    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> io::Result<()>,
-) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut part = path.as_os_str().to_owned();
-    part.push(".part");
-    let part = PathBuf::from(part);
-    let mut out = std::io::BufWriter::new(std::fs::File::create(&part)?);
-    let done = write(&mut out).and_then(|()| out.flush());
-    drop(out);
-    match done {
-        Ok(()) => std::fs::rename(&part, path),
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            Err(e)
+/// A file of a disc's ISO 9660 filesystem ([`files_with`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscFile {
+    /// Directories split by `/`, no version suffix.
+    pub path: String,
+    pub start: u32,
+    pub size: u32,
+}
+
+/// Every file of a disc image that `open` makes, as `open_bigfile_with`.
+pub fn files_with<R: Read + Seek>(open: impl Fn() -> io::Result<R>) -> io::Result<Vec<DiscFile>> {
+    let image = mount(&open)?;
+    let mut files = Vec::new();
+    let mut dirs = vec![(String::new(), image.root_dir().iter(&image))];
+    while let Some((prefix, dir)) = dirs.pop() {
+        for entry in dir.entries().filter_map(Result::ok) {
+            if entry.is_special() {
+                continue;
+            }
+            let name = entry.display_name();
+            let path = format!("{prefix}{}", name.split(';').next().unwrap_or_default());
+            if entry.is_directory() {
+                if let Ok(dir) = entry.as_dir_ref(&image) {
+                    dirs.push((format!("{path}/"), image.open_dir(dir)));
+                }
+                continue;
+            }
+            let header = entry.header();
+            files.push(DiscFile {
+                path,
+                start: header.extent.read(),
+                size: header.data_len.read(),
+            });
         }
     }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// Whether the file `a` of the 2048-byte-sector disc `x` has the same bytes as `b` of `y`.
+pub fn same_file<A: Read + Seek, B: Read + Seek>(
+    (x, a): (&mut A, &DiscFile),
+    (y, b): (&mut B, &DiscFile),
+) -> io::Result<bool> {
+    if a.size != b.size {
+        return Ok(false);
+    }
+    x.seek(SeekFrom::Start(a.start as u64 * USER_DATA_SIZE))?;
+    y.seek(SeekFrom::Start(b.start as u64 * USER_DATA_SIZE))?;
+    // In pieces: TEST.STR is 90 MB.
+    let (mut p, mut q) = (vec![0; 1 << 20], vec![0; 1 << 20]);
+    let mut left = a.size as usize;
+    while left > 0 {
+        let n = left.min(p.len());
+        x.read_exact(&mut p[..n])?;
+        y.read_exact(&mut q[..n])?;
+        if p[..n] != q[..n] {
+            return Ok(false);
+        }
+        left -= n;
+    }
+    Ok(true)
 }
 
 /// The first sector of the file at `path` (directories split by `/`, no version suffix).

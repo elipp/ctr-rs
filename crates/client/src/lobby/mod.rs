@@ -8,7 +8,8 @@
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (the `.cache/custom-tracks` folder, see `paths.rs`)
-//! * `/race start`: start the race, once the others have joined (the host only)
+//! * `/race start`: start the race, once the others have joined (the host only). Outside a lobby
+//!   it starts a race of our local players alone (`/race restart` and `/race stop` too)
 //! * `/cup create <name> <tracks> <laps>`: define a cup (`cup.rs`), kept in the config until
 //!   `/cup delete <name>`, and `/cup start <name>` to drive it: its races one after another, points
 //!   for the first four to finish, and [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a
@@ -38,7 +39,7 @@
 //!   (`bots_menu.rs`)
 //!
 //! The race is a mesh with rollback: every player plays its own pad at once and sends it to all
-//! the others, and the pads of the others reach `drive_tick` through [`Online::inbox`]. A pad
+//! the others, and the pads of the others reach `drive_tick` through [`NetRace::inbox`](crate::race_on::NetRace::inbox). A pad
 //! that has not come yet is predicted, and put right when it does (`race::rollback`).
 
 use bevy::prelude::*;
@@ -46,13 +47,13 @@ use net::{EndpointId, Pad, Session, Ticket};
 
 use crate::console::Log;
 use crate::maps;
+use crate::race_on::{CurrentRace, RaceOn};
 
 use commands::{pause_key, run};
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
 use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
 use hud::waiting;
-pub use online::Online;
 pub(crate) use progress::SPECTATE_BUFFER;
 use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
@@ -63,7 +64,6 @@ mod countdown;
 pub(crate) mod cup;
 mod hud;
 pub mod lag;
-mod online;
 mod placing;
 mod progress;
 mod report;
@@ -123,7 +123,6 @@ pub struct Lobby {
     /// Who stands on the podium of the cup that just ended (`podium.rs`), until it is shown: once
     /// our race is over.
     pub(crate) podium: Option<[Option<u8>; 3]>,
-    pub online: Option<Online>,
 }
 
 /// How many bots the host's races have, of which kind, and how hard they race (`/bots`).
@@ -229,7 +228,7 @@ struct Member {
     id: EndpointId,
     /// The short form of the key.
     key: String,
-    /// What the player is called (see [`Online::labels`]).
+    /// What the player is called (see [`CurrentRace::labels`]).
     label: String,
     nick: String,
     character: u8,
@@ -314,8 +313,8 @@ impl Lobby {
     }
 
     /// Whether we are in a lobby and no race is on: the players wait.
-    pub fn is_waiting(&self) -> bool {
-        self.session.is_some() && self.online.is_none()
+    pub fn is_waiting(&self, race: &RaceOn) -> bool {
+        self.session.is_some() && !race.is_on()
     }
 
     /// What our lobby is called in the realm's list, if it is public.
@@ -439,15 +438,15 @@ impl Lobby {
     }
 
     /// Whether `/cup pause` is in effect, in a race or between the races of a cup.
-    pub(crate) fn is_paused(&self) -> bool {
-        self.online.as_ref().is_some_and(|net| net.pause_at.is_some())
+    pub(crate) fn is_paused(&self, race: &RaceOn) -> bool {
+        race.net().is_some_and(|net| net.pause_at.is_some())
             || self.series.as_ref().is_some_and(|s| s.paused)
     }
 
     /// `/cup pause` (the host only): everyone's race stops at `tick`, our current one. Between
     /// the races of a cup, the countdown to the next one stops instead.
-    fn pause(&mut self, tick: u32) {
-        if self.online.is_some() {
+    fn pause(&mut self, race_on: &RaceOn, tick: u32) {
+        if race_on.is_on() {
             if let Some(session) = &self.session {
                 session.pause(tick);
             }
@@ -465,8 +464,8 @@ impl Lobby {
 
     /// `/cup resume`: the race goes on from where it stopped, or the countdown to the cup's next
     /// race starts.
-    fn resume(&mut self, now: f32) {
-        if self.online.as_ref().is_some_and(|net| net.pause_at.is_some()) {
+    fn resume(&mut self, race_on: &RaceOn, now: f32) {
+        if race_on.net().is_some_and(|net| net.pause_at.is_some()) {
             if let Some(session) = &self.session {
                 session.resume();
             }
@@ -487,7 +486,7 @@ impl Lobby {
     /// `/cup next` (`step` 1) and `/cup previous` (-1), the host only: the race in progress stops
     /// without points, and the countdown goes to the track `step` away. Between races, `step`
     /// counts from the race that was coming up.
-    fn step_cup(&mut self, step: isize, now: f32) {
+    fn step_cup(&mut self, race_on: &mut RaceOn, step: isize, now: f32) {
         let Some(series) = self.series.as_mut().filter(|s| s.scored) else {
             return;
         };
@@ -503,11 +502,11 @@ impl Lobby {
             laps: series.laps,
         };
         let text = format!("Race {} of {}: {}", race + 1, series.tracks.len(), maps::name(track));
-        if self.online.is_some() {
+        if race_on.is_on() {
             if let Some(session) = &self.session {
                 session.stop();
             }
-            self.end_race();
+            self.end_race(race_on);
         }
         self.announce(text);
         self.count_down(then, now, COUNTDOWN_SECONDS);
@@ -515,15 +514,16 @@ impl Lobby {
 
     /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,
     /// so that players who join now do not hear of a race in progress.)
-    fn end_race(&mut self) {
-        self.online = None;
+    fn end_race(&mut self, race_on: &mut RaceOn) {
+        race_on.0 = None;
         if let Some(session) = &self.session {
             session.over();
         }
     }
 
     /// Leaves the lobby, ours or another's, and the race in it.
-    pub fn close(&mut self) {
+    pub fn close(&mut self, race_on: &mut RaceOn) {
+        race_on.0 = None;
         let bots = self.bots;
         *self = Lobby::default();
         self.bots = bots;
@@ -669,33 +669,38 @@ impl Lobby {
         said(name, crate::console::DIM_COLOR)
     }
 
-    /// Names the slots of the race after the nicknames known now, and the bots after their
-    /// characters.
-    fn refresh_labels(&mut self) {
-        if let Some(online) = &mut self.online {
-            // One name for each endpoint (its first slot): the others of its slots are its extra
-            // players, "name@2", "name@3", ...
-            let first = |slot: usize| online.ids.iter().position(|id| *id == online.ids[slot]) == Some(slot);
-            let players: Vec<(EndpointId, &str)> = (online.ids.iter().enumerate())
-                .filter(|&(slot, _)| !online.is_bot(slot) && first(slot))
-                .map(|(_, id)| (*id, self.nicks.get(id).map_or("", String::as_str)))
-                .collect();
-            let names = net::display_names(&players);
-            let name_of = |id: EndpointId| {
-                let at = players.iter().position(|(other, _)| *other == id);
-                at.map(|at| names[at].clone()).unwrap_or_default()
-            };
-            online.labels = (0..online.ids.len())
-                .map(|slot| match online.characters.get(slot) {
-                    Some(&c) if online.is_bot(slot) => online::bot_label(c),
-                    _ if first(slot) => name_of(online.ids[slot]),
-                    _ => {
-                        let nth = (0..=slot).filter(|&s| !online.is_bot(s) && online.ids[s] == online.ids[slot]).count();
-                        format!("{}@{nth}", name_of(online.ids[slot]))
-                    }
-                })
-                .collect();
-        }
+    /// Names the slots of a lobby's race after the nicknames known now, and the bots after
+    /// their characters.
+    fn refresh_labels(&self, race_on: &mut RaceOn) {
+        let Some(race) = race_on.get_mut() else {
+            return;
+        };
+        let Some(ids) = race.net.as_ref().map(|net| &net.ids) else {
+            return;
+        };
+        // One name for each endpoint (its first slot): the others of its slots are its extra
+        // players, "name@2", "name@3", ...
+        let first = |slot: usize| ids.iter().position(|id| *id == ids[slot]) == Some(slot);
+        let players: Vec<(EndpointId, &str)> = (ids.iter().enumerate())
+            .filter(|&(slot, _)| !race.is_bot(slot) && first(slot))
+            .map(|(_, id)| (*id, self.nicks.get(id).map_or("", String::as_str)))
+            .collect();
+        let names = net::display_names(&players);
+        let name_of = |id: EndpointId| {
+            let at = players.iter().position(|(other, _)| *other == id);
+            at.map(|at| names[at].clone()).unwrap_or_default()
+        };
+        let labels = (0..ids.len())
+            .map(|slot| match race.characters.get(slot) {
+                Some(&c) if race.is_bot(slot) => crate::race_on::bot_label(c),
+                _ if first(slot) => name_of(ids[slot]),
+                _ => {
+                    let nth = (0..=slot).filter(|&s| !race.is_bot(s) && ids[s] == ids[slot]).count();
+                    format!("{}@{nth}", name_of(ids[slot]))
+                }
+            })
+            .collect();
+        race.labels = labels;
     }
 
     /// Our pad for the tick being played, which goes to the others at once.
@@ -706,7 +711,7 @@ impl Lobby {
     }
 
     /// The pads of our other local players (split screen) for the tick being played, in the order
-    /// of their slots (`Online::locals`, after the first). They go before ours
+    /// of their slots (`CurrentRace::locals`, after the first). They go before ours
     /// ([`send`](Self::send)).
     pub fn send_extras(&self, pads: Vec<Pad>) {
         if let Some(session) = &self.session {
@@ -752,7 +757,7 @@ impl Lobby {
     }
 
     /// The pads of our bots for the tick being played, in the order of their slots (see
-    /// [`Online::bot_slots`]). They go before ours ([`send`](Self::send)).
+    /// [`CurrentRace::bot_slots`]). They go before ours ([`send`](Self::send)).
     pub fn send_bots(&self, pads: Vec<Pad>) {
         if let Some(session) = &self.session {
             session.bot_input(pads);
@@ -795,11 +800,29 @@ impl Lobby {
         }
     }
 
-    /// The race is built and can start, once the others are as well.
+    /// Our part of the race is built, and it can start once the others' are as well.
     pub fn ready(&self) {
         if let Some(session) = &self.session {
             session.ready();
         }
+    }
+
+    /// Starts a race of our local players alone on `track`, or starts ours over: no lobby, no
+    /// countdown (the race has its lights). A lobby's own start comes from its session instead
+    /// (`report`).
+    fn race_alone(
+        &mut self,
+        race_on: &mut RaceOn,
+        characters: Vec<u8>,
+        nick: &str,
+        track: u32,
+        rules: net::Rules,
+        solo: Option<race::solo::Kind>,
+    ) {
+        debug_assert!(self.session.is_none());
+        // As a lobby's start does (`report`): the flag comes in over what is shown.
+        self.cup_next = Some(track);
+        race_on.0 = Some(CurrentRace::alone(characters, nick, track, rules, solo));
     }
 }
 
@@ -819,7 +842,8 @@ pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<crate::learned::Brains>();
+        app.init_resource::<crate::learned::Brains>()
+            .init_resource::<RaceOn>();
         app.init_resource::<Lobby>()
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()

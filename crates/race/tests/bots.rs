@@ -272,7 +272,7 @@ fn drive(tracks: &[(LevelId, Level, Objects)], steering: Steering) -> Vec<Run> {
         // No karts bumping: each bot is on its own.
         let specs = bots(turn);
         let mut race = Race::new(level, objects.clone(), &specs, false);
-        race.laps = 1;
+        race.mode = race::Mode::Race { laps: 1 };
         for kart in &mut race.karts {
             kart.bot.as_mut().unwrap().steering = steering;
         }
@@ -491,7 +491,7 @@ fn needs_disc_trace_gap() {
         })
         .collect();
     let mut race = Race::new(&level, objects, &specs, false);
-    race.laps = 1;
+    race.mode = race::Mode::Race { laps: 1 };
     let path = &level.nav_paths[race.karts[SLOT].bot.as_ref().unwrap().path as usize].frames;
     println!("path {}:", race.karts[SLOT].bot.as_ref().unwrap().path);
     for i in FRAMES {
@@ -598,7 +598,7 @@ fn gap_takeoffs(level: &Level, objects: &Objects, steering: Steering) -> Vec<Tak
             .collect();
         let n = specs.len();
         let mut race = Race::new(level, objects.clone(), &specs, false);
-        race.laps = 1;
+        race.mode = race::Mode::Race { laps: 1 };
         for kart in &mut race.karts {
             kart.bot.as_mut().unwrap().steering = steering;
         }
@@ -799,7 +799,7 @@ fn needs_disc_replay_dump() {
     };
     // As the client's `Sim::rollback` builds an offline race.
     let mut race = Race::new(&level, objects, &dump.specs, dump.collisions);
-    race.laps = dump.laps;
+    race.mode = race::Mode::Race { laps: dump.laps };
     let pads = vec![Pad::default(); dump.specs.len()];
     let slot = dump.watched;
     let path_of = |kart: &race::Kart| {

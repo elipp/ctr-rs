@@ -91,6 +91,7 @@ fn show(
     config: Res<crate::config::Config>,
     menu: Res<crate::pause::PauseMenu>,
     lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     time: Res<Time<Real>>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
@@ -106,7 +107,7 @@ fn show(
         }
     }
     let wanted = config.controls.held(Control::Scoreboard, &keys) || now < shown.until;
-    let table = (wanted && lobby.is_open() && !menu.open).then(|| table(&lobby));
+    let table = (wanted && lobby.is_open() && !menu.open).then(|| table(&lobby, &race_on));
     if table == shown.table {
         return;
     }
@@ -126,8 +127,8 @@ fn show(
 }
 
 /// What the table shows now.
-fn table(lobby: &Lobby) -> Table {
-    let drivers = drivers(lobby);
+fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
+    let drivers = drivers(lobby, race_on);
     let standings = lobby.standings.as_ref();
     let ping = |driver: &Driver| match &driver.key {
         _ if driver.you => "you".to_string(),
@@ -173,7 +174,7 @@ fn table(lobby: &Lobby) -> Table {
             });
         }
     }
-    let cup = standings.is_some() || lobby.online.as_ref().is_some_and(|net| net.retail.cup);
+    let cup = standings.is_some() || race_on.get().is_some_and(|race| race.retail.cup);
     if cup {
         lines.sort_by_key(|line| std::cmp::Reverse(line.points));
     }
@@ -195,17 +196,17 @@ fn table(lobby: &Lobby) -> Table {
 }
 
 /// The karts of the race on, or the players of the lobby between races.
-fn drivers(lobby: &Lobby) -> Vec<Driver> {
-    if let Some(net) = &lobby.online {
-        let characters = net.kart_characters();
-        return (0..net.karts())
+fn drivers(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Vec<Driver> {
+    if let Some(race) = race_on.get() {
+        let characters = race.kart_characters();
+        return (0..race.karts())
             .filter_map(|slot| {
                 Some(Driver {
-                    who: net.who(slot)?,
+                    who: race.who(slot)?,
                     character: characters[slot],
-                    name: net.kart_label(slot).to_string(),
-                    key: (!net.is_any_bot(slot)).then(|| net.names[slot].clone()),
-                    you: net.local(slot),
+                    name: race.kart_label(slot).to_string(),
+                    key: (!race.is_any_bot(slot)).then(|| race.keys().get(slot).cloned()).flatten(),
+                    you: race.local(slot),
                 })
             })
             .collect();

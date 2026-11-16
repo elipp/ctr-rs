@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 const MAGIC: &[u8; 8] = b"CTRMAP\0\0";
 
 /// The version of the format: changes with the structs that are saved in it.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 
 /// zstd's level for a map file: it is made once and sent many times.
 const COMPRESSION: i32 = 19;
@@ -55,6 +55,20 @@ pub struct Map {
     pub vram: Vec<VramImage>,
     /// The music, reverb and samples the patch gave the track; none for a track of the game.
     pub audio: Option<Audio>,
+    /// What a relic race is on: retail ships a whole `Lod::Relic` LEV and VRAM per track (the 1P
+    /// geometry with time crates, without weapon/fruit crates), and so do patches that change
+    /// that slot. Grafting the crates onto the 1P level would move models, texture pages and BSP
+    /// hitboxes between files. None: the 1P level is all modes' (`instance::lev_init` hides what
+    /// a mode doesn't show).
+    pub relic: Option<Box<Relic>>,
+}
+
+/// A map's relic LEV ([`Map::relic`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relic {
+    pub level: Level,
+    pub dram: DramFile,
+    pub vram: Vec<VramImage>,
 }
 
 /// The audio a patch changed on the track it replaced (`audio::carve`). What the map does not
@@ -158,12 +172,15 @@ impl Map {
 
     /// The map as a file: this is also what is sent to a player who has not got it.
     pub fn to_bytes(&self) -> io::Result<Vec<u8>> {
+        self.to_bytes_at(COMPRESSION)
+    }
+
+    /// As [`Map::to_bytes`], at zstd's `level`: what reads it doesn't care, and neither do
+    /// [`Map::hash`] and [`Map::id`], which are of the contents.
+    pub fn to_bytes_at(&self, level: i32) -> io::Result<Vec<u8>> {
         let mut out = MAGIC.to_vec();
         out.extend(VERSION.to_le_bytes());
-        out.extend(zstd::stream::encode_all(
-            self.encode()?.as_slice(),
-            COMPRESSION,
-        )?);
+        out.extend(zstd::stream::encode_all(self.encode()?.as_slice(), level)?);
         Ok(out)
     }
 
@@ -194,19 +211,21 @@ impl Map {
     /// tells a map that was made by an older build, which `Map::read` refuses, without reading
     /// it all.
     pub fn is_current(path: &Path) -> bool {
-        use std::io::Read;
-        let mut head = [0u8; MAGIC.len() + 4];
-        std::fs::File::open(path)
-            .and_then(|mut f| f.read_exact(&mut head))
-            .is_ok_and(|()| head.starts_with(MAGIC) && head[MAGIC.len()..] == VERSION.to_le_bytes())
+        let head = MAGIC.len() + 4;
+        loader::store::read_prefix(path, head).is_ok_and(|bytes| {
+            bytes.len() == head
+                && bytes.starts_with(MAGIC)
+                && bytes[MAGIC.len()..] == VERSION.to_le_bytes()
+        })
     }
 
+    /// (Through `loader::store`, so the maps made from the disc are kept in a browser too.)
     pub fn write(&self, path: &Path) -> io::Result<()> {
-        std::fs::write(path, self.to_bytes()?)
+        loader::store::write(path, &self.to_bytes()?)
     }
 
     pub fn read(path: &Path) -> io::Result<Map> {
-        Map::from_bytes(&std::fs::read(path)?)
+        Map::from_bytes(&loader::store::read(path)?)
     }
 }
 
@@ -259,6 +278,7 @@ mod tests {
                 pixels: vec![9, 8],
             }],
             audio: None,
+            relic: None,
         }
     }
 

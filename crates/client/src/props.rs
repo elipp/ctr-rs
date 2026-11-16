@@ -54,8 +54,8 @@ impl Sim {
         }
     }
 
-    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the rules of
-    /// a race of a lobby, even if we are alone in it (None for a free drive). A `spectator`
+    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `rules` are a race's, of
+    /// a lobby or alone, with what it plays (None for a free drive). A `spectator`
     /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
     /// race after the players; the `band` is the learned bots' rubber band.
     #[allow(clippy::too_many_arguments)]
@@ -64,19 +64,28 @@ impl Sim {
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
-        online: Option<net::Rules>,
+        rules: Option<(net::Rules, race::Mode)>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
     ) -> Rollback<Race> {
+        let solo = rules.and_then(|(rules, mode)| Some((rules, race::solo::Kind::of(mode)?)));
+        if let Some((rules, (kind, laps))) = solo {
+            // `/race relic|trial` refuses a lobby, split screen and bots.
+            let [spec] = specs else {
+                panic!("a solo run is for one kart, not {}", specs.len());
+            };
+            let race = race::solo::start(level, objects, *spec, kind, laps, rules.seed);
+            return Rollback::new(race, 1, Some(0), ROLLBACK_WINDOW).record(0, spec.character);
+        }
         let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
         race.band = band;
         if let Some((setup, bots)) = bots.filter(|(_, bots)| !bots.is_empty()) {
             race.add_bots(level, setup, bots);
         }
-        // An online race starts with the ceremony; offline the kart drives off at once.
-        if let Some(rules) = online {
-            race.laps = rules.laps;
+        // A race starts with the ceremony; a free drive drives off at once.
+        if let Some((rules, mode)) = rules {
+            race.mode = mode;
             race.objects.random_number = i32::from(rules.seed);
             race.roulette = vehicle::item::Roulette {
                 masked: rules.masked_weapons,
@@ -88,7 +97,7 @@ impl Sim {
             };
             race.start_ceremony(level);
         } else {
-            race.laps = race::FREE_DRIVE_LAPS;
+            race.mode = race::Mode::FreeDrive;
         }
         let rollback = Rollback::new(
             race,
@@ -97,7 +106,7 @@ impl Sim {
             ROLLBACK_WINDOW,
         );
         // Nobody to compare with alone (the bots are in our sim alone), or offline.
-        if specs.len() > 1 && online.is_some() {
+        if specs.len() > 1 && rules.is_some() {
             rollback.check_every(CHECK_EVERY)
         } else {
             rollback
@@ -112,7 +121,7 @@ impl Sim {
         level: &Level,
         specs: &[KartSpec],
         own: usize,
-        online: Option<net::Rules>,
+        rules: Option<(net::Rules, race::Mode)>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
@@ -122,12 +131,17 @@ impl Sim {
             self.start.clone(),
             specs,
             own,
-            online,
+            rules,
             spectator,
             bots,
             band,
         );
         self.own = own;
+    }
+
+    /// The objects at tick 0.
+    pub fn start(&self) -> &Objects {
+        &self.start
     }
 
     /// Our kart.
@@ -254,7 +268,7 @@ pub fn spin_fruit(
     }
 }
 
-/// How far to raise instance `n` of a level, in level units, when the level places a crate inside
+/// How far to raise instance `n` of a level's 1P LEV, in level units, when the level places a crate inside
 /// the ground (see DEVIATIONS.md). Only what is drawn moves; the sim keeps the crate where the
 /// level has it.
 ///
@@ -545,17 +559,14 @@ pub fn spawn(
     // The parts of a model at a scale, before the instance winds them, and its atlas.
     let mut built: HashMap<(u32, [i16; 3]), ([mesh::MeshPart; PARTS], Handle<Image>)> =
         Default::default();
-    // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
-    let show_letters = std::env::var_os("CTR_LETTERS").is_some();
+    // `DRAW_INSTANCE`, which the mode filter (`lev_init`) clears: the C, T and R letters, the
+    // crates of another mode. A time crate of the relic LEV has it only once the filter set it.
     for (n, inst) in level
         .instances
         .iter()
         .enumerate()
-        .filter(|(_, i)| i.model != 0)
+        .filter(|(_, i)| i.model != 0 && i.flags & 1 != 0)
     {
-        if !show_letters && matches!(inst.model_name.as_str(), "c" | "t" | "r") {
-            continue;
-        }
         // The fireballs hide their model (`HIDE_MODEL`); see `fire`.
         if matches!(by_instance.get(&n), Some(Slot::Fireball(_))) {
             continue;

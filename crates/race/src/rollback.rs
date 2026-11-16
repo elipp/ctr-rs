@@ -89,6 +89,8 @@ pub struct Rollback<S: Simulation> {
     every: u32,
     /// The hashes taken and not yet collected: (tick, hash of the state before that tick).
     sums: Vec<(u32, u64)>,
+    /// A slot whose final pads are kept whole, from tick 0 ([`Rollback::record`]).
+    recording: Option<(usize, vehicle::demo::Demo)>,
 }
 
 impl<S: Simulation> Rollback<S> {
@@ -110,6 +112,28 @@ impl<S: Simulation> Rollback<S> {
             dirty: None,
             every: 0,
             sums: Vec::new(),
+            recording: None,
+        }
+    }
+
+    /// Keeps every final pad of `slot` (a kart of `character`), from tick 0 on: a demo of it
+    /// ([`Rollback::recorded`]). Only ticks that are final are in it, so it is the pads the race
+    /// was really played with, whatever was predicted. Before any tick is played.
+    pub fn record(mut self, slot: usize, character: usize) -> Rollback<S> {
+        debug_assert_eq!(self.played, 0);
+        self.recording = Some((slot, vehicle::demo::Demo::new(character)));
+        self
+    }
+
+    /// The demo [`Rollback::record`] keeps: up to [`Rollback::settled`].
+    pub fn recorded(&self) -> Option<&vehicle::demo::Demo> {
+        self.recording.as_ref().map(|(_, demo)| demo)
+    }
+
+    /// The ticks before `base` are final: whatever `pads` (tick `base`'s) are, they are for good.
+    fn record_final(&mut self, pads: &[Pad]) {
+        if let Some((slot, demo)) = &mut self.recording {
+            demo.record(self.base, &pads[*slot].input(0));
         }
     }
 
@@ -316,6 +340,7 @@ impl<S: Simulation> Rollback<S> {
                 self.sums.push((self.played, self.now.checksum()));
             }
             let output = self.now.step(cx, &pads);
+            self.record_final(&pads);
             for known in &mut self.known {
                 known.pop_front();
             }
@@ -338,7 +363,9 @@ impl<S: Simulation> Rollback<S> {
                 self.sums.push((self.base, self.snapshots[0].checksum()));
             }
             self.snapshots.pop_front();
-            self.used.pop_front();
+            if let Some(pads) = self.used.pop_front() {
+                self.record_final(&pads);
+            }
             for known in &mut self.known {
                 known.pop_front();
             }

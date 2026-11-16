@@ -345,7 +345,7 @@ impl<'a> Env<'a> {
             let frames = &track.level.nav_paths[self.path].frames;
             let spec = spec(self.rng.below(vehicle::stats::CHARACTER_ENGINES.len()));
             let mut race = Race::new(&track.level, track.objects.clone(), &[spec], false);
-            race.laps = race::FREE_DRIVE_LAPS;
+            race.mode = race::Mode::FreeDrive;
             // (Not before a jump, a lip or a grab's spot: those are for getting over it.)
             let turn = if !jump_start && !grab_start && !lip_start && self.rng.unit() < self.rules.turned_starts
             {

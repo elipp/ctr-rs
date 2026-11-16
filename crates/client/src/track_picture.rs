@@ -33,7 +33,6 @@ use crate::kart::KartSlot;
 use crate::hud::atlas_image;
 use crate::loading::Loading;
 use crate::pixel::OwnTarget;
-use crate::lobby::Lobby;
 use crate::scene::{spawn_layers, spawn_parts};
 use crate::shadow::Shadow;
 use crate::sky::{self, SkyCamera};
@@ -466,11 +465,11 @@ fn start_building(
     loading: Option<Res<Loading>>,
     taking: Option<Res<Capture>>,
     building: Option<Res<BuildingLevel>>,
-    lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut pictures: ResMut<TrackPictures>,
     mut commands: Commands,
 ) {
-    if loading.is_some() || taking.is_some() || building.is_some() || lobby.online.is_some() {
+    if loading.is_some() || taking.is_some() || building.is_some() || race_on.is_on() {
         return;
     }
     let Some((id, since)) = pictures.awaiting_preview else {

@@ -8,8 +8,10 @@ use loader::level::LevelId;
 use loader::model::Model;
 use loader::vram::Vram;
 
+/// The level shown, its id, and the mode its instances were filtered for (`load_level`): a race
+/// of another mode on the same track has to load it again.
 #[derive(Resource)]
-pub struct Track(pub Level, pub LevelId);
+pub struct Track(pub Level, pub LevelId, pub instance::lev_init::LevMode);
 
 #[derive(Resource)]
 pub(crate) struct Textures {

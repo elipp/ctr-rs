@@ -81,7 +81,9 @@ mod portrait_row;
 mod probe;
 mod projectile;
 
+mod pb;
 mod props;
+mod race_on;
 mod public_lobbies;
 mod rain;
 mod rect_menu;
@@ -94,6 +96,7 @@ mod shield;
 mod skid;
 mod sky;
 mod slide_meter;
+mod solo_end;
 mod sound;
 mod speedometer;
 mod spider;
@@ -101,6 +104,7 @@ mod submerge;
 mod subtract;
 mod suggest;
 mod text_field;
+mod timebox;
 mod toast;
 mod track_picture;
 mod tracker;
@@ -148,7 +152,10 @@ fn log_filter() -> String {
 fn main() {
     crash::install();
     #[cfg(target_arch = "wasm32")]
-    web::take_disc_image();
+    {
+        web::take_kept();
+        web::take_disc_image();
+    }
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);
@@ -166,7 +173,7 @@ fn main() {
         racer,
         driving: true,
     };
-    let LevelData { level, dram, vram } = load_level(track_id);
+    let LevelData { level, dram, vram } = load_level(track_id, instance::lev_init::LevMode::Arcade);
     let character_data = load_character(racer);
     let Shared {
         crate_explosion,
@@ -174,10 +181,11 @@ fn main() {
         shields,
         projectiles,
         fruit_display,
+        relic,
         fonts,
         digits,
     } = load_shared();
-    let loaded = Track(level, LevelId(track_id));
+    let loaded = Track(level, LevelId(track_id), instance::lev_init::LevMode::Arcade);
     let textures = Textures { dram, vram };
     let drive = new_drive(&loaded, &character_data.racer, racer as usize);
 
@@ -242,6 +250,7 @@ fn main() {
         .insert_resource(mask::MaskModels(Some(masks)))
         .insert_resource(shield::ShieldModels(Some(shields)))
         .insert_resource(wumpa_icon::FruitDisplay(fruit_display))
+        .insert_resource(solo_end::RelicModel(relic))
         .insert_resource(projectile::ProjectileModels::new(projectiles))
         .insert_resource(fonts)
         .add_plugins(font::FontPlugin)

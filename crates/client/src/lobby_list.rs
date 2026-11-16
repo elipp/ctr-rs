@@ -64,17 +64,18 @@ impl Plugin for LobbyListPlugin {
 fn build(
     mut commands: Commands,
     lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
     loaded: Option<Res<Portraits>>,
     lists: Query<(Entity, &List)>,
 ) {
-    let players: Vec<Row> = if lobby.is_waiting() {
+    let players: Vec<Row> = if lobby.is_waiting(&race_on) {
         lobby.rows()
     } else {
         Vec::new()
     };
-    let watchers: Vec<(String, String)> = if lobby.is_waiting() {
+    let watchers: Vec<(String, String)> = if lobby.is_waiting(&race_on) {
         lobby
             .watchers()
             .map(|(n, k)| (n.to_string(), k.to_string()))

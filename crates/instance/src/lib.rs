@@ -9,6 +9,7 @@
 //! hitbox (`LInC`).
 
 pub mod hazard;
+pub mod lev_init;
 pub mod pickup;
 pub mod reflect;
 
@@ -29,7 +30,7 @@ use hazard::seal::Seal;
 use hazard::spider::Spider;
 use hazard::teeth::Teeth;
 use hazard::turtle::Turtle;
-use pickup::crates::{CrateBox, Kind};
+use pickup::crates::CrateBox;
 use pickup::fruit::Fruit;
 
 /// `VEH_PICK_DAMAGE_*`: what a hit does to the driver.
@@ -254,6 +255,8 @@ pub struct Touch<'a> {
     pub model: i16,
     /// `sdata->randomNumber`, which breaking a fruit crate advances.
     pub random_number: &'a mut i32,
+    /// `gGT->frozenTimeRemaining`, which breaking a time crate adds to.
+    pub frozen_ms: &'a mut i32,
 }
 
 /// An object and the instance of the level that it moves (an index into `Level::instances`).
@@ -322,6 +325,8 @@ pub struct Objects {
     pub crates: Vec<Placed<CrateBox>>,
     /// `sdata->randomNumber`, which breaking a fruit crate advances.
     pub random_number: i32,
+    /// `gGT->frozenTimeRemaining`: the race clock holds while it runs down (`Race::tick`).
+    pub frozen_ms: i32,
     /// `ptrSpawnType2`'s first path, which the minecarts follow.
     position_path: Vec<SVec3>,
     /// `ptrSpawnType2_PosRot`, which the rollers follow.
@@ -412,6 +417,7 @@ impl Objects {
             fruit: Vec::new(),
             crates: Vec::new(),
             random_number: math::RANDOM_NUMBER_INIT,
+            frozen_ms: 0,
             position_path: level.position_paths.first().cloned().unwrap_or_default(),
             roll_paths: level.paths.clone(),
             ticks: 0,
@@ -428,10 +434,10 @@ impl Objects {
                 };
                 std::array::from_fn(animation)
             };
-            if let Some(kind) = Kind::of_model(def.model_id) {
+            if let Some(sim) = CrateBox::of_model(def.model_id) {
                 objects.crates.push(Placed {
                     instance,
-                    sim: CrateBox::new(kind),
+                    sim,
                     frames: [0; ANIMATIONS],
                 });
                 continue;
@@ -578,6 +584,7 @@ impl Objects {
             fruit,
             crates,
             random_number,
+            frozen_ms: _,
             position_path,
             roll_paths,
             ticks,
@@ -736,15 +743,18 @@ impl Objects {
     /// instance with no object.
     pub fn hit(&mut self, instance: usize, driver: &mut Driver, model: i16) -> i32 {
         let mut result = None;
+        let mut frozen_ms = self.frozen_ms;
         self.each_object(|e| {
             if e.instance == instance {
                 result = Some(e.object.touch(&mut Touch {
                     driver: &mut *driver,
                     model,
                     random_number: e.random_number,
+                    frozen_ms: &mut frozen_ms,
                 }));
             }
         });
+        self.frozen_ms = frozen_ms;
         result.unwrap_or(1)
     }
 }

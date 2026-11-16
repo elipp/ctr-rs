@@ -30,24 +30,22 @@
 //! folder ([`LAYOUT`]), the size of the image, and the size of each file. [`Source::check`] reads
 //! it with the folder, and does not open the image. A folder with no manifest was never finished.
 //!
-//! Where there is no folder to keep the files in (a browser), [`Source::hold`] takes every need
-//! from the image into memory instead, once, so that the image can be let go of.
+//! The folder is a [`crate::store`] folder: in a browser, the page's IndexedDB.
 //!
 //! The levels are not here: they are maps (`.ctrmap`), made from the disc by the `map` crate.
 
-use std::collections::HashMap;
 use std::io::{self, Cursor, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use hadris_iso::read::IsoImage;
 
 use crate::bigfile::BigFile;
 use crate::bigindex::{BigIndex, LevFile, Lod};
 use crate::disc::{
-    Disc, FileDisc, RawSectorReader, USER_DATA_SIZE, find, find_sized, invalid, mount,
-    open_bigfile, open_file, write_atomically,
+    Disc, FileDisc, RawSectorReader, USER_DATA_SIZE, find, find_sized, image_len, invalid, mount,
+    open_bigfile, open_file,
 };
+use crate::store;
 use crate::howl::Howl;
 use crate::level::LevelId;
 use crate::xa::{Category, Xnf, read_track};
@@ -90,9 +88,6 @@ const NITROS_OXIDE: u32 = 15;
 
 /// `OVERLAY_INDEX_PODIUMS`: overlay 233 among the threads' overlays (230 to 233).
 const CUTSCENE_OVERLAY: u32 = 3;
-
-/// The bytes of every need, if [`Source::hold`] has taken them.
-static HELD: OnceLock<HashMap<Need, Vec<u8>>> = OnceLock::new();
 
 /// A file of the disc, or a part of one, that the game reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -216,23 +211,15 @@ impl Source {
 
     /// Whether the folder has the file of `need`.
     pub fn has(&self, need: Need) -> bool {
-        self.path(need).is_file()
+        store::len(&self.path(need)).is_ok()
     }
 
     /// The bytes of `need`. A file that the folder lacks is taken from the image and kept (if it
     /// cannot be kept, it is still returned: the next read takes it from the image again).
     pub fn get(&self, need: Need) -> io::Result<Vec<u8>> {
-        if let Some(bytes) = HELD.get().and_then(|held| held.get(&need)) {
-            return Ok(bytes.clone());
-        }
-        match std::fs::read(self.path(need)) {
+        match store::read(&self.path(need)) {
             Ok(bytes) => return Ok(bytes),
-            // (A browser has no files: there everything is held, see `hold`.)
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::Unsupported
-                ) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
         let xnf = if matches!(need, Need::Xa(..)) {
@@ -259,31 +246,32 @@ impl Source {
     }
 
     fn store(&self, need: Need, bytes: &[u8]) -> io::Result<()> {
-        use std::io::Write;
-        write_atomically(&self.path(need), |out| out.write_all(bytes))
+        store::write(&self.path(need), bytes)
     }
 
     /// Whether the folder has everything: reads the manifest and looks at the files, not at the
     /// image's contents.
     pub fn check(&self) -> Check {
-        let Ok(text) = std::fs::read_to_string(self.dir.join(MANIFEST)) else {
+        let Some(text) = store::read(&self.dir.join(MANIFEST))
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
             return Check::NotPrepared;
         };
         let Some(manifest) = Manifest::parse(&text) else {
             return Check::Stale("the manifest is of another layout".into());
         };
         if let Some(image) = &self.image
-            && let Ok(meta) = std::fs::metadata(image)
+            && let Ok(len) = image_len(image)
             && manifest.image_size != 0
-            && meta.len() != manifest.image_size
+            && len != manifest.image_size
         {
             return Check::Stale(format!(
-                "the files were made from an image of {} bytes, this one has {}",
+                "the files were made from an image of {} bytes, this one has {len}",
                 manifest.image_size,
-                meta.len()
             ));
         }
-        let Some(xnf) = std::fs::read(self.path(Need::Xnf))
+        let Some(xnf) = store::read(&self.path(Need::Xnf))
             .ok()
             .and_then(|bytes| Xnf::parse(&bytes).ok())
         else {
@@ -294,7 +282,7 @@ impl Source {
             .filter(|&need| {
                 // A need the manifest does not know (one added since the folder was made) is
                 // missing too, though no file of it is there to differ.
-                let on_disk = std::fs::metadata(self.path(need)).map(|m| m.len());
+                let on_disk = store::len(&self.path(need));
                 manifest
                     .size_of(&need.key())
                     .is_none_or(|size| on_disk.ok() != Some(size))
@@ -314,12 +302,12 @@ impl Source {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
         };
-        gone(std::fs::remove_file(self.dir.join(MANIFEST)))?;
+        gone(store::remove_file(&self.dir.join(MANIFEST)))?;
         for file in ["shared.vrm", "menu.lev", "menu.vrm", "KART.HWL", "ENG.XNF"] {
-            gone(std::fs::remove_file(self.dir.join(file)))?;
+            gone(store::remove_file(&self.dir.join(file)))?;
         }
         for dir in ["racer", "pack", "xa", "podium", "overlay"] {
-            gone(std::fs::remove_dir_all(self.dir.join(dir)))?;
+            gone(store::remove_dir_all(&self.dir.join(dir)))?;
         }
         Ok(())
     }
@@ -340,22 +328,6 @@ impl Source {
         Ok((file, howl))
     }
 
-    /// Takes every need from the image into memory, where [`Source::get`] answers from then
-    /// on: for where there is no folder to keep them in. Once only. Returns how many bytes it took.
-    pub fn hold(&self) -> io::Result<usize> {
-        let mut image = Image::open(self.image_for(Need::Xnf)?)?;
-        let xnf = Xnf::parse(&image.extract(Need::Xnf, &Xnf::default())?)?;
-        let held: HashMap<Need, Vec<u8>> = Need::all(&xnf)
-            .into_iter()
-            .map(|need| Ok((need, image.extract(need, &xnf)?)))
-            .collect::<io::Result<_>>()?;
-        let size = held.values().map(Vec::len).sum();
-        if HELD.set(held).is_err() {
-            panic!("the needs are held once");
-        }
-        Ok(size)
-    }
-
     /// Makes the file of every need that the folder lacks, from the image, and the manifest last.
     /// It tells how far it is (`done` of `of`). A folder that [`Source::check`] calls stale is
     /// deleted first. Returns how many files it made.
@@ -365,7 +337,7 @@ impl Source {
             // A file of the wrong size is made again.
             Check::Missing(needs) => {
                 for need in needs {
-                    let _ = std::fs::remove_file(self.path(need));
+                    let _ = store::remove_file(&self.path(need));
                 }
             }
             Check::Ready | Check::NotPrepared => {}
@@ -385,17 +357,14 @@ impl Source {
         }
         let mut manifest = Manifest::default();
         if let Some(image) = &self.image {
-            manifest.image_size = std::fs::metadata(image)?.len();
+            manifest.image_size = image_len(image)?;
         }
         manifest.bigfile = fingerprint.unwrap_or_default();
         for &need in &all {
-            let size = std::fs::metadata(self.path(need))?.len();
+            let size = store::len(&self.path(need))?;
             manifest.files.push((need.key(), size));
         }
-        write_atomically(&self.dir.join(MANIFEST), |out| {
-            use std::io::Write;
-            out.write_all(manifest.render().as_bytes())
-        })?;
+        store::write(&self.dir.join(MANIFEST), manifest.render().as_bytes())?;
         Ok(missing.len())
     }
 }

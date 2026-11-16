@@ -11,7 +11,6 @@ use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::lobby::Lobby;
 use crate::portrait_row::{
     HIGHLIGHT, Portraits, portraits, spawn_host_badge, spawn_portrait, spawn_tags,
 };
@@ -78,7 +77,7 @@ impl Plugin for LeaderboardPlugin {
 /// switch takes every node away, and a race on the new level builds it again.)
 fn build(
     mut commands: Commands,
-    lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     drive: Res<crate::drive::Drive>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
@@ -86,20 +85,19 @@ fn build(
     boards: Query<(Entity, &Board)>,
 ) {
     // (None in a split screen: the column is one for the whole window, and the players have their
-    // own parts of it.)
-    let online = lobby
-        .online
-        .as_ref()
-        .filter(|online| online.built && drive.views().len() == 1);
+    // own parts of it. None in a relic race, which is alone: retail has no ranks there.)
+    let race = race_on.get().filter(|race| {
+        race.phase >= crate::race_on::Phase::Spawned && drive.views().len() == 1 && race.solo.is_none()
+    });
     for (entity, board) in &boards {
         // The same race goes on; a restart keeps the players, so it keeps the column too.
-        if online.is_some_and(|o| o.names == board.names && o.kart_characters() == board.characters)
+        if race.is_some_and(|o| o.keys() == board.names && o.kart_characters() == board.characters)
         {
             return;
         }
         commands.entity(entity).despawn();
     }
-    let Some(online) = online else {
+    let Some(race) = race else {
         return;
     };
     let image = portraits(
@@ -108,7 +106,7 @@ fn build(
         &textures.vram,
         &mut images,
     );
-    let karts = online.kart_characters();
+    let karts = race.kart_characters();
     let players = karts.len();
     let column = commands
         .spawn((
@@ -125,10 +123,10 @@ fn build(
         let y = slot as f32 * SLOT;
         let portrait = spawn_portrait(&mut commands, column, &image, karts[slot], ICON_Y + y);
         commands.entity(portrait).insert(Row { slot, y, pop: 0.0 });
-        let label = online.kart_label(slot);
+        let label = race.kart_label(slot);
         // (A bot has no key: a brain bot's would be the host's.)
-        let key = match online.is_any_bot(slot) {
-            false => online.names.get(slot).map_or("", String::as_str),
+        let key = match race.is_any_bot(slot) {
+            false => race.keys().get(slot).map_or("", String::as_str),
             true => "",
         };
         // The host is slot 0 (`net::Event::Start`).
@@ -154,7 +152,7 @@ fn build(
         ));
     }
     commands.entity(column).insert(Board {
-        names: online.names.clone(),
+        names: race.keys().to_vec(),
         characters: karts,
         order: (0..players).collect(),
     });
@@ -257,12 +255,12 @@ fn tint(sim: Res<crate::props::Sim>, mut rows: Query<(&Row, &mut ImageNode)>) {
 }
 
 /// Keeps the names on the portraits those of the nicknames now.
-fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
-    let Some(online) = &lobby.online else {
+fn names(race_on: Res<crate::race_on::RaceOn>, mut tags: Query<(&NameTag, &mut Text)>) {
+    let Some(race) = race_on.get() else {
         return;
     };
     for (NameTag(slot), mut text) in &mut tags {
-        let label = online.kart_label(*slot);
+        let label = race.kart_label(*slot);
         if text.0 != label {
             text.0 = label.to_string();
         }
@@ -271,11 +269,11 @@ fn names(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut Text)>) {
 
 /// Colours the name of the kart the view follows (ours, or the one a spectator watches) in
 /// [`HIGHLIGHT`].
-fn highlight(lobby: Res<Lobby>, mut tags: Query<(&NameTag, &mut TextColor)>) {
-    let Some(online) = &lobby.online else {
+fn highlight(race_on: Res<crate::race_on::RaceOn>, mut tags: Query<(&NameTag, &mut TextColor)>) {
+    let Some(race) = race_on.get() else {
         return;
     };
-    let viewed = online.viewed();
+    let viewed = race.viewed();
     for (NameTag(slot), mut text) in &mut tags {
         let color = if *slot == viewed {
             HIGHLIGHT

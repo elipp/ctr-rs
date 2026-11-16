@@ -62,7 +62,7 @@ fn show(
         let Some(kart) = hud.get(view) else {
             continue;
         };
-        let shown = race.laps != race::FREE_DRIVE_LAPS
+        let shown = race.mode.is_race()
             && vehicle::lap::wrong_way(kart.driver)
             && race.event_ms & FLASH_BIT != 0
             && !menu.open;

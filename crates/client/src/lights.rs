@@ -52,7 +52,7 @@ fn down(ms: f32) -> f32 {
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     fixed: Res<Time<Fixed>>,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
@@ -82,12 +82,11 @@ fn show(
         } else {
             0.0
         };
-    // Only an online race has the start with the lights, once the sim has gone back to its tick 0
+    // Only a race has the start with the lights, once the sim has gone back to its tick 0
     // (until then it is the free drive's, which has none).
-    let started = lobby
-        .online
-        .as_ref()
-        .is_some_and(|net| net.built && !net.fresh);
+    let started = race_on
+        .get()
+        .is_some_and(|race| race.phase >= crate::race_on::Phase::OnGrid);
     let down = if started { down(ms) } else { 0.0 };
     let shown = if down > 0.0 {
         Visibility::Inherited

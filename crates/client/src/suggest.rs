@@ -225,6 +225,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
         "The lobby's race (host only)",
         &[
             leaf("start", "Count down to a race here"),
+            leaf("relic", "A relic race here, alone: time crates freeze the clock"),
+            leaf("trial", "A time trial here, alone: no pickups, beat your best"),
             leaf("restart", "Count down to the race again"),
             leaf("stop", "End the race for everyone"),
         ],
@@ -648,7 +650,7 @@ mod tests {
             ]
         );
         assert_eq!(names("/r"), ["race"]);
-        assert_eq!(names("/race "), ["start", "restart", "stop"]);
+        assert_eq!(names("/race "), ["start", "relic", "trial", "restart", "stop"]);
         assert_eq!(names("/race st"), ["start", "stop"]);
         assert_eq!(names("/debug weapon 1"), ["1", "10", "11"]);
         assert_eq!(

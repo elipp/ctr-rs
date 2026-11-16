@@ -654,12 +654,12 @@ impl KartBuilder<'_, '_> {
 /// Puts every kart where its sim has it, between the last two ticks.
 pub fn show(
     fixed: Res<Time<Fixed>>,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut karts: Query<(&mut Transform, &mut Visibility, &KartMotion, Has<Kart>)>,
 ) {
     let t = fixed.overstep_fraction();
     // A spectator has no kart of its own: the others' are all drawn, and ours is not.
-    let spectating = lobby.online.as_ref().is_some_and(|net| net.spectating());
+    let spectating = race_on.get().is_some_and(|race| race.spectating());
     for (mut transform, mut visibility, motion, ours) in &mut karts {
         let want = if motion.hidden || (ours && spectating) {
             Visibility::Hidden

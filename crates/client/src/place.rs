@@ -84,7 +84,7 @@ impl Plugin for PlacePlugin {
 fn show(
     mut commands: Commands,
     hud: HudViews,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     digits: Res<BigDigits>,
     mut huds: Query<(&HudView, &mut Visibility, &Children), With<PlaceHud>>,
     mut digit: Query<(&mut ImageNode, &mut Node), With<BigDigit>>,
@@ -101,7 +101,8 @@ fn show(
         // `driverRank` is -1 until the kart has a place.
         let rank = kart.driver.driver_rank;
         let place = usize::try_from(rank).ok().map(|rank| rank + 1);
-        let shown = place.filter(|&p| lobby.online.is_some() && p <= digits.0.len());
+        // A solo run has no place (`UI_INSTANCE_InitAll` makes no `big1` for it).
+        let shown = place.filter(|&p| race_on.is_on() && race_on.solo().is_none() && p <= digits.0.len());
         visibility.set_if_neq(if shown.is_some() {
             Visibility::Inherited
         } else {

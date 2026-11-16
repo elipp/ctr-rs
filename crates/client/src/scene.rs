@@ -14,6 +14,7 @@ use bevy::image::ImageSampler;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use instance::lev_init::LevMode;
 use loader::level::LevelId;
 use loader::model::Model;
 use render::mesh::{self, PARTS, Part};
@@ -83,11 +84,12 @@ pub(crate) struct Picked {
 pub(crate) fn keep_picks(
     mut actions: MessageReader<command::Action>,
     lobby: Res<lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut picked: ResMut<Picked>,
 ) {
     for action in actions.read() {
         // (The lobby refuses it, and says so.)
-        if lobby::commands::refusal(action, &lobby).is_some() {
+        if lobby::commands::refusal(action, &lobby, &race_on).is_some() {
             continue;
         }
         match action {
@@ -151,18 +153,22 @@ pub(crate) fn switch_level(world: &mut World) {
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)
     let race_track = world
-        .get_resource::<lobby::Lobby>()
-        .and_then(|l| l.online.as_ref())
-        .map(|o| (o.track, o.hash));
-    let missing = race_track.is_some_and(|(track, hash)| !maps::has(track, hash));
-    let race_track = race_track.map(|(track, _)| track);
+        .get_resource::<crate::race_on::RaceOn>()
+        .and_then(|race_on| race_on.get())
+        .map(|o| (o.track, o.hash, o.lev_mode()));
+    let missing = race_track.is_some_and(|(track, hash, _)| !maps::has(track, hash));
+    // A race of another mode on the shown track loads it again: its instances differ
+    // (`lev_init`), and a relic race is on another LEV.
+    let mode = race_track.map_or(LevMode::Arcade, |(_, _, mode)| mode);
+    let mode_changed = mode != world.resource::<Track>().2;
+    let race_track = race_track.map(|(track, ..)| track);
     // The next race of a cup has started: the loading screen comes in over the race before first.
     if let Some(track) = race_track
         && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
         && lobby.cup_next == Some(track)
     {
         lobby.cup_next = None;
-        let same_level = track == world.resource::<LevelNumber>().0;
+        let same_level = track == world.resource::<LevelNumber>().0 && !mode_changed;
         crate::loading::bring_in(world, same_level);
         return;
     }
@@ -206,9 +212,10 @@ pub(crate) fn switch_level(world: &mut World) {
         .map_or(0, |racer| racer as i32 - options.racer as i32);
     let current = world.resource::<LevelNumber>().0;
     let wanted = race_track
-        .filter(|&track| track != current && !missing)
+        .filter(|&track| (track != current || mode_changed) && !missing)
         .or(back.filter(|&track| track != current))
-        .or(picked_track.filter(|&track| track != current));
+        .or(picked_track.filter(|&track| track != current))
+        .or((race_track.is_none() && mode_changed).then_some(current));
     if wanted.is_none() && level_step == 0 && racer_step == 0 {
         return;
     }
@@ -229,13 +236,13 @@ pub(crate) fn switch_level(world: &mut World) {
     }
     let character = (racer_step != 0).then(|| load_character(options.racer));
 
-    if id != current {
+    if id != current || mode_changed {
         stage(format_args!("loading level {id:#x}"));
-        let LevelData { level, dram, vram } = load_level(id);
+        let LevelData { level, dram, vram } = load_level(id, mode);
         stage("level loaded, old scene still up");
         let scene = world_scene(world);
         despawn(world, scene);
-        world.insert_resource(Track(level, LevelId(id)));
+        world.insert_resource(Track(level, LevelId(id), mode));
         world.insert_resource(Textures { dram, vram });
         if let Some(character) = character {
             character.insert(world);
@@ -300,6 +307,7 @@ pub(crate) fn rebuild_scene(world: &mut World, options: Options) {
 pub(crate) fn switch_mode(
     mut actions: MessageReader<command::Action>,
     lobby: Res<lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mesh_options: Res<MeshOptions>,
     mut toasts: MessageWriter<toast::Toast>,
     mut commands: Commands,
@@ -326,7 +334,7 @@ pub(crate) fn switch_mode(
             _ => continue,
         };
         // The scene is rebuilt: the race would start over.
-        if lobby.is_open() || lobby.online.is_some() {
+        if lobby.is_open() || race_on.is_on() {
             toasts.write(
                 toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
                     .color(Color::srgb(1.0, 0.4, 0.4)),
@@ -654,7 +662,8 @@ pub(crate) fn setup(
         &mut subtract_materials,
         crate_bias.0,
         track.1,
-        mesh_options.crate_fixup,
+        // (Its instance numbers are the 1P LEVs'.)
+        mesh_options.crate_fixup && track.2 == LevMode::Arcade,
     );
     // The previous level's fire, if the level has none.
     commands.remove_resource::<fire::Fire>();

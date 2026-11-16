@@ -47,6 +47,8 @@ impl PluginGroup for HudPlugins {
             .add(crate::lights::LightsPlugin)
             .add(crate::place::PlacePlugin)
             .add(crate::laps::LapsPlugin)
+            .add(crate::timebox::TimeboxPlugin)
+            .add(crate::solo_end::SoloEndPlugin)
             .add(crate::weapon::WeaponPlugin)
             .add(crate::tracker::TrackerPlugin)
             .add(crate::wumpa_icon::WumpaIconPlugin)
