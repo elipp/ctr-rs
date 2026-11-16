@@ -54,8 +54,8 @@ impl Sim {
         }
     }
 
-    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the rules of
-    /// a race, of a lobby or alone (None for a free drive). A `spectator`
+    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `rules` are a race's, of
+    /// a lobby or alone (None for a free drive). A `spectator`
     /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
     /// race after the players; the `band` is the learned bots' rubber band.
     #[allow(clippy::too_many_arguments)]
@@ -64,7 +64,7 @@ impl Sim {
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
-        online: Option<net::Rules>,
+        rules: Option<net::Rules>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
@@ -75,7 +75,7 @@ impl Sim {
             race.add_bots(level, setup, bots);
         }
         // A race starts with the ceremony; a free drive drives off at once.
-        if let Some(rules) = online {
+        if let Some(rules) = rules {
             race.mode = race::Mode::Race { laps: rules.laps };
             race.objects.random_number = i32::from(rules.seed);
             race.roulette = vehicle::item::Roulette {
@@ -97,7 +97,7 @@ impl Sim {
             ROLLBACK_WINDOW,
         );
         // Nobody to compare with alone (the bots are in our sim alone), or offline.
-        if specs.len() > 1 && online.is_some() {
+        if specs.len() > 1 && rules.is_some() {
             rollback.check_every(CHECK_EVERY)
         } else {
             rollback
@@ -112,7 +112,7 @@ impl Sim {
         level: &Level,
         specs: &[KartSpec],
         own: usize,
-        online: Option<net::Rules>,
+        rules: Option<net::Rules>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
@@ -122,7 +122,7 @@ impl Sim {
             self.start.clone(),
             specs,
             own,
-            online,
+            rules,
             spectator,
             bots,
             band,

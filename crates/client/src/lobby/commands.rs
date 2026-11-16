@@ -4,6 +4,7 @@ use super::countdown::Then;
 use super::cup::{CupDef, Finisher, Series};
 use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, BotKind, Lobby};
+use crate::race_on::RaceOn;
 use crate::command::{Action, PolicyChoice};
 use crate::console::{Log, console};
 use crate::controls::Control;
@@ -41,7 +42,8 @@ pub(super) fn copy_to_clipboard(text: String) {
 }
 
 /// Why `action` cannot be done now, if it cannot.
-pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
+pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Option<&'static str> {
+    let racing = race_on.is_on();
     Some(match action {
         Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
             if lobby.is_open() =>
@@ -50,46 +52,46 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         }
         // (A race alone has no session to carry over into the lobby.)
         Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
-            if lobby.online.is_some() =>
+            if racing =>
         {
             "Stop the race first (/race stop)"
         }
         Action::ToggleSpectator if !lobby.is_open() || !lobby.joined => {
             "Only a guest of a lobby can do that (the host drives)"
         }
-        Action::ToggleSpectator if lobby.online.is_some() => net::NOT_NOW,
+        Action::ToggleSpectator if racing => net::NOT_NOW,
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
         Action::Promote(_)
-            if lobby.online.is_some() || lobby.series.is_some() || lobby.countdown.is_some() =>
+            if racing || lobby.series.is_some() || lobby.countdown.is_some() =>
         {
             net::NOT_NOW
         }
         Action::Players(Some(_)) if lobby.is_open() => {
             "The players are set before joining: close the lobby first"
         }
-        Action::Players(Some(_)) if lobby.online.is_some() => "Stop the race first (/race stop)",
-        Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
-        Action::Character(_) if lobby.online.is_some() || lobby.characters_locked() => net::NOT_NOW,
+        Action::Players(Some(_)) if racing => "Stop the race first (/race stop)",
+        Action::PurgeCache if racing => net::NOT_NOW,
+        Action::Character(_) if racing || lobby.characters_locked() => net::NOT_NOW,
         // (A host's countdown is to the track it is on.)
-        Action::Track(_) if lobby.online.is_some() || lobby.countdown.is_some() => net::NOT_NOW,
+        Action::Track(_) if racing || lobby.countdown.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::Say(_) if !lobby.is_open() => "Not in a lobby to talk to (/lobby create)",
         // (Outside a lobby they are of a race alone.)
         Action::StartRace | Action::RestartRace if lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::StartRace if lobby.online.is_some() => "The race has started (/race restart)",
-        Action::RestartRace if lobby.online.is_none() => "No race to restart (/race start)",
-        Action::DebugRanking if !lobby.is_open() || lobby.joined || lobby.online.is_none() => {
+        Action::StartRace if racing => "The race has started (/race restart)",
+        Action::RestartRace if !racing => "No race to restart (/race start)",
+        Action::DebugRanking if !lobby.is_open() || lobby.joined || !racing => {
             "Only the host of a lobby can do that, in a race"
         }
         Action::StopRace if lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::StopRace if lobby.online.is_none() && lobby.series.is_none() => "No race to stop",
+        Action::StopRace if !racing && lobby.series.is_none() => "No race to stop",
         Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. } if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -99,7 +101,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "A cup is paused (/cup resume, or /cup stop to end it)"
         }
         Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
-            if lobby.online.is_some() || lobby.series.is_some() =>
+            if racing || lobby.series.is_some() =>
         {
             net::NOT_NOW
         }
@@ -107,11 +109,11 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
             "Only the host of a lobby can do that"
         }
         Action::CupPause | Action::CupResume
-            if lobby.online.is_none() && !lobby.series.as_ref().is_some_and(|s| s.scored) =>
+            if !racing && !lobby.series.as_ref().is_some_and(|s| s.scored) =>
         {
             "No race or cup in progress (/cup start)"
         }
-        Action::CupPause if lobby.is_paused() => "Paused already (/cup resume)",
+        Action::CupPause if lobby.is_paused(race_on) => "Paused already (/cup resume)",
         Action::CupNext | Action::CupPrevious if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -126,7 +128,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::CupPrevious if lobby.series.as_ref().is_some_and(|s| s.race == 0) => {
             "This is the cup's first track"
         }
-        Action::CupResume if !lobby.is_paused() => "Not paused (/cup pause)",
+        Action::CupResume if !lobby.is_paused(race_on) => "Not paused (/cup pause)",
         Action::StartRace | Action::RestartRace | Action::CupStart(_) | Action::CupRandom { .. } | Action::CupDrive { .. }
             if lobby.countdown.is_some() =>
         {
@@ -161,6 +163,7 @@ pub(super) fn pause_key(
     config: Res<crate::config::Config>,
     menu: Res<crate::pause::PauseMenu>,
     lobby: Res<Lobby>,
+    race_on: Res<RaceOn>,
     mut actions: MessageWriter<Action>,
 ) {
     if menu.takes_keys()
@@ -169,7 +172,7 @@ pub(super) fn pause_key(
     {
         return;
     }
-    actions.write(if lobby.is_paused() {
+    actions.write(if lobby.is_paused(&race_on) {
         Action::CupResume
     } else {
         Action::CupPause
@@ -180,6 +183,7 @@ pub(super) fn pause_key(
 pub(super) fn run(
     mut actions: MessageReader<Action>,
     mut lobby: ResMut<Lobby>,
+    mut race_on: ResMut<RaceOn>,
     drive: Res<crate::drive::Drive>,
     chosen: Res<crate::drive::Chosen>,
     track: Res<crate::Track>,
@@ -195,7 +199,7 @@ pub(super) fn run(
     mut logs: MessageWriter<Log>,
 ) {
     for action in actions.read() {
-        if let Some(why) = refusal(action, &lobby) {
+        if let Some(why) = refusal(action, &lobby, &race_on) {
             toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
@@ -236,7 +240,7 @@ pub(super) fn run(
                 }
             }
             Action::CloseLobby => {
-                lobby.close();
+                lobby.close(&mut race_on);
                 "Lobby closed!"
             }
             Action::Promote(name) => {
@@ -261,7 +265,7 @@ pub(super) fn run(
                 } else {
                     let characters = std::iter::once(drive.character as u8).chain(extras).collect();
                     let rules = super::rules(race::DEFAULT_LAPS, &config, now);
-                    lobby.race_alone(characters, &config.nickname, track.1.0, rules);
+                    lobby.race_alone(&mut race_on, characters, &config.nickname, track.1.0, rules);
                 }
                 continue;
             }
@@ -318,7 +322,7 @@ pub(super) fn run(
                 }
                 if changed {
                     lobby.set_series_bots(now);
-                    if lobby.online.is_some() {
+                    if race_on.is_on() {
                         let cup = lobby.series.as_ref().is_some_and(|s| s.scored);
                         text += if cup {
                             " (from the cup's next race)"
@@ -342,7 +346,7 @@ pub(super) fn run(
                     Ok(name) => {
                         let mut text = format!("Brain bots drive with the policy\n{name}");
                         if *choice != PolicyChoice::Show
-                            && (lobby.online.is_some() || lobby.series.is_some())
+                            && (race_on.is_on() || lobby.series.is_some())
                         {
                             text += "\n(from the next race you start)";
                         }
@@ -441,19 +445,19 @@ pub(super) fn run(
                 continue;
             }
             Action::CupPause => {
-                lobby.pause(sim.race.tick());
+                lobby.pause(&race_on, sim.race.tick());
                 continue;
             }
             Action::CupResume => {
-                lobby.resume(now);
+                lobby.resume(&race_on, now);
                 continue;
             }
             Action::CupNext => {
-                lobby.step_cup(1, now);
+                lobby.step_cup(&mut race_on, 1, now);
                 continue;
             }
             Action::CupPrevious => {
-                lobby.step_cup(-1, now);
+                lobby.step_cup(&mut race_on, -1, now);
                 continue;
             }
             Action::CupDelete(name) => {
@@ -525,16 +529,16 @@ pub(super) fn run(
             // (Not the lobby's.)
             Action::DebugRanking => {
                 // The others are told the race stopped; the host scores it like a finished one.
-                let Some(net) = &lobby.online else { continue };
+                let Some(race) = race_on.get() else { continue };
                 let mut finishers: Vec<Finisher> =
-                    (0..net.karts()).filter_map(|slot| net.finisher(slot)).collect();
+                    (0..race.karts()).filter_map(|slot| race.finisher(slot)).collect();
                 shuffle(&mut finishers);
                 let players = finishers.len();
                 if let Some(session) = &lobby.session {
                     session.stop();
                 }
                 lobby.countdown = None;
-                lobby.end_race();
+                lobby.end_race(&mut race_on);
                 lobby.race_over(players, &finishers, now);
                 continue;
             }
@@ -556,13 +560,13 @@ pub(super) fn run(
             | Action::Clear => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.
-                if let Some(session) = lobby.session.as_ref().filter(|_| lobby.online.is_some()) {
+                if let Some(session) = lobby.session.as_ref().filter(|_| race_on.is_on()) {
                     session.stop();
                 }
                 lobby.countdown = None;
                 let series = lobby.series.take();
                 let cup = series.as_ref().is_some_and(|s| s.scored);
-                lobby.end_race();
+                lobby.end_race(&mut race_on);
                 // (The guests hear of a stopped race from the session; of a cup, only from us.)
                 if cup {
                     lobby.announce("Cup stopped");
@@ -577,18 +581,18 @@ pub(super) fn run(
                 continue;
             }
             Action::RestartRace if !lobby.is_open() => {
-                if let Some(net) = &lobby.online {
-                    let (characters, track) = (net.characters.clone(), net.track);
-                    let rules = super::rules(net.rules.laps, &config, now);
-                    lobby.race_alone(characters, &config.nickname, track, rules);
+                if let Some(race) = race_on.get() {
+                    let (characters, track) = (race.characters.clone(), race.track);
+                    let rules = super::rules(race.rules.laps, &config, now);
+                    lobby.race_alone(&mut race_on, characters, &config.nickname, track, rules);
                 }
                 continue;
             }
             Action::RestartRace => {
-                if let Some(net) = &lobby.online {
+                if let Some(race) = race_on.get() {
                     let then = Then::Restart {
-                        track: net.track,
-                        laps: net.rules.laps,
+                        track: race.track,
+                        laps: race.rules.laps,
                     };
                     lobby.count_down(then, now, super::COUNTDOWN_SECONDS);
                 }

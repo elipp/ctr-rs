@@ -193,11 +193,11 @@ fn split_time(ms: i32) -> String {
 /// pass back and plays it again does not toast it twice.
 pub(super) fn split_toast(
     sim: Res<crate::props::Sim>,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut announced: Local<usize>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    let Some((number, time, behind)) = lobby.online.as_ref().and(sim.race.last_split(sim.own))
+    let Some((number, time, behind)) = race_on.get().and(sim.race.last_split(sim.own))
     else {
         *announced = 0;
         return;

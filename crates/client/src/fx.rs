@@ -26,7 +26,6 @@ use render::font::Font;
 
 use crate::command::Action;
 use crate::font::{CtrText, TexelSize};
-use crate::lobby::Lobby;
 use crate::toast::Toast;
 
 /// An effect to try, or a way to watch it (`/debug fx`).
@@ -183,7 +182,7 @@ fn act(
     mut actions: MessageReader<Action>,
     mut fx: ResMut<Effects>,
     mut flash: ResMut<crate::flash::Flashes>,
-    lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
@@ -191,7 +190,7 @@ fn act(
             continue;
         };
         let offline_only = matches!(what, Fx::Speed(_) | Fx::Freeze(_) | Fx::Step);
-        if offline_only && lobby.shares_race() {
+        if offline_only && race_on.shared() {
             toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
@@ -220,8 +219,8 @@ fn act(
 }
 
 /// An online race keeps its own clock: the slow motion and the freeze end when one begins.
-fn online(lobby: Res<Lobby>, mut fx: ResMut<Effects>) {
-    if lobby.shares_race() && (fx.speed != 1.0 || fx.frozen) {
+fn online(race_on: Res<crate::race_on::RaceOn>, mut fx: ResMut<Effects>) {
+    if race_on.shared() && (fx.speed != 1.0 || fx.frozen) {
         fx.speed = 1.0;
         fx.frozen = false;
     }

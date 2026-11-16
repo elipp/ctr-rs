@@ -14,7 +14,6 @@ use crate::sky::SkyCamera;
 use crate::{OverlayCamera, Track, player_layer};
 use crate::controls::Controls;
 use crate::kart::{KartBuilder, KartSlot};
-use crate::lobby::Lobby;
 use crate::toast::Toast;
 
 /// The camera that draws the HUD of local player `.0`, in the player's part of the window (a UI
@@ -31,12 +30,12 @@ pub struct UnderCamera(pub usize);
 /// Makes the players on the screen as many as `/players` says: the others' karts and views, and
 /// what each drives with. A pad if there is one that no player has, else (for the second player)
 /// the keyboard's second set of keys. Not before the level is up. In an online race the players
-/// are the ones the roster gave us (`Online::locals`): the views follow those slots, and the
+/// are the ones the roster gave us (`CurrentRace::locals`): the views follow those slots, and the
 /// karts are the characters the host said.
 pub(super) fn sync(
     wanted: Res<LocalPlayers>,
     chosen: Res<super::Chosen>,
-    lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     track: Res<Track>,
     loading: Option<Res<crate::loading::Loading>>,
     mut drive: ResMut<Drive>,
@@ -53,9 +52,11 @@ pub(super) fn sync(
         return;
     }
     // The slot of each local player (the first is ours) and the character it drives.
-    let (slots, characters): (Vec<usize>, Vec<usize>) = match &lobby.online {
+    let (slots, characters): (Vec<usize>, Vec<usize>) = match race_on.get() {
         // (Once `remote::build` has put the others on the grid. A spectator has no view of its own.)
-        Some(online) if !online.built || online.spectating() => return,
+        Some(online) if online.phase < crate::race_on::Phase::Spawned || online.spectating() => {
+            return;
+        }
         Some(online) => online
             .locals
             .iter()

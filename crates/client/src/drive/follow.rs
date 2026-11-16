@@ -125,7 +125,7 @@ impl Default for Orbit {
 /// (Only the place: turning the view with the kart's offset would swing all of it.)
 pub(super) fn chase(
     drive: Res<Drive>,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -174,10 +174,10 @@ pub(super) fn chase(
     let mut target = a.target.lerp(b.target, t);
     // The kart the camera follows, if it is another player's (a spectator's, or once we have
     // finished): it is drawn where its motion says.
-    let watched = lobby.online.as_ref().and_then(|net| {
+    let watched = race_on.get().and_then(|race| {
         others
             .iter()
-            .find(|(slot, _)| slot.0 == net.watching)
+            .find(|(slot, _)| slot.0 == race.watching)
             .map(|(_, motion)| motion)
     });
     if let Some(motion) = watched {

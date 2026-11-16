@@ -1,7 +1,6 @@
 //! The place our kart finished in, "You came in 2nd", which stays on screen until the race is
 //! over.
 
-use super::Lobby;
 use super::progress::ordinal;
 use crate::font::CtrText;
 use bevy::prelude::*;
@@ -14,15 +13,14 @@ pub(super) struct Placing;
 /// Shows our place from the moment our kart crosses the line, and takes it away with the race.
 pub(super) fn placing(
     mut commands: Commands,
-    lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     sim: Res<crate::props::Sim>,
     row: Query<(Entity, &Children), With<Placing>>,
     mut texts: Query<&mut CtrText>,
 ) {
-    let place = lobby
-        .online
-        .as_ref()
-        .filter(|net| net.go && !net.fresh && !net.spectating())
+    let place = race_on
+        .get()
+        .filter(|race| race.racing() && !race.spectating())
         .map(|_| sim.driver())
         .filter(|d| d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
         .map(|d| d.driver_rank.max(0) as usize);

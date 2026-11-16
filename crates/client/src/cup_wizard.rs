@@ -96,7 +96,12 @@ fn draft<'a>(draft: &'a mut Option<Draft>, config: &Config) -> &'a mut Draft {
 }
 
 /// Editing is hidden while `lobby.series()` runs: the running cup's controls replace it.
-pub(crate) fn items(draft: &Option<Draft>, lobby: &Lobby, config: &Config) -> Vec<Entry> {
+pub(crate) fn items(
+    draft: &Option<Draft>,
+    lobby: &Lobby,
+    race_on: &crate::race_on::RaceOn,
+    config: &Config,
+) -> Vec<Entry> {
     let cup = |item| Item::Cup(item);
     let mut items = Vec::new();
     if let Some(series) = lobby.series() {
@@ -107,7 +112,7 @@ pub(crate) fn items(draft: &Option<Draft>, lobby: &Lobby, config: &Config) -> Ve
             "Track",
             Kind::Value(format!("{} of {}", series.race + 1, series.tracks.len())),
         ));
-        if lobby.is_paused() {
+        if lobby.is_paused(race_on) {
             items.push(entry(cup(CupItem::Resume), "Resume"));
         } else {
             items.push(entry(cup(CupItem::Pause), "Pause"));

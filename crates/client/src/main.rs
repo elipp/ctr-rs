@@ -82,6 +82,7 @@ mod probe;
 mod projectile;
 
 mod props;
+mod race_on;
 mod public_lobbies;
 mod rain;
 mod rect_menu;

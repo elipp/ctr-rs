@@ -243,6 +243,7 @@ struct Prompt;
 fn toggle(
     mut actions: MessageReader<Action>,
     lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     podium: Option<Res<Podium>>,
     mut toasts: MessageWriter<toast::Toast>,
     mut commands: Commands,
@@ -252,7 +253,7 @@ fn toggle(
         let Action::DebugPodium(named) = action else {
             continue;
         };
-        if !shown && (lobby.is_open() || lobby.online.is_some()) {
+        if !shown && (lobby.is_open() || race_on.is_on()) {
             toasts.write(
                 toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
                     .color(Color::srgb(1.0, 0.4, 0.4)),
@@ -315,8 +316,7 @@ fn from_lobby(world: &mut World) {
         return;
     }
     let shown = world.contains_resource::<Podium>();
-    let mut lobby = world.resource_mut::<crate::lobby::Lobby>();
-    if lobby.online.is_some() {
+    if world.resource::<crate::race_on::RaceOn>().is_on() {
         if shown {
             leave(world);
         }
@@ -325,7 +325,7 @@ fn from_lobby(world: &mut World) {
     if shown {
         return;
     }
-    let Some(places) = lobby.podium.take() else {
+    let Some(places) = world.resource_mut::<crate::lobby::Lobby>().podium.take() else {
         return;
     };
     if let Err(why) = enter(world, places) {

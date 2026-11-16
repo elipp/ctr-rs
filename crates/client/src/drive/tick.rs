@@ -14,6 +14,7 @@ use super::{Drive, Kart};
 use crate::Track;
 use crate::command::Action;
 use crate::kart::{KartMotion, KartSlot};
+use crate::race_on::{CurrentRace, Phase, RaceOn};
 use crate::toast::Toast;
 
 /// How many ticks we may play past the last pad of another player before we wait for it: the
@@ -71,7 +72,8 @@ pub(super) fn drive_tick(
     mut sim: ResMut<crate::props::Sim>,
     mut drive: ResMut<Drive>,
     mut hold: crate::fx::Hold,
-    mut lobby: ResMut<crate::lobby::Lobby>,
+    lobby: Res<crate::lobby::Lobby>,
+    mut race_on: ResMut<RaceOn>,
     config: Res<crate::config::Config>,
     shown: Shown,
     mut memory: Local<Memory>,
@@ -93,19 +95,17 @@ pub(super) fn drive_tick(
     let drive = &mut *drive;
     // In a lobby's race the sim is everyone's: no pause of our own, no restarts. (A race alone
     // restarts through the lobby, as `/race restart`: see `pause.rs`.)
-    let shared = lobby.shares_race();
+    let shared = race_on.shared();
     // The level of the race is not up yet, nor the karts of the others.
-    if lobby
-        .online
-        .as_ref()
-        .is_some_and(|net| net.track != track.1.0 || !net.built)
+    if race_on.get()
+        .is_some_and(|race| race.track != track.1.0 || race.phase < Phase::Spawned)
     {
         return;
     }
 
     // The host's `/cup pause`: stop at its tick, or now if we are already past it. Rollback evens
     // out the ticks we are ahead once the race resumes.
-    let host_paused = (lobby.online.as_ref())
+    let host_paused = (race_on.net())
         .and_then(|net| net.pause_at)
         .is_some_and(|at| sim.race.tick() >= at);
     if host_paused != *was_host_paused {
@@ -132,50 +132,48 @@ pub(super) fn drive_tick(
     // The menu's RESTART is the grid: every start puts everything, the objects too, back
     // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
-    let mut restart = picked && lobby.online.is_none();
+    let mut restart = picked && !race_on.is_on();
     // The race is over (won, stopped, the lobby closed or failed): back to the free drive.
-    if lobby.online.is_none() && (sim.race.mode.is_race() || sim.race.karts.len() != drive.views.len()) {
+    if !race_on.is_on() && (sim.race.mode.is_race() || sim.race.karts.len() != drive.views.len()) {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
-    if let Some(net) = lobby.online.as_mut().filter(|net| net.fresh) {
-        net.fresh = false;
+    if let Some(race) = race_on.get_mut().filter(|race| race.phase == Phase::Spawned) {
+        race.phase = Phase::OnGrid;
         restart = true;
     }
     if restart {
-        let (specs, own, spectator) = match &lobby.online {
-            Some(net) => (net.specs.clone(), net.viewed(), net.spectating()),
+        let (specs, own, spectator) = match race_on.get() {
+            Some(race) => (race.specs.clone(), race.viewed(), race.spectating()),
             None => (drive.specs(), 0, false),
         };
-        let bots = lobby.online.as_ref().map(|net| {
+        let bots = race_on.get().map(|race| {
             let setup = vehicle::bot::Setup {
-                difficulty: net.retail.difficulty as i16,
+                difficulty: race.retail.difficulty as i16,
                 // A custom track has the rubber band of the first.
-                track: (net.track < race::RACING_TRACKS).then_some(net.track as u8),
-                cup: net.retail.cup,
-                players: net.characters.len(),
+                track: (race.track < race::RACING_TRACKS).then_some(race.track as u8),
+                cup: race.retail.cup,
+                players: race.characters.len(),
             };
-            (setup, net.retail_specs.as_slice())
+            (setup, race.retail_specs.as_slice())
         });
         // The host's brain bots are players to the race: it rubber-bands them (at the difficulty
         // of `/bots`, which comes with the retail bots' even when there are none).
-        let band = lobby
-            .online
-            .as_ref()
-            .filter(|net| net.bots > 0)
-            .map(|net| race::Band::new(net.bot_slots(), net.retail.difficulty as i16));
+        let band = race_on.get()
+            .filter(|race| race.bots > 0)
+            .map(|race| race::Band::new(race.bot_slots(), race.retail.difficulty as i16));
         sim.restart(
             &track.0,
             &specs,
             own,
-            lobby.online.as_ref().map(|net| net.rules),
+            race_on.get().map(|race| race.rules),
             spectator,
             bots,
             band,
         );
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.
-        let hosted = lobby.online.as_ref().filter(|net| net.hosts_bots());
+        let hosted = race_on.get().filter(|race| race.hosts_bots());
         if hosted.is_some() {
             match brains.load() {
                 Ok(name) => info!("online bots: the policy {name}"),
@@ -193,9 +191,9 @@ pub(super) fn drive_tick(
             track.1,
             &sim.race,
             &specs,
-            hosted.map_or(0..0, |net| net.bot_slots()),
-            hosted.map_or(vehicle::bot::difficulty_level::MEDIUM, |net| {
-                net.retail.difficulty as i16
+            hosted.map_or(0..0, |race| race.bot_slots()),
+            hosted.map_or(vehicle::bot::difficulty_level::MEDIUM, |race| {
+                race.retail.difficulty as i16
             }),
         );
         particles.list.clear();
@@ -208,25 +206,26 @@ pub(super) fn drive_tick(
 
     // Tick 0 has to come first: the others must be ready as well. (And our local players' views
     // are up, which make their pads: the race cannot play a tick without them.)
-    if lobby
-        .online
-        .as_ref()
-        .is_some_and(|net| !net.go || (!net.spectating() && drive.views.len() != net.locals.len()))
+    if race_on.get()
+        .is_some_and(|race| !race.racing() || (!race.spectating() && drive.views.len() != race.locals.len()))
     {
         for mut text in &mut net_label {
-            text.0 = match &lobby.online {
-                Some(net) if config.debug_hud => net.summary(0, 0),
-                _ => String::new(),
-            };
+            text.0 = race_on
+                .get()
+                .filter(|_| config.debug_hud)
+                .and_then(|race| race.summary(0, 0))
+                .unwrap_or_default();
         }
         return;
     }
 
     let tick = sim.race.tick();
     let own = sim.own;
-    let spectating = lobby.online.as_ref().is_some_and(|net| net.spectating());
+    let spectating = race_on.get().is_some_and(|race| race.spectating());
     let mut reports = Vec::new();
-    if let Some(net) = lobby.online.as_mut() {
+    if let Some(race) = race_on.get_mut()
+        && let Some(net) = race.net.as_mut()
+    {
         // The pads of the others that came in since the last tick.
         for (slot, first, pads) in net.inbox.drain(..) {
             let pads: Vec<Pad> = pads.iter().map(pad_of).collect();
@@ -280,7 +279,7 @@ pub(super) fn drive_tick(
             sim.race.leave(slot);
             net.frozen[slot] = true;
             net.gone[slot] = true;
-            let name = net.labels.get(slot).map_or("?", String::as_str);
+            let name = race.labels.get(slot).map_or("?", String::as_str);
             toasts.write(
                 Toast::new(format!("Player {name} left the race"), 3000)
                     .color(Color::srgb(1.0, 0.6, 0.3)),
@@ -292,15 +291,15 @@ pub(super) fn drive_tick(
     }
     // Who has crossed the line, as the sim has it now. The sim takes no more of their pads, so
     // once ours has, we watch the rest of the race as a spectator does (below).
-    let watches = match lobby.online.as_mut() {
-        Some(net) => {
-            net.finished = sim
+    let watches = match race_on.get_mut() {
+        Some(race) => {
+            race.finished = sim
                 .race
                 .karts
                 .iter()
                 .map(|kart| kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
                 .collect();
-            net.watches()
+            race.watches()
         }
         None => spectating,
     };
@@ -316,17 +315,15 @@ pub(super) fn drive_tick(
     // others' delay. A watching client does not wait for the karts that have finished: the sim
     // ignores their pads (and they would wait for each other).
     let finished_slot = |slot: usize| {
-        lobby
-            .online
-            .as_ref()
-            .is_some_and(|net| net.finished.get(slot).copied().unwrap_or(false))
+        race_on.get()
+            .is_some_and(|race| race.finished.get(slot).copied().unwrap_or(false))
     };
-    let ours = |slot: usize| lobby.online.as_ref().is_some_and(|net| net.drives(slot));
+    let ours = |slot: usize| race_on.get().is_some_and(|race| race.drives(slot));
     let late: Vec<usize> = if shared {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
             // (Our other local players' pads are made below, and so are our bots'.)
-            .filter(|&slot| !lobby.online.as_ref().is_some_and(|net| net.local(slot)))
+            .filter(|&slot| !race_on.get().is_some_and(|race| race.local(slot)))
             .filter(|&slot| !ours(slot))
             .filter(|&slot| !(watches && finished_slot(slot)))
             .filter(|&slot| {
@@ -341,11 +338,14 @@ pub(super) fn drive_tick(
     } else {
         Vec::new()
     };
-    if watches && let Some(net) = lobby.online.as_mut() {
+    if watches
+        && let Some(race) = race_on.get_mut()
+        && let Some(net) = race.net.as_mut()
+    {
         // (Once everyone has left or finished, nothing is waited for: as if the buffer were
         // full.)
         let complete = (0..sim.race.players())
-            .filter(|&slot| !net.finished[slot])
+            .filter(|&slot| !race.finished[slot])
             .map(|slot| sim.race.confirmed_until(slot))
             .min()
             .unwrap_or(u32::MAX);
@@ -363,11 +363,11 @@ pub(super) fn drive_tick(
         let quiet = if watches { MAX_LEAD } else { 0 };
         if waits.0 >= quiet
             && (waits.0 - quiet) % WAIT_TOAST_TICKS == 0
-            && let Some(net) = lobby.online.as_ref()
+            && let Some(race) = race_on.get()
         {
             let names: Vec<&str> = late
                 .iter()
-                .map(|&slot| net.labels.get(slot).map_or("?", String::as_str))
+                .map(|&slot| race.labels.get(slot).map_or("?", String::as_str))
                 .collect();
             let text = format!("Waiting for {}...", names.join(", "));
             toasts.write(
@@ -401,10 +401,8 @@ pub(super) fn drive_tick(
     let auto = brains.autopilot && !spectating && !watches;
     brains.drive_own(&track.0, track.1, &sim.race, own, auto);
     let own_due = auto && sim.race.confirmed_until(own) <= tick;
-    let bots_due = lobby
-        .online
-        .as_ref()
-        .is_some_and(|net| net.hosts_bots() && net.bot_slots().any(|slot| sim.race.confirmed_until(slot) <= tick));
+    let bots_due = race_on.get()
+        .is_some_and(|race| race.hosts_bots() && race.bot_slots().any(|slot| sim.race.confirmed_until(slot) <= tick));
     let mut pads = if bots_due || own_due {
         brains.pads(&track.0, &sim.race)
     } else {
@@ -414,11 +412,11 @@ pub(super) fn drive_tick(
     let auto_pad = pads.iter().find(|(slot, _)| *slot == own && own_due).map(|&(_, pad)| pad);
     pads.retain(|(slot, _)| *slot != own || !own_due);
     if bots_due
-        && let Some(net) = lobby.online.as_ref()
+        && let Some(race) = race_on.get()
     {
         // No policy (it could not be read): they hold still, as a player that left does.
         if pads.is_empty() {
-            pads = net.bot_slots().map(|slot| (slot, Pad::default())).collect();
+            pads = race.bot_slots().map(|slot| (slot, Pad::default())).collect();
         }
         for &(slot, pad) in &pads {
             sim.race
@@ -506,10 +504,11 @@ pub(super) fn drive_tick(
         }
     }
     for mut text in &mut net_label {
-        text.0 = match &lobby.online {
-            Some(net) if config.debug_hud => net.summary(tick, sim.race.unsettled()),
-            _ => String::new(),
-        };
+        text.0 = race_on
+            .get()
+            .filter(|_| config.debug_hud)
+            .and_then(|race| race.summary(tick, sim.race.unsettled()))
+            .unwrap_or_default();
     }
 
     // Everyone's karts play together, by slot, ours among them. The pads that are not in yet
@@ -531,7 +530,7 @@ pub(super) fn drive_tick(
     let advance = sim.race.advance(&track.0);
     replayed += advance.replayed;
     if replayed > 0
-        && let Some(net) = lobby.online.as_mut()
+        && let Some(net) = race_on.get_mut().and_then(|race| race.net.as_mut())
     {
         net.corrections += 1;
         net.replayed += replayed;
@@ -540,7 +539,7 @@ pub(super) fn drive_tick(
     // against theirs.
     for (tick, hash) in sim.race.take_checksums() {
         lobby.checksum(tick, hash);
-        if let Some(net) = lobby.online.as_mut() {
+        if let Some(net) = race_on.get_mut().and_then(|race| race.net.as_mut()) {
             let found = net.checks.mine(tick, hash);
             net.found(found);
         }
@@ -582,51 +581,49 @@ pub(super) fn drive_tick(
     }
     // Once we have finished, the camera can follow the others (R1 and L1), the ones still here.
     let finished = sim.driver().actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
-    if let Some(net) = lobby.online.as_mut() {
+    if let Some(race) = race_on.get_mut() {
         let players = sim.race.players();
-        let before = net.watching;
+        let before = race.watching;
         // The next kart that way that is still here.
-        let step = |net: &mut crate::lobby::Online, step: i32| {
+        let step = |race: &mut CurrentRace, step: i32| {
             for _ in 0..players {
-                net.watching = (net.watching as i32 + step).rem_euclid(players as i32) as usize;
-                if !net.gone[net.watching] {
+                race.watching = (race.watching as i32 + step).rem_euclid(players as i32) as usize;
+                if !race.gone(race.watching) {
                     break;
                 }
             }
         };
         if spectating {
             // Any kart of the race that is still here, whenever.
-            if cycle != 0 || net.gone[net.watching] {
-                step(net, if cycle == 0 { 1 } else { cycle });
+            if cycle != 0 || race.gone(race.watching) {
+                step(race, if cycle == 0 { 1 } else { cycle });
             }
         } else {
             // After our finish, R1 goes to the kart one place behind the watched one in the race
             // and L1 to the one ahead (wrapping round), the retail bots' included.
             let karts = sim.race.karts.len();
-            let here = |net: &crate::lobby::Online, slot: usize| !net.gone.get(slot).copied().unwrap_or(false);
-            if !finished || net.watching >= karts || !here(net, net.watching) {
-                net.watching = own;
+            let here = |race: &CurrentRace, slot: usize| !race.gone(slot);
+            if !finished || race.watching >= karts || !here(race, race.watching) {
+                race.watching = own;
             }
             if finished && cycle != 0 {
                 let mut by_rank: Vec<(i16, usize)> = (0..karts)
-                    .filter(|&slot| here(net, slot))
+                    .filter(|&slot| here(race, slot))
                     .map(|slot| (sim.race.karts[slot].driver.driver_rank, slot))
                     .collect();
                 by_rank.sort();
-                if let Some(at) = by_rank.iter().position(|&(_, slot)| slot == net.watching) {
+                if let Some(at) = by_rank.iter().position(|&(_, slot)| slot == race.watching) {
                     let next = (at as i32 + cycle).rem_euclid(by_rank.len() as i32) as usize;
-                    net.watching = by_rank[next].1;
+                    race.watching = by_rank[next].1;
                 }
             }
         }
-        if net.watching != before {
+        if race.watching != before {
             drive.own().camera.flags |= camera::flags::DIRECTION_CHANGED;
         }
     }
-    let watching = lobby
-        .online
-        .as_ref()
-        .map_or(own, |net| net.watching);
+    let watching = race_on.get()
+        .map_or(own, |race| race.watching);
     // The HUD and the sounds follow the kart the spectator watches, as they follow ours.
     if spectating {
         sim.own = watching;
@@ -650,9 +647,8 @@ pub(super) fn drive_tick(
     // The offsets of the others' karts fade as far as their players' pings call for.
     for (mut motion, slot, ours) in &mut motions {
         if !ours {
-            let ping = lobby
-                .online
-                .as_ref()
+            let ping = race_on
+                .net()
                 .and_then(|net| net.names.get(slot.0))
                 .and_then(|name| lobby.average_pings.get(name));
             let ease = smoothing.ease(ping.copied(), motion.replayed_average());
@@ -705,14 +701,14 @@ pub(super) fn drive_tick(
 pub(super) fn debug_actions(
     mut actions: MessageReader<Action>,
     mut sim: ResMut<crate::props::Sim>,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<RaceOn>,
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
         // Freeze for as long as asked, to see the race put right after a hitch: the frame is cut
         // short, so the others run ahead.
         if let Action::DebugStall(time) = action {
-            if lobby.shares_race() {
+            if race_on.shared() {
                 debug!("(debug) stalling for {time:?}");
                 stall(*time);
             } else {
@@ -728,7 +724,7 @@ pub(super) fn debug_actions(
         ) {
             continue;
         }
-        if lobby.shares_race() {
+        if race_on.shared() {
             toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }

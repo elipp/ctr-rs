@@ -6,7 +6,6 @@ use render::mesh::SCALE;
 
 use crate::drive::ChaseCamera;
 use crate::kart::KartSlot;
-use crate::lobby::Lobby;
 
 /// The box of the name over the kart in a slot. Its children are the name's text: the
 /// [`NameOutline`]s first, under the [`NameText`].
@@ -71,7 +70,7 @@ const TOO_FAR: f32 = 3200.0;
 
 pub(crate) fn overhead(
     mut commands: Commands,
-    lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     drive: Option<Res<crate::drive::Drive>>,
     screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &Transform), With<ChaseCamera>>,
@@ -95,7 +94,7 @@ pub(crate) fn overhead(
 ) {
     // (Not in a split screen: the plates are placed by the one camera.)
     let split = drive.is_some_and(|d| d.views().len() > 1);
-    let Some(net) = lobby.online.as_ref().filter(|_| !split) else {
+    let Some(race) = race_on.get().filter(|_| !split) else {
         for (entity, ..) in &labels {
             commands.entity(entity).despawn();
         }
@@ -105,7 +104,7 @@ pub(crate) fn overhead(
         return;
     };
     // A label for each kart, and the one for the kart we watch.
-    for slot in 0..net.karts() {
+    for slot in 0..race.karts() {
         if labels.iter().all(|(_, label, ..)| label.0 != slot) {
             let font = crate::font::bold(TextFont::from_font_size(MAX_SIZE));
             commands
@@ -166,10 +165,10 @@ pub(crate) fn overhead(
             },
         ));
     }
-    let followed = net.watching != net.slot;
+    let followed = race.watching != race.slot;
     for (_, mut text, mut visibility) in &mut watching {
         let line = if followed {
-            format!("{}\nR1 / L1: change the camera", net.kart_label(net.watching))
+            format!("{}\nR1 / L1: change the camera", race.kart_label(race.watching))
         } else {
             String::new()
         };
@@ -199,13 +198,13 @@ pub(crate) fn overhead(
     };
     for (_, label, children, mut transform, mut node, mut visibility) in &mut labels {
         let slot = label.0;
-        let name = net.kart_label(slot);
+        let name = race.kart_label(slot);
         let at = karts
             .iter()
             .find(|(kart, _)| kart.0 == slot)
             .map(|(_, transform)| transform.translation + Vec3::Y * LIFT * SCALE);
         let drawn = (|| {
-            if slot == net.watching || net.gone.get(slot).copied().unwrap_or(false) {
+            if slot == race.watching || race.gone(slot) {
                 return None;
             }
             let at = at?;

@@ -12,7 +12,7 @@ use race::KartSpec;
 use crate::Track;
 use crate::drive::Kart;
 use crate::kart::{KartBuilder, KartSlot};
-use crate::lobby::Lobby;
+use crate::race_on::{Phase, RaceOn};
 
 /// Whether karts bump into each other: on unless `CTR_KART_COLLISIONS=0`. (Retail has them off
 /// online. Every player of a race has to run it the same way.)
@@ -24,7 +24,7 @@ pub fn kart_collisions() -> bool {
 /// Puts the karts of the others on the grid when a race starts, and takes them away when it ends.
 /// (Ours is the one with the [`Kart`] marker; the others are every kart that has none.)
 pub fn build(
-    mut lobby: ResMut<Lobby>,
+    mut race_on: ResMut<RaceOn>,
     track: Res<Track>,
     others: Query<Entity, (With<KartSlot>, Without<Kart>, Without<crate::drive::Extra>)>,
     mut builder: KartBuilder,
@@ -36,38 +36,37 @@ pub fn build(
     if loading.is_some() {
         return;
     }
-    let Some(online) = lobby
-        .online
-        .as_mut()
-        .filter(|online| !online.built && online.track == track.1.0)
+    let Some(race) = race_on
+        .get_mut()
+        .filter(|race| race.phase == Phase::Starting && race.track == track.1.0)
     else {
-        if lobby.online.is_none() {
+        if !race_on.is_on() {
             for entity in &others {
                 builder.commands.entity(entity).try_despawn();
             }
         }
         return;
     };
-    online.built = true;
+    race.phase = Phase::Spawned;
     for entity in &others {
         builder.commands.entity(entity).try_despawn();
     }
-    online.specs.clear();
-    online.retail_specs.clear();
+    race.specs.clear();
+    race.retail_specs.clear();
     // (Every client drops them alike: the level is the same for all.)
-    if !online.retail.characters.is_empty()
+    if !race.retail.characters.is_empty()
         && !track.0.nav_paths.iter().any(|path| path.frames.len() > 1)
     {
-        online.retail.characters.clear();
+        race.retail.characters.clear();
         toasts.write(crate::toast::Toast::new(
             "This track has no paths for bots: they sit this race out",
             4000,
         ));
     }
-    let players = online.characters.len();
+    let players = race.characters.len();
     let mut models: HashMap<usize, (Model, Vec<Icon>)> = HashMap::new();
-    let bots = online.retail.characters.iter().enumerate();
-    let karts = online
+    let bots = race.retail.characters.iter().enumerate();
+    let karts = race
         .characters
         .iter()
         .enumerate()
@@ -86,14 +85,14 @@ pub fn build(
             line: None,
         };
         if slot < players {
-            online.specs.push(spec);
+            race.specs.push(spec);
         } else {
-            online.retail_specs.push(spec);
+            race.retail_specs.push(spec);
         }
         // (Ours is on the grid already, and our other local players' are put there with their
         // views, `drive::split::sync`. A spectator's slot is past the players', where the bots'
         // karts are.)
-        if online.local(slot) && !online.spectating() {
+        if race.local(slot) && !race.spectating() {
             continue;
         }
         let birth = race::Kart::birth(&track.0, slot, &spec);

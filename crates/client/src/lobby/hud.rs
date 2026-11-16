@@ -46,12 +46,13 @@ fn spawn_label(commands: &mut Commands, marker: impl Component, text: &str) {
 /// everyone in a race the host paused.
 pub(super) fn waiting(
     lobby: Res<Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     time: Res<Time<Real>>,
     mut waiting_label: Query<&mut Visibility, (With<WaitingHud>, Without<PausedHud>)>,
     mut paused_label: Query<&mut Visibility, With<PausedHud>>,
 ) {
-    let waiting = lobby.joined && lobby.session.is_some() && lobby.online.is_none();
-    let paused = lobby.online.as_ref().is_some_and(|net| net.pause_at.is_some());
+    let waiting = lobby.joined && lobby.is_waiting(&race_on);
+    let paused = race_on.net().is_some_and(|net| net.pause_at.is_some());
     let on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
     let visibility_of = |show: bool| {
         if show && on {

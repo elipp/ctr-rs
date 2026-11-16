@@ -77,7 +77,7 @@ fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     hud: HudViews,
-    lobby: Res<crate::lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut blocks: Query<(&HudView, &mut Visibility), Or<(With<TimeBlock>, With<LapBlock>)>>,
     time_blocks: Query<&HudView, With<TimeBlock>>,
     mut rows: Query<(Entity, &HudView, &mut LapRows)>,
@@ -98,7 +98,7 @@ fn show(
         }
         return;
     }
-    let shown = if lobby.online.is_some() {
+    let shown = if race_on.is_on() {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -106,7 +106,7 @@ fn show(
     for (_, mut visibility) in &mut blocks {
         visibility.set_if_neq(shown);
     }
-    if lobby.online.is_none() {
+    if !race_on.is_on() {
         return;
     }
     let race = &*sim.race;

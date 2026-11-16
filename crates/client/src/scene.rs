@@ -83,11 +83,12 @@ pub(crate) struct Picked {
 pub(crate) fn keep_picks(
     mut actions: MessageReader<command::Action>,
     lobby: Res<lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut picked: ResMut<Picked>,
 ) {
     for action in actions.read() {
         // (The lobby refuses it, and says so.)
-        if lobby::commands::refusal(action, &lobby).is_some() {
+        if lobby::commands::refusal(action, &lobby, &race_on).is_some() {
             continue;
         }
         match action {
@@ -151,8 +152,8 @@ pub(crate) fn switch_level(world: &mut World) {
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)
     let race_track = world
-        .get_resource::<lobby::Lobby>()
-        .and_then(|l| l.online.as_ref())
+        .get_resource::<crate::race_on::RaceOn>()
+        .and_then(|race_on| race_on.get())
         .map(|o| (o.track, o.hash));
     let missing = race_track.is_some_and(|(track, hash)| !maps::has(track, hash));
     let race_track = race_track.map(|(track, _)| track);
@@ -300,6 +301,7 @@ pub(crate) fn rebuild_scene(world: &mut World, options: Options) {
 pub(crate) fn switch_mode(
     mut actions: MessageReader<command::Action>,
     lobby: Res<lobby::Lobby>,
+    race_on: Res<crate::race_on::RaceOn>,
     mesh_options: Res<MeshOptions>,
     mut toasts: MessageWriter<toast::Toast>,
     mut commands: Commands,
@@ -326,7 +328,7 @@ pub(crate) fn switch_mode(
             _ => continue,
         };
         // The scene is rebuilt: the race would start over.
-        if lobby.is_open() || lobby.online.is_some() {
+        if lobby.is_open() || race_on.is_on() {
             toasts.write(
                 toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
                     .color(Color::srgb(1.0, 0.4, 0.4)),

@@ -414,13 +414,14 @@ pub fn entering(world: &mut World) -> bool {
         .any(|s| !s.leaving && s.position > COVERED_AT)
 }
 
-/// Tells the others we can start once the race is built and the flag of a cup, if it is up, has
+/// Tells the others we can start once the race is on the grid and the flag of a cup, if it is up, has
 /// nearly had its least time ([`READY_LEAD_SECONDS`] left): the go waits for every flag, so none
 /// is still up at the green light, and the camera's fly-in is mostly out from under it. Not
 /// before the flag has come up at all (`cup_next`: it is spawned a frame after the race is
 /// announced).
 fn tell_ready(
-    mut lobby: ResMut<crate::lobby::Lobby>,
+    lobby: Res<crate::lobby::Lobby>,
+    mut race_on: ResMut<crate::race_on::RaceOn>,
     screens: Query<&LoadingScreen>,
     loading: Option<Res<Loading>>,
 ) {
@@ -430,13 +431,18 @@ fn tell_ready(
     if loading.is_some() || held || lobby.cup_next.is_some() {
         return;
     }
-    if !lobby.online.as_ref().is_some_and(|o| o.built && !o.ready) {
+    let Some(race) = race_on
+        .get_mut()
+        .filter(|race| race.phase == crate::race_on::Phase::OnGrid)
+    else {
         return;
+    };
+    race.phase = crate::race_on::Phase::Ready;
+    // Alone nobody else is waited for.
+    match race.net {
+        Some(_) => lobby.ready(),
+        None => race.go = true,
     }
-    if let Some(online) = &mut lobby.online {
-        online.ready = true;
-    }
-    lobby.ready();
 }
 
 /// Brings the flag in over the window before the next race of a cup. `same_level`: the race is on
@@ -603,7 +609,7 @@ fn animate(
     mut letters: Query<(&Letter, &ChildOf, &mut Node, &mut Visibility)>,
     mut materials: ResMut<Assets<FlagMaterial>>,
     loading: Option<Res<Loading>>,
-    lobby: Option<Res<crate::lobby::Lobby>>,
+    race_on: Option<Res<crate::race_on::RaceOn>>,
     drive: Option<Res<drive::Drive>>,
     sim: Option<Res<crate::props::Sim>>,
     mut commands: Commands,
@@ -631,17 +637,15 @@ fn animate(
                 // (A race that was stopped meanwhile has nothing to wait for.) Not at the go
                 // alone: until the race has put the karts on the grid and started the sim over
                 // (`drive_tick`), and our views are up, the scene shows the karts as they were.
-                let ready = lobby
+                let ready = race_on
                     .as_ref()
-                    .and_then(|lobby| lobby.online.as_ref())
-                    .is_none_or(|online| {
-                        online.go
-                            && online.built
-                            && !online.fresh
-                            && (online.spectating()
+                    .and_then(|race_on| race_on.get())
+                    .is_none_or(|race| {
+                        race.racing()
+                            && (race.spectating()
                                 || drive
                                     .as_ref()
-                                    .is_some_and(|d| d.views().len() == online.locals.len()))
+                                    .is_some_and(|d| d.views().len() == race.locals.len()))
                             // The race has played a tick or two: the karts are posed and the
                             // camera has left its default, which a flag leaving at the go alone
                             // would show.
