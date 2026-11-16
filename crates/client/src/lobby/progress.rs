@@ -157,7 +157,8 @@ pub(super) fn pace(
     fx: Option<Res<crate::fx::Effects>>,
     mut time: ResMut<Time<Virtual>>,
 ) {
-    let running = lobby.online.as_ref().filter(|net| net.go);
+    // (A race alone has nobody to keep up with: it runs as a free drive does.)
+    let running = lobby.online.as_ref().filter(|net| net.go && lobby.shares_race());
     let max_delta = if running.is_some() {
         CATCH_UP
     } else {
@@ -176,7 +177,7 @@ pub(super) fn pace(
             .fold(0.0_f32, |most, (_, &a)| most.max(a))
     });
     let speed = match &fx {
-        Some(fx) if lobby.online.is_none() => fx.speed,
+        Some(fx) if !lobby.shares_race() => fx.speed,
         _ if let Some(net) = running.filter(|net| net.watches()) => (1.0
             + SPECTATE_GAIN * (net.buffered - SPECTATE_BUFFER))
             .clamp(SLOWEST, SPECTATE_FASTEST),

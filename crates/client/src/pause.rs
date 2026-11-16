@@ -275,7 +275,7 @@ fn items(
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
-    if lobby.online.is_none() {
+    if !lobby.shares_race() {
         items.push(entry(Item::Restart, "Restart"));
     }
     // (Bots only race in a lobby's series: offline there's nothing for them to fill.)
@@ -295,8 +295,8 @@ fn items(
     if cfg!(not(target_arch = "wasm32")) {
         items.push(entry(Item::Quit, "Quit"));
     }
-    // Online the race goes on.
-    let title = if lobby.online.is_none() {
+    // A lobby's race goes on.
+    let title = if !lobby.shares_race() {
         "Paused"
     } else {
         "Menu"
@@ -557,7 +557,7 @@ fn input(
         .sum();
     let view = menu.view;
     let was_open = menu.open;
-    let offline = lobby.online.is_none();
+    let offline = !lobby.shares_race();
     let sound = |id| {
         if let Some(sounds) = &sounds {
             sounds.menu(id);
@@ -785,6 +785,12 @@ fn input(
         }
         match taken_item {
             Some(Item::Resume) => menu.open = false,
+            // A race alone starts over as a race, with its lights (the lobby's); a free drive
+            // only puts the kart back on the grid (`drive_tick`).
+            Some(Item::Restart) if lobby.online.is_some() => {
+                menu.open = false;
+                actions.write(Action::RestartRace);
+            }
             Some(Item::Restart) => {
                 menu.open = false;
                 menu.restart = true;
@@ -1058,7 +1064,7 @@ fn test_sound(
     let picked = (menu.open && menu.view == View::Options)
         .then(options_items)
         .and_then(|items| match items.get(menu.selected)?.item {
-            Item::Volume(Slider::Music) if lobby.online.is_some() => None,
+            Item::Volume(Slider::Music) if lobby.shares_race() => None,
             Item::Volume(slider) => Some(slider),
             _ => None,
         });

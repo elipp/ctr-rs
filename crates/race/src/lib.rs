@@ -331,8 +331,30 @@ pub const DEFAULT_LAPS: u8 = 3;
 /// How many checkpoints a lap is cut by (see [`Race::splits`]).
 pub const CHECKPOINTS_PER_LAP: usize = 2;
 
-/// The laps of a free drive, which has no end: more than anyone drives.
-pub const FREE_DRIVE_LAPS: u8 = u8::MAX;
+/// What is being played: a rule of the race, the same for everyone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Driving with no end: nobody finishes, and there is no wrong way.
+    FreeDrive,
+    /// `laps` laps to the line (`gGT->numLaps`).
+    Race { laps: u8 },
+}
+
+impl Mode {
+    /// `gGT->numLaps`, as the ported code reads it. A free drive has more than anyone drives,
+    /// so that the code needs no case of its own for it (retail has none).
+    pub fn lap_limit(self) -> u8 {
+        match self {
+            Mode::FreeDrive => u8::MAX,
+            Mode::Race { laps } => laps,
+        }
+    }
+
+    /// Whether it ends at a finish line.
+    pub fn is_race(self) -> bool {
+        matches!(self, Mode::Race { .. })
+    }
+}
 
 /// Where the weapons fired this tick go: the level, the karts as they were before any of them
 /// fired, the temple doors, and the tick's milliseconds.
@@ -367,8 +389,8 @@ pub struct Race {
     /// Whether karts bump into each other (retail has it off online). A rule of the race: it has
     /// to be the same for everyone.
     pub kart_collisions: bool,
-    /// How many laps the race has (`gGT->numLaps`). A rule of the race, like the one above.
-    pub laps: u8,
+    /// A rule of the race, like the one above.
+    pub mode: Mode,
     /// What the weapon roulette gives, and the retail bots fire. A rule of the race.
     pub roulette: vehicle::item::Roulette,
     /// How many karts have finished the race (`numPlayersFinishedRace`): the next to finish is
@@ -425,7 +447,7 @@ impl Race {
             feedback: Feedback::default(),
             tick: 0,
             kart_collisions,
-            laps: DEFAULT_LAPS,
+            mode: Mode::Race { laps: DEFAULT_LAPS },
             roulette: vehicle::item::Roulette::default(),
             finished: 0,
             finish_ticks: Vec::new(),
@@ -543,7 +565,7 @@ impl Race {
             .iter_mut()
             .map(|kart| {
                 let d = &mut kart.driver;
-                let lap = vehicle::lap::update(d, level, self.laps, event_time);
+                let lap = vehicle::lap::update(d, level, self.mode.lap_limit(), event_time);
                 if lap.finished {
                     d.driver_rank = self.finished;
                     self.finished += 1;
@@ -606,7 +628,7 @@ impl Race {
             // The kart does not pass more than the race has.
             if progress < zones[zone]
                 && progress > zones[zone + 1]
-                && passed <= self.laps as usize * CHECKPOINTS_PER_LAP
+                && passed <= self.mode.lap_limit() as usize * CHECKPOINTS_PER_LAP
             {
                 self.splits[slot].push(self.event_ms);
                 self.checkpoints[slot] += 1;
@@ -922,7 +944,7 @@ impl Race {
             let bot_env = vehicle::bot::Env {
                 elapsed_time_ms: env.elapsed_time_ms,
                 traffic_lights_timer: self.lights_ms,
-                laps: self.laps,
+                laps: self.mode.lap_limit(),
                 timer: self.tick,
                 kart_collisions: self.kart_collisions,
             };
@@ -1283,14 +1305,14 @@ impl Race {
             }
             let p = &self.karts[player].driver;
             let still_racing =
-                p.lap_index < self.laps || p.distance_to_finish_curr > BOT_TRAILING_NEAR_FINISH;
+                p.lap_index < self.mode.lap_limit() || p.distance_to_finish_curr > BOT_TRAILING_NEAR_FINISH;
             if rank < 3
                 && still_racing
                 && let Some(bot) = rank_of(&self.karts, rank + 1)
                 && self.bot_may_fire(bot, player)
             {
                 let roll = math::mix_rng_scramble(&mut self.objects.random_number) % 800;
-                let last_lap = self.karts[bot].driver.lap_index as i32 == self.laps as i32 - 1;
+                let last_lap = self.karts[bot].driver.lap_index as i32 == self.mode.lap_limit() as i32 - 1;
                 let launch = if roll < 2 && !last_lap {
                     Some(vehicle::item::Launch::Missile)
                 } else if roll < 4 {
@@ -1393,7 +1415,8 @@ impl Race {
             "{} {} {} {} {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
             self.tick,
             self.event_ms,
-            self.laps,
+            // (The number, not the mode: the hashes stay those of the clients before `Mode`.)
+            self.mode.lap_limit(),
             self.finished,
             self.winner,
             self.lights_ms,

@@ -48,6 +48,12 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         {
             "Close the lobby first (/lobby close)"
         }
+        // (A race alone has no session to carry over into the lobby.)
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
+            if lobby.online.is_some() =>
+        {
+            "Stop the race first (/race stop)"
+        }
         Action::ToggleSpectator if !lobby.is_open() || !lobby.joined => {
             "Only a guest of a lobby can do that (the host drives)"
         }
@@ -61,16 +67,18 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         {
             net::NOT_NOW
         }
-        Action::Players(Some(_)) if lobby.is_open() || lobby.online.is_some() => {
+        Action::Players(Some(_)) if lobby.is_open() => {
             "The players are set before joining: close the lobby first"
         }
+        Action::Players(Some(_)) if lobby.online.is_some() => "Stop the race first (/race stop)",
         Action::PurgeCache if lobby.online.is_some() => net::NOT_NOW,
         Action::Character(_) if lobby.online.is_some() || lobby.characters_locked() => net::NOT_NOW,
         // (A host's countdown is to the track it is on.)
         Action::Track(_) if lobby.online.is_some() || lobby.countdown.is_some() => net::NOT_NOW,
         Action::NetInfo if !lobby.is_open() => "No lobby (/lobby create)",
         Action::Say(_) if !lobby.is_open() => "Not in a lobby to talk to (/lobby create)",
-        Action::StartRace | Action::RestartRace if !lobby.is_open() || lobby.joined => {
+        // (Outside a lobby they are of a race alone.)
+        Action::StartRace | Action::RestartRace if lobby.joined => {
             "Only the host of a lobby can do that"
         }
         Action::StartRace if lobby.online.is_some() => "The race has started (/race restart)",
@@ -78,7 +86,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby) -> Option<&'static str> {
         Action::DebugRanking if !lobby.is_open() || lobby.joined || lobby.online.is_none() => {
             "Only the host of a lobby can do that, in a race"
         }
-        Action::StopRace if !lobby.is_open() || lobby.joined => {
+        Action::StopRace if lobby.joined => {
             "Only the host of a lobby can do that"
         }
         Action::StopRace if lobby.online.is_none() && lobby.series.is_none() => "No race to stop",
@@ -248,7 +256,13 @@ pub(super) fn run(
                 continue;
             }
             Action::StartRace => {
-                lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
+                if lobby.is_open() {
+                    lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
+                } else {
+                    let characters = std::iter::once(drive.character as u8).chain(extras).collect();
+                    let rules = super::rules(race::DEFAULT_LAPS, &config, now);
+                    lobby.race_alone(characters, &config.nickname, track.1.0, rules);
+                }
                 continue;
             }
             Action::Bots {
@@ -559,6 +573,14 @@ pub(super) fn run(
                     }
                 } else {
                     toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
+                }
+                continue;
+            }
+            Action::RestartRace if !lobby.is_open() => {
+                if let Some(net) = &lobby.online {
+                    let (characters, track) = (net.characters.clone(), net.track);
+                    let rules = super::rules(net.rules.laps, &config, now);
+                    lobby.race_alone(characters, &config.nickname, track, rules);
                 }
                 continue;
             }

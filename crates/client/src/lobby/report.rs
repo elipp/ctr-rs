@@ -130,54 +130,16 @@ pub(super) fn report(
                 };
                 let mut characters = characters;
                 characters.iter_mut().for_each(on_roster);
-                let characters_len = characters.len();
                 let mut retail = retail;
                 retail
                     .characters
-                    .truncate(race::MAX_KARTS.saturating_sub(characters_len));
+                    .truncate(race::MAX_KARTS.saturating_sub(characters.len()));
                 retail.characters.iter_mut().for_each(on_roster);
                 stopped = false;
                 started_cup = Some(retail.cup);
-                let names: Vec<String> = players
-                    .iter()
-                    .map(|id| id.fmt_short().to_string())
-                    .collect();
-                started = Some(Online {
-                    slot,
-                    locals,
-                    characters,
-                    bots,
-                    // (Named after the nicknames below.)
-                    labels: names.clone(),
-                    names,
-                    ids: players,
-                    track,
-                    hash,
-                    rules,
-                    inbox: Vec::new(),
-                    delayed: default(),
-                    fresh: true,
-                    built: false,
-                    ready: false,
-                    go: false,
-                    specs: Vec::new(),
-                    retail,
-                    retail_specs: Vec::new(),
-                    corrections: 0,
-                    replayed: 0,
-                    ahead: vec![0.0; characters_len],
-                    buffered: 0.0,
-                    checks: race::desync::Checks::new(characters_len, slot),
-                    desync: Vec::new(),
-                    announced: 0,
-                    gone: vec![false; characters_len],
-                    finished: vec![false; characters_len],
-                    watching: if slot < characters_len { slot } else { 0 },
-                    asked: Vec::new(),
-                    frozen: vec![false; characters_len],
-                    lefts: Vec::new(),
-                    pause_at: None,
-                });
+                started = Some(Online::new(
+                    slot, locals, characters, bots, players, track, hash, rules, retail,
+                ));
             }
             Event::Go => go = true,
             Event::Gone { slot } => gones.push(slot),

@@ -1,4 +1,8 @@
 //! The race that has started: [`Online`], and the desyncs it reports.
+//!
+//! Most of the client takes `Lobby::online` being there as "a race is on", networked or not: a
+//! race we drive alone ([`Online::alone`]) has no session under it, and `Lobby::shares_race`
+//! tells the two apart.
 
 use bevy::prelude::*;
 use net::{EndpointId, Pad};
@@ -17,7 +21,8 @@ pub struct Online {
     pub bots: usize,
     /// The short form of each slot's iroh key (`fmt_short`), which keys the pings.
     pub names: Vec<String>,
-    /// The endpoint of each slot.
+    /// The endpoint of each slot. Empty in a race alone (no endpoint without a session), which
+    /// [`Online::who`] and `Lobby::refresh_labels` rely on.
     pub ids: Vec<EndpointId>,
     /// What each slot is called on screen (`net::display_names`): the nickname if there is one.
     /// It follows the nicknames, which can change in a race.
@@ -103,6 +108,84 @@ pub fn bot_label(character: u8) -> String {
 }
 
 impl Online {
+    /// The race the session started, before anything of it is played.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        slot: usize,
+        locals: Vec<usize>,
+        characters: Vec<u8>,
+        bots: usize,
+        ids: Vec<EndpointId>,
+        track: u32,
+        hash: u64,
+        rules: net::Rules,
+        retail: net::RetailBots,
+    ) -> Online {
+        let players = characters.len();
+        let names: Vec<String> = ids.iter().map(|id| id.fmt_short().to_string()).collect();
+        Online {
+            slot,
+            locals,
+            characters,
+            bots,
+            // (Named after the nicknames once the lobby has told them, `Lobby::refresh_labels`.)
+            labels: names.clone(),
+            names,
+            ids,
+            track,
+            hash,
+            rules,
+            inbox: Vec::new(),
+            delayed: default(),
+            fresh: true,
+            built: false,
+            ready: false,
+            go: false,
+            specs: Vec::new(),
+            retail,
+            retail_specs: Vec::new(),
+            corrections: 0,
+            replayed: 0,
+            ahead: vec![0.0; players],
+            buffered: 0.0,
+            checks: race::desync::Checks::new(players, slot),
+            desync: Vec::new(),
+            announced: 0,
+            gone: vec![false; players],
+            finished: vec![false; players],
+            watching: if slot < players { slot } else { 0 },
+            asked: Vec::new(),
+            frozen: vec![false; players],
+            lefts: Vec::new(),
+            pause_at: None,
+        }
+    }
+
+    /// A race of our local players alone, `characters` (the first view's first), with no
+    /// session: nothing goes out and nothing comes in, and the go is ours (`Lobby::ready`).
+    pub fn alone(characters: Vec<u8>, nick: &str, track: u32, rules: net::Rules) -> Online {
+        let locals = (0..characters.len()).collect();
+        let mut online = Online::new(
+            0,
+            locals,
+            characters,
+            0,
+            Vec::new(),
+            track,
+            crate::maps::hash(track).unwrap_or(0),
+            rules,
+            net::RetailBots::default(),
+        );
+        online.labels = (1..=online.characters.len())
+            .map(|n| match (nick.is_empty(), n) {
+                (true, n) => format!("Player {n}"),
+                (false, 1) => nick.to_string(),
+                (false, n) => format!("{nick}@{n}"),
+            })
+            .collect();
+        online
+    }
+
     /// The slots of the host's bots: the last of the players. Their pads are the host's to make
     /// (`learned.rs`), and come to everyone else as a player's do.
     pub fn bot_slots(&self) -> std::ops::Range<usize> {

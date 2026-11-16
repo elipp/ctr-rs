@@ -8,7 +8,8 @@
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (the `.cache/custom-tracks` folder, see `paths.rs`)
-//! * `/race start`: start the race, once the others have joined (the host only)
+//! * `/race start`: start the race, once the others have joined (the host only). Outside a lobby
+//!   it starts a race of our local players alone (`/race restart` and `/race stop` too)
 //! * `/cup create <name> <tracks> <laps>`: define a cup (`cup.rs`), kept in the config until
 //!   `/cup delete <name>`, and `/cup start <name>` to drive it: its races one after another, points
 //!   for the first four to finish, and [`BETWEEN_RACES_SECONDS`] between them. A `/race start` is a
@@ -321,6 +322,13 @@ impl Lobby {
     /// What our lobby is called in the realm's list, if it is public.
     pub fn public_name(&self) -> Option<&str> {
         self.public.as_deref()
+    }
+
+    /// Whether the race on is a lobby's, which goes on whatever we do: no pause or restart of
+    /// our own, nor anything that would make our sim differ from the others'. A race alone is
+    /// ours to do with as we like.
+    pub fn shares_race(&self) -> bool {
+        self.online.is_some() && self.session.is_some()
     }
 
     /// Whether we are in a lobby (ours or another's), or creating one.
@@ -795,11 +803,26 @@ impl Lobby {
         }
     }
 
-    /// The race is built and can start, once the others are as well.
-    pub fn ready(&self) {
-        if let Some(session) = &self.session {
-            session.ready();
+    /// The race is built and can start, once the others are as well. Alone, it goes at once.
+    pub fn ready(&mut self) {
+        match &self.session {
+            Some(session) => session.ready(),
+            None => {
+                if let Some(online) = &mut self.online {
+                    online.go = true;
+                }
+            }
         }
+    }
+
+    /// Starts a race of our local players alone on `track`, or starts ours over: no lobby, no
+    /// countdown (the race has its lights). A lobby's own start comes from its session instead
+    /// (`report`).
+    fn race_alone(&mut self, characters: Vec<u8>, nick: &str, track: u32, rules: net::Rules) {
+        debug_assert!(self.session.is_none());
+        // As a lobby's start does (`report`): the flag comes in over what is shown.
+        self.cup_next = Some(track);
+        self.online = Some(Online::alone(characters, nick, track, rules));
     }
 }
 

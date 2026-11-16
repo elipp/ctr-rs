@@ -91,8 +91,9 @@ pub(super) fn drive_tick(
         waits,
     } = &mut *memory;
     let drive = &mut *drive;
-    // In an online race the sim is everyone's: no pause of our own, no restarts.
-    let online = lobby.online.is_some();
+    // In a lobby's race the sim is everyone's: no pause of our own, no restarts. (A race alone
+    // restarts through the lobby, as `/race restart`: see `pause.rs`.)
+    let shared = lobby.shares_race();
     // The level of the race is not up yet, nor the karts of the others.
     if lobby
         .online
@@ -113,7 +114,7 @@ pub(super) fn drive_tick(
     }
     // The pause menu (or the effects panel's freeze) stops the race, unless the race is
     // everyone's.
-    let paused = ((hold.menu.open || hold.fx.holds()) && !online) || host_paused;
+    let paused = ((hold.menu.open || hold.fx.holds()) && !shared) || host_paused;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
         for view in &mut drive.views {
@@ -131,9 +132,9 @@ pub(super) fn drive_tick(
     // The menu's RESTART is the grid: every start puts everything, the objects too, back
     // as it was at tick 0.
     let picked = std::mem::take(&mut hold.menu.restart);
-    let mut restart = picked && !online;
-    // The lobby closed, or the race failed: back to the grid with our kart alone.
-    if !online && sim.race.karts.len() != drive.views.len() {
+    let mut restart = picked && lobby.online.is_none();
+    // The race is over (won, stopped, the lobby closed or failed): back to the free drive.
+    if lobby.online.is_none() && (sim.race.mode.is_race() || sim.race.karts.len() != drive.views.len()) {
         restart = true;
     }
     // The race starts: tick 0 for everyone.
@@ -321,7 +322,7 @@ pub(super) fn drive_tick(
             .is_some_and(|net| net.finished.get(slot).copied().unwrap_or(false))
     };
     let ours = |slot: usize| lobby.online.as_ref().is_some_and(|net| net.drives(slot));
-    let late: Vec<usize> = if online {
+    let late: Vec<usize> = if shared {
         (0..sim.race.players())
             .filter(|&slot| spectating || slot != own)
             // (Our other local players' pads are made below, and so are our bots'.)
@@ -460,7 +461,7 @@ pub(super) fn drive_tick(
             ry: pad.ry,
         });
     }
-    if online && !extra_pads.is_empty() {
+    if shared && !extra_pads.is_empty() {
         lobby.send_extras(extra_pads);
     }
     // Our own pad for this tick, from the controller as it is now. It is played at once, and the
@@ -471,7 +472,7 @@ pub(super) fn drive_tick(
         let held = sim.kart().held;
         let pad = if watches {
             Pad::default()
-        } else if (online && hold.menu.open) || drive.views[0].chooser.open {
+        } else if (shared && hold.menu.open) || drive.views[0].chooser.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if let Some(pad) = auto_pad {
@@ -495,7 +496,7 @@ pub(super) fn drive_tick(
         sim.race
             .confirm(own, tick, pad)
             .expect("our pads come in order");
-        if online {
+        if shared {
             lobby.send(net::Pad {
                 held: pad.held,
                 lx: pad.lx,
@@ -700,7 +701,7 @@ pub(super) fn drive_tick(
 
 /// The debug commands that change our kart: `/debug weapon <N>` drops what we hold and rolls
 /// item `N`, as the roulette would (5, the spring, turns into a turbo), and `/debug wumpa <N>`
-/// sets the wumpa count. Not online.
+/// sets the wumpa count. Not in a lobby's race.
 pub(super) fn debug_actions(
     mut actions: MessageReader<Action>,
     mut sim: ResMut<crate::props::Sim>,
@@ -711,7 +712,7 @@ pub(super) fn debug_actions(
         // Freeze for as long as asked, to see the race put right after a hitch: the frame is cut
         // short, so the others run ahead.
         if let Action::DebugStall(time) = action {
-            if lobby.online.is_some() {
+            if lobby.shares_race() {
                 debug!("(debug) stalling for {time:?}");
                 stall(*time);
             } else {
@@ -727,7 +728,7 @@ pub(super) fn debug_actions(
         ) {
             continue;
         }
-        if lobby.online.is_some() {
+        if lobby.shares_race() {
             toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }

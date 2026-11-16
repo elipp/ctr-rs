@@ -191,7 +191,7 @@ fn act(
             continue;
         };
         let offline_only = matches!(what, Fx::Speed(_) | Fx::Freeze(_) | Fx::Step);
-        if offline_only && lobby.online.is_some() {
+        if offline_only && lobby.shares_race() {
             toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
@@ -221,7 +221,7 @@ fn act(
 
 /// An online race keeps its own clock: the slow motion and the freeze end when one begins.
 fn online(lobby: Res<Lobby>, mut fx: ResMut<Effects>) {
-    if lobby.online.is_some() && (fx.speed != 1.0 || fx.frozen) {
+    if lobby.shares_race() && (fx.speed != 1.0 || fx.frozen) {
         fx.speed = 1.0;
         fx.frozen = false;
     }

@@ -772,13 +772,13 @@ impl Sfx<'_> {
             .filter(|_| ours.actions_flag_set & actions::MASK_WEAPON != 0);
         sounds.update_state(&RaceAudio {
             lights_out: race.lights_ms < 1,
-            laps: race.laps,
+            laps: race.mode.lap_limit(),
             lap: ours.lap_index,
             to_finish: ours.distance_to_finish_curr as i32,
             finished,
             first: ours.driver_rank == 0,
             mask_song: mask.map(|m| if m.good_guy { AKU_SONG } else { UKA_SONG }),
-            wrong_way: race.laps != race::FREE_DRIVE_LAPS && vehicle::lap::wrong_way(ours),
+            wrong_way: race.mode.is_race() && vehicle::lap::wrong_way(ours),
             good_guy: vehicle::stuck::good_guy(ours.character),
         });
     }

@@ -115,7 +115,7 @@ fn drive(
     laps: u8,
     mut pad: impl FnMut(&Race) -> Pad,
 ) -> Run {
-    race.laps = laps;
+    race.mode = race::Mode::Race { laps };
     let mut run = Run {
         laps: Vec::new(),
         finished: false,

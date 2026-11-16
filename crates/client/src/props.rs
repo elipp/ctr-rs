@@ -55,7 +55,7 @@ impl Sim {
     }
 
     /// The race at tick 0 with the karts `specs`, ours being kart `own`; `online` is the rules of
-    /// a race of a lobby, even if we are alone in it (None for a free drive). A `spectator`
+    /// a race, of a lobby or alone (None for a free drive). A `spectator`
     /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
     /// race after the players; the `band` is the learned bots' rubber band.
     #[allow(clippy::too_many_arguments)]
@@ -74,9 +74,9 @@ impl Sim {
         if let Some((setup, bots)) = bots.filter(|(_, bots)| !bots.is_empty()) {
             race.add_bots(level, setup, bots);
         }
-        // An online race starts with the ceremony; offline the kart drives off at once.
+        // A race starts with the ceremony; a free drive drives off at once.
         if let Some(rules) = online {
-            race.laps = rules.laps;
+            race.mode = race::Mode::Race { laps: rules.laps };
             race.objects.random_number = i32::from(rules.seed);
             race.roulette = vehicle::item::Roulette {
                 masked: rules.masked_weapons,
@@ -88,7 +88,7 @@ impl Sim {
             };
             race.start_ceremony(level);
         } else {
-            race.laps = race::FREE_DRIVE_LAPS;
+            race.mode = race::Mode::FreeDrive;
         }
         let rollback = Rollback::new(
             race,

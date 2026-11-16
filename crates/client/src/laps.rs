@@ -123,7 +123,7 @@ fn show(
             race.event_ms
         };
         // A kart that finished stays on its last lap.
-        let laps = race.laps;
+        let laps = race.mode.lap_limit();
         let lap = (driver.lap_index + 1).min(laps);
         // The laps done, and the one being driven (the first counts from the green light).
         let mut times: Vec<i32> = done.clone();
