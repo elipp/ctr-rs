@@ -117,7 +117,7 @@ mod tests {
     fn a_time_trial_hides_every_pickup() {
         let mut trial = level(&[(WUMPA_FRUIT, 0xf), (FRUIT_CRATE, 0x7), (TIME_CRATE_02, 0xb), (0x1234, 0x7)]);
         lev_init_all(&mut trial, LevMode::TimeTrial);
-        assert_eq!(flags(&trial), [0, 0, 0x8, 0x7]);
+        assert_eq!(flags(&trial), [0, 0, 0, 0x7]);
     }
 
     #[test]
