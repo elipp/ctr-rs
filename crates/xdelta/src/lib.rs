@@ -9,6 +9,7 @@
 //! (`VCD_TARGET`). xdelta3 makes none of them unless it is told to.
 
 use std::io::{self, Read, Seek, SeekFrom};
+use std::sync::Arc;
 
 /// How many decoded windows a reader keeps.
 const CACHED_WINDOWS: usize = 3;
@@ -197,7 +198,8 @@ fn index(patch: &[u8]) -> io::Result<Index> {
 /// patch copies from it.
 pub struct Patched<R> {
     source: R,
-    patch: Vec<u8>,
+    /// Shared: a pack can be 100+ MB, and an import opens the patched disc many times.
+    patch: Arc<[u8]>,
     index: Index,
     pos: u64,
     /// The last windows decoded, the least recent first: their number and their bytes.
@@ -207,7 +209,8 @@ pub struct Patched<R> {
 
 impl<R: Read + Seek> Patched<R> {
     /// The image that `patch` (the bytes of an `.xdelta` file) makes of `source`.
-    pub fn new(source: R, patch: Vec<u8>) -> io::Result<Self> {
+    pub fn new(source: R, patch: impl Into<Arc<[u8]>>) -> io::Result<Self> {
+        let patch = patch.into();
         let index = index(&patch)?;
         Ok(Patched {
             source,

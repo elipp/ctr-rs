@@ -8,13 +8,14 @@
 //! other players sent must not be taken for a track of the game.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use loader::bigfile::BigFile;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::level::LevelId;
 
-use crate::Map;
+use crate::{Map, Relic};
 use crate::import::from_files;
 
 /// What the name of a map starts with when it is a track of the game.
@@ -51,36 +52,42 @@ const PODIUM: (&str, &str, LevelId) = (
     LevelId::GEM_STONE_VALLEY,
 );
 
-/// What the name of a racing track's relic map ends in: the track's `Lod::Relic` LEV, which is
-/// the 1P one's geometry with the time crates (and no weapon or fruit crates). Retail ships a
-/// whole LEV and VRAM for it, and so do we: grafting the crates onto the 1P level would move
-/// models, texture pages and BSP hitboxes between files.
-pub const RELIC_SUFFIX: &str = "__relic";
-
-/// A level made from the disc: the name in its file, its `LevelId`, and whether it is the relic
-/// LEV.
+/// A level made from the disc: the name in its file, and its `LevelId`.
 struct Made {
     slug: &'static str,
     id: LevelId,
-    relic: bool,
 }
 
 impl Made {
     fn name(&self) -> String {
-        let suffix = if self.relic { RELIC_SUFFIX } else { "" };
-        format!("{PREFIX}{}{suffix}", self.slug)
+        format!("{PREFIX}{}", self.slug)
     }
 
-    fn lod(&self) -> Lod {
-        if self.relic { Lod::Relic } else { Lod::OnePlayer }
+    /// Whether the level has a `Lod::Relic` LEV ([`Map::relic`]): the racing tracks do.
+    fn has_relic(&self) -> bool {
+        TRACKS.iter().any(|t| t.2 == self.id)
+    }
+
+    /// The map, from the disc `big` is the index of.
+    fn make<R: io::Read + io::Seek>(&self, disc: &mut R, big: &BigFile) -> io::Result<Map> {
+        let mut read = |lod, file| big.read(disc, BigIndex::level(self.id, lod, file).get());
+        let mut map = from_files(
+            self.name(),
+            &read(Lod::OnePlayer, LevFile::Lev)?,
+            &read(Lod::OnePlayer, LevFile::Vram)?,
+        )?;
+        if self.has_relic() {
+            let (lev, vram) = (read(Lod::Relic, LevFile::Lev)?, read(Lod::Relic, LevFile::Vram)?);
+            map.relic = Some(Box::new(Relic::from_files(&lev, &vram)?));
+        }
+        Ok(map)
     }
 }
 
 /// Every level made from the disc.
 fn all() -> impl Iterator<Item = Made> {
-    let arcade = TRACKS.iter().chain(std::iter::once(&PODIUM));
-    let made = |relic| move |&(slug, _, id): &(&'static str, &str, LevelId)| Made { slug, id, relic };
-    arcade.map(made(false)).chain(TRACKS.iter().map(made(true)))
+    let levels = TRACKS.iter().chain(std::iter::once(&PODIUM));
+    levels.map(|&(slug, _, id)| Made { slug, id })
 }
 
 /// The game's track that is called `name` (see [`display_name`]), in any case.
@@ -96,15 +103,9 @@ pub fn is_builtin_name(name: &str) -> bool {
     name.starts_with(PREFIX)
 }
 
-/// The level that a map named `name` stands in for; none if the name is not one of the levels'
-/// (a relic map's is not: see [`relic_of`]).
+/// The level that a map named `name` stands in for; none if the name is not one of the levels'.
 pub fn level_of(name: &str) -> Option<LevelId> {
-    all().find(|m| !m.relic && m.name() == name).map(|m| m.id)
-}
-
-/// The racing track whose relic LEV a map named `name` is.
-pub fn relic_of(name: &str) -> Option<LevelId> {
-    all().find(|m| m.relic && m.name() == name).map(|m| m.id)
+    all().find(|m| m.name() == name).map(|m| m.id)
 }
 
 /// The name of the map of the game's racing track `id` (`__builtin__dingo_canyon`).
@@ -159,55 +160,46 @@ pub fn missing_count(dir: &Path) -> usize {
 }
 
 /// Makes the map of each level that `dir` has none of (or only one of an older version),
-/// from the disc image `original`, and returns how many. The image is not opened if there is nothing to make.
+/// from the disc image `original`, and returns how many. The image is not opened if there is
+/// nothing to make. The other `.ctrmap` files of `dir` are deleted: the folder is ours, and an
+/// older build's leftovers (the `__relic` maps of version 9) would be refused at every start.
 pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
     let missing = missing(dir);
     if missing.is_empty() {
         return Ok(0);
     }
     std::fs::create_dir_all(dir)?;
-
-    let (mut disc, big) = open_bigfile(original)?;
-    let mut files = Vec::new();
-    for made in missing {
-        let mut read = |file| big.read(&mut disc, BigIndex::level(made.id, made.lod(), file).get());
-        let (lev, vram) = (read(LevFile::Lev)?, read(LevFile::Vram)?);
-        files.push((made, lev, vram));
+    let ours: Vec<String> = all().map(|m| file_name(&m)).collect();
+    for entry in std::fs::read_dir(dir)?.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".ctrmap") && !ours.contains(&name) {
+            std::fs::remove_file(entry.path())?;
+        }
     }
 
-    // The compression is the slow part: the maps are made side by side.
+    // The reading is quick, the compression slow: the maps are read in turn, then compressed
+    // side by side.
+    let (mut disc, big) = open_bigfile(original)?;
+    let maps = (missing.iter())
+        .map(|made| made.make(&mut disc, &big))
+        .collect::<io::Result<Vec<_>>>()?;
     std::thread::scope(|scope| {
-        let jobs: Vec<_> = files
-            .into_iter()
-            .map(|(made, lev, vram)| {
-                scope.spawn(move || -> io::Result<PathBuf> {
-                    let map = from_files(made.name(), &lev, &vram)?;
-                    save(&map, dir)?;
-                    Ok(dir.join(file_name(&made)))
-                })
-            })
+        let jobs: Vec<_> = (maps.iter())
+            .map(|map| scope.spawn(move || save(map, dir)))
             .collect();
-        let mut count = 0;
         for job in jobs {
             job.join().expect("a map thread panicked")?;
-            count += 1;
         }
-        Ok(count)
+        Ok(maps.len())
     })
 }
 
 /// The map of every level, made from the disc image `original` and only held in memory:
-/// for a client with no folder to keep them in (a browser). One after another, and not
-/// compressed, which is what [`export`] spends its time on.
+/// for a client with no folder to keep them in (a browser). Not compressed, which is what
+/// [`export`] spends its time on.
 pub fn make_all(original: &Path) -> io::Result<Vec<Map>> {
     let (mut disc, big) = open_bigfile(original)?;
-    all()
-        .map(|made| {
-            let mut read =
-                |file| big.read(&mut disc, BigIndex::level(made.id, made.lod(), file).get());
-            from_files(made.name(), &read(LevFile::Lev)?, &read(LevFile::Vram)?)
-        })
-        .collect()
+    all().map(|made| made.make(&mut disc, &big)).collect()
 }
 
 #[cfg(test)]

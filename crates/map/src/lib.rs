@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 const MAGIC: &[u8; 8] = b"CTRMAP\0\0";
 
 /// The version of the format: changes with the structs that are saved in it.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 
 /// zstd's level for a map file: it is made once and sent many times.
 const COMPRESSION: i32 = 19;
@@ -55,6 +55,20 @@ pub struct Map {
     pub vram: Vec<VramImage>,
     /// The music, reverb and samples the patch gave the track; none for a track of the game.
     pub audio: Option<Audio>,
+    /// What a relic race is on: retail ships a whole `Lod::Relic` LEV and VRAM per track (the 1P
+    /// geometry with time crates, without weapon/fruit crates), and so do patches that change
+    /// that slot. Grafting the crates onto the 1P level would move models, texture pages and BSP
+    /// hitboxes between files. None: the 1P level is all modes' (`instance::lev_init` hides what
+    /// a mode doesn't show).
+    pub relic: Option<Box<Relic>>,
+}
+
+/// A map's relic LEV ([`Map::relic`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relic {
+    pub level: Level,
+    pub dram: DramFile,
+    pub vram: Vec<VramImage>,
 }
 
 /// The audio a patch changed on the track it replaced (`audio::carve`). What the map does not
@@ -259,6 +273,7 @@ mod tests {
                 pixels: vec![9, 8],
             }],
             audio: None,
+            relic: None,
         }
     }
 

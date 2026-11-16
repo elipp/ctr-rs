@@ -6,6 +6,7 @@ pub mod howl;
 pub mod icons;
 pub mod lev;
 pub mod level;
+pub mod lng;
 pub mod model;
 pub mod nav_amend;
 pub mod scenery;

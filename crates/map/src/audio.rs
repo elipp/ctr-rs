@@ -6,13 +6,14 @@
 use std::fmt::Write as _;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 use howl::tables::{LEVEL_REVERBS, LEVEL_SONGS};
 use loader::disc::{open_howl_with, read_file_with};
 
 /// The USA game's executable.
-const EXE: &str = "SCUS_944.26";
-const HWL: &str = "SOUNDS/KART.HWL";
+pub(crate) const EXE: &str = "SCUS_944.26";
+pub(crate) const HWL: &str = "SOUNDS/KART.HWL";
 /// The size of a PS-X EXE's header; the code follows it.
 const EXE_HEADER: usize = 0x800;
 /// Changes of the executable this close are shown as one.
@@ -22,7 +23,7 @@ const MAX_RANGES: usize = 40;
 
 /// What differs between the disc and the one the patch makes, for people to read.
 pub fn audit(original: &Path, patch: &Path) -> io::Result<String> {
-    let bytes = std::fs::read(patch)?;
+    let bytes: Arc<[u8]> = std::fs::read(patch)?.into();
     let old = || Ok(loader::disc::open_file(original)?);
     let new = || xdelta::Patched::new(loader::disc::open_file(original)?, bytes.clone());
     let mut out = String::new();
@@ -241,15 +242,18 @@ fn read_table(exe: &[u8], at: usize, width: usize, count: usize) -> Option<Vec<u
 /// its reverb if that is not. Every map made over a track keeps which one, so that what it does
 /// not carry is the game's. `song_pack` names the pack to take when the patch does not say which
 /// is the track's (`ctr-map audio` shows which it changes), and `reverb` the reverb mode.
+/// `own_pack_only` is for a pack of several tracks: each map then takes its slot's pack, not
+/// every pack the patch changes.
 pub fn carve(
     original: &Path,
-    patch: &[u8],
+    patch: &Arc<[u8]>,
     level: u32,
     song_pack: Option<u8>,
     reverb: Option<u8>,
+    own_pack_only: bool,
 ) -> io::Result<Option<crate::Audio>> {
     let old = || Ok(loader::disc::open_file(original)?);
-    let new = || xdelta::Patched::new(loader::disc::open_file(original)?, patch.to_vec());
+    let new = || xdelta::Patched::new(loader::disc::open_file(original)?, patch.clone());
     let mut audio = crate::Audio {
         level,
         reverb: None,
@@ -301,7 +305,9 @@ pub fn carve(
         let (p, q) = (x.cseq(&mut a, pack as u16)?, y.cseq(&mut b, pack as u16)?);
         let wanted = q.is_some()
             && (song_pack == Some(pack as u8)
-                || (plays_in_races(pack as u8, first) && !same_pack(&p, &q)));
+                || (plays_in_races(pack as u8, first)
+                    && (!own_pack_only || Some(pack as u8) == first)
+                    && !same_pack(&p, &q)));
         if wanted && chosen.len() < crate::MAX_SOUNDTRACKS {
             chosen.push(pack as u8);
             let q = q.unwrap();
@@ -517,9 +523,9 @@ pub struct PackChange {
 }
 
 /// The song packs of the patch that do not sound like the game's.
-pub fn changed_packs(original: &Path, patch: &[u8]) -> io::Result<Vec<PackChange>> {
+pub fn changed_packs(original: &Path, patch: &Arc<[u8]>) -> io::Result<Vec<PackChange>> {
     let old = || Ok(loader::disc::open_file(original)?);
-    let new = || xdelta::Patched::new(loader::disc::open_file(original)?, patch.to_vec());
+    let new = || xdelta::Patched::new(loader::disc::open_file(original)?, patch.clone());
     let ((mut a, x), (mut b, y)) = (open_howl_with(old)?, open_howl_with(new)?);
     let tempos = |c: &Option<loader::howl::Cseq>| -> Vec<i16> {
         c.iter().flat_map(|c| &c.songs).map(|s| s.bpm).collect()
@@ -555,9 +561,9 @@ pub fn changed_packs(original: &Path, patch: &[u8]) -> io::Result<Vec<PackChange
 
 /// The levels whose reverb mode the patched executable changes, with the mode the game has and
 /// the one the patch gives (`data.reverbMode`).
-pub fn changed_reverbs(original: &Path, patch: &[u8]) -> io::Result<Vec<(usize, u8, u8)>> {
+pub fn changed_reverbs(original: &Path, patch: &Arc<[u8]>) -> io::Result<Vec<(usize, u8, u8)>> {
     let old = || Ok(loader::disc::open_file(original)?);
-    let new = || xdelta::Patched::new(loader::disc::open_file(original)?, patch.to_vec());
+    let new = || xdelta::Patched::new(loader::disc::open_file(original)?, patch.clone());
     let (Some(a), Some(b)) = (read_file_with(old, EXE)?, read_file_with(new, EXE)?) else {
         return Ok(Vec::new());
     };

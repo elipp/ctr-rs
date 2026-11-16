@@ -53,6 +53,10 @@ commands:
                                       the grey (`..` is transparent, a trailing `'` marks a
                                       set semi-transparency bit); no CHARS dumps every glyph,
                                       --index picks a glyph by its index in the icon group
+  strings [FIRST [LAST]] [--lang N] [--tracks]
+                                      the language file's strings FIRST..=LAST (default all) of
+                                      language N (default 1, English; 0 ja .. 7 nl); --tracks
+                                      prints each track's name string instead
   portraits | weapons                 decodes the HUD pictures the way the viewer does and
                                       counts the texels of each
 
@@ -193,12 +197,14 @@ struct Loaded {
     level: Level,
 }
 
-fn load(id: LevelId) -> Result<Loaded, String> {
-    let path = std::env::var_os("CTR_BIN")
+fn disc_path() -> PathBuf {
+    std::env::var_os("CTR_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin"))
+}
+
+fn load(id: LevelId) -> Result<Loaded, String> {
+    let path = disc_path();
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let index = BigIndex::level(id, Lod::OnePlayer, LevFile::Lev);
     let file = big
@@ -691,11 +697,7 @@ fn hitbox_lines(level: &Level, instance: usize) -> Vec<String> {
 }
 
 fn icon_scan(range: std::ops::RangeInclusive<i32>) -> Result<(), String> {
-    let path = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+    let path = disc_path();
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     for index in 0..big.entries.len() {
         let Ok(file) = big.read(&mut disc, index) else {
@@ -720,11 +722,7 @@ fn icon_scan(range: std::ops::RangeInclusive<i32>) -> Result<(), String> {
 /// The icon groups (`iconGroup[n]`) of the racer pack and, with a level, of the level's own
 /// `LevTexLookup`: where the particles' icons are.
 fn icon_groups(level: Option<LevelId>) -> Result<(), String> {
-    let path = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+    let path = disc_path();
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let pack = big
         .read(&mut disc, BigIndex::ARCADE_1P_PACK.nth(0).get())
@@ -757,11 +755,7 @@ fn icon_groups(level: Option<LevelId>) -> Result<(), String> {
 /// Decodes the HUD pictures the way the viewer does, to see that every cell has something in it.
 fn hud_pictures(which: &str) -> Result<(), String> {
     use render::{portraits, weapons};
-    let path = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+    let path = disc_path();
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut vram = loader::vram::Vram::default();
     let shared = big
@@ -829,11 +823,7 @@ fn font_glyphs(mut args: Args) -> Result<(), String> {
     }
     args.finish()?;
 
-    let path = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+    let path = disc_path();
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut vram = loader::vram::Vram::default();
     let shared = big
@@ -916,11 +906,7 @@ fn font_glyphs(mut args: Args) -> Result<(), String> {
 }
 
 fn pack_models(entry: Option<usize>) -> Result<(), String> {
-    let path = std::env::var_os("CTR_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ctr-u.bin")
-        });
+    let path = disc_path();
     let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let entry = entry.unwrap_or_else(|| BigIndex::ARCADE_1P_PACK.nth(0).get());
     let file = big.read(&mut disc, entry).map_err(|e| e.to_string())?;
@@ -966,6 +952,37 @@ fn pack_models(entry: Option<usize>) -> Result<(), String> {
     Ok(())
 }
 
+fn strings(mut args: Args) -> Result<(), String> {
+    let lang = args.option_number("--lang")?.unwrap_or(loader::lng::ENGLISH as i32);
+    let tracks = args.switch("--tracks");
+    let first = args.0.first().map(|a| a.parse::<usize>()).transpose();
+    let last = args.0.get(1).map(|a| a.parse::<usize>()).transpose();
+    let (Ok(first), Ok(last)) = (first, last) else {
+        return Err("strings takes numbers".into());
+    };
+    let (mut disc, big) = open_bigfile(&disc_path()).map_err(|e| e.to_string())?;
+    let entry = BigIndex::LANGUAGE_FILE.nth(lang as u32).get();
+    let file = big.read(&mut disc, entry).map_err(|e| e.to_string())?;
+    let strings = loader::lng::parse(&file).map_err(|e| e.to_string())?;
+    let show = |i: usize| match strings.get(i) {
+        Some(s) => format!("{i:>4} {:?}", String::from_utf8_lossy(s)),
+        None => format!("{i:>4} (none: the file has {})", strings.len()),
+    };
+    if tracks {
+        for id in (0..25).map(LevelId) {
+            println!("level {:>2}: {}", id.0, show(loader::lng::track_name(id).unwrap()));
+        }
+        return Ok(());
+    }
+    let first = first.unwrap_or(0);
+    let last = last.unwrap_or(strings.len().saturating_sub(1));
+    println!("BIGFILE entry {entry}: {} strings", strings.len());
+    for i in first..=last {
+        println!("{}", show(i));
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
@@ -989,6 +1006,9 @@ fn run() -> Result<(), String> {
     }
     if matches!(command.as_str(), "portraits" | "weapons") {
         return hud_pictures(&command);
+    }
+    if command == "strings" {
+        return strings(Args(args));
     }
     if command == "font" {
         return font_glyphs(Args(args));
