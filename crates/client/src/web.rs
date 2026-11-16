@@ -190,7 +190,7 @@ pub fn take_relic_pbs() -> Vec<Vec<u8>> {
 /// Fills `loader::store` with what the page kept, and has it keep every change from now on.
 /// Before anything reads the store.
 pub fn take_kept() {
-    let kept = take_kept_files().iter().filter_map(|pair| {
+    let kept = take_kept_files().into_iter().filter_map(|pair| {
         let pair: js_sys::Array = pair.dyn_into().ok()?;
         let path = pair.get(0).as_string()?;
         let bytes = pair.get(1).dyn_into::<js_sys::Uint8Array>().ok()?;

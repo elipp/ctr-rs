@@ -84,6 +84,9 @@ pub struct CurrentRace {
     /// A relic race (`race::Mode::Relic`): only ever alone, so it is not one of the rules the
     /// host sends.
     pub relic: bool,
+    /// The relic to beat and its time in ms (`race::relic::target`), from the personal best as it
+    /// was when the race went on the grid.
+    pub relic_target: Option<(race::relic::Tier, i32)>,
     pub phase: Phase,
     /// Tick 0 has come: the host heard every player ready (alone, we are). Not ordered with
     /// [`CurrentRace::phase`]: a spectator is not waited for, and can hear it before its own race
@@ -232,6 +235,7 @@ impl CurrentRace {
             hash,
             rules,
             relic: false,
+            relic_target: None,
             phase: Phase::Starting,
             go: false,
             specs: Vec::new(),

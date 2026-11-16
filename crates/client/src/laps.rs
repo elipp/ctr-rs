@@ -3,6 +3,8 @@
 //! time; the last one is the lap being driven). LAP is at the top right: the lap out of the
 //! race's. The times are `m:ss:cc`. The places and colours are measured from retail screenshots.
 //!
+//! A relic race has no lap rows: under TIME is the next relic to earn and its time instead.
+//!
 //! A free drive has neither: it has no laps to count and no end.
 
 use bevy::prelude::*;
@@ -27,6 +29,21 @@ const LAP_TIME_X: f32 = 42.0;
 /// The space above the lap rows, in lines.
 const ROWS_DOWN: f32 = 1.0;
 
+/// Retail's colours of the relics' names and times (`data.colors`): flat ones, but platinum's
+/// SILVER, which runs dark to white across a corner, is ours as a top-to-bottom one.
+const SAPPHIRE: Gradient = Gradient {
+    top: [0x40, 0xbf, 0xff],
+    bottom: [0x40, 0xbf, 0xff],
+};
+const GOLD: Gradient = Gradient {
+    top: [0xe6, 0xd3, 0x00],
+    bottom: [0xe6, 0xd3, 0x00],
+};
+const PLATINUM: Gradient = Gradient {
+    top: [0xff, 0xff, 0xff],
+    bottom: [0x60, 0x60, 0x60],
+};
+
 /// The race's time (`m:ss:cc`) from milliseconds.
 pub(crate) fn clock(ms: i32) -> String {
     let ms = ms.max(0);
@@ -48,6 +65,13 @@ struct Total;
 /// The lap out of the race's.
 #[derive(Component)]
 struct LapCount;
+
+/// The relic to earn's name, and its time.
+#[derive(Component)]
+struct TargetName;
+
+#[derive(Component)]
+struct TargetTime;
 
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
@@ -88,7 +112,10 @@ fn show(
         Has<LapCount>,
         Option<&RowLabel>,
         Option<&RowTime>,
+        Has<TargetName>,
+        Has<TargetTime>,
     )>,
+    mut target_nodes: Query<&mut Node, Or<(With<TargetName>, With<TargetTime>)>>,
 ) {
     let missing = hud.missing(time_blocks.iter().copied());
     if !missing.is_empty() {
@@ -110,6 +137,22 @@ fn show(
         return;
     }
     let race = &*sim.race;
+    let relic = race_on.get().filter(|race| race.relic);
+    let target = relic.and_then(|race| race.relic_target).map(|(tier, ms)| {
+        use race::relic::Tier;
+        match tier {
+            Tier::Sapphire => ("Sapphire", SAPPHIRE, ms),
+            Tier::Gold => ("Gold", GOLD, ms),
+            Tier::Platinum => ("Platinum", PLATINUM, ms),
+        }
+    });
+    // (Out of the layout without one, or the block's gaps would push the lap rows down.)
+    let display = if target.is_some() { Display::Flex } else { Display::None };
+    for mut node in &mut target_nodes {
+        if node.display != display {
+            node.display = display;
+        }
+    }
     for ViewKart {
         view, slot, driver, ..
     } in hud.iter()
@@ -124,7 +167,9 @@ fn show(
         let lap = (driver.lap_index + 1).min(laps);
         // The laps done, and the one being driven (the first counts from the green light).
         let mut times: Vec<i32> = done.clone();
-        if !finished {
+        if relic.is_some() {
+            times.clear();
+        } else if !finished {
             times.push(race.event_ms - driver.lap_time);
         }
         if let Some((entity, _, mut count)) = rows.iter_mut().find(|(_, v, _)| v.0 == view)
@@ -136,9 +181,15 @@ fn show(
                 spawn_row(&mut commands, entity, view, i, &clock(ms));
             }
         }
-        for (v, mut text, is_total, is_count, label, time) in &mut texts {
+        for (v, mut text, is_total, is_count, label, time, is_name, is_target) in &mut texts {
             if v.0 != view {
                 continue;
+            }
+            if (is_name || is_target)
+                && let Some((_, gradient, _)) = target
+                && text.gradient != gradient
+            {
+                text.gradient = gradient;
             }
             let wanted = if is_total {
                 clock(total)
@@ -148,6 +199,10 @@ fn show(
                 format!("L{}", i + 1)
             } else if let Some(&RowTime(i)) = time {
                 times.get(i).map_or_else(String::new, |&ms| clock(ms))
+            } else if is_name {
+                target.map_or_else(String::new, |(name, _, _)| name.to_string())
+            } else if is_target {
+                target.map_or_else(String::new, |(_, _, ms)| clock(ms))
             } else {
                 continue;
             };
@@ -180,6 +235,8 @@ fn spawn(commands: &mut Commands, view: usize) {
         children![
             text("Time", Font::Middle, Gradient::ORANGE),
             (view, Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
+            (view, TargetName, text("", Font::Middle, SAPPHIRE)),
+            (view, TargetTime, text("", Font::Large, SAPPHIRE)),
             (
                 view,
                 LapRows(0),

@@ -171,6 +171,10 @@ pub(super) fn drive_tick(
             bots,
             band,
         );
+        if let Some(race) = race_on.get_mut().filter(|race| race.relic) {
+            let best = crate::relic_pb::best(&track.0, &sim, race).map(|o| o.final_ms);
+            race.relic_target = race::relic::target(race.track, race.rules.laps, best);
+        }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.
         let hosted = race_on.get().filter(|race| race.hosts_bots());

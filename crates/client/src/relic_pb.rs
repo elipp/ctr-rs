@@ -76,29 +76,23 @@ mod store {
     }
 }
 
-/// Re-times the stored best and the run just finished, on the level loaded (the race's), and
-/// keeps the faster. `race` is a relic race whose kart has finished, and whose finish tick is
-/// settled (the demo has every pad up to there). None if the run can't be timed: that is a bug,
-/// and logged.
-pub fn finished(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Verdict> {
+/// The time of the stored best of the race's map and laps, re-timed on the level loaded (the
+/// race's); None if there is none (or it no longer finishes, or can't be read).
+pub fn best(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Outcome> {
     let spec = *race.specs.first()?;
-    let demo = sim.race.recorded()?.clone();
-    let Some(run) = Run::of_finished(&sim.race, race.hash, race.rules.seed, demo) else {
-        error!("relic personal best: the recording doesn't reach the finish");
-        return None;
-    };
-    // The live race's time is not trusted on its own: a best's time is always a replay's, and a
-    // recording that replays differently would be a broken best.
-    let new = run.replay(level, sim.start().clone(), spec);
-    let live = sim.race.final_ms(0);
-    let Some(new) = new.filter(|o| Some(o.final_ms) == live) else {
-        error!("relic personal best: the run replays as {new:?}, not {live:?} ms; not kept");
-        return None;
-    };
+    stored(level, sim, race, &name(race.hash, race.rules.laps), spec)
+}
 
-    let name = name(race.hash, run.laps);
-    let old = match store::load(&name).and_then(|b| b.map(|b| Run::from_bytes(&b)).transpose()) {
-        Ok(Some(old)) if old.map_hash == race.hash && old.laps == run.laps => {
+/// Replays the best stored under `name`, with `spec` if it is of the same character.
+fn stored(
+    level: &loader::lev::Level,
+    sim: &Sim,
+    race: &CurrentRace,
+    name: &str,
+    spec: race::KartSpec,
+) -> Option<Outcome> {
+    match store::load(name).and_then(|b| b.map(|b| Run::from_bytes(&b)).transpose()) {
+        Ok(Some(old)) if old.map_hash == race.hash && old.laps == race.rules.laps => {
             let old_spec = if old.demo.character == spec.character {
                 spec
             } else {
@@ -129,7 +123,31 @@ pub fn finished(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Op
             warn!("relic personal best {name}: {e}");
             None
         }
+    }
+}
+
+/// Re-times the stored best and the run just finished, on the level loaded (the race's), and
+/// keeps the faster. `race` is a relic race whose kart has finished, and whose finish tick is
+/// settled (the demo has every pad up to there). None if the run can't be timed: that is a bug,
+/// and logged.
+pub fn finished(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Verdict> {
+    let spec = *race.specs.first()?;
+    let demo = sim.race.recorded()?.clone();
+    let Some(run) = Run::of_finished(&sim.race, race.hash, race.rules.seed, demo) else {
+        error!("relic personal best: the recording doesn't reach the finish");
+        return None;
     };
+    // The live race's time is not trusted on its own: a best's time is always a replay's, and a
+    // recording that replays differently would be a broken best.
+    let new = run.replay(level, sim.start().clone(), spec);
+    let live = sim.race.final_ms(0);
+    let Some(new) = new.filter(|o| Some(o.final_ms) == live) else {
+        error!("relic personal best: the run replays as {new:?}, not {live:?} ms; not kept");
+        return None;
+    };
+
+    let name = name(race.hash, run.laps);
+    let old = stored(level, sim, race, &name, spec);
 
     let verdict = match old {
         Some(best) if best.final_ms <= new.final_ms => return Some(Verdict::Worse { best }),

@@ -33,6 +33,49 @@ pub fn start(level: &Level, objects: Objects, spec: KartSpec, laps: u8, seed: u1
     race
 }
 
+/// The relics a run can earn, from the slowest time to the fastest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tier {
+    Sapphire,
+    Gold,
+    Platinum,
+}
+
+/// Retail's relic times of the racing tracks (by `LevelId`), sapphire, gold, platinum, in its
+/// clock's units (960 a second): `data.RelicTime`. They are for its 3 laps.
+const RELIC_TIMES: [[u32; 3]; 18] = [
+    [0x13ec0, 0x102c0, 0xc6c0],
+    [0x14a00, 0x10a40, 0xca80],
+    [0x15180, 0xff00, 0xa8c0],
+    [0x120c0, 0xf3c0, 0xc300],
+    [0x12c00, 0xe880, 0xa140],
+    [0x16080, 0x102c0, 0x9d80],
+    [0x11940, 0xf3c0, 0xce40],
+    [0x2b5c0, 0x24180, 0x1c980],
+    [0x15cc0, 0xf3c0, 0x8ac0],
+    [0x1af40, 0x18600, 0x15900],
+    [0x24540, 0x1d100, 0x15900],
+    [0x1fa40, 0x16080, 0xc6c0],
+    [0x2a300, 0x23dc0, 0x1d4c0],
+    [0x2e2c0, 0x29400, 0x24180],
+    [0x16440, 0x10e00, 0xb7c0],
+    [0x34bc0, 0x2f580, 0x29b80],
+    [0x1af40, 0x189c0, 0x17700],
+    [0x189c0, 0x15900, 0x12840],
+];
+
+/// The relic to go for on `track` (a `LevelId`) with `laps`, and its time in ms: the slowest one
+/// `best_ms` (`Outcome::final_ms`) hasn't earned. Retail earns a relic at its time or under
+/// (`RR_EndEvent_UnlockAward`). None on a track or lap count retail has no times for, or once
+/// the platinum is earned.
+pub fn target(track: u32, laps: u8, best_ms: Option<i32>) -> Option<(Tier, i32)> {
+    let times = RELIC_TIMES.get(track as usize).filter(|_| laps == 3)?;
+    [Tier::Sapphire, Tier::Gold, Tier::Platinum]
+        .into_iter()
+        .zip(times.map(|units| (units * 1000 / 960) as i32))
+        .find(|&(_, ms)| best_ms.is_none_or(|best| best > ms))
+}
+
 /// A recorded relic run: everything its replay depends on besides the level and the kart's model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Run {
@@ -149,6 +192,19 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_target_is_the_next_relic_not_earned() {
+        // Dingo Canyon: 1:25, 1:09, 0:53.
+        assert_eq!(target(0, 3, None), Some((Tier::Sapphire, 85_000)));
+        assert_eq!(target(0, 3, Some(85_000)), Some((Tier::Gold, 69_000)));
+        assert_eq!(target(0, 3, Some(53_001)), Some((Tier::Platinum, 53_000)));
+        assert_eq!(target(0, 3, Some(53_000)), None);
+        // Turbo Track's platinum: 1:19.
+        assert_eq!(target(17, 3, Some(80_000)), Some((Tier::Platinum, 79_000)));
+        assert_eq!(target(0, 5, None), None);
+        assert_eq!(target(18, 3, None), None);
+    }
 
     #[test]
     fn bytes_round_trip() {
