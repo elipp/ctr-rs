@@ -171,9 +171,12 @@ pub(super) fn drive_tick(
             bots,
             band,
         );
-        if let Some(race) = race_on.get_mut().filter(|race| race.relic) {
-            let best = crate::relic_pb::best(&track.0, &sim, race).map(|o| o.final_ms);
-            race.relic_target = race::relic::target(race.track, race.rules.laps, best);
+        if let Some(race) = race_on.get_mut().filter(|race| race.solo.is_some()) {
+            let best = crate::pb::best(&track.0, &sim, race).map(|o| o.final_ms);
+            if race.solo == Some(race::solo::Kind::Relic) {
+                race.relic_target = race::relic::target(race.track, race.rules.laps, best);
+            }
+            race.best = best;
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.

@@ -203,7 +203,7 @@ impl HudModel {
 }
 
 /// Puts the fruit in the corner of the window, as tall as the HUD wants it, and turns it as
-/// the fruit of the level turn. A relic race has none (`UI_INSTANCE_InitAll`).
+/// the fruit of the level turn. A solo run has none (`UI_INSTANCE_InitAll`).
 fn show(
     sim: Res<crate::props::Sim>,
     race_on: Res<crate::race_on::RaceOn>,
@@ -224,7 +224,7 @@ fn show(
     }
     *last = (ticks, turns);
     let angle = turns / crate::props::FRUIT_SPIN_TICKS * std::f32::consts::TAU;
-    let visibility = if race_on.relic() {
+    let visibility = if race_on.solo().is_some() {
         Visibility::Hidden
     } else {
         Visibility::Inherited

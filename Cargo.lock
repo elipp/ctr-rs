@@ -6855,6 +6855,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 name = "race"
 version = "0.1.0"
 dependencies = [
+ "bitcode",
  "coll",
  "hadris-iso",
  "instance",
@@ -8657,6 +8658,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 name = "vehicle"
 version = "0.1.0"
 dependencies = [
+ "bitcode",
  "coll",
  "gte",
  "hadris-iso",

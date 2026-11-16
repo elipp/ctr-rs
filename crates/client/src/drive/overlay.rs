@@ -135,7 +135,7 @@ pub(super) fn reward_hud(
 
 /// The wumpa count of each local player: a small "x" and the count in the big orange digits,
 /// level with the middle of the fruit, right of it. The "x" is orange too, and its middle is the
-/// digits' (retail draws it 4 lines down from their top, 8 tall, on digits 16 tall). A relic race
+/// digits' (retail draws it 4 lines down from their top, 8 tall, on digits 16 tall). A solo run
 /// has none (`UI_RenderFrame_Racing`).
 pub(super) fn wumpa_hud(
     mut commands: Commands,
@@ -167,7 +167,7 @@ pub(super) fn wumpa_hud(
             ],
         ));
     }
-    let visibility = if race_on.relic() {
+    let visibility = if race_on.solo().is_some() {
         Visibility::Hidden
     } else {
         Visibility::Inherited
@@ -189,10 +189,10 @@ pub(super) fn wumpa_hud(
     }
 }
 
-/// `m:ss.cc`, as a checkpoint time is told.
-fn split_time(ms: i32) -> String {
-    let ms = ms.max(0);
-    format!("{}:{:02}.{:02}", ms / 60000, ms / 1000 % 60, ms % 1000 / 10)
+/// `m:ss.cc`, as a checkpoint time is told: from retail's clock units, as `laps::clock`.
+fn split_time(units: i32) -> String {
+    let t = units.max(0);
+    format!("{}:{:02}.{:02}", t / 0xe100, t / 0x3c0 % 60, t * 100 / 0x3c0 % 100)
 }
 
 /// Toasts the time of each checkpoint we pass (see `race::Race::last_split`) against the first
@@ -205,8 +205,9 @@ pub(super) fn split_toast(
     mut announced: Local<usize>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    let Some((number, time, behind)) = race_on.get().and(sim.race.last_split(sim.own))
-    else {
+    // (Alone in a solo run, there is no first kart to be behind.)
+    let racing = race_on.get().filter(|race| race.solo.is_none());
+    let Some((number, time, behind)) = racing.and(sim.race.last_split(sim.own)) else {
         *announced = 0;
         return;
     };

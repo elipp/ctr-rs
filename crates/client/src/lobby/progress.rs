@@ -2,7 +2,7 @@
 
 use super::cup::{self, Finisher};
 use super::{ANNOUNCE_COLOR, Lobby};
-use crate::race_on::RaceOn;
+use crate::race_on::{RaceOn, SoloEnd};
 use crate::toast::Toast;
 use bevy::prelude::*;
 
@@ -95,32 +95,33 @@ pub(super) fn finish(
         let Some(slot) = sim.race.karts.iter().position(finished) else {
             continue;
         };
-        let label = race.kart_label(slot);
-        let text = match sim.race.final_ms(slot) {
-            // Alone against the clock, a place says nothing.
-            Some(ms) if race.relic => {
-                let perfect = if sim.race.perfect(slot) { ", PERFECT" } else { "" };
-                format!("{label} finished in {}{perfect}", crate::laps::clock(ms))
-            }
-            _ => format!("{label} finished {}", ordinal(place)),
-        };
+        // A solo run's finish is told by its ceremony (`solo_end.rs`).
+        if let Some(kind) = race.solo
+            && let Some(ms) = sim.race.final_ms(slot)
+        {
+            use crate::pb::Verdict;
+            debug!("{kind:?} run finished in {} (tick {at})", crate::laps::clock(ms));
+            let verdict = crate::pb::finished(&track.0, &sim, race);
+            let relic = kind == race::solo::Kind::Relic;
+            let earned = |ms| relic.then(|| race::relic::earned(race.track, race.rules.laps, ms)).flatten();
+            let (new_best, had, best) = match verdict {
+                Some(Verdict::First) => (true, None, None),
+                Some(Verdict::Better { old }) => (true, earned(old.final_ms), None),
+                Some(Verdict::Worse { best }) => (false, None, Some(best.final_ms)),
+                None => (false, None, None),
+            };
+            race.solo_end = Some(SoloEnd {
+                at,
+                perfect: sim.race.perfect(slot),
+                new_best,
+                best,
+                relic: earned(ms).filter(|&tier| new_best && Some(tier) > had),
+            });
+            continue;
+        }
+        let text = format!("{} finished {}", race.kart_label(slot), ordinal(place));
         debug!("{text} (tick {at})");
         toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
-        if race.relic
-            && let Some(verdict) = crate::relic_pb::finished(&track.0, &sim, race)
-        {
-            use crate::relic_pb::Verdict;
-            let text = match verdict {
-                Verdict::First => "New personal best".to_string(),
-                Verdict::Better { old } => {
-                    format!("New personal best (was {})", crate::laps::clock(old.final_ms))
-                }
-                Verdict::Worse { best } => {
-                    format!("Personal best: {}", crate::laps::clock(best.final_ms))
-                }
-            };
-            toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
-        }
     }
     // The race is over when the players that score have crossed the line (the ones that left
     // will not, and are not waited for), and the aftermath has passed.
@@ -147,7 +148,13 @@ pub(super) fn finish(
             .get(waited_for.saturating_sub(1))
             .copied()
     };
-    let over_at = last_waited.map(|at| at + AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32);
+    // A solo run goes on for its ceremony, which has no time of its own until it is settled.
+    let aftermath = match (race.solo, race.solo_end) {
+        (None, _) => AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32,
+        (Some(_), Some(_)) => crate::solo_end::TICKS,
+        (Some(_), None) => return,
+    };
+    let over_at = last_waited.map(|at| at + aftermath);
     if !over_at.is_some_and(|at| at < settled) {
         return;
     }

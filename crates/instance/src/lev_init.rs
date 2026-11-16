@@ -27,13 +27,14 @@ const CRYSTAL: i32 = 0x60;
 /// `STATIC_C`; T and R are the two after it.
 const LETTER_C: i32 = 0x93;
 
-/// The part of `gGT->gameMode1` the filter reads. (No time trial, crystal challenge or token race
-/// yet: the arcade branch is retail's "none of those".)
+/// The part of `gGT->gameMode1` the filter reads. (No crystal challenge or token race yet: the
+/// arcade branch is retail's "none of those".)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum LevMode {
     #[default]
     Arcade,
     Relic,
+    TimeTrial,
 }
 
 /// Whether `model_id` is a time crate.
@@ -53,6 +54,11 @@ pub fn lev_init_all(instances: &mut [InstDef], mode: LevMode) {
                 }
                 if is_time_crate(id) {
                     inst.flags |= 1;
+                }
+            }
+            LevMode::TimeTrial => {
+                if arcade_only || is_time_crate(id) {
+                    inst.flags &= !DRAW_COLLISION_MASK;
                 }
             }
             LevMode::Arcade => {
@@ -105,6 +111,13 @@ mod tests {
         let mut relic = level(&RELIC_LEV);
         lev_init_all(&mut relic, LevMode::Relic);
         assert_eq!(flags(&relic), [0, 0, 0x9, 0x9, 0]);
+    }
+
+    #[test]
+    fn a_time_trial_hides_every_pickup() {
+        let mut trial = level(&[(WUMPA_FRUIT, 0xf), (FRUIT_CRATE, 0x7), (TIME_CRATE_02, 0xb), (0x1234, 0x7)]);
+        lev_init_all(&mut trial, LevMode::TimeTrial);
+        assert_eq!(flags(&trial), [0, 0, 0x8, 0x7]);
     }
 
     #[test]

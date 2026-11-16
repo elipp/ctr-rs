@@ -11,6 +11,7 @@ pub mod desync;
 pub mod infer;
 pub mod nn;
 pub mod relic;
+pub mod solo;
 pub mod rev;
 pub mod rng;
 pub mod rollback;
@@ -351,6 +352,9 @@ pub enum Mode {
     /// crates freeze the clock, and breaking all of them takes [`PERFECT_BONUS_MS`] off the
     /// final time.
     Relic { laps: u8 },
+    /// A race against the clock alone, on the relic LEV as `lev_init::LevMode::TimeTrial` leaves
+    /// it (no pickups of any kind).
+    TimeTrial { laps: u8 },
 }
 
 /// `MainGameEnd_SoloRaceGetReward`: what a relic race's final time loses when every time crate
@@ -363,7 +367,7 @@ impl Mode {
     pub fn lap_limit(self) -> u8 {
         match self {
             Mode::FreeDrive => u8::MAX,
-            Mode::Race { laps } | Mode::Relic { laps } => laps,
+            Mode::Race { laps } | Mode::Relic { laps } | Mode::TimeTrial { laps } => laps,
         }
     }
 
@@ -738,11 +742,13 @@ impl Race {
         self.objects.crates.iter().filter(|c| c.sim.kind == time).count()
     }
 
-    /// Whether the kart in `slot` broke every time crate of the level (none to break is not a
-    /// perfect: retail compares the counts, but has no relic level without crates).
+    /// Whether the kart in `slot` broke every time crate of the level in a relic race (none to
+    /// break is not a perfect: retail compares the counts, but has no relic level without crates).
     pub fn perfect(&self, slot: usize) -> bool {
         let crates = self.time_crates();
-        crates > 0 && self.karts[slot].driver.num_time_crates as usize == crates
+        matches!(self.mode, Mode::Relic { .. })
+            && crates > 0
+            && self.karts[slot].driver.num_time_crates as usize == crates
     }
 
     /// The time the kart in `slot` finished in, its laps' added up: None before it has. A relic
@@ -753,7 +759,7 @@ impl Race {
             return None;
         }
         let laps: i32 = self.lap_times[slot].iter().sum();
-        let bonus = matches!(self.mode, Mode::Relic { .. }) && self.perfect(slot);
+        let bonus = self.perfect(slot);
         Some(laps - if bonus { PERFECT_BONUS_MS } else { 0 })
     }
 

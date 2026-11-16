@@ -85,10 +85,10 @@ fn build(
     boards: Query<(Entity, &Board)>,
 ) {
     // (None in a split screen: the column is one for the whole window, and the players have their
-    // own parts of it.)
-    let race = race_on
-        .get()
-        .filter(|race| race.phase >= crate::race_on::Phase::Spawned && drive.views().len() == 1);
+    // own parts of it. None in a relic race, which is alone: retail has no ranks there.)
+    let race = race_on.get().filter(|race| {
+        race.phase >= crate::race_on::Phase::Spawned && drive.views().len() == 1 && race.solo.is_none()
+    });
     for (entity, board) in &boards {
         // The same race goes on; a restart keeps the players, so it keeps the column too.
         if race.is_some_and(|o| o.keys() == board.names && o.kart_characters() == board.characters)

@@ -30,9 +30,14 @@ impl RaceOn {
         self.0.is_some()
     }
 
-    /// Whether the race on is a relic race, whose HUD has the time crates and no wumpa fruit.
+    /// The race on's kind, if it is a solo run against the clock: one kart, no ranks, no fruit.
+    pub fn solo(&self) -> Option<race::solo::Kind> {
+        self.get()?.solo
+    }
+
+    /// Whether the race on is a relic race, whose HUD has the time crates.
     pub fn relic(&self) -> bool {
-        self.get().is_some_and(|race| race.relic)
+        self.solo() == Some(race::solo::Kind::Relic)
     }
 
     /// Whether the race on is a lobby's (see [`CurrentRace::net`]).
@@ -81,12 +86,17 @@ pub struct CurrentRace {
     pub hash: u64,
     /// The rules of the race (laps, weapons, seed): the host's in a lobby.
     pub rules: net::Rules,
-    /// A relic race (`race::Mode::Relic`): only ever alone, so it is not one of the rules the
-    /// host sends.
-    pub relic: bool,
-    /// The relic to beat and its time in ms (`race::relic::target`), from the personal best as it
+    /// A solo run against the clock (`race::solo`): only ever alone, so it is not one of the
+    /// rules the host sends.
+    pub solo: Option<race::solo::Kind>,
+    /// The relic to beat and its time (`race::relic::target`), from the personal best as it
     /// was when the race went on the grid.
     pub relic_target: Option<(race::relic::Tier, i32)>,
+    /// A solo run's personal best's time, as it was when the race went on the grid.
+    pub best: Option<i32>,
+    /// What a solo run's finish did to the personal best, once it is settled
+    /// (`lobby::progress::finish`): the ceremony (`solo_end.rs`) goes by it.
+    pub solo_end: Option<SoloEnd>,
     pub phase: Phase,
     /// Tick 0 has come: the host heard every player ready (alone, we are). Not ordered with
     /// [`CurrentRace::phase`]: a spectator is not waited for, and can hear it before its own race
@@ -110,6 +120,20 @@ pub struct CurrentRace {
     /// it). A spectator has none of its own: it is whichever it chose.
     pub watching: usize,
     pub net: Option<NetRace>,
+}
+
+/// The finish of a solo run.
+#[derive(Clone, Copy, Debug)]
+pub struct SoloEnd {
+    /// The tick the kart crossed the line at.
+    pub at: u32,
+    pub perfect: bool,
+    /// The run is the new personal best (or the first).
+    pub new_best: bool,
+    /// The personal best's time, when the run didn't beat it.
+    pub best: Option<i32>,
+    /// The relic the run earned that the old best hadn't (`NEW_RELIC`).
+    pub relic: Option<race::relic::Tier>,
 }
 
 /// The netcode of a lobby's race.
@@ -234,8 +258,10 @@ impl CurrentRace {
             track,
             hash,
             rules,
-            relic: false,
+            solo: None,
             relic_target: None,
+            best: None,
+            solo_end: None,
             phase: Phase::Starting,
             go: false,
             specs: Vec::new(),
@@ -254,7 +280,7 @@ impl CurrentRace {
         nick: &str,
         track: u32,
         rules: net::Rules,
-        relic: bool,
+        solo: Option<race::solo::Kind>,
     ) -> CurrentRace {
         let locals = (0..characters.len()).collect();
         let hash = crate::maps::hash(track).unwrap_or(0);
@@ -269,7 +295,7 @@ impl CurrentRace {
             net::RetailBots::default(),
             None,
         );
-        race.relic = relic;
+        race.solo = solo;
         race.labels = (1..=race.characters.len())
             .map(|n| match (nick.is_empty(), n) {
                 (true, n) => format!("Player {n}"),
@@ -283,17 +309,12 @@ impl CurrentRace {
     /// What the sim plays.
     pub fn mode(&self) -> race::Mode {
         let laps = self.rules.laps;
-        if self.relic {
-            race::Mode::Relic { laps }
-        } else {
-            race::Mode::Race { laps }
-        }
+        self.solo.map_or(race::Mode::Race { laps }, |kind| kind.mode(laps))
     }
 
     /// How the race's level has its instances (`lev_init`).
     pub fn lev_mode(&self) -> instance::lev_init::LevMode {
-        use instance::lev_init::LevMode;
-        if self.relic { LevMode::Relic } else { LevMode::Arcade }
+        self.solo.map_or_else(Default::default, race::solo::Kind::lev_mode)
     }
 
     /// Whether `track` is the race's level, loaded for its mode.

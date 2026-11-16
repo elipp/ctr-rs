@@ -63,6 +63,8 @@ pub(crate) struct Shared {
     pub(crate) projectiles: render::projectile::Models,
     /// The wumpa fruit of the counter, for a level that has none of its own.
     pub(crate) fruit_display: Model,
+    /// The relic a relic race awards (`STATIC_RELIC`).
+    pub(crate) relic: Model,
     /// The menus' text.
     pub(crate) fonts: font::Fonts,
     /// The big digits of the place in a race.
@@ -98,8 +100,9 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
 }
 
 /// A level, from its map, with the texture page file shared by every track (`shared.vrm`): the
-/// racers' textures are in it. Its instances are as `mode` leaves them: a relic race is on the
-/// map's relic LEV where it has one (`Map::relic`).
+/// racers' textures are in it. Its instances are as `mode` leaves them: a relic race and a time
+/// trial are on the map's relic LEV where it has one (`Map::relic`), as retail's `levelLOD` 8 is
+/// for both (`LOAD_TenStages`).
 pub(crate) fn load_level(id: u32, mode: instance::lev_init::LevMode) -> LevelData {
     // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
     let map = maps::get(id).unwrap_or_else(|| {
@@ -114,7 +117,9 @@ pub(crate) fn load_level(id: u32, mode: instance::lev_init::LevMode) -> LevelDat
     });
     debug!("level {id:#x} ({}): loaded from its track file", maps::name(id));
     let (level, dram, images) = match (&map.relic, mode) {
-        (Some(r), instance::lev_init::LevMode::Relic) => (&r.level, &r.dram, &r.vram),
+        (Some(r), instance::lev_init::LevMode::Relic | instance::lev_init::LevMode::TimeTrial) => {
+            (&r.level, &r.dram, &r.vram)
+        }
         _ => (&map.level, &map.dram, &map.vram),
     };
     // A map brings its own level and texture pages; the shared ones are the disc's.
@@ -193,5 +198,10 @@ pub(crate) fn load_shared() -> Shared {
         shields: render::shield::models(&pack).expect("racer pack has the shields"),
         projectiles: render::projectile::models(&pack).expect("racer pack has the weapons"),
         fruit_display: render::fruit::display_model(&pack).expect("racer pack has the fruit"),
+        relic: loader::model::parse_pack_models(&pack)
+            .expect("parse racer pack models")
+            .into_iter()
+            .find(|m| m.id == crate::solo_end::RELIC_MODEL)
+            .expect("racer pack has the relic"),
     }
 }

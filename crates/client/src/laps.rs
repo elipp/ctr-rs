@@ -3,7 +3,8 @@
 //! time; the last one is the lap being driven). LAP is at the top right: the lap out of the
 //! race's. The times are `m:ss:cc`. The places and colours are measured from retail screenshots.
 //!
-//! A relic race has no lap rows: under TIME is the next relic to earn and its time instead.
+//! A relic race has no lap rows: under TIME is the next relic to earn and its time instead, and
+//! under that the personal best. A time trial has the best between TIME TRIAL and the lap rows.
 //!
 //! A free drive has neither: it has no laps to count and no end.
 
@@ -26,6 +27,10 @@ const LINE_GAP: f32 = 1.0;
 /// How far right of the "L1" its time starts, in pixels of retail's screen.
 const LAP_TIME_X: f32 = 42.0;
 
+/// "TIME", or "TIME TRIAL" in one (`UI_DrawRaceClock`).
+#[derive(Component)]
+struct TimeLabel;
+
 /// The space above the lap rows, in lines.
 const ROWS_DOWN: f32 = 1.0;
 
@@ -44,10 +49,21 @@ const PLATINUM: Gradient = Gradient {
     bottom: [0x60, 0x60, 0x60],
 };
 
-/// The race's time (`m:ss:cc`) from milliseconds.
-pub(crate) fn clock(ms: i32) -> String {
-    let ms = ms.max(0);
-    format!("{}:{:02}:{:02}", ms / 60000, ms / 1000 % 60, ms % 1000 / 10)
+/// The colour of a relic's name and time.
+pub(crate) fn tier_gradient(tier: race::relic::Tier) -> Gradient {
+    use race::relic::Tier;
+    match tier {
+        Tier::Sapphire => SAPPHIRE,
+        Tier::Gold => GOLD,
+        Tier::Platinum => PLATINUM,
+    }
+}
+
+/// The race's time (`m:ss:cc`) as `UI_DrawRaceClock` writes it. The sim's `*_ms` times are
+/// retail's clock units, 960 a second (`elapsed_time_ms` is 32 a tick), not milliseconds.
+pub(crate) fn clock(units: i32) -> String {
+    let t = units.max(0);
+    format!("{}:{:02}:{:02}", t / 0xe100, t / 0x3c0 % 60, t * 100 / 0x3c0 % 100)
 }
 
 /// The TIME block.
@@ -72,6 +88,13 @@ struct TargetName;
 
 #[derive(Component)]
 struct TargetTime;
+
+/// The personal best's label, and its time.
+#[derive(Component)]
+struct BestName;
+
+#[derive(Component)]
+struct BestTime;
 
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
@@ -114,8 +137,13 @@ fn show(
         Option<&RowTime>,
         Has<TargetName>,
         Has<TargetTime>,
+        Has<BestTime>,
+        Has<TimeLabel>,
     )>,
-    mut target_nodes: Query<&mut Node, Or<(With<TargetName>, With<TargetTime>)>>,
+    mut relic_nodes: Query<
+        (&mut Node, Has<BestName>, Has<BestTime>),
+        Or<(With<TargetName>, With<TargetTime>, With<BestName>, With<BestTime>)>,
+    >,
 ) {
     let missing = hud.missing(time_blocks.iter().copied());
     if !missing.is_empty() {
@@ -125,7 +153,8 @@ fn show(
         }
         return;
     }
-    let shown = if race_on.is_on() {
+    // (The end of a solo run has its own panel, with the time.)
+    let shown = if race_on.is_on() && crate::solo_end::shown(&race_on).is_none() {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -137,7 +166,9 @@ fn show(
         return;
     }
     let race = &*sim.race;
-    let relic = race_on.get().filter(|race| race.relic);
+    let solo = race_on.get().filter(|race| race.solo.is_some());
+    let relic = solo.filter(|race| race.solo == Some(race::solo::Kind::Relic));
+    let trial = solo.is_some() && relic.is_none();
     let target = relic.and_then(|race| race.relic_target).map(|(tier, ms)| {
         use race::relic::Tier;
         match tier {
@@ -146,9 +177,16 @@ fn show(
             Tier::Platinum => ("Platinum", PLATINUM, ms),
         }
     });
-    // (Out of the layout without one, or the block's gaps would push the lap rows down.)
-    let display = if target.is_some() { Display::Flex } else { Display::None };
-    for mut node in &mut target_nodes {
+    let best = solo.and_then(|race| race.best);
+    // (Out of the layout without one, or the block's gaps would push the lap rows down; the best
+    // goes up in the target's place.)
+    let display = |on: bool| if on { Display::Flex } else { Display::None };
+    for (mut node, best_name, best_time) in &mut relic_nodes {
+        let display = display(if best_name || best_time {
+            best.is_some()
+        } else {
+            target.is_some()
+        });
         if node.display != display {
             node.display = display;
         }
@@ -181,7 +219,9 @@ fn show(
                 spawn_row(&mut commands, entity, view, i, &clock(ms));
             }
         }
-        for (v, mut text, is_total, is_count, label, time, is_name, is_target) in &mut texts {
+        for (v, mut text, is_total, is_count, label, time, is_name, is_target, is_best, is_label) in
+            &mut texts
+        {
             if v.0 != view {
                 continue;
             }
@@ -191,7 +231,9 @@ fn show(
             {
                 text.gradient = gradient;
             }
-            let wanted = if is_total {
+            let wanted = if is_label {
+                if trial { "Time Trial" } else { "Time" }.to_string()
+            } else if is_total {
                 clock(total)
             } else if is_count {
                 format!("{lap}/{laps}")
@@ -203,6 +245,8 @@ fn show(
                 target.map_or_else(String::new, |(name, _, _)| name.to_string())
             } else if is_target {
                 target.map_or_else(String::new, |(_, _, ms)| clock(ms))
+            } else if is_best {
+                best.map_or_else(String::new, clock)
             } else {
                 continue;
             };
@@ -233,10 +277,12 @@ fn spawn(commands: &mut Commands, view: usize) {
         Visibility::Hidden,
         Pickable::IGNORE,
         children![
-            text("Time", Font::Middle, Gradient::ORANGE),
+            (view, TimeLabel, text("Time", Font::Middle, Gradient::ORANGE)),
             (view, Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
             (view, TargetName, text("", Font::Middle, SAPPHIRE)),
             (view, TargetTime, text("", Font::Large, SAPPHIRE)),
+            (BestName, text("Best", Font::Middle, Gradient::WHITE)),
+            (view, BestTime, text("", Font::Large, Gradient::WHITE)),
             (
                 view,
                 LapRows(0),
@@ -290,8 +336,9 @@ mod tests {
     #[test]
     fn the_clock_is_minutes_seconds_and_hundredths() {
         assert_eq!(clock(0), "0:00:00");
-        assert_eq!(clock(49_880), "0:49:88");
-        assert_eq!(clock(61_005), "1:01:00");
+        assert_eq!(clock(47_885), "0:49:88");
+        assert_eq!(clock(58_560), "1:01:00");
+        assert_eq!(clock(81_600), "1:25:00");
         assert_eq!(clock(-32), "0:00:00");
     }
 }

@@ -81,12 +81,12 @@ mod portrait_row;
 mod probe;
 mod projectile;
 
+mod pb;
 mod props;
 mod race_on;
 mod public_lobbies;
 mod rain;
 mod rect_menu;
-mod relic_pb;
 mod remote;
 mod resources;
 mod scene;
@@ -96,6 +96,7 @@ mod shield;
 mod skid;
 mod sky;
 mod slide_meter;
+mod solo_end;
 mod sound;
 mod speedometer;
 mod spider;
@@ -180,6 +181,7 @@ fn main() {
         shields,
         projectiles,
         fruit_display,
+        relic,
         fonts,
         digits,
     } = load_shared();
@@ -248,6 +250,7 @@ fn main() {
         .insert_resource(mask::MaskModels(Some(masks)))
         .insert_resource(shield::ShieldModels(Some(shields)))
         .insert_resource(wumpa_icon::FruitDisplay(fruit_display))
+        .insert_resource(solo_end::RelicModel(relic))
         .insert_resource(projectile::ProjectileModels::new(projectiles))
         .insert_resource(fonts)
         .add_plugins(font::FontPlugin)

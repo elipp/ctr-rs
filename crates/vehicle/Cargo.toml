@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bitcode = "0.6.9"
 coll = { path = "../coll" }
 gte = { path = "../gte" }
 loader = { path = "../loader" }

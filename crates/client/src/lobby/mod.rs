@@ -817,12 +817,12 @@ impl Lobby {
         nick: &str,
         track: u32,
         rules: net::Rules,
-        relic: bool,
+        solo: Option<race::solo::Kind>,
     ) {
         debug_assert!(self.session.is_none());
         // As a lobby's start does (`report`): the flag comes in over what is shown.
         self.cup_next = Some(track);
-        race_on.0 = Some(CurrentRace::alone(characters, nick, track, rules, relic));
+        race_on.0 = Some(CurrentRace::alone(characters, nick, track, rules, solo));
     }
 }
 

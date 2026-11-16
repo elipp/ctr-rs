@@ -133,12 +133,12 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrSaveTrackPicture)]
     pub fn save_track_picture(key: &str, bytes: &[u8]);
 
-    #[wasm_bindgen(js_namespace = window, js_name = ctrTakeRelicPbs)]
-    fn take_saved_relic_pbs() -> js_sys::Array;
+    #[wasm_bindgen(js_namespace = window, js_name = ctrTakePbs)]
+    fn take_saved_pbs() -> js_sys::Array;
 
-    /// Keeps a relic race's personal best (`relic_pb.rs`), under `key`.
-    #[wasm_bindgen(js_namespace = window, js_name = ctrSaveRelicPb)]
-    pub fn save_relic_pb(key: &str, bytes: &[u8]);
+    /// Keeps a solo run's personal best (`pb.rs`), under `key`.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSavePb)]
+    pub fn save_pb(key: &str, bytes: &[u8]);
 
     /// Hands the page a warning or an error that was logged, for it to show if the game crashes.
     #[wasm_bindgen(js_namespace = window, js_name = ctrLog)]
@@ -179,9 +179,9 @@ pub fn take_track_pictures() -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The relic races' personal bests the page keeps, once.
-pub fn take_relic_pbs() -> Vec<Vec<u8>> {
-    take_saved_relic_pbs()
+/// The solo runs' personal bests the page keeps, once.
+pub fn take_pbs() -> Vec<Vec<u8>> {
+    take_saved_pbs()
         .iter()
         .map(|bytes| bytes.unchecked_into::<js_sys::Uint8Array>().to_vec())
         .collect()
