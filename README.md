@@ -15,8 +15,6 @@ ctr-rs is an online-focused reimplementation of Crash Team Racing (PS1, 1999), w
 ## What's not here (not currently planned)
 
 - **Adventure mode**
-- **Time trial**
-- **Relic race**
 - **Battle mode**
 
 ## Running it
