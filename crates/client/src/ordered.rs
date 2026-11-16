@@ -26,6 +26,8 @@ const RELIEF: f32 = 0.125;
 pub struct Ordering {
     nearer: f32,
     relief: f32,
+    /// WebGL2 has uniform buffers in multiples of 16 bytes.
+    _pad: Vec2,
 }
 
 view_extension!(
@@ -71,6 +73,7 @@ fn ordered(
         let ordering = Ordering {
             nearer: -(root.bias as f32) * SLOT * SCALE,
             relief: RELIEF,
+            _pad: Vec2::ZERO,
         };
         commands
             .entity(entity)

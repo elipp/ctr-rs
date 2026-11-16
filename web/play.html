@@ -120,7 +120,8 @@
     <pre id="detail" hidden></pre>
     <ul id="menu" role="menu"></ul>
     <small id="note">It stays on this device.</small>
-    <input type="file" accept=".bin,.chd">
+    <!-- No `accept`: Safari filters by UTI, and .chd has none, so it greys the file out. -->
+    <input type="file">
   </div>
 </div>
 <script>
