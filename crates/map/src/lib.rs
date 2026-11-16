@@ -172,12 +172,15 @@ impl Map {
 
     /// The map as a file: this is also what is sent to a player who has not got it.
     pub fn to_bytes(&self) -> io::Result<Vec<u8>> {
+        self.to_bytes_at(COMPRESSION)
+    }
+
+    /// As [`Map::to_bytes`], at zstd's `level`: what reads it doesn't care, and neither do
+    /// [`Map::hash`] and [`Map::id`], which are of the contents.
+    pub fn to_bytes_at(&self, level: i32) -> io::Result<Vec<u8>> {
         let mut out = MAGIC.to_vec();
         out.extend(VERSION.to_le_bytes());
-        out.extend(zstd::stream::encode_all(
-            self.encode()?.as_slice(),
-            COMPRESSION,
-        )?);
+        out.extend(zstd::stream::encode_all(self.encode()?.as_slice(), level)?);
         Ok(out)
     }
 
@@ -208,19 +211,21 @@ impl Map {
     /// tells a map that was made by an older build, which `Map::read` refuses, without reading
     /// it all.
     pub fn is_current(path: &Path) -> bool {
-        use std::io::Read;
-        let mut head = [0u8; MAGIC.len() + 4];
-        std::fs::File::open(path)
-            .and_then(|mut f| f.read_exact(&mut head))
-            .is_ok_and(|()| head.starts_with(MAGIC) && head[MAGIC.len()..] == VERSION.to_le_bytes())
+        let head = MAGIC.len() + 4;
+        loader::store::read_prefix(path, head).is_ok_and(|bytes| {
+            bytes.len() == head
+                && bytes.starts_with(MAGIC)
+                && bytes[MAGIC.len()..] == VERSION.to_le_bytes()
+        })
     }
 
+    /// (Through `loader::store`, so the maps made from the disc are kept in a browser too.)
     pub fn write(&self, path: &Path) -> io::Result<()> {
-        std::fs::write(path, self.to_bytes()?)
+        loader::store::write(path, &self.to_bytes()?)
     }
 
     pub fn read(path: &Path) -> io::Result<Map> {
-        Map::from_bytes(&std::fs::read(path)?)
+        Map::from_bytes(&loader::store::read(path)?)
     }
 }
 

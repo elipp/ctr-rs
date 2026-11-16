@@ -3,9 +3,7 @@
 //! time; the last one is the lap being driven). LAP is at the top right: the lap out of the
 //! race's. The times are `m:ss:cc`. The places and colours are measured from retail screenshots.
 //!
-//! A free drive has neither: it has no laps to count and no end. A relic race also counts the
-//! time crates under LAP (`UI_DrawNumTimebox`; retail's place for it is not measured yet, nor is
-//! its spinning crate drawn).
+//! A free drive has neither: it has no laps to count and no end.
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -51,10 +49,6 @@ struct Total;
 #[derive(Component)]
 struct LapCount;
 
-/// The time crates broken out of the level's, in a relic race.
-#[derive(Component)]
-struct CrateCount;
-
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
 struct LapRows(usize);
@@ -94,8 +88,7 @@ fn show(
         Has<LapCount>,
         Option<&RowLabel>,
         Option<&RowTime>,
-    ), Without<CrateCount>>,
-    mut crate_counts: Query<(&HudView, &mut CtrText, &mut Visibility), With<CrateCount>>,
+    )>,
 ) {
     let missing = hud.missing(time_blocks.iter().copied());
     if !missing.is_empty() {
@@ -141,21 +134,6 @@ fn show(
             commands.entity(entity).despawn_related::<Children>();
             for (i, &ms) in times.iter().enumerate() {
                 spawn_row(&mut commands, entity, view, i, &clock(ms));
-            }
-        }
-        let relic = matches!(race.mode, race::Mode::Relic { .. });
-        for (v, mut text, mut visibility) in &mut crate_counts {
-            if v.0 != view {
-                continue;
-            }
-            visibility.set_if_neq(if relic {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            });
-            let wanted = format!("x{:02}/{:02}", driver.num_time_crates, race.time_crates());
-            if relic && text.text != wanted {
-                text.text = wanted;
             }
         }
         for (v, mut text, is_total, is_count, label, time) in &mut texts {
@@ -223,7 +201,6 @@ fn spawn(commands: &mut Commands, view: usize) {
         children![
             text("Lap", Font::Middle, Gradient::WHITE),
             (view, LapCount, text("", Font::Large, Gradient::WHITE)),
-            (view, CrateCount, text("", Font::Large, Gradient::ORANGE), Visibility::Hidden),
         ],
     ));
 }

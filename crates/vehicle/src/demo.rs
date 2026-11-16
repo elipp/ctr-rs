@@ -86,6 +86,12 @@ impl Demo {
         })
     }
 
+    /// Ends the demo before `length`: the changes from then on go.
+    pub fn truncate(&mut self, length: u32) {
+        self.length = self.length.min(length);
+        self.changes.retain(|c| c.tick < self.length);
+    }
+
     pub fn to_text(&self) -> String {
         let mut text = format!("{HEADER} {}\n", self.character);
         for c in &self.changes {

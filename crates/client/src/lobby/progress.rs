@@ -75,6 +75,7 @@ pub(super) fn finish(
     mut lobby: ResMut<Lobby>,
     mut race_on: ResMut<RaceOn>,
     sim: Res<crate::props::Sim>,
+    track: Res<crate::Track>,
     time: Res<Time<Real>>,
     mut toasts: MessageWriter<Toast>,
 ) {
@@ -105,6 +106,21 @@ pub(super) fn finish(
         };
         debug!("{text} (tick {at})");
         toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
+        if race.relic
+            && let Some(verdict) = crate::relic_pb::finished(&track.0, &sim, race)
+        {
+            use crate::relic_pb::Verdict;
+            let text = match verdict {
+                Verdict::First => "New personal best".to_string(),
+                Verdict::Better { old } => {
+                    format!("New personal best (was {})", crate::laps::clock(old.final_ms))
+                }
+                Verdict::Worse { best } => {
+                    format!("Personal best: {}", crate::laps::clock(best.final_ms))
+                }
+            };
+            toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
+        }
     }
     // The race is over when the players that score have crossed the line (the ones that left
     // will not, and are not waited for), and the aftermath has passed.

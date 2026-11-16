@@ -69,6 +69,14 @@ impl Sim {
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
     ) -> Rollback<Race> {
+        if let Some((rules, race::Mode::Relic { laps })) = rules {
+            // `/race relic` refuses a lobby, split screen and bots.
+            let [spec] = specs else {
+                panic!("a relic race is for one kart, not {}", specs.len());
+            };
+            let race = race::relic::start(level, objects, *spec, laps, rules.seed);
+            return Rollback::new(race, 1, Some(0), ROLLBACK_WINDOW).record(0, spec.character);
+        }
         let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
         race.band = band;
         if let Some((setup, bots)) = bots.filter(|(_, bots)| !bots.is_empty()) {
@@ -128,6 +136,11 @@ impl Sim {
             band,
         );
         self.own = own;
+    }
+
+    /// The objects at tick 0.
+    pub fn start(&self) -> &Objects {
+        &self.start
     }
 
     /// Our kart.

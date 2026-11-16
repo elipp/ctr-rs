@@ -39,15 +39,6 @@ fn made() -> bool {
 pub fn prepare() {
     use loader::source::Check;
     let source = source();
-    // A browser has nowhere to keep them: there they are held in memory, so that the page can let
-    // go of the image (`web::release_disc`).
-    if cfg!(target_arch = "wasm32") {
-        match source.hold() {
-            Ok(size) => tell!("Took {} MiB from the disc", size >> 20),
-            Err(e) => tell!("Could not take the files of the disc: {e}"),
-        }
-        return;
-    }
     let why = match source.check() {
         Check::Ready => return,
         Check::NotPrepared => "making the files of the disc (this is done once)".to_string(),
@@ -143,7 +134,9 @@ fn ask() -> Option<PathBuf> {
     }
 }
 
+/// The page asks on a reload: there is nothing to wait for here.
 #[cfg(target_arch = "wasm32")]
 fn ask() -> Option<PathBuf> {
+    crate::web::need_disc("The files made from the disc are missing or out of date");
     None
 }

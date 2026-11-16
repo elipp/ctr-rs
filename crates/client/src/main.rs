@@ -86,6 +86,7 @@ mod race_on;
 mod public_lobbies;
 mod rain;
 mod rect_menu;
+mod relic_pb;
 mod remote;
 mod resources;
 mod scene;
@@ -102,6 +103,7 @@ mod submerge;
 mod subtract;
 mod suggest;
 mod text_field;
+mod timebox;
 mod toast;
 mod track_picture;
 mod tracker;
@@ -149,7 +151,10 @@ fn log_filter() -> String {
 fn main() {
     crash::install();
     #[cfg(target_arch = "wasm32")]
-    web::take_disc_image();
+    {
+        web::take_kept();
+        web::take_disc_image();
+    }
     let track_id = 0;
     let mut config = config::Config::load();
     disc::locate(&mut config);

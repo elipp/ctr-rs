@@ -49,6 +49,13 @@ pub fn track_pictures() -> PathBuf {
     root().join(".cache").join("track_pictures")
 }
 
+/// The relic races' personal bests (`relic_pb.rs`). Lost with the folder, but nothing else
+/// depends on them.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn relic_pbs() -> PathBuf {
+    root().join(".cache").join("relic-pbs")
+}
+
 fn cache() -> PathBuf {
     if cfg!(debug_assertions) {
         root().join(".cache")

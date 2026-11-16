@@ -453,6 +453,7 @@ window.ctrSetConfigAside = setConfigAside;
 
 // The game reads the image from here (a wasm program's memory never shrinks, so it is not copied
 // in), and lets go of it once it has taken what it needs.
+window.ctrHasDisc = () => disc !== null;
 window.ctrDiscSize = () => disc.length;
 window.ctrReadDisc = (at, buf) => buf.set(disc.subarray(at, at + buf.length));
 window.ctrReleaseDisc = () => {
@@ -480,12 +481,16 @@ async function read(stream, size) {
 
 // `copy` is the file to keep a copy of, where the browser cannot remember a file's place
 // (`showOpenFilePicker`). Once the game has started on it, so as not to keep a wrong one.
+// Without a `stream`, the game runs on what it `kept` of a disc before (and asks for one again
+// through `ctrNeedDisc` if that is not enough).
 async function start(stream, size, copy = null) {
   if (drop.classList.contains("busy")) return;
   drop.classList.add("busy");
   document.getElementById("detail").hidden = true;
-  crumb("reading the disc");
-  disc = await read(stream, size);
+  if (stream !== null) {
+    crumb("reading the disc");
+    disc = await read(stream, size);
+  }
   crumb("reading the saved maps");
   trackPictures = await stored("trackPictures", "readonly", (s) => s.getAll()).catch((e) => {
     console.warn(`could not read the pictures of the tracks: ${e}`);
@@ -493,6 +498,10 @@ async function start(stream, size, copy = null) {
   });
   maps = await stored("maps", "readonly", (s) => s.getAll()).catch((e) => {
     console.warn(`could not read the maps: ${e}`);
+    return [];
+  });
+  relicPbs = await stored("relicPbs", "readonly", (s) => s.getAll()).catch((e) => {
+    console.warn(`could not read the relic personal bests: ${e}`);
     return [];
   });
   status.textContent = "Starting";
@@ -524,7 +533,9 @@ async function start(stream, size, copy = null) {
   canvas.focus();
   touchGame.hidden = !hasTouch;
   keepAwake();
-  if (copy !== null) remember(copy).then(() => navigator.storage?.persist?.());
+  if (stream !== null) sessionStorage.removeItem(NEED_DISC);
+  if (copy !== null) remember(copy);
+  navigator.storage?.persist?.();
 }
 
 // The screen stays on while the game runs, which a race driven with a pad (no keys or mouse for the
@@ -646,7 +657,8 @@ function environment() {
 
 let crash = null;
 function crashed(message) {
-  if (crash !== null) return;
+  // (The game stops once it has asked for the disc: that is no crash.)
+  if (crash !== null || reloading) return;
   crash = message;
   wakeLock?.release().catch(() => {});
   const starting = !drop.classList.contains("hidden");
@@ -732,9 +744,9 @@ canvas.addEventListener("webglcontextlost", (e) => {
 
 function stored(name, mode, use) {
   return new Promise((resolve, reject) => {
-    const open = indexedDB.open("ctr-rs", 3);
+    const open = indexedDB.open("ctr-rs", 4);
     open.onupgradeneeded = () => {
-      for (const store of ["handles", "maps", "trackPictures"]) {
+      for (const store of ["handles", "maps", "trackPictures", "relicPbs", "kept"]) {
         if (!open.result.objectStoreNames.contains(store)) open.result.createObjectStore(store);
       }
     };
@@ -751,8 +763,69 @@ const remember = (handle) => stored("handles", "readwrite", (s) => s.put(handle,
 const forget = () => stored("handles", "readwrite", (s) => s.delete("disc")).catch(() => {});
 const recall = () => stored("handles", "readonly", (s) => s.get("disc")).catch(() => undefined);
 
+// What the game made of the disc (`loader::store`), by its path: a start with these needs no disc.
+// Every write is its own transaction: if the page goes before all are in, the game finds the
+// files missing next time and asks for the disc again.
+let kept = [];
+window.ctrTakeKept = () => {
+  const taken = kept;
+  kept = [];
+  return taken;
+};
+window.ctrKeep = (key, bytes) => {
+  // `bytes` views wasm memory, which can move.
+  const copy = bytes.slice();
+  stored("kept", "readwrite", (s) => s.put(copy, key)).catch((e) =>
+    console.warn(`could not keep ${key}: ${e}`),
+  );
+};
+window.ctrUnkeep = (key) => {
+  stored("kept", "readwrite", (s) => s.delete(key)).catch((e) =>
+    console.warn(`could not delete ${key}: ${e}`),
+  );
+};
+async function readKept() {
+  try {
+    const keys = await stored("kept", "readonly", (s) => s.getAllKeys());
+    const values = await stored("kept", "readonly", (s) => s.getAll());
+    // (Both are in key order.)
+    return keys.length === values.length ? keys.map((key, i) => [key, values[i]]) : [];
+  } catch (e) {
+    console.warn(`could not read what was kept of the disc: ${e}`);
+    return [];
+  }
+}
+function forgetKept() {
+  kept = [];
+  return stored("kept", "readwrite", (s) => s.clear()).catch((e) =>
+    console.warn(`could not forget the kept files: ${e}`),
+  );
+}
+// Why the game asked for the disc, over the reload it asks with.
+const NEED_DISC = "ctr-rs.need-disc";
+let reloading = false;
+window.ctrNeedDisc = (why) => {
+  sessionStorage.setItem(NEED_DISC, why);
+  reloading = true;
+  location.reload();
+};
+
 let maps = [];
 let trackPictures = [];
+let relicPbs = [];
+window.ctrTakeRelicPbs = () => {
+  const taken = relicPbs;
+  relicPbs = [];
+  return taken;
+};
+// Not cleared by `ctrPurgeMaps`: unlike those, a best can't be fetched again.
+window.ctrSaveRelicPb = (key, bytes) => {
+  // `bytes` views wasm memory, which can move.
+  const copy = bytes.slice();
+  stored("relicPbs", "readwrite", (s) => s.put(copy, key)).catch((e) =>
+    console.warn(`could not keep the relic personal best: ${e}`),
+  );
+};
 window.ctrTakeTrackPictures = () => {
   const taken = trackPictures;
   trackPictures = [];
@@ -908,14 +981,25 @@ input.addEventListener("change", () => {
 });
 
 fresh();
-if (lastWords !== null) {
+const needDisc = sessionStorage.getItem(NEED_DISC);
+const note = needDisc !== null ? `${needDisc}: the disc is needed again.` : lastWords;
+if (note !== null) {
   const detail = document.getElementById("detail");
   detail.classList.add("note");
-  detail.textContent = lastWords;
+  detail.textContent = note;
   detail.hidden = false;
 }
+kept = await readKept();
 const saved = await recall();
-if (saved instanceof Blob) {
+// After a crash the player picks: what was kept may be what crashed it.
+if (kept.length > 0 && note === null) {
+  start(null, 0);
+} else if (kept.length > 0) {
+  offer("The files made from the disc were kept", [
+    ["Continue with them", () => start(null, 0)],
+    ["Make them again from a .bin", () => forgetKept().then(pick)],
+  ]);
+} else if (saved instanceof Blob) {
   offer(`${saved.name} was kept from last time`, [
     ["Continue with it", () => startKept(saved)],
     ["Pick another .bin", pick],

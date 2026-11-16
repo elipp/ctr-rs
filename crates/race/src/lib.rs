@@ -10,6 +10,7 @@ pub mod bot;
 pub mod desync;
 pub mod infer;
 pub mod nn;
+pub mod relic;
 pub mod rev;
 pub mod rng;
 pub mod rollback;
@@ -302,6 +303,14 @@ pub enum Light {
     Green,
 }
 
+/// A beat of the frozen clock of a relic race (`MainFrame_GameLogic`): every 6th tick while it is
+/// frozen, every other one higher.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockBeat {
+    Tick,
+    Tock,
+}
+
 /// When each light comes on: the timer goes to or under this.
 const LIGHT_AT_MS: [(i32, Light); 4] = [
     (0xb40, Light::Red1),
@@ -426,6 +435,8 @@ pub struct Race {
     pub intro_ticks: u32,
     /// The light that came on in the last tick, if one did.
     pub light: Option<Light>,
+    /// The frozen clock's beat that sounded in the last tick, if one did.
+    pub clock_beat: Option<ClockBeat>,
     /// `elapsedEventTime`: the milliseconds since the green light (since tick 0 in a race with
     /// no ceremony). The lap times are of this clock.
     pub event_ms: i32,
@@ -466,6 +477,7 @@ impl Race {
             lights_ms: 0,
             intro_ticks: 0,
             light: None,
+            clock_beat: None,
             event_ms: 0,
             bots: None,
             band: None,
@@ -1106,13 +1118,22 @@ impl Race {
             tick.lap = lap;
         }
         self.update_splits(level);
-        // (Retail plays the frozen clock's tick sound from here, every 6 ticks.)
+        self.clock_beat = None;
         if self.lights_ms < 1 {
             let frozen = &mut self.objects.frozen_ms;
             if *frozen < 1 {
                 self.event_ms += env.elapsed_time_ms;
             } else {
-                *frozen = (*frozen - env.elapsed_time_ms).max(0);
+                // The last decrement, the one that would go below 0, is silent.
+                let left = *frozen - env.elapsed_time_ms;
+                *frozen = left.max(0);
+                if left >= 0 && self.tick % 6 == 0 {
+                    self.clock_beat = Some(if self.tick % 12 == 0 {
+                        ClockBeat::Tick
+                    } else {
+                        ClockBeat::Tock
+                    });
+                }
             }
         }
         self.tick += 1;

@@ -30,6 +30,11 @@ impl RaceOn {
         self.0.is_some()
     }
 
+    /// Whether the race on is a relic race, whose HUD has the time crates and no wumpa fruit.
+    pub fn relic(&self) -> bool {
+        self.get().is_some_and(|race| race.relic)
+    }
+
     /// Whether the race on is a lobby's (see [`CurrentRace::net`]).
     pub fn shared(&self) -> bool {
         self.net().is_some()

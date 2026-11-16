@@ -1,5 +1,4 @@
 use std::fs::File;
-use std::io::Write;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -258,6 +257,14 @@ impl Seek for FileDisc {
 
 /// Opens the disc image at `path` (a `.bin`, or a CHD, told by its first bytes) as the bytes of a
 /// `.bin`.
+/// The size of the disc image at `path`, which may be the [external](keep_external) one.
+pub fn image_len(path: &Path) -> io::Result<u64> {
+    match EXTERNAL.get() {
+        Some(&(ref at, len, _)) if at == path => Ok(len),
+        _ => Ok(std::fs::metadata(path)?.len()),
+    }
+}
+
 pub fn open_file(path: &Path) -> io::Result<FileDisc> {
     let mut disc = match EXTERNAL.get() {
         Some(&(ref at, len, read)) if at == path => FileDisc::External { pos: 0, len, read },
@@ -372,29 +379,6 @@ pub fn open_xa_with<R: Read + Seek>(
             .collect()
     });
     Ok((xnf, XaFiles::new(open()?, starts)))
-}
-
-/// Writes `path` (and the directories above it) by `write`, under another name until it is done.
-pub(crate) fn write_atomically(
-    path: &Path,
-    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> io::Result<()>,
-) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut part = path.as_os_str().to_owned();
-    part.push(".part");
-    let part = PathBuf::from(part);
-    let mut out = std::io::BufWriter::new(std::fs::File::create(&part)?);
-    let done = write(&mut out).and_then(|()| out.flush());
-    drop(out);
-    match done {
-        Ok(()) => std::fs::rename(&part, path),
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            Err(e)
-        }
-    }
 }
 
 /// A file of a disc's ISO 9660 filesystem ([`files_with`]).

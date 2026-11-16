@@ -47,7 +47,7 @@ use howl::{AntiSpam, CENTRE, Howl, NO_DISTORTION, Sound};
 use loader::howl::Cseq;
 use loader::lev::Level;
 use loader::source::{Need, Source as DiscSource};
-use race::{KartTick, Light, Race};
+use race::{ClockBeat, KartTick, Light, Race};
 use render::mesh::SCALE;
 use vehicle::calc::map_to_range;
 use vehicle::engine_sound::{EngineSound, EngineVoice, FarVoice};
@@ -61,6 +61,12 @@ use crate::controls::Control;
 /// `DotLights_AudioAndVideo`: a red light comes on, and the green.
 const RED_LIGHT_SFX: u16 = 0x45;
 const GREEN_LIGHT_SFX: u16 = 0x46;
+/// `MainFrame_GameLogic`: the frozen clock of a relic race, its volume, and the pitches of
+/// [`ClockBeat::Tick`] and [`ClockBeat::Tock`].
+const CLOCK_SFX: u16 = 0x40;
+const CLOCK_VOLUME: u8 = 0x8c;
+const CLOCK_TICK_DISTORT: u8 = 0x90;
+const CLOCK_TOCK_DISTORT: u8 = 0x88;
 /// `RB_CrateWeapon_ThCollide`: the item roulette spins.
 const ROULETTE_SFX: u16 = 0x5d;
 /// A crate breaks; a wumpa fruit of the level is picked up.
@@ -570,6 +576,18 @@ impl Sfx<'_> {
                 Light::Green => GREEN_LIGHT_SFX,
             };
             sounds.play(id, AntiSpam::Off, howl::Sfx::FULL);
+        }
+        if let Some(beat) = race.clock_beat {
+            let distort = match beat {
+                ClockBeat::Tick => CLOCK_TICK_DISTORT,
+                ClockBeat::Tock => CLOCK_TOCK_DISTORT,
+            };
+            let sfx = howl::Sfx {
+                volume: CLOCK_VOLUME,
+                distort,
+                ..howl::Sfx::FULL
+            };
+            sounds.play(CLOCK_SFX, AntiSpam::Off, sfx);
         }
 
         let finished = ours.actions_flag_set & actions::RACE_FINISHED != 0;

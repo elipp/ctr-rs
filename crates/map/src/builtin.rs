@@ -14,6 +14,7 @@ use loader::bigfile::BigFile;
 use loader::bigindex::{BigIndex, LevFile, Lod};
 use loader::disc::open_bigfile;
 use loader::level::LevelId;
+use loader::store;
 
 use crate::{Map, Relic};
 use crate::import::from_files;
@@ -131,18 +132,9 @@ pub fn id_of_slug(slug: &str) -> Option<u32> {
     TRACKS.iter().find(|t| t.0 == slug).map(|t| t.2.0)
 }
 
-/// Saves a map in `dir`, if it has no file there yet or one of an older
-/// version. It is under another name until it is whole, so that a stop leaves no half map.
-pub fn save(map: &Map, dir: &Path) -> io::Result<()> {
-    let path = dir.join(format!("{}.ctrmap", map.name));
-    if Map::is_current(&path) {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dir)?;
-    let part = path.with_extension("ctrmap.part");
-    map.write(&part)?;
-    std::fs::rename(&part, &path)
-}
+/// zstd's level for these maps: never sent, so the size matters less than making them, which a
+/// browser does single-threaded (at `COMPRESSION`'s 19 that took minutes).
+const COMPRESSION: i32 = 3;
 
 fn file_name(made: &Made) -> String {
     format!("{}.ctrmap", made.name())
@@ -163,43 +155,29 @@ pub fn missing_count(dir: &Path) -> usize {
 /// from the disc image `original`, and returns how many. The image is not opened if there is
 /// nothing to make. The other `.ctrmap` files of `dir` are deleted: the folder is ours, and an
 /// older build's leftovers (the `__relic` maps of version 9) would be refused at every start.
+/// `dir` is a `loader::store` folder.
 pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
     let missing = missing(dir);
     if missing.is_empty() {
         return Ok(0);
     }
-    std::fs::create_dir_all(dir)?;
     let ours: Vec<String> = all().map(|m| file_name(&m)).collect();
-    for entry in std::fs::read_dir(dir)?.filter_map(Result::ok) {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".ctrmap") && !ours.contains(&name) {
-            std::fs::remove_file(entry.path())?;
+    let listed = match store::list(dir) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        listed => listed?,
+    };
+    for path in listed {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.ends_with(".ctrmap") && !ours.iter().any(|o| *o == name) {
+            store::remove_file(&path)?;
         }
     }
-
-    // The reading is quick, the compression slow: the maps are read in turn, then compressed
-    // side by side.
     let (mut disc, big) = open_bigfile(original)?;
-    let maps = (missing.iter())
-        .map(|made| made.make(&mut disc, &big))
-        .collect::<io::Result<Vec<_>>>()?;
-    std::thread::scope(|scope| {
-        let jobs: Vec<_> = (maps.iter())
-            .map(|map| scope.spawn(move || save(map, dir)))
-            .collect();
-        for job in jobs {
-            job.join().expect("a map thread panicked")?;
-        }
-        Ok(maps.len())
-    })
-}
-
-/// The map of every level, made from the disc image `original` and only held in memory:
-/// for a client with no folder to keep them in (a browser). Not compressed, which is what
-/// [`export`] spends its time on.
-pub fn make_all(original: &Path) -> io::Result<Vec<Map>> {
-    let (mut disc, big) = open_bigfile(original)?;
-    all().map(|made| made.make(&mut disc, &big)).collect()
+    for made in &missing {
+        let map = made.make(&mut disc, &big)?;
+        store::write(&dir.join(file_name(made)), &map.to_bytes_at(COMPRESSION)?)?;
+    }
+    Ok(missing.len())
 }
 
 #[cfg(test)]

@@ -135,15 +135,17 @@ pub(super) fn reward_hud(
 
 /// The wumpa count of each local player: a small "x" and the count in the big orange digits,
 /// level with the middle of the fruit, right of it. The "x" is orange too, and its middle is the
-/// digits' (retail draws it 4 lines down from their top, 8 tall, on digits 16 tall).
+/// digits' (retail draws it 4 lines down from their top, 8 tall, on digits 16 tall). A relic race
+/// has none (`UI_RenderFrame_Racing`).
 pub(super) fn wumpa_hud(
     mut commands: Commands,
     hud: HudViews,
-    counters: Query<(&HudView, &Children), With<WumpaCounter>>,
+    race_on: Res<crate::race_on::RaceOn>,
+    mut counters: Query<(&HudView, &Children, &mut Visibility), With<WumpaCounter>>,
     mut counts: Query<&mut CtrText, With<WumpaHud>>,
 ) {
     let height = Font::Large.line_height() as f32;
-    for view in hud.missing(counters.iter().map(|(v, _)| *v)) {
+    for view in hud.missing(counters.iter().map(|(v, ..)| *v)) {
         commands.spawn((
             WumpaCounter,
             HudView(view),
@@ -165,7 +167,13 @@ pub(super) fn wumpa_hud(
             ],
         ));
     }
-    for (&HudView(view), children) in &counters {
+    let visibility = if race_on.relic() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    for (&HudView(view), children, mut shown) in &mut counters {
+        shown.set_if_neq(visibility);
         let Some(kart) = hud.get(view) else {
             continue;
         };

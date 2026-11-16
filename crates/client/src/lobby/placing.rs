@@ -20,7 +20,8 @@ pub(super) fn placing(
 ) {
     let place = race_on
         .get()
-        .filter(|race| race.racing() && !race.spectating())
+        // Alone against the clock, a place says nothing.
+        .filter(|race| race.racing() && !race.spectating() && !race.relic)
         .map(|_| sim.driver())
         .filter(|d| d.actions_flag_set & vehicle::actions::RACE_FINISHED != 0)
         .map(|d| d.driver_rank.max(0) as usize);

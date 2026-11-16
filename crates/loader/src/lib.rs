@@ -11,6 +11,7 @@ pub mod model;
 pub mod nav_amend;
 pub mod scenery;
 pub mod source;
+pub mod store;
 pub mod texture;
 pub mod vram;
 pub mod water;
