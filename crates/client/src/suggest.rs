@@ -225,8 +225,8 @@ pub(crate) const COMMANDS: &[Spec] = &[
         "The lobby's race (host only)",
         &[
             leaf("start", "Count down to a race here"),
-            leaf("relic", "A relic race here, alone: time crates freeze the clock"),
-            leaf("trial", "A time trial here, alone: no pickups, beat your best"),
+            leaf("relic", "Relic race: time crates freeze the clock"),
+            leaf("time-trial", "Time trial mode"),
             leaf("restart", "Count down to the race again"),
             leaf("stop", "End the race for everyone"),
         ],
@@ -278,7 +278,11 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[
             takes("create", "Make and keep a cup", "<name> <tracks> <laps>"),
             takes("start", "Count down to a cup's first race", "<name>"),
-            takes("random", "A cup of random tracks (host only)", "<tracks> [laps]"),
+            takes(
+                "random",
+                "A cup of random tracks (host only)",
+                "<tracks> [laps]",
+            ),
             leaf("pause", "Pause the race for everyone (host only)"),
             leaf("resume", "Resume after /cup pause (host only)"),
             leaf("next", "Skip to the cup's next track (host only)"),
@@ -469,11 +473,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ],
             ),
             leaf("viewer", "Race or fly-through viewer"),
-            takes(
-                "podium",
-                "A cup's podium, or back",
-                "[1st] [2nd] [3rd]",
-            ),
+            takes("podium", "A cup's podium, or back", "[1st] [2nd] [3rd]"),
             node(
                 "hud",
                 "The race's dev text (alone: toggle)",
@@ -650,14 +650,25 @@ mod tests {
             ]
         );
         assert_eq!(names("/r"), ["race"]);
-        assert_eq!(names("/race "), ["start", "relic", "trial", "restart", "stop"]);
+        assert_eq!(
+            names("/race "),
+            ["start", "relic", "time-trial", "restart", "stop"]
+        );
         assert_eq!(names("/race st"), ["start", "stop"]);
         assert_eq!(names("/debug weapon 1"), ["1", "10", "11"]);
         assert_eq!(
             names("/debug fx "),
             [
-                "confetti", "flash", "finish", "speed", "freeze", "step", "weather", "rain",
-                "tracker", "loading-screen"
+                "confetti",
+                "flash",
+                "finish",
+                "speed",
+                "freeze",
+                "step",
+                "weather",
+                "rain",
+                "tracker",
+                "loading-screen"
             ]
         );
         assert_eq!(names("/debug fx f"), ["flash", "finish", "freeze"]);

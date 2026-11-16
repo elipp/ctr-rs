@@ -169,6 +169,7 @@ impl View {
 pub(crate) enum Item {
     Resume,
     Restart,
+    Solo(race::solo::Kind),
     LeaveLobby,
     /// Shows the realm's list.
     PublicLobbies,
@@ -280,6 +281,11 @@ fn items(
     let mut items = vec![entry(Item::Resume, "Resume")];
     if !race_on.shared() {
         items.push(entry(Item::Restart, "Restart"));
+    }
+    // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
+    if !lobby.is_open() && !race_on.is_on() {
+        items.push(entry(Item::Solo(race::solo::Kind::Relic), "Relic race"));
+        items.push(entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"));
     }
     // (Bots only race in a lobby's series: offline there's nothing for them to fill.)
     if lobby.is_host() {
@@ -798,6 +804,10 @@ fn input(
             Some(Item::Restart) => {
                 menu.open = false;
                 menu.restart = true;
+            }
+            Some(Item::Solo(kind)) => {
+                menu.open = false;
+                actions.write(Action::StartSolo(kind));
             }
             Some(Item::LeaveLobby) => {
                 menu.open = false;

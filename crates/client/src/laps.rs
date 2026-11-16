@@ -6,7 +6,8 @@
 //! A relic race has no lap rows: under TIME is the next relic to earn and its time instead, and
 //! under that the personal best. A time trial has the best between TIME TRIAL and the lap rows.
 //!
-//! A free drive has neither: it has no laps to count and no end.
+//! A free drive has neither: it has no laps to count and no end. In TIME's place it has the
+//! track's personal bests, if any.
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -107,11 +108,40 @@ struct RowLabel(usize);
 #[derive(Component)]
 struct RowTime(usize);
 
+/// A free drive's block of the track's personal bests: the relic run's, then the time trial's.
+#[derive(Component)]
+struct BestsBlock;
+
+#[derive(Component)]
+struct FreeBest(race::solo::Kind, bool);
+
+/// The personal bests of the track driven freely. `stale` once any race is on: one may have
+/// set a best, and the race may have been on this very track.
+#[derive(Resource)]
+struct FreeBests {
+    level: u32,
+    stale: bool,
+    relic: Option<i32>,
+    trial: Option<i32>,
+}
+
+impl Default for FreeBests {
+    fn default() -> Self {
+        FreeBests {
+            level: 0,
+            stale: true,
+            relic: None,
+            trial: None,
+        }
+    }
+}
+
 pub struct LapsPlugin;
 
 impl Plugin for LapsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, show.run_if(crate::drive::driving));
+        app.init_resource::<FreeBests>()
+            .add_systems(Update, (show, show_bests).run_if(crate::drive::driving));
     }
 }
 
@@ -257,7 +287,67 @@ fn show(
     }
 }
 
-/// Both blocks of local player `view`, hidden, with no lap rows.
+/// A replay is only needed when a best's `.time` is missing or stale (`pb.rs`): otherwise this
+/// reads two small files per track.
+fn show_bests(
+    race_on: Res<crate::race_on::RaceOn>,
+    lobby: Option<Res<crate::lobby::Lobby>>,
+    level: Res<crate::resources::LevelNumber>,
+    mut bests: ResMut<FreeBests>,
+    mut blocks: Query<&mut Visibility, With<BestsBlock>>,
+    mut texts: Query<(&FreeBest, &mut CtrText, &mut Node)>,
+) {
+    // (A lobby's free drive has its own things up there.)
+    if race_on.is_on() || lobby.is_some_and(|lobby| lobby.is_open()) {
+        bests.stale = true;
+        for mut visibility in &mut blocks {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+        return;
+    }
+    if bests.stale || bests.level != level.0 {
+        let laps = race::DEFAULT_LAPS;
+        let best = |kind| crate::pb::best_on(level.0, kind, laps).map(|o| o.final_ms);
+        *bests = FreeBests {
+            level: level.0,
+            stale: false,
+            relic: best(race::solo::Kind::Relic),
+            trial: best(race::solo::Kind::TimeTrial),
+        };
+    }
+    let shown = if bests.relic.is_some() || bests.trial.is_some() {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut blocks {
+        visibility.set_if_neq(shown);
+    }
+    // (The relic's label is in the colour of the relic it earned, as `solo_end.rs` names it.)
+    let tier = bests
+        .relic
+        .and_then(|ms| race::relic::earned(level.0, race::DEFAULT_LAPS, ms))
+        .map_or(Gradient::WHITE, tier_gradient);
+    for (&FreeBest(kind, is_time), mut text, mut node) in &mut texts {
+        let ms = match kind {
+            race::solo::Kind::Relic => bests.relic,
+            race::solo::Kind::TimeTrial => bests.trial,
+        };
+        let display = if ms.is_some() { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+        if kind == race::solo::Kind::Relic && !is_time && text.gradient != tier {
+            text.gradient = tier;
+        }
+        let wanted = if is_time { ms.map_or_else(String::new, clock) } else { continue };
+        if text.text != wanted {
+            text.text = wanted;
+        }
+    }
+}
+
+/// Both blocks of local player `view`, and the free drive's bests, hidden, with no lap rows.
 fn spawn(commands: &mut Commands, view: usize) {
     let block = |left: Option<f32>, right: Option<f32>, align| Node {
         position_type: PositionType::Absolute,
@@ -293,6 +383,27 @@ fn spawn(commands: &mut Commands, view: usize) {
                     ..default()
                 },
             ),
+        ],
+    ));
+    use race::solo::Kind;
+    commands.spawn((
+        BestsBlock,
+        view,
+        block(Some(TIME_LEFT), None, AlignItems::FlexStart),
+        Visibility::Hidden,
+        Pickable::IGNORE,
+        children![
+            (
+                text("Personal Bests", Font::Middle, Gradient::WHITE),
+                Node {
+                    margin: UiRect::bottom(hud::y(LINE_GAP)),
+                    ..default()
+                },
+            ),
+            (FreeBest(Kind::Relic, false), text("Relic", Font::Middle, Gradient::WHITE)),
+            (FreeBest(Kind::Relic, true), text("", Font::Large, Gradient::WHITE)),
+            (FreeBest(Kind::TimeTrial, false), text("Time Trial", Font::Middle, Gradient::ORANGE)),
+            (FreeBest(Kind::TimeTrial, true), text("", Font::Large, Gradient::ORANGE)),
         ],
     ));
     commands.spawn((
