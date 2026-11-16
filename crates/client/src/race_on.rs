@@ -76,6 +76,9 @@ pub struct CurrentRace {
     pub hash: u64,
     /// The rules of the race (laps, weapons, seed): the host's in a lobby.
     pub rules: net::Rules,
+    /// A relic race (`race::Mode::Relic`): only ever alone, so it is not one of the rules the
+    /// host sends.
+    pub relic: bool,
     pub phase: Phase,
     /// Tick 0 has come: the host heard every player ready (alone, we are). Not ordered with
     /// [`CurrentRace::phase`]: a spectator is not waited for, and can hear it before its own race
@@ -223,6 +226,7 @@ impl CurrentRace {
             track,
             hash,
             rules,
+            relic: false,
             phase: Phase::Starting,
             go: false,
             specs: Vec::new(),
@@ -236,7 +240,13 @@ impl CurrentRace {
     }
 
     /// A race of our local players alone, `characters` (the first view's first).
-    pub fn alone(characters: Vec<u8>, nick: &str, track: u32, rules: net::Rules) -> CurrentRace {
+    pub fn alone(
+        characters: Vec<u8>,
+        nick: &str,
+        track: u32,
+        rules: net::Rules,
+        relic: bool,
+    ) -> CurrentRace {
         let locals = (0..characters.len()).collect();
         let hash = crate::maps::hash(track).unwrap_or(0);
         let mut race = CurrentRace::new(
@@ -250,6 +260,7 @@ impl CurrentRace {
             net::RetailBots::default(),
             None,
         );
+        race.relic = relic;
         race.labels = (1..=race.characters.len())
             .map(|n| match (nick.is_empty(), n) {
                 (true, n) => format!("Player {n}"),
@@ -258,6 +269,27 @@ impl CurrentRace {
             })
             .collect();
         race
+    }
+
+    /// What the sim plays.
+    pub fn mode(&self) -> race::Mode {
+        let laps = self.rules.laps;
+        if self.relic {
+            race::Mode::Relic { laps }
+        } else {
+            race::Mode::Race { laps }
+        }
+    }
+
+    /// How the race's level has its instances (`lev_init`).
+    pub fn lev_mode(&self) -> instance::lev_init::LevMode {
+        use instance::lev_init::LevMode;
+        if self.relic { LevMode::Relic } else { LevMode::Arcade }
+    }
+
+    /// Whether `track` is the race's level, loaded for its mode.
+    pub fn is_shown(&self, track: &crate::Track) -> bool {
+        self.track == track.1.0 && self.lev_mode() == track.2
     }
 
     /// Whether ticks of the race are played: it has gone, and the sim is the race's.

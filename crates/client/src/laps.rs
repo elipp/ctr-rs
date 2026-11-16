@@ -3,7 +3,9 @@
 //! time; the last one is the lap being driven). LAP is at the top right: the lap out of the
 //! race's. The times are `m:ss:cc`. The places and colours are measured from retail screenshots.
 //!
-//! A free drive has neither: it has no laps to count and no end.
+//! A free drive has neither: it has no laps to count and no end. A relic race also counts the
+//! time crates under LAP (`UI_DrawNumTimebox`; retail's place for it is not measured yet, nor is
+//! its spinning crate drawn).
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -28,7 +30,7 @@ const LAP_TIME_X: f32 = 42.0;
 const ROWS_DOWN: f32 = 1.0;
 
 /// The race's time (`m:ss:cc`) from milliseconds.
-fn clock(ms: i32) -> String {
+pub(crate) fn clock(ms: i32) -> String {
     let ms = ms.max(0);
     format!("{}:{:02}:{:02}", ms / 60000, ms / 1000 % 60, ms % 1000 / 10)
 }
@@ -48,6 +50,10 @@ struct Total;
 /// The lap out of the race's.
 #[derive(Component)]
 struct LapCount;
+
+/// The time crates broken out of the level's, in a relic race.
+#[derive(Component)]
+struct CrateCount;
 
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
@@ -88,7 +94,8 @@ fn show(
         Has<LapCount>,
         Option<&RowLabel>,
         Option<&RowTime>,
-    )>,
+    ), Without<CrateCount>>,
+    mut crate_counts: Query<(&HudView, &mut CtrText, &mut Visibility), With<CrateCount>>,
 ) {
     let missing = hud.missing(time_blocks.iter().copied());
     if !missing.is_empty() {
@@ -116,12 +123,9 @@ fn show(
     {
         let finished = driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
         let done = &race.lap_times[slot];
-        // The time stops when we cross the line of the last lap: then it is the laps' times.
-        let total = if finished {
-            done.iter().sum()
-        } else {
-            race.event_ms
-        };
+        // The time stops when we cross the line of the last lap: then it is the laps' times (a
+        // perfect relic run's less its bonus).
+        let total = race.final_ms(slot).unwrap_or(race.event_ms);
         // A kart that finished stays on its last lap.
         let laps = race.mode.lap_limit();
         let lap = (driver.lap_index + 1).min(laps);
@@ -137,6 +141,21 @@ fn show(
             commands.entity(entity).despawn_related::<Children>();
             for (i, &ms) in times.iter().enumerate() {
                 spawn_row(&mut commands, entity, view, i, &clock(ms));
+            }
+        }
+        let relic = matches!(race.mode, race::Mode::Relic { .. });
+        for (v, mut text, mut visibility) in &mut crate_counts {
+            if v.0 != view {
+                continue;
+            }
+            visibility.set_if_neq(if relic {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
+            let wanted = format!("x{:02}/{:02}", driver.num_time_crates, race.time_crates());
+            if relic && text.text != wanted {
+                text.text = wanted;
             }
         }
         for (v, mut text, is_total, is_count, label, time) in &mut texts {
@@ -204,6 +223,7 @@ fn spawn(commands: &mut Commands, view: usize) {
         children![
             text("Lap", Font::Middle, Gradient::WHITE),
             (view, LapCount, text("", Font::Large, Gradient::WHITE)),
+            (view, CrateCount, text("", Font::Large, Gradient::ORANGE), Visibility::Hidden),
         ],
     ));
 }

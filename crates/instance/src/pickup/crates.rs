@@ -3,8 +3,8 @@
 //! does not come back). Its thread exists only from the first touch until it is whole again.
 //!
 //! What breaking one gives a driver is done for the fruit crate (5 to 8 wumpa for the pickup HUD
-//! to give) and the weapon crate (the item roulette, see `vehicle::item`). The time crate's bonus
-//! is not here.
+//! to give), the weapon crate (the item roulette, see `vehicle::item`) and the time crate (frozen
+//! race clock, see `Race::tick`).
 
 use coll::model_id;
 use vehicle::{Driver, actions, item, wumpa};
@@ -87,6 +87,19 @@ pub struct CrateBox {
     pause_cooldown: bool,
     /// How many times it was broken, for the explosion (the caller counts the change).
     pub breaks: u32,
+    /// What breaking a time crate adds to `gGT->frozenTimeRemaining`; 0 for the others.
+    frozen_ms: i32,
+}
+
+/// `RB_CrateTime_LInC`: what each of `STATIC_TIME_CRATE_01..03` freezes the race clock for.
+fn frozen_ms_of(model_id: i32) -> i32 {
+    use crate::lev_init::{TIME_CRATE_01, TIME_CRATE_02, TIME_CRATE_03};
+    match model_id {
+        TIME_CRATE_01 => 0x3c0,
+        TIME_CRATE_02 => 0x780,
+        TIME_CRATE_03 => 0xb40,
+        _ => 0,
+    }
 }
 
 impl CrateBox {
@@ -98,7 +111,27 @@ impl CrateBox {
             cooldown: 0,
             pause_cooldown: false,
             breaks: 0,
+            frozen_ms: 0,
         }
+    }
+
+    /// The crate of a level model (`InstDef::model_id`), if it is one.
+    pub fn of_model(model_id: i32) -> Option<CrateBox> {
+        Some(CrateBox {
+            frozen_ms: frozen_ms_of(model_id),
+            ..CrateBox::new(Kind::of_model(model_id)?)
+        })
+    }
+
+    /// `RB_CrateTime_LInC`'s reward, on the tick a time crate broke: only a player's own touch
+    /// counts (retail reads the touching thread as a driver; a blast's owner is not one). Retail
+    /// also skips a driver the AI took over after the finish, which a port kart never is.
+    fn time_reward(&self, driver: &mut Driver, model: i16, frozen_ms: &mut i32) {
+        if model != model_id::PLAYER || driver.actions_flag_set & actions::BOT != 0 {
+            return;
+        }
+        driver.num_time_crates += 1;
+        *frozen_ms += self.frozen_ms;
     }
 
     /// `RB_Crate*_LInC` (with `RB_Crate*_ThCollide`): a driver touched it, with `model`
@@ -170,7 +203,11 @@ impl Instance for CrateBox {
     }
 
     fn touch(&mut self, hit: &mut Touch) -> i32 {
-        self.linc(hit.driver, hit.model, hit.random_number)
+        let broke = self.linc(hit.driver, hit.model, hit.random_number);
+        if broke == 1 && self.kind == Kind::Time {
+            self.time_reward(hit.driver, hit.model, hit.frozen_ms);
+        }
+        broke
     }
 }
 
@@ -313,6 +350,45 @@ mod tests {
             CrateBox::new(Kind::Weapon).linc(&mut bot, model, &mut rng);
             assert_eq!(bot.held_item_id, item::held::NONE);
         }
+    }
+
+    /// A touch of `model` through the crate's `LInC`, as the collision search makes it.
+    fn touch(c: &mut CrateBox, driver: &mut Driver, model: i16, frozen_ms: &mut i32) -> i32 {
+        let mut rng = math::RANDOM_NUMBER_INIT;
+        c.touch(&mut Touch {
+            driver,
+            model,
+            random_number: &mut rng,
+            frozen_ms,
+        })
+    }
+
+    #[test]
+    fn a_time_crate_freezes_the_clock_for_its_seconds_once() {
+        let mut driver = Driver::default();
+        let mut frozen = 0;
+        let mut two = CrateBox::of_model(crate::lev_init::TIME_CRATE_02).unwrap();
+        assert_eq!(touch(&mut two, &mut driver, PLAYER, &mut frozen), 1);
+        assert_eq!((frozen, driver.num_time_crates), (0x780, 1));
+        // Spent for good: it neither comes back nor pays again.
+        tick_n(&mut two, 100);
+        assert_eq!(touch(&mut two, &mut driver, PLAYER, &mut frozen), 0);
+        let mut three = CrateBox::of_model(crate::lev_init::TIME_CRATE_03).unwrap();
+        touch(&mut three, &mut driver, PLAYER, &mut frozen);
+        assert_eq!((frozen, driver.num_time_crates), (0x780 + 0xb40, 2));
+    }
+
+    #[test]
+    fn only_a_players_own_touch_is_paid_for_a_time_crate() {
+        let mut frozen = 0;
+        let mut driver = Driver::default();
+        let mut c = CrateBox::of_model(crate::lev_init::TIME_CRATE_01).unwrap();
+        assert_eq!(touch(&mut c, &mut driver, model_id::BOMB, &mut frozen), 1);
+        let mut bot = Driver::default();
+        bot.actions_flag_set |= actions::BOT;
+        let mut c = CrateBox::of_model(crate::lev_init::TIME_CRATE_01).unwrap();
+        touch(&mut c, &mut bot, PLAYER, &mut frozen);
+        assert_eq!((frozen, driver.num_time_crates, bot.num_time_crates), (0, 0, 0));
     }
 
     #[test]

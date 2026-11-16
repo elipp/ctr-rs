@@ -167,7 +167,7 @@ fn main() {
         racer,
         driving: true,
     };
-    let LevelData { level, dram, vram } = load_level(track_id);
+    let LevelData { level, dram, vram } = load_level(track_id, instance::lev_init::LevMode::Arcade);
     let character_data = load_character(racer);
     let Shared {
         crate_explosion,
@@ -178,7 +178,7 @@ fn main() {
         fonts,
         digits,
     } = load_shared();
-    let loaded = Track(level, LevelId(track_id));
+    let loaded = Track(level, LevelId(track_id), instance::lev_init::LevMode::Arcade);
     let textures = Textures { dram, vram };
     let drive = new_drive(&loaded, &character_data.racer, racer as usize);
 

@@ -7,6 +7,10 @@
 //! (`map::builtin`): such a map has the number of the track it is named for, is not listed as a
 //! map, and is only taken from the folder of what is made from the disc (`paths::builtin_maps`),
 //! never from our own maps or from what other players sent.
+//!
+//! A racing track's relic LEV is a map of its own too (`builtin::RELIC_SUFFIX`), kept apart in
+//! [`RELICS`] so that nothing that goes by track number (the lobby's hashes, sending, the list)
+//! can take one for the track: a relic race is solo, and only [`relic`] hands them out.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, Once};
@@ -38,6 +42,8 @@ enum File {
 /// The maps there are: read once, then added to by the ones that come in over the network (they
 /// live as long as the program, so that the rest of the viewer can hold on to them).
 static MAPS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+/// The relic maps of the game's racing tracks, by `LevelId`.
+static RELICS: Mutex<Vec<(u32, &'static Map)>> = Mutex::new(Vec::new());
 static LOADED: Once = Once::new();
 /// Where the maps of the game's own tracks are.
 fn builtin_directory() -> PathBuf {
@@ -55,6 +61,7 @@ fn cache_directory() -> PathBuf {
 pub fn load() {
     LOADED.call_once(|| {
         let mut maps = Vec::new();
+        let mut relics = Vec::new();
         // Whether the folder is the one the game's own tracks are in.
         for (builtins, dir) in [(true, builtin_directory()), (false, cache_directory())] {
             let Ok(entries) = std::fs::read_dir(dir) else {
@@ -79,6 +86,10 @@ pub fn load() {
                         "a custom track cannot be named for one of the game's tracks"
                     };
                     tell!("{}: {why}", path.display());
+                    continue;
+                }
+                if let Some(level) = builtin::relic_of(&map.name).filter(|_| builtins) {
+                    relics.push((level.0, &*Box::leak(Box::new(map))));
                     continue;
                 }
                 if builtins {
@@ -119,6 +130,7 @@ pub fn load() {
         }
         maps.sort_by(|a, b| a.map.name.cmp(&b.map.name));
         MAPS.lock().unwrap().extend(maps);
+        RELICS.lock().unwrap().extend(relics);
     });
 }
 
@@ -126,6 +138,13 @@ pub fn load() {
 pub fn get(id: u32) -> Option<&'static Map> {
     let maps = MAPS.lock().unwrap();
     maps.iter().find(|e| e.id == id).map(|e| e.map)
+}
+
+/// The relic LEV of the game's racing track `id`; none for a custom track, whose one map is all
+/// its modes'.
+pub fn relic(id: u32) -> Option<&'static Map> {
+    let relics = RELICS.lock().unwrap();
+    relics.iter().find(|(level, _)| *level == id).map(|&(_, map)| map)
 }
 
 /// The hash of the contents of the map `id`: a game track's too, whose map is made from the disc.
@@ -347,6 +366,10 @@ pub fn make_builtins() {
     };
     let mut maps = MAPS.lock().unwrap();
     for map in made {
+        if let Some(level) = builtin::relic_of(&map.name) {
+            RELICS.lock().unwrap().push((level.0, &*Box::leak(Box::new(map))));
+            continue;
+        }
         let (Some(level), Ok(hash)) = (builtin::level_of(&map.name), map.hash()) else {
             continue;
         };

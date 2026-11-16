@@ -436,7 +436,7 @@ fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
         mut level,
         dram,
         mut vram,
-    } = crate::load_level(LEVEL.0);
+    } = crate::load_level(LEVEL.0, instance::lev_init::LevMode::Arcade);
     let path = CameraPath::parse(&dram)
         .map_err(|e| e.to_string())?
         .ok_or("Gem Stone Valley has no camera path")?;
@@ -583,7 +583,7 @@ fn leave(world: &mut World) {
     let mut options = *world.resource::<Options>();
     options.driving = driving;
     world.insert_resource(options);
-    show(world, level, crate::load_level(level), options, false);
+    show(world, level, crate::load_level(level, instance::lev_init::LevMode::Arcade), options, false);
 }
 
 /// Builds the scene of `level` in place of the one shown. The podium's has the scene's common
@@ -591,7 +591,7 @@ fn leave(world: &mut World) {
 fn show(world: &mut World, id: u32, data: LevelData, options: Options, podium: bool) {
     let scene = crate::world_scene(world);
     crate::despawn(world, scene);
-    world.insert_resource(Track(data.level, LevelId(id)));
+    world.insert_resource(Track(data.level, LevelId(id), instance::lev_init::LevMode::Arcade));
     world.insert_resource(Textures {
         dram: data.dram,
         vram: data.vram,

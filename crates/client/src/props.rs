@@ -55,7 +55,7 @@ impl Sim {
     }
 
     /// The race at tick 0 with the karts `specs`, ours being kart `own`; `rules` are a race's, of
-    /// a lobby or alone (None for a free drive). A `spectator`
+    /// a lobby or alone, with what it plays (None for a free drive). A `spectator`
     /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
     /// race after the players; the `band` is the learned bots' rubber band.
     #[allow(clippy::too_many_arguments)]
@@ -64,7 +64,7 @@ impl Sim {
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
-        rules: Option<net::Rules>,
+        rules: Option<(net::Rules, race::Mode)>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
@@ -75,8 +75,8 @@ impl Sim {
             race.add_bots(level, setup, bots);
         }
         // A race starts with the ceremony; a free drive drives off at once.
-        if let Some(rules) = rules {
-            race.mode = race::Mode::Race { laps: rules.laps };
+        if let Some((rules, mode)) = rules {
+            race.mode = mode;
             race.objects.random_number = i32::from(rules.seed);
             race.roulette = vehicle::item::Roulette {
                 masked: rules.masked_weapons,
@@ -112,7 +112,7 @@ impl Sim {
         level: &Level,
         specs: &[KartSpec],
         own: usize,
-        rules: Option<net::Rules>,
+        rules: Option<(net::Rules, race::Mode)>,
         spectator: bool,
         bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
         band: Option<race::Band>,
@@ -254,7 +254,7 @@ pub fn spin_fruit(
     }
 }
 
-/// How far to raise instance `n` of a level, in level units, when the level places a crate inside
+/// How far to raise instance `n` of a level's 1P LEV, in level units, when the level places a crate inside
 /// the ground (see DEVIATIONS.md). Only what is drawn moves; the sim keeps the crate where the
 /// level has it.
 ///
@@ -545,17 +545,14 @@ pub fn spawn(
     // The parts of a model at a scale, before the instance winds them, and its atlas.
     let mut built: HashMap<(u32, [i16; 3]), ([mesh::MeshPart; PARTS], Handle<Image>)> =
         Default::default();
-    // The C, T and R letters are hidden unless `CTR_LETTERS` is set.
-    let show_letters = std::env::var_os("CTR_LETTERS").is_some();
+    // `DRAW_INSTANCE`, which the mode filter (`lev_init`) clears: the C, T and R letters, the
+    // crates of another mode. A time crate of the relic LEV has it only once the filter set it.
     for (n, inst) in level
         .instances
         .iter()
         .enumerate()
-        .filter(|(_, i)| i.model != 0)
+        .filter(|(_, i)| i.model != 0 && i.flags & 1 != 0)
     {
-        if !show_letters && matches!(inst.model_name.as_str(), "c" | "t" | "r") {
-            continue;
-        }
         // The fireballs hide their model (`HIDE_MODEL`); see `fire`.
         if matches!(by_instance.get(&n), Some(Slot::Fireball(_))) {
             continue;

@@ -51,9 +51,36 @@ const PODIUM: (&str, &str, LevelId) = (
     LevelId::GEM_STONE_VALLEY,
 );
 
+/// What the name of a racing track's relic map ends in: the track's `Lod::Relic` LEV, which is
+/// the 1P one's geometry with the time crates (and no weapon or fruit crates). Retail ships a
+/// whole LEV and VRAM for it, and so do we: grafting the crates onto the 1P level would move
+/// models, texture pages and BSP hitboxes between files.
+pub const RELIC_SUFFIX: &str = "__relic";
+
+/// A level made from the disc: the name in its file, its `LevelId`, and whether it is the relic
+/// LEV.
+struct Made {
+    slug: &'static str,
+    id: LevelId,
+    relic: bool,
+}
+
+impl Made {
+    fn name(&self) -> String {
+        let suffix = if self.relic { RELIC_SUFFIX } else { "" };
+        format!("{PREFIX}{}{suffix}", self.slug)
+    }
+
+    fn lod(&self) -> Lod {
+        if self.relic { Lod::Relic } else { Lod::OnePlayer }
+    }
+}
+
 /// Every level made from the disc.
-fn all() -> impl Iterator<Item = &'static (&'static str, &'static str, LevelId)> {
-    TRACKS.iter().chain(std::iter::once(&PODIUM))
+fn all() -> impl Iterator<Item = Made> {
+    let arcade = TRACKS.iter().chain(std::iter::once(&PODIUM));
+    let made = |relic| move |&(slug, _, id): &(&'static str, &str, LevelId)| Made { slug, id, relic };
+    arcade.map(made(false)).chain(TRACKS.iter().map(made(true)))
 }
 
 /// The game's track that is called `name` (see [`display_name`]), in any case.
@@ -69,10 +96,15 @@ pub fn is_builtin_name(name: &str) -> bool {
     name.starts_with(PREFIX)
 }
 
-/// The level that a map named `name` stands in for; none if the name is not one of the levels'.
+/// The level that a map named `name` stands in for; none if the name is not one of the levels'
+/// (a relic map's is not: see [`relic_of`]).
 pub fn level_of(name: &str) -> Option<LevelId> {
-    let slug = name.strip_prefix(PREFIX)?;
-    all().find(|t| t.0 == slug).map(|t| t.2)
+    all().find(|m| !m.relic && m.name() == name).map(|m| m.id)
+}
+
+/// The racing track whose relic LEV a map named `name` is.
+pub fn relic_of(name: &str) -> Option<LevelId> {
+    all().find(|m| m.relic && m.name() == name).map(|m| m.id)
 }
 
 /// The name of the map of the game's racing track `id` (`__builtin__dingo_canyon`).
@@ -111,13 +143,13 @@ pub fn save(map: &Map, dir: &Path) -> io::Result<()> {
     std::fs::rename(&part, &path)
 }
 
-fn file_name(slug: &str) -> String {
-    format!("{PREFIX}{slug}.ctrmap")
+fn file_name(made: &Made) -> String {
+    format!("{}.ctrmap", made.name())
 }
 
-fn missing(dir: &Path) -> Vec<&'static (&'static str, &'static str, LevelId)> {
+fn missing(dir: &Path) -> Vec<Made> {
     all()
-        .filter(|t| !Map::is_current(&dir.join(file_name(t.0))))
+        .filter(|m| !Map::is_current(&dir.join(file_name(m))))
         .collect()
 }
 
@@ -137,20 +169,21 @@ pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
 
     let (mut disc, big) = open_bigfile(original)?;
     let mut files = Vec::new();
-    for &&(slug, _, id) in &missing {
-        let mut read = |file| big.read(&mut disc, BigIndex::level(id, Lod::OnePlayer, file).get());
-        files.push((slug, read(LevFile::Lev)?, read(LevFile::Vram)?));
+    for made in missing {
+        let mut read = |file| big.read(&mut disc, BigIndex::level(made.id, made.lod(), file).get());
+        let (lev, vram) = (read(LevFile::Lev)?, read(LevFile::Vram)?);
+        files.push((made, lev, vram));
     }
 
     // The compression is the slow part: the maps are made side by side.
     std::thread::scope(|scope| {
         let jobs: Vec<_> = files
             .into_iter()
-            .map(|(slug, lev, vram)| {
+            .map(|(made, lev, vram)| {
                 scope.spawn(move || -> io::Result<PathBuf> {
-                    let map = from_files(format!("{PREFIX}{slug}"), &lev, &vram)?;
+                    let map = from_files(made.name(), &lev, &vram)?;
                     save(&map, dir)?;
-                    Ok(dir.join(file_name(slug)))
+                    Ok(dir.join(file_name(&made)))
                 })
             })
             .collect();
@@ -169,14 +202,10 @@ pub fn export(original: &Path, dir: &Path) -> io::Result<usize> {
 pub fn make_all(original: &Path) -> io::Result<Vec<Map>> {
     let (mut disc, big) = open_bigfile(original)?;
     all()
-        .map(|&(slug, _, id)| {
+        .map(|made| {
             let mut read =
-                |file| big.read(&mut disc, BigIndex::level(id, Lod::OnePlayer, file).get());
-            from_files(
-                format!("{PREFIX}{slug}"),
-                &read(LevFile::Lev)?,
-                &read(LevFile::Vram)?,
-            )
+                |file| big.read(&mut disc, BigIndex::level(made.id, made.lod(), file).get());
+            from_files(made.name(), &read(LevFile::Lev)?, &read(LevFile::Vram)?)
         })
         .collect()
 }

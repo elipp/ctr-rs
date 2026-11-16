@@ -29,7 +29,7 @@ use weapon::Weapons;
 /// The version of the sim's behavior. Clients that play a race together must agree on it: any
 /// change that makes a tick come out differently (physics, weapons, objects, the rules) bumps it,
 /// and the lobby turns away a client with another. (The desync checks catch the ones that forget.)
-pub const SIM_VERSION: u32 = 11;
+pub const SIM_VERSION: u32 = 12;
 
 const UNSORTED: i16 = -1;
 
@@ -338,7 +338,15 @@ pub enum Mode {
     FreeDrive,
     /// `laps` laps to the line (`gGT->numLaps`).
     Race { laps: u8 },
+    /// A race against the clock, on the level as `lev_init::LevMode::Relic` leaves it: the time
+    /// crates freeze the clock, and breaking all of them takes [`PERFECT_BONUS_MS`] off the
+    /// final time.
+    Relic { laps: u8 },
 }
+
+/// `MainGameEnd_SoloRaceGetReward`: what a relic race's final time loses when every time crate
+/// of the level was broken (`numTimeCrates == timeCratesInLEV`).
+pub const PERFECT_BONUS_MS: i32 = 0x2580;
 
 impl Mode {
     /// `gGT->numLaps`, as the ported code reads it. A free drive has more than anyone drives,
@@ -346,13 +354,13 @@ impl Mode {
     pub fn lap_limit(self) -> u8 {
         match self {
             Mode::FreeDrive => u8::MAX,
-            Mode::Race { laps } => laps,
+            Mode::Race { laps } | Mode::Relic { laps } => laps,
         }
     }
 
     /// Whether it ends at a finish line.
     pub fn is_race(self) -> bool {
-        matches!(self, Mode::Race { .. })
+        !matches!(self, Mode::FreeDrive)
     }
 }
 
@@ -709,6 +717,32 @@ impl Race {
             vehicle::item::launch_effects(&kart.driver, launch, at, effects);
             kart.driver.bomb_thrown |= kind == weapon::Kind::Bomb;
         }
+    }
+
+    /// `gGT->timeCratesInLEV`. Retail counts them only in a relic race, which is the only race
+    /// this is read in.
+    pub fn time_crates(&self) -> usize {
+        let time = instance::pickup::crates::Kind::Time;
+        self.objects.crates.iter().filter(|c| c.sim.kind == time).count()
+    }
+
+    /// Whether the kart in `slot` broke every time crate of the level (none to break is not a
+    /// perfect: retail compares the counts, but has no relic level without crates).
+    pub fn perfect(&self, slot: usize) -> bool {
+        let crates = self.time_crates();
+        crates > 0 && self.karts[slot].driver.num_time_crates as usize == crates
+    }
+
+    /// The time the kart in `slot` finished in, its laps' added up: None before it has. A relic
+    /// race takes [`PERFECT_BONUS_MS`] off a [`perfect`](Self::perfect) run.
+    pub fn final_ms(&self, slot: usize) -> Option<i32> {
+        let driver = &self.karts[slot].driver;
+        if driver.actions_flag_set & actions::RACE_FINISHED == 0 {
+            return None;
+        }
+        let laps: i32 = self.lap_times[slot].iter().sum();
+        let bonus = matches!(self.mode, Mode::Relic { .. }) && self.perfect(slot);
+        Some(laps - if bonus { PERFECT_BONUS_MS } else { 0 })
     }
 
     /// The checkpoint `kart` passed last, as (its number, the time it passed it at, and how
@@ -1072,8 +1106,14 @@ impl Race {
             tick.lap = lap;
         }
         self.update_splits(level);
+        // (Retail plays the frozen clock's tick sound from here, every 6 ticks.)
         if self.lights_ms < 1 {
-            self.event_ms += env.elapsed_time_ms;
+            let frozen = &mut self.objects.frozen_ms;
+            if *frozen < 1 {
+                self.event_ms += env.elapsed_time_ms;
+            } else {
+                *frozen = (*frozen - env.elapsed_time_ms).max(0);
+            }
         }
         self.tick += 1;
         ticks
@@ -1412,9 +1452,10 @@ impl Race {
         let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
         let _ = writeln!(
             hash,
-            "{} {} {} {} {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
+            "{} {} {} {} {} {:?} {} {} {:?} {:?} {:?} {:?} {:?}",
             self.tick,
             self.event_ms,
+            self.objects.frozen_ms,
             // (The number, not the mode: the hashes stay those of the clients before `Mode`.)
             self.mode.lap_limit(),
             self.finished,

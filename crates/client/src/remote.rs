@@ -38,7 +38,7 @@ pub fn build(
     }
     let Some(race) = race_on
         .get_mut()
-        .filter(|race| race.phase == Phase::Starting && race.track == track.1.0)
+        .filter(|race| race.phase == Phase::Starting && race.is_shown(&track))
     else {
         if !race_on.is_on() {
             for entity in &others {

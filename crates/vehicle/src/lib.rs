@@ -458,6 +458,8 @@ pub struct Driver {
     /// The `const_*` fields: the engine class's physics constants.
     pub stats: stats::Stats,
     pub num_wumpas: i8,
+    /// `numTimeCrates`: the time crates this driver broke (`RB_CrateTime_LInC`).
+    pub num_time_crates: i16,
     /// `PickupWumpaHUD`: the fruit picked up that the HUD has not given the driver yet, and the
     /// ticks until it gives the next (see [`wumpa`]).
     pub pickup_wumpa_collected: i32,

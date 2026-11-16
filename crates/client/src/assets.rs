@@ -98,10 +98,12 @@ pub(crate) fn load_racer(character: usize) -> (Model, Vec<Icon>) {
 }
 
 /// A level, from its map, with the texture page file shared by every track (`shared.vrm`): the
-/// racers' textures are in it.
-pub(crate) fn load_level(id: u32) -> LevelData {
+/// racers' textures are in it. Its instances are as `mode` leaves them: a relic race is on the
+/// track's relic LEV where the game has one (`maps::relic`).
+pub(crate) fn load_level(id: u32, mode: instance::lev_init::LevMode) -> LevelData {
     // (A map that an online race is on and we lack is fetched first, see `lobby.rs`.)
-    let map = maps::get(id).unwrap_or_else(|| {
+    let relic = (mode == instance::lev_init::LevMode::Relic).then(|| maps::relic(id));
+    let map = relic.flatten().or_else(|| maps::get(id)).unwrap_or_else(|| {
         if map::is_map_id(id) {
             panic!("map {id:#x} is not in the tracks folder")
         } else {
@@ -119,6 +121,7 @@ pub(crate) fn load_level(id: u32) -> LevelData {
     }
     upload_shared(&mut vram, &crate::disc::source());
     let mut level = map.level.clone();
+    instance::lev_init::lev_init_all(&mut level.instances, mode);
     for why in loader::nav_amend::Amendments::builtin().apply(id, &mut level.nav_paths) {
         warn!("level {id:#x}: a bot path amendment is left out: {why}");
     }

@@ -70,6 +70,8 @@ pub enum Action {
     /// Lists the tracks there are (`/track list`).
     ListTracks,
     StartRace,
+    /// A relic race alone on the track shown (`race::Mode::Relic`).
+    StartRelic,
     /// Fill the grid of our races with bots (`lobby::BotSettings`): how many, how hard, and of
     /// which kind, or say what it is with none of them. Kept until the game closes, not in the
     /// config.
@@ -237,7 +239,7 @@ const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of 
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
-const RACE_USAGE: &str = "Usage: /race start | restart | stop";
+const RACE_USAGE: &str = "Usage: /race start | relic | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
@@ -467,6 +469,7 @@ impl Action {
         let (sub, _) = word(line);
         match sub {
             "start" => Ok(Action::StartRace),
+            "relic" => Ok(Action::StartRelic),
             "restart" => Ok(Action::RestartRace),
             "stop" => Ok(Action::StopRace),
             "" => Err(RACE_USAGE.into()),
@@ -1940,6 +1943,7 @@ mod tests {
             Ok(Action::ListTracks)
         ));
         assert!(matches!(Action::parse("race start"), Ok(Action::StartRace)));
+        assert!(matches!(Action::parse("race relic"), Ok(Action::StartRelic)));
         assert!(matches!(
             Action::parse("race restart"),
             Ok(Action::RestartRace)

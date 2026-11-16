@@ -94,7 +94,15 @@ pub(super) fn finish(
         let Some(slot) = sim.race.karts.iter().position(finished) else {
             continue;
         };
-        let text = format!("{} finished {}", race.kart_label(slot), ordinal(place));
+        let label = race.kart_label(slot);
+        let text = match sim.race.final_ms(slot) {
+            // Alone against the clock, a place says nothing.
+            Some(ms) if race.relic => {
+                let perfect = if sim.race.perfect(slot) { ", PERFECT" } else { "" };
+                format!("{label} finished in {}{perfect}", crate::laps::clock(ms))
+            }
+            _ => format!("{label} finished {}", ordinal(place)),
+        };
         debug!("{text} (tick {at})");
         toasts.write(Toast::new(text, FINISH_TOAST_MS).color(ANNOUNCE_COLOR));
     }

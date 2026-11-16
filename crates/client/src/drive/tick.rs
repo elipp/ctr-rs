@@ -98,7 +98,7 @@ pub(super) fn drive_tick(
     let shared = race_on.shared();
     // The level of the race is not up yet, nor the karts of the others.
     if race_on.get()
-        .is_some_and(|race| race.track != track.1.0 || race.phase < Phase::Spawned)
+        .is_some_and(|race| !race.is_shown(&track) || race.phase < Phase::Spawned)
     {
         return;
     }
@@ -166,7 +166,7 @@ pub(super) fn drive_tick(
             &track.0,
             &specs,
             own,
-            race_on.get().map(|race| race.rules),
+            race_on.get().map(|race| (race.rules, race.mode())),
             spectator,
             bots,
             band,

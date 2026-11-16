@@ -83,7 +83,8 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         Action::StartRace | Action::RestartRace if lobby.joined => {
             "Only the host of a lobby can do that"
         }
-        Action::StartRace if racing => "The race has started (/race restart)",
+        Action::StartRace | Action::StartRelic if racing => "The race has started (/race restart)",
+        Action::StartRelic if lobby.is_open() => "A relic race is solo: close the lobby first (/lobby close)",
         Action::RestartRace if !racing => "No race to restart (/race start)",
         Action::DebugRanking if !lobby.is_open() || lobby.joined || !racing => {
             "Only the host of a lobby can do that, in a race"
@@ -265,8 +266,20 @@ pub(super) fn run(
                 } else {
                     let characters = std::iter::once(drive.character as u8).chain(extras).collect();
                     let rules = super::rules(race::DEFAULT_LAPS, &config, now);
-                    lobby.race_alone(&mut race_on, characters, &config.nickname, track.1.0, rules);
+                    let nick = &config.nickname;
+                    lobby.race_alone(&mut race_on, characters, nick, track.1.0, rules, false);
                 }
+                continue;
+            }
+            Action::StartRelic => {
+                if !extras.is_empty() {
+                    let why = "A relic race is for one player (/players 1)";
+                    toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+                    continue;
+                }
+                let characters = vec![drive.character as u8];
+                let rules = super::rules(race::DEFAULT_LAPS, &config, now);
+                lobby.race_alone(&mut race_on, characters, &config.nickname, track.1.0, rules, true);
                 continue;
             }
             Action::Bots {
@@ -582,9 +595,9 @@ pub(super) fn run(
             }
             Action::RestartRace if !lobby.is_open() => {
                 if let Some(race) = race_on.get() {
-                    let (characters, track) = (race.characters.clone(), race.track);
+                    let (characters, track, relic) = (race.characters.clone(), race.track, race.relic);
                     let rules = super::rules(race.rules.laps, &config, now);
-                    lobby.race_alone(&mut race_on, characters, &config.nickname, track, rules);
+                    lobby.race_alone(&mut race_on, characters, &config.nickname, track, rules, relic);
                 }
                 continue;
             }
