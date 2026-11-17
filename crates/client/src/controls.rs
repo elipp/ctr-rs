@@ -39,6 +39,9 @@ pub enum Control {
     /// Opens the menu that picks the racer of a local player (`drive/chooser.rs`), as a pad's
     /// Select does.
     RacerMenu,
+    /// Shows or hides a solo run's personal best's ghost (`ghost.rs`), as a pad's Select does
+    /// in one.
+    Ghost,
     /// Mutes or unmutes the music, and every sound (`sound.rs`).
     MuteMusic,
     MuteSound,
@@ -49,7 +52,7 @@ pub enum Control {
 }
 
 impl Control {
-    pub const ALL: [Control; 18] = [
+    pub const ALL: [Control; 19] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -64,6 +67,7 @@ impl Control {
         Control::NextRacer,
         Control::PreviousRacer,
         Control::RacerMenu,
+        Control::Ghost,
         Control::MuteMusic,
         Control::MuteSound,
         Control::PauseRace,
@@ -87,6 +91,7 @@ impl Control {
             Control::NextRacer => "next-racer",
             Control::PreviousRacer => "previous-racer",
             Control::RacerMenu => "racer-menu",
+            Control::Ghost => "ghost",
             Control::MuteMusic => "mute-music",
             Control::MuteSound => "mute-sound",
             Control::PauseRace => "pause-race",
@@ -111,6 +116,7 @@ impl Control {
             Control::NextRacer => "Next racer",
             Control::PreviousRacer => "Previous racer",
             Control::RacerMenu => "Racer menu",
+            Control::Ghost => "Ghost",
             Control::MuteMusic => "Mute music",
             Control::MuteSound => "Mute sound",
             Control::PauseRace => "Pause race",
@@ -134,6 +140,7 @@ impl Control {
             Control::NextRacer => &[KeyCode::Period],
             Control::PreviousRacer => &[KeyCode::Comma],
             Control::RacerMenu => &[KeyCode::KeyC],
+            Control::Ghost => &[KeyCode::KeyV],
             Control::MuteMusic => &[KeyCode::KeyM],
             Control::MuteSound => &[KeyCode::KeyS],
             Control::PauseRace => &[KeyCode::KeyG],

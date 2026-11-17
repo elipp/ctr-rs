@@ -94,6 +94,9 @@ pub struct CurrentRace {
     pub relic_target: Option<(race::relic::Tier, i32)>,
     /// A solo run's personal best's time, as it was when the race went on the grid.
     pub best: Option<i32>,
+    /// A solo run's personal best, driving next to ours (`ghost.rs`): it keeps pace with the
+    /// race's sim, tick for tick from the grid on.
+    pub ghost: Option<race::solo::Ghost>,
     /// What a solo run's finish did to the personal best, once it is settled
     /// (`lobby::progress::finish`): the ceremony (`solo_end.rs`) goes by it.
     pub solo_end: Option<SoloEnd>,
@@ -261,6 +264,7 @@ impl CurrentRace {
             solo: None,
             relic_target: None,
             best: None,
+            ghost: None,
             solo_end: None,
             phase: Phase::Starting,
             go: false,

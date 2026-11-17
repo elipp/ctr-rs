@@ -51,6 +51,7 @@ mod font;
 mod pixel;
 mod frame;
 mod fx;
+mod ghost;
 mod clock;
 mod heat;
 mod hud;

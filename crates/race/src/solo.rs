@@ -116,13 +116,10 @@ impl Run {
     /// Plays the run on `level` from `objects` (as for [`start`]) with the kart `spec`, whose
     /// character must be the demo's. None if the kart hasn't finished when the pads run out.
     pub fn replay(&self, level: &Level, objects: Objects, spec: KartSpec) -> Option<Outcome> {
-        debug_assert_eq!(spec.character, self.demo.character);
-        let mut race = start(level, objects, spec, self.kind, self.laps, self.seed);
-        let mut held = 0;
+        let mut ghost = Ghost::new(level, objects, spec, self);
         for tick in 0..self.demo.length {
-            let input = self.demo.input(tick, held)?;
-            held = input.buttons_held;
-            race.tick(level, &[Pad::of_input(&input)]);
+            ghost.tick(level);
+            let race = ghost.race();
             if race.karts[0].driver.actions_flag_set & actions::RACE_FINISHED != 0 {
                 return Some(Outcome {
                     final_ms: race.final_ms(0)?,
@@ -151,6 +148,44 @@ impl Run {
         }
         let unpacked = zstd::bulk::decompress(rest, MAX_DECODED).map_err(|e| format!("not zstd: {e}"))?;
         bitcode::decode(&unpacked).map_err(|e| format!("bad solo run: {e}"))
+    }
+}
+
+/// A run played back on a race of its own, a tick at a time: [`Run::replay`], and the ghost drawn
+/// next to a live run, which must never drive differently from what a replay times.
+#[derive(Clone)]
+pub struct Ghost {
+    race: Race,
+    demo: Demo,
+    held: u32,
+}
+
+impl Ghost {
+    /// At tick 0 on `level` from `objects` (as for [`start`]), the kart `spec`, whose character
+    /// must be the run's.
+    pub fn new(level: &Level, objects: Objects, spec: KartSpec, run: &Run) -> Ghost {
+        debug_assert_eq!(spec.character, run.demo.character);
+        Ghost {
+            race: start(level, objects, spec, run.kind, run.laps, run.seed),
+            demo: run.demo.clone(),
+            held: 0,
+        }
+    }
+
+    /// Plays the next tick with the run's pad; past the run's end (the finish, where the sim takes
+    /// no more pads) a neutral one.
+    pub fn tick(&mut self, level: &Level) {
+        let input = self.demo.input(self.race.tick, self.held).unwrap_or_default();
+        self.held = input.buttons_held;
+        self.race.tick(level, &[Pad::of_input(&input)]);
+    }
+
+    pub fn race(&self) -> &Race {
+        &self.race
+    }
+
+    pub fn kart(&self) -> &crate::Kart {
+        &self.race.karts[0]
     }
 }
 

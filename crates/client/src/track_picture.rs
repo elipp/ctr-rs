@@ -550,6 +550,7 @@ fn spawn_preview(
         &mut materials,
         &mut subtract_materials,
         PREVIEW_LAYER,
+        None,
     );
     spawn_parts(
         mesh.water,

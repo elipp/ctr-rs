@@ -55,9 +55,12 @@ struct Map {
     size: (usize, usize),
 }
 
-/// The dot of the kart in slot `.0`.
-#[derive(Component)]
-struct Dot(usize);
+/// The dot of a kart: the one in a slot of the race, or a solo run's ghost (`ghost.rs`).
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Dot {
+    Kart(usize),
+    Ghost,
+}
 
 /// The dots tinted each colour (by character, then white), and their size in texels.
 #[derive(Resource)]
@@ -196,6 +199,8 @@ fn hide_for_speedometer(
 fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
+    race_on: Res<crate::race_on::RaceOn>,
+    ghost_shown: Res<crate::ghost::GhostShown>,
     hud: HudViews,
     images: Option<Res<DotImages>>,
     maps: Query<(Entity, &HudView, &Map, Option<&Children>)>,
@@ -206,6 +211,10 @@ fn show(
     };
     let karts = &sim.race.karts;
     let flash = sim.race.objects.ticks() & 2 != 0;
+    let ghost = (race_on.get())
+        .and_then(|race| race.ghost.as_ref())
+        .filter(|_| ghost_shown.0)
+        .map(|ghost| ghost.kart());
     for (map_entity, &HudView(view), map, children) in &maps {
         let Some(kart) = hud.get(view) else {
             continue;
@@ -213,24 +222,28 @@ fn show(
         let own = kart.slot;
         for &child in children.into_iter().flatten() {
             if let Ok((entity, dot, ..)) = dots.get(child)
-                && dot.0 >= karts.len()
+                && match *dot {
+                    Dot::Kart(slot) => slot >= karts.len(),
+                    Dot::Ghost => ghost.is_none(),
+                }
             {
                 commands.entity(entity).despawn();
             }
         }
         // The picture's top left on retail's screen, which the dots are placed from.
         let (left, top) = (RIGHT - map.size.0 as i32, BOTTOM - map.size.1 as i32);
-        for (slot, kart) in karts.iter().enumerate() {
+        let ghost = ghost.map(|kart| (Dot::Ghost, kart));
+        for (dot, kart) in karts.iter().enumerate().map(|(slot, kart)| (Dot::Kart(slot), kart)).chain(ghost) {
             let d = &kart.driver;
             let character = (d.character as usize).min(CHARACTER_COLORS.len() - 1);
             // (Retail's one player has the player's dot and the bots the others: here the others
-            // are the other players too.)
-            let image = if slot != own {
-                &images.bot[character]
-            } else if flash {
-                &images.player[character]
-            } else {
-                images.player.last().unwrap()
+            // are the other players too.) A player's ghost flickers between Crash's blue and
+            // Cortex's red every frame (`UI_Map_DrawGhosts`).
+            let image = match dot {
+                Dot::Ghost => &images.bot[(sim.race.objects.ticks() & 1) as usize],
+                Dot::Kart(slot) if slot != own => &images.bot[character],
+                Dot::Kart(_) if flash => &images.player[character],
+                Dot::Kart(_) => images.player.last().unwrap(),
             };
             let (x, y) = icon_pos(&map.layout, d.pos_curr.x >> 8, d.pos_curr.z >> 8);
             let node = Node {
@@ -241,11 +254,11 @@ fn show(
                 height: hud::y(images.size.1 as f32),
                 ..default()
             };
-            let z = ZIndex(if slot == own { 1 } else { 0 });
+            let z = ZIndex(if dot == Dot::Kart(own) { 1 } else { 0 });
             let existing = children
                 .into_iter()
                 .flatten()
-                .find(|&&c| dots.get(c).is_ok_and(|(_, dot, ..)| dot.0 == slot));
+                .find(|&&c| dots.get(c).is_ok_and(|(_, d, ..)| *d == dot));
             match existing.and_then(|&c| dots.get_mut(c).ok()) {
                 Some((_, _, mut current, mut current_node, mut current_z)) => {
                     if current.image != *image {
@@ -256,7 +269,7 @@ fn show(
                 }
                 None => {
                     commands.spawn((
-                        Dot(slot),
+                        dot,
                         ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch),
                         node,
                         z,

@@ -4,7 +4,7 @@
 //! voids) old bests instead of leaving stale times next to runs that no longer make them.
 
 use bevy::prelude::*;
-use race::solo::{Kind, Outcome, Run};
+use race::solo::{Ghost, Kind, Outcome, Run};
 
 use crate::props::Sim;
 use crate::race_on::CurrentRace;
@@ -208,6 +208,42 @@ fn racer_spec(character: usize) -> race::KartSpec {
     }
 }
 
+/// The run stored as the best for `kind`, `map_hash` and `laps`, and its bytes; None if there is
+/// none or it can't be read (logged).
+fn load(kind: Kind, map_hash: u64, laps: u8) -> Option<(Run, Vec<u8>)> {
+    let name = format!("{}.run", stem(kind, map_hash, laps));
+    let bytes = match store::load(&name) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return None,
+        Err(e) => {
+            warn!("personal best {name}: {e}");
+            return None;
+        }
+    };
+    match Run::from_bytes(&bytes) {
+        Ok(run) if run.map_hash == map_hash && run.laps == laps && run.kind == kind => {
+            Some((run, bytes))
+        }
+        Ok(_) => {
+            warn!("personal best {name}: of another kind, map or lap count");
+            None
+        }
+        Err(e) => {
+            warn!("personal best {name}: {e}");
+            None
+        }
+    }
+}
+
+/// The stored best of the solo race, at tick 0 on the level loaded (the race's), to race against;
+/// None if there is none. A best that no longer finishes still drives (it's the run as it was
+/// played), so `race.best` is not asked.
+pub fn ghost(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Ghost> {
+    let spec = *race.specs.first()?;
+    let (run, _) = load(race.solo?, race.hash, race.rules.laps)?;
+    Some(Ghost::new(level, sim.start().clone(), spec_for(&run, spec), &run))
+}
+
 /// The best stored for `kind`, `map_hash` and `laps`: its [`Timed`], or if that is missing or
 /// stale, what `replay` makes of it (and the `Timed` written for next time).
 fn stored(
@@ -218,25 +254,7 @@ fn stored(
 ) -> Option<Outcome> {
     let stem = stem(kind, map_hash, laps);
     let name = format!("{stem}.run");
-    let bytes = match store::load(&name) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return None,
-        Err(e) => {
-            warn!("personal best {name}: {e}");
-            return None;
-        }
-    };
-    let run = match Run::from_bytes(&bytes) {
-        Ok(run) if run.map_hash == map_hash && run.laps == laps && run.kind == kind => run,
-        Ok(_) => {
-            warn!("personal best {name}: of another kind, map or lap count");
-            return None;
-        }
-        Err(e) => {
-            warn!("personal best {name}: {e}");
-            return None;
-        }
-    };
+    let (run, bytes) = load(kind, map_hash, laps)?;
     let fresh = Timed::of(&run, &bytes, None);
     let timed = store::load(&format!("{stem}.time")).ok().flatten();
     if let Some(timed) = timed.as_deref().and_then(Timed::from_bytes)

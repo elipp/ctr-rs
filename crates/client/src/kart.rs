@@ -425,10 +425,13 @@ pub struct KartRig {
     shown: Option<((u8, i16), (u8, i16), u32, Option<((u8, i16), u32)>)>,
     /// Whether the vertex colours are the burnt black ones.
     burnt: bool,
+    /// A ghost's: its colours are greyed whenever they are written.
+    fade: Option<crate::ghost::Fade>,
 }
 
 /// The model of a kart at `placement`, in render layer `layer`, and its wheels. With a `motion`
 /// the sim moves it. The model faces along +Z, like a driver's heading.
+#[allow(clippy::too_many_arguments)]
 fn spawn_body(
     model: &Model,
     wheel_icons: &[Icon],
@@ -436,6 +439,7 @@ fn spawn_body(
     placement: Transform,
     layer: usize,
     motion: Option<KartMotion>,
+    fade: Option<crate::ghost::Fade>,
     commands: &mut Commands,
     images: &mut Assets<Image>,
     meshes: &mut Assets<Mesh>,
@@ -450,12 +454,18 @@ fn spawn_body(
         .map(|a| &a.frames[a.frames.len() / 2])
         .or(header.static_frame.as_ref())
         .expect("racer model has a pose");
-    let data = mesh::model_mesh(
+    let mut data = mesh::model_mesh(
         header,
         frame,
         vram,
         [render::wheels::DRIVER_INSTANCE_SCALE as i16; 3],
     );
+    if let Some(fade) = fade {
+        fade.rgba(&mut data.atlas.rgba);
+        for part in &mut data.parts {
+            part.colors.iter_mut().for_each(|c| *c = fade.color(*c));
+        }
+    }
     let base = crate::kart_material(data.atlas, images);
 
     let root = commands.spawn((placement, Visibility::default())).id();
@@ -469,9 +479,10 @@ fn spawn_body(
             vram,
             root,
             layer,
+            fade,
         );
     }
-    let parts = crate::spawn_parts(
+    let parts = crate::spawn_faded_parts(
         data.parts,
         &base,
         Transform::default(),
@@ -481,6 +492,7 @@ fn spawn_body(
         materials,
         subtract_materials,
         layer,
+        fade.map(|f| f.alpha),
     );
     if let Some(motion) = motion {
         commands.entity(root).insert((
@@ -490,6 +502,7 @@ fn spawn_body(
                 parts,
                 shown: None,
                 burnt: false,
+                fade,
             },
         ));
     }
@@ -557,6 +570,7 @@ impl KartBuilder<'_, '_> {
             placement,
             layer,
             sim.map(|(_, kart)| KartMotion::new(kart)),
+            None,
             &mut self.commands,
             &mut self.images,
             &mut self.meshes,
@@ -649,19 +663,47 @@ impl KartBuilder<'_, '_> {
         }
         kart
     }
+
+    /// The kart of a solo run's ghost (`ghost.rs`) where `kart` is: see-through and greyed, in
+    /// the world's layer, driven by its [`KartMotion`] but in no [`KartSlot`], and with none of
+    /// the effects (they all go by the slot).
+    pub fn spawn_ghost(&mut self, model: &Model, wheel_icons: &[Icon], kart: &race::Kart) -> Entity {
+        spawn_body(
+            model,
+            wheel_icons,
+            &self.textures.vram,
+            Transform::default(),
+            0,
+            Some(KartMotion::new(kart)),
+            Some(crate::ghost::Fade::GHOST),
+            &mut self.commands,
+            &mut self.images,
+            &mut self.meshes,
+            &mut self.materials,
+            &mut self.subtract_materials,
+            &mut self.wheel_materials,
+        )
+    }
 }
 
 /// Puts every kart where its sim has it, between the last two ticks.
 pub fn show(
     fixed: Res<Time<Fixed>>,
     race_on: Res<crate::race_on::RaceOn>,
-    mut karts: Query<(&mut Transform, &mut Visibility, &KartMotion, Has<Kart>)>,
+    ghosts: Res<crate::ghost::GhostShown>,
+    mut karts: Query<(
+        &mut Transform,
+        &mut Visibility,
+        &KartMotion,
+        Has<Kart>,
+        Has<crate::ghost::GhostKart>,
+    )>,
 ) {
     let t = fixed.overstep_fraction();
     // A spectator has no kart of its own: the others' are all drawn, and ours is not.
     let spectating = race_on.get().is_some_and(|race| race.spectating());
-    for (mut transform, mut visibility, motion, ours) in &mut karts {
-        let want = if motion.hidden || (ours && spectating) {
+    for (mut transform, mut visibility, motion, ours, ghost) in &mut karts {
+        let want = if motion.hidden || (ours && spectating) || (ghost && !ghosts.0) {
             Visibility::Hidden
         } else {
             Visibility::Inherited
@@ -751,6 +793,8 @@ pub fn animate(
                 };
                 let colors = if motion.burnt {
                     vec![[0.0, 0.0, 0.0, 1.0]; colors.len()]
+                } else if let Some(fade) = rig.fade {
+                    colors.into_iter().map(|c| fade.color(c)).collect()
                 } else {
                     colors
                 };
