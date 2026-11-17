@@ -163,7 +163,7 @@ fn panel(
     for (line, mut text, mut node) in &mut lines {
         let (wanted, gradient) = match line {
             Line::Time => (
-                Some(format!("YOUR TIME {}", crate::laps::clock(total))),
+                Some(format!("YOUR TIME {}", race::clock::time(total))),
                 Gradient::ORANGE,
             ),
             Line::Perfect => (end.perfect.then(|| "PERFECT -10".to_string()), flash),
@@ -173,7 +173,7 @@ fn panel(
             ),
             Line::Best => (end.new_best.then(|| "NEW HIGH SCORE!".to_string()), flash),
             Line::OldBest => (
-                end.best.map(|ms| format!("BEST {}", crate::laps::clock(ms))),
+                end.best.map(|ms| format!("BEST {}", race::clock::time(ms))),
                 Gradient::WHITE,
             ),
             Line::Submit => (

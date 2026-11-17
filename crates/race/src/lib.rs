@@ -7,6 +7,7 @@
 //! [`KartTick`]s; nothing of it goes back in.
 
 pub mod bot;
+pub mod clock;
 pub mod desync;
 pub mod infer;
 pub mod nn;
@@ -1291,7 +1292,7 @@ fn after_tick(
     (landing, wall, spray, puffs)
 }
 
-/// `PICKUPBOTS_UPDATE_START_DELAY`: the bots fire nothing in the first 19.2 seconds of a race.
+/// `PICKUPBOTS_UPDATE_START_DELAY`: the bots fire nothing in the first 20 seconds of a race.
 const BOT_WEAPONS_FROM_MS: i32 = 0x4b00;
 /// `PICKUPBOTS_CLOSE_DIST_SQ_BIAS` and `_RANGE`: how far from a player (squared, flat) a bot
 /// next to it in the race fires at it.

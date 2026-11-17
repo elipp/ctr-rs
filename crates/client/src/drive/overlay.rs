@@ -189,12 +189,6 @@ pub(super) fn wumpa_hud(
     }
 }
 
-/// `m:ss.cc`, as a checkpoint time is told: from retail's clock units, as `laps::clock`.
-fn split_time(units: i32) -> String {
-    let t = units.max(0);
-    format!("{}:{:02}.{:02}", t / 0xe100, t / 0x3c0 % 60, t * 100 / 0x3c0 % 100)
-}
-
 /// Toasts the time of each checkpoint we pass (see `race::Race::last_split`) against the first
 /// kart to pass it: green if we were the first there, else red and how far behind the first.
 /// `announced` is the number of the last checkpoint toasted, so that a rollback that takes a
@@ -216,9 +210,9 @@ pub(super) fn split_toast(
     }
     *announced = number;
     let toast = if behind == 0 {
-        crate::toast::Toast::new(split_time(time), SPLIT_SHOW_MS).color(Color::srgb(0.4, 1.0, 0.4))
+        crate::toast::Toast::new(race::clock::time(time), SPLIT_SHOW_MS).color(Color::srgb(0.4, 1.0, 0.4))
     } else {
-        crate::toast::Toast::new(format!("+{}", split_time(behind)), SPLIT_SHOW_MS)
+        crate::toast::Toast::new(race::clock::delta(behind), SPLIT_SHOW_MS)
             .color(Color::srgb(1.0, 0.3, 0.3))
     };
     toasts.write(toast);

@@ -74,34 +74,6 @@ pub(crate) fn tier_gradient(tier: race::relic::Tier) -> Gradient {
     }
 }
 
-/// The race's time (`m:ss:cc`) as `UI_DrawRaceClock` writes it. The sim's `*_ms` times are
-/// retail's clock units, 960 a second (`elapsed_time_ms` is 32 a tick), not milliseconds.
-pub(crate) fn clock(units: i32) -> String {
-    let t = units.max(0);
-    format!(
-        "{}:{:02}:{:02}",
-        t / 0xe100,
-        t / 0x3c0 % 60,
-        t % 0x3c0 * 100 / 0x3c0
-    )
-}
-
-/// A split against the world record, in retail's clock units: "-1.25", "+0.40", "+1:02.10".
-fn delta(units: i32) -> String {
-    let sign = match units.signum() {
-        -1 => "-",
-        1 => "+",
-        _ => "",
-    };
-    let t = units.unsigned_abs();
-    let (minutes, seconds, hundredths) = (t / 0xe100, t / 0x3c0 % 60, t % 0x3c0 * 100 / 0x3c0);
-    if minutes > 0 {
-        format!("{sign}{minutes}:{seconds:02}.{hundredths:02}")
-    } else {
-        format!("{sign}{seconds}.{hundredths:02}")
-    }
-}
-
 /// The TIME block.
 #[derive(Component)]
 struct TimeBlock;
@@ -220,11 +192,10 @@ pub struct LapsPlugin;
 
 impl Plugin for LapsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FreeBests>()
-            .add_systems(
-                Update,
-                (show, (show_bests, free_relic).chain()).distributive_run_if(crate::drive::driving),
-            );
+        app.init_resource::<FreeBests>().add_systems(
+            Update,
+            (show, (show_bests, free_relic).chain()).distributive_run_if(crate::drive::driving),
+        );
     }
 }
 
@@ -356,8 +327,8 @@ fn show(
                     }
                     .into()
                 }),
-                World::Time => world.map(|(entry, _, _)| clock(entry.final_ms)),
-                World::Split => split.map(delta),
+                World::Time => world.map(|(entry, _, _)| race::clock::time(entry.final_ms)),
+                World::Split => split.map(race::clock::delta),
             };
             if part != World::Split
                 && let Some((_, _, ours)) = world
@@ -401,7 +372,7 @@ fn show(
             count.0 = times.len();
             commands.entity(entity).despawn_related::<Children>();
             for (i, &ms) in times.iter().enumerate() {
-                spawn_row(&mut commands, entity, view, i, &clock(ms));
+                spawn_row(&mut commands, entity, view, i, &race::clock::time(ms));
             }
         }
         for (v, mut text, is_total, is_count, label, time, is_name, is_target, is_best, is_label) in
@@ -419,19 +390,19 @@ fn show(
             let wanted = if is_label {
                 if trial { "Time Trial" } else { "Time" }.to_string()
             } else if is_total {
-                clock(total)
+                race::clock::time(total)
             } else if is_count {
                 format!("{lap}/{laps}")
             } else if let Some(RowLabel(i)) = label {
                 format!("L{}", i + 1)
             } else if let Some(&RowTime(i)) = time {
-                times.get(i).map_or_else(String::new, |&ms| clock(ms))
+                times.get(i).map_or_else(String::new, |&ms| race::clock::time(ms))
             } else if is_name {
                 target.map_or_else(String::new, |(name, _, _)| name.to_string())
             } else if is_target {
-                target.map_or_else(String::new, |(_, _, ms)| clock(ms))
+                target.map_or_else(String::new, |(_, _, ms)| race::clock::time(ms))
             } else if is_best {
-                best.map_or_else(String::new, clock)
+                best.map_or_else(String::new, race::clock::time)
             } else {
                 continue;
             };
@@ -489,7 +460,11 @@ fn show_bests(
         bests.icon = icon;
     }
     for mut node in &mut relic_line {
-        let display = if bests.relic.is_some() { Display::Flex } else { Display::None };
+        let display = if bests.relic.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != display {
             node.display = display;
         }
@@ -508,7 +483,7 @@ fn show_bests(
             node.display = display;
         }
         let wanted = if is_time {
-            ms.map_or_else(String::new, clock)
+            ms.map_or_else(String::new, race::clock::time)
         } else {
             continue;
         };
@@ -545,7 +520,12 @@ fn free_relic(
     let Some(tier) = bests.icon else {
         return;
     };
-    let missing = hud.missing(icons.iter().filter(|(_, icon, ..)| icon.tier == tier).map(|(_, _, v, _)| *v));
+    let missing = hud.missing(
+        icons
+            .iter()
+            .filter(|(_, icon, ..)| icon.tier == tier)
+            .map(|(_, _, v, _)| *v),
+    );
     if !missing.is_empty() {
         let Some(built) = crate::solo_end::build(&model.0, tier, &textures, &mut images) else {
             return;
@@ -581,7 +561,9 @@ fn free_relic(
     let ticks = sim.race.tick as f32 + fixed.overstep_fraction();
     let angle = ticks / crate::solo_end::SPIN_TICKS * std::f32::consts::TAU;
     for (_, icon, view, mut transform) in &mut icons {
-        let (Some(kart), Some((_, slot, at))) = (hud.get(view.0), slots.iter().find(|(v, ..)| *v == view)) else {
+        let (Some(kart), Some((_, slot, at))) =
+            (hud.get(view.0), slots.iter().find(|(v, ..)| *v == view))
+        else {
             continue;
         };
         // Laid out in the view's part of the window, in its physical pixels; the HUD camera looks
@@ -669,7 +651,10 @@ fn spawn(commands: &mut Commands, view: usize) {
                     ..default()
                 },
                 children![
-                    (FreeBest(Kind::Relic, true), text("", Font::Large, Gradient::ORANGE)),
+                    (
+                        FreeBest(Kind::Relic, true),
+                        text("", Font::Large, Gradient::ORANGE)
+                    ),
                     (
                         view,
                         FreeRelicSlot,
@@ -727,18 +712,4 @@ fn spawn_row(commands: &mut Commands, rows: Entity, view: usize, i: usize, time:
             ),
         ],
     ));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_clock_is_minutes_seconds_and_hundredths() {
-        assert_eq!(clock(0), "0:00:00");
-        assert_eq!(clock(47_885), "0:49:88");
-        assert_eq!(clock(58_560), "1:01:00");
-        assert_eq!(clock(81_600), "1:25:00");
-        assert_eq!(clock(-32), "0:00:00");
-    }
 }

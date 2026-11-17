@@ -232,7 +232,7 @@ pub(crate) fn placed(rank: u32, top_ms: i32) -> String {
     let place = crate::lobby::ordinal((rank as usize).saturating_sub(1));
     match rank {
         1 => format!("{place} on the board!"),
-        _ => format!("{place} on the board, top {}", crate::laps::clock(top_ms)),
+        _ => format!("{place} on the board, top {}", race::clock::time(top_ms)),
     }
 }
 

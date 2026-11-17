@@ -80,12 +80,6 @@ fn who(db: &Db, key: &[u8; 32]) -> Result<String, String> {
     })
 }
 
-/// A sim time (960 clock units a second) as `m:ss.cc`.
-fn clock(units: i32) -> String {
-    let t = units.max(0);
-    format!("{}:{:02}.{:02}", t / 57_600, t / 960 % 60, t * 100 / 960 % 100)
-}
-
 fn date(at: i64) -> String {
     jiff::Timestamp::from_second(at)
         .map_or_else(|_| at.to_string(), |t| t.strftime("%Y-%m-%d %H:%M UTC").to_string())
@@ -131,11 +125,11 @@ fn suspects(db: &Db) -> rusqlite::Result<()> {
             "run {} by {}, {} at {}\n  much like run {} by {}, {} at {}",
             s.id,
             name(&s.nick, &s.key),
-            clock(s.final_ms),
+            race::clock::time(s.final_ms),
             date(s.at),
             s.of_id,
             name(&s.of_nick, &s.of_key),
-            clock(s.of_final_ms),
+            race::clock::time(s.of_final_ms),
             date(s.of_at),
         );
     }

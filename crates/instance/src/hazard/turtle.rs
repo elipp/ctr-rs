@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn a_turtle_waits_sinks_waits_and_rises() {
         let mut t = Turtle::new(&def("turtle#4"), 11);
-        // 30 ticks of waiting (960 ms), then a frame a tick down to the last one.
+        // 30 ticks of waiting (a second), then a frame a tick down to the last one.
         for _ in 0..30 {
             t.tick(11);
         }

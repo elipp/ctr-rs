@@ -103,7 +103,7 @@ pub(super) fn finish(
             use crate::pb::Verdict;
             debug!(
                 "{kind:?} run finished in {} (tick {at})",
-                crate::laps::clock(ms)
+                race::clock::time(ms)
             );
             let verdict = crate::pb::finished(&track.0, &sim, race);
             let relic = kind == race::solo::Kind::Relic;

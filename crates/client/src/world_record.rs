@@ -222,11 +222,11 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
     if !(race.ghosts.world.is_some() || ours && race.phase >= Phase::OnGrid) {
         return;
     }
-    let time = crate::laps::clock(entry.final_ms);
+    let time = race::clock::time(entry.final_ms);
     let text = if ours {
-        format!("You hold the world record: {time}, {}", date(entry.at))
+        format!("You hold the world record\n{time}\n{}", date(entry.at))
     } else {
-        format!("World record {time} by {}, {}", who(entry), date(entry.at))
+        format!("World record {time}\n{}\n{}", who(entry), date(entry.at))
     };
     toasts.write(Toast::new(text, 4000));
     world.untold = false;
@@ -299,7 +299,7 @@ fn listed(mut tops: ResMut<Tops>, mut toasts: MessageWriter<Toast>) {
                     let mut line = format!(
                         "{:>3}. {}  {}  {}",
                         entry.rank,
-                        crate::laps::clock(entry.final_ms),
+                        race::clock::time(entry.final_ms),
                         who(entry),
                         date(entry.at)
                     );
