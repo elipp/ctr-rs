@@ -4,7 +4,14 @@
 //! The kart has a [`KartMotion`] but no `KartSlot`: everything that draws or hears a kart by its
 //! slot in `Sim::race` (effects, sounds, camera, names) must never take it for one of the race's.
 
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{
+    ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
+};
 use bevy::prelude::*;
+use bevy::render::render_resource::{
+    AsBindGroup, ColorWrites, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+};
 
 use crate::controls::Control;
 use crate::kart::{KartBuilder, KartMotion};
@@ -46,6 +53,34 @@ impl Fade {
     }
 }
 
+/// Writes depth and no colour: a twin of each of the ghost's solid parts, on the same mesh, so
+/// that the blended body only draws its frontmost surface. Blending writes no depth, so without
+/// it a racer's face showed through the back of its head. The twin must keep the body's depth
+/// bias (and transform), or the body would fail the depth test against it.
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+pub struct DepthOnly {}
+
+impl MaterialExtension for DepthOnly {
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        for target in descriptor
+            .fragment
+            .iter_mut()
+            .flat_map(|f| f.targets.iter_mut())
+            .flatten()
+        {
+            target.write_mask = ColorWrites::empty();
+        }
+        Ok(())
+    }
+}
+
+pub type DepthOnlyMaterial = ExtendedMaterial<StandardMaterial, DepthOnly>;
+
 /// Whether ghosts are drawn: Select, or [`Control::Ghost`], in a solo run. Kept across races.
 #[derive(Resource)]
 pub struct GhostShown(pub bool);
@@ -69,7 +104,8 @@ pub struct GhostPlugin;
 impl Plugin for GhostPlugin {
     fn build(&self, app: &mut App) {
         // (`step` runs in `drive_tick`'s chain: `drive/mod.rs`.)
-        app.init_resource::<GhostShown>()
+        app.add_plugins(MaterialPlugin::<DepthOnlyMaterial>::default())
+            .init_resource::<GhostShown>()
             .add_systems(Update, (build, toggle).run_if(crate::drive::driving));
     }
 }

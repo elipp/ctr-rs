@@ -463,14 +463,19 @@ pub fn bring_in(world: &mut World, same_level: bool) {
     }
 }
 
-/// The one place the game clock is stopped: while a scene settles ([`Loading`]), and while a flag
-/// that holds it is coming in.
+/// The one place the game clock is stopped: while a scene settles ([`Loading`]), while a flag
+/// that holds it is coming in, and while the pause menu is open over a race that is not shared.
+/// Stopping the clock rather than the race alone stops `FixedUpdate` (the level's animations
+/// count `GameTick` there) and `overstep_fraction`, which what is drawn between ticks goes by.
 fn hold_clock(
     loading: Option<Res<Loading>>,
     screens: Query<&LoadingScreen>,
+    menu: Res<crate::pause::PauseMenu>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut time: ResMut<Time<Virtual>>,
 ) {
     let hold = loading.is_some()
+        || (menu.open && !race_on.shared())
         || screens
             .iter()
             .any(|s| s.holds_clock && !s.leaving && s.position > COVERED_AT);

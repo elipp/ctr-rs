@@ -112,9 +112,10 @@ pub(super) fn drive_tick(
         sfx.set_paused(host_paused);
         *was_host_paused = host_paused;
     }
-    // The pause menu (or the effects panel's freeze) stops the race, unless the race is
-    // everyone's.
-    let paused = ((hold.menu.open || hold.fx.holds()) && !shared) || host_paused;
+    // The effects panel's freeze stops the race, unless the race is everyone's. (It holds only the
+    // race, so that `/debug fx step` can run ticks: the pause menu stops the clock instead,
+    // `loading::hold_clock`.)
+    let paused = (hold.fx.holds() && !shared) || host_paused;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
         for view in &mut drive.views {

@@ -8,6 +8,7 @@
 use bevy::ecs::system::SystemParam;
 use std::time::Duration;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use loader::icons::Icon;
 use loader::model::{Model, ModelHeader};
@@ -446,7 +447,7 @@ fn spawn_body(
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
     wheel_materials: &mut Assets<crate::wheels::WheelMaterial>,
-) -> Entity {
+) -> (Entity, [Option<Handle<Mesh>>; PARTS], StandardMaterial) {
     let header = &model.headers[0];
     let frame = header
         .animations
@@ -499,14 +500,14 @@ fn spawn_body(
             motion,
             KartRig {
                 header: header.clone(),
-                parts,
+                parts: parts.clone(),
                 shown: None,
                 burnt: false,
                 fade,
             },
         ));
     }
-    root
+    (root, parts, base)
 }
 
 /// Everything that makes a kart: the assets of its pieces and the means to spawn them.
@@ -518,6 +519,7 @@ pub struct KartBuilder<'w, 's> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     subtract_materials: ResMut<'w, Assets<SubtractMaterial>>,
     wheel_materials: ResMut<'w, Assets<crate::wheels::WheelMaterial>>,
+    depth_materials: ResMut<'w, Assets<crate::ghost::DepthOnlyMaterial>>,
     skid_materials: ResMut<'w, Assets<crate::skid::SkidMaterial>>,
     skid_subtract_materials: ResMut<'w, Assets<crate::skid::SkidSubtractMaterial>>,
     streak_materials: ResMut<'w, Assets<crate::billboard::StreakMaterial>>,
@@ -563,7 +565,7 @@ impl KartBuilder<'_, '_> {
         sim: Option<(usize, &race::Kart)>,
     ) -> Entity {
         let vram = &self.textures.vram;
-        let kart = spawn_body(
+        let (kart, ..) = spawn_body(
             model,
             wheel_icons,
             vram,
@@ -668,7 +670,7 @@ impl KartBuilder<'_, '_> {
     /// the world's layer, driven by its [`KartMotion`] but in no [`KartSlot`], and with none of
     /// the effects (they all go by the slot).
     pub fn spawn_ghost(&mut self, model: &Model, wheel_icons: &[Icon], kart: &race::Kart) -> Entity {
-        spawn_body(
+        let (root, parts, base) = spawn_body(
             model,
             wheel_icons,
             &self.textures.vram,
@@ -682,7 +684,27 @@ impl KartBuilder<'_, '_> {
             &mut self.materials,
             &mut self.subtract_materials,
             &mut self.wheel_materials,
-        )
+        );
+        // (Add and subtract parts are glows: they stay see-through to the rest of the ghost.)
+        let material = self.depth_materials.add(crate::ghost::DepthOnlyMaterial {
+            base: StandardMaterial {
+                alpha_mode: AlphaMode::Mask(0.5),
+                ..base
+            },
+            extension: crate::ghost::DepthOnly {},
+        });
+        for part in [mesh::Part::Opaque, mesh::Part::Average] {
+            if let Some(handle) = &parts[part as usize] {
+                self.commands.spawn((
+                    Mesh3d(handle.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::default(),
+                    RenderLayers::layer(0),
+                    ChildOf(root),
+                ));
+            }
+        }
+        root
     }
 }
 
