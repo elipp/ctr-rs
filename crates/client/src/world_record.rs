@@ -7,8 +7,8 @@
 
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
-use race::solo::{Ghost, Kind, Run};
 use net::score::Fetched;
+use race::solo::{Ghost, Kind, Run};
 use score::{BoardId, Entry, Request, Response};
 
 use crate::command::Action;
@@ -50,7 +50,6 @@ pub struct WorldRecord {
     untold: bool,
 }
 
-
 /// `/score top`s on their way: the track's name, the board.
 #[derive(Resource, Default)]
 struct Tops(Vec<(String, BoardId, net::score::Answer)>);
@@ -81,7 +80,12 @@ fn is_ours(entry: &Entry) -> bool {
 impl WorldRecord {
     /// At each start of a solo race (`drive_tick`, as it builds the best's ghost): the world
     /// record's ghost at tick 0 if one is known, and the board asked again unless it was lately.
-    pub fn start(&mut self, level: &loader::lev::Level, sim: &crate::props::Sim, race: &CurrentRace) -> Option<Ghost> {
+    pub fn start(
+        &mut self,
+        level: &loader::lev::Level,
+        sim: &crate::props::Sim,
+        race: &CurrentRace,
+    ) -> Option<Ghost> {
         let board = board_of(race)?;
         if self.board != Some(board) {
             let record = cache::load(board);
@@ -93,8 +97,11 @@ impl WorldRecord {
                 asked: None,
             };
         }
-        let stale = self.asked.is_none_or(|at| at.elapsed().as_secs() >= FRESH_SECS);
-        if self.asking.is_none() && stale
+        let stale = self
+            .asked
+            .is_none_or(|at| at.elapsed().as_secs() >= FRESH_SECS);
+        if self.asking.is_none()
+            && stale
             && let Some(server) = net::score::default_score()
         {
             let known = self.record.as_ref().map(|r| r.entry.run_id);
@@ -106,7 +113,12 @@ impl WorldRecord {
 
     /// The record's ghost at tick 0 unless the record is ours, its splits worked out if they
     /// aren't yet (ours too: they are what the HUD's splits are against).
-    fn ghost(&mut self, level: &loader::lev::Level, sim: &crate::props::Sim, race: &CurrentRace) -> Option<Ghost> {
+    fn ghost(
+        &mut self,
+        level: &loader::lev::Level,
+        sim: &crate::props::Sim,
+        race: &CurrentRace,
+    ) -> Option<Ghost> {
         let record = self.record.as_mut()?;
         let ghost = crate::pb::ghost_of(level, sim, race, &record.run)?;
         if record.splits.is_none() {
@@ -121,7 +133,11 @@ impl WorldRecord {
             return None;
         }
         let record = self.record.as_ref()?;
-        Some((&record.entry, record.splits.as_deref(), is_ours(&record.entry)))
+        Some((
+            &record.entry,
+            record.splits.as_deref(),
+            is_ours(&record.entry),
+        ))
     }
 
     /// The board's #1 is `record` now (None: there is none).
@@ -156,7 +172,11 @@ fn answer(
         Ok(None) => None,
         Ok(Some((entry, Fetched::Known))) => {
             // The same run: only the nick (and the suspect mark) may have changed.
-            if let Some(record) = world.record.as_mut().filter(|r| r.entry.run_id == entry.run_id) {
+            if let Some(record) = world
+                .record
+                .as_mut()
+                .filter(|r| r.entry.run_id == entry.run_id)
+            {
                 record.entry = entry;
                 cache::save(board, record);
             }
@@ -196,7 +216,10 @@ fn answer(
         }
     };
     world.set(board, record);
-    let Some(race) = race_on.get_mut().filter(|race| board_of(race) == Some(board)) else {
+    let Some(race) = race_on
+        .get_mut()
+        .filter(|race| board_of(race) == Some(board))
+    else {
         return;
     };
     // Before `OnGrid` the sim isn't on the race's grid yet: `drive_tick`'s start builds it.
@@ -224,13 +247,13 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
     }
     let time = race::clock::time(entry.final_ms);
     let text = if ours {
-        format!("You hold the world record\n{time}\n{}", date(entry.at))
+        format!("You hold the server record\n{time}\n{}", date(entry.at))
     } else {
         let by = match entry.nick.as_str() {
             "" => who(entry),
             nick => nick.to_string(),
         };
-        format!("World record {time}\nby {by}\n{}", date(entry.at))
+        format!("Server record {time}\nby {by}\n{}", date(entry.at))
     };
     toasts.write(Toast::new(text, 4000));
     world.untold = false;
@@ -249,7 +272,8 @@ fn who(entry: &Entry) -> String {
 
 /// In UTC: the client has no time zone database (`Cargo.toml`).
 fn date(at: i64) -> String {
-    jiff::Timestamp::from_second(at).map_or_else(|_| "?".to_string(), |t| t.strftime("%Y-%m-%d").to_string())
+    jiff::Timestamp::from_second(at)
+        .map_or_else(|_| "?".to_string(), |t| t.strftime("%Y-%m-%d").to_string())
 }
 
 fn top(
@@ -272,7 +296,10 @@ fn top(
                 sim_version: race::SIM_VERSION,
                 laps: race::DEFAULT_LAPS,
             };
-            Ok((board, net::score::ask(server, Request::Top { board, n: TOP })))
+            Ok((
+                board,
+                net::score::ask(server, Request::Top { board, n: TOP }),
+            ))
         };
         match asked() {
             Ok((board, answer)) => tops.0.push((crate::maps::stable_name(id), board, answer)),
@@ -296,7 +323,9 @@ fn listed(mut tops: ResMut<Tops>, mut toasts: MessageWriter<Toast>) {
             Kind::TimeTrial => "Time trial",
         };
         match response.map_err(|e| e.to_string()).and_then(|r| r) {
-            Ok(Response::Top(top)) if top.is_empty() => console!("{kind}, {name}: nobody on the board yet"),
+            Ok(Response::Top(top)) if top.is_empty() => {
+                console!("{kind}, {name}: nobody on the board yet")
+            }
             Ok(Response::Top(top)) => {
                 console!("{kind}, {name}, {} laps:", board.laps);
                 for entry in &top {
@@ -324,7 +353,8 @@ fn listed(mut tops: ResMut<Tops>, mut toasts: MessageWriter<Toast>) {
                 toasts.write(Toast::new("The board answered nonsense", 3000).color(RED));
             }
             Err(e) => {
-                toasts.write(Toast::new(format!("Could not reach the board: {e}"), 5000).color(RED));
+                toasts
+                    .write(Toast::new(format!("Could not reach the board: {e}"), 5000).color(RED));
             }
         }
     }

@@ -168,7 +168,7 @@ impl Shown {
         match self.0 {
             [true, true] => "Ghosts: both",
             [true, false] => "Ghost: your best",
-            [false, true] => "Ghost: world record",
+            [false, true] => "Ghost: server record",
             [false, false] => "Ghosts off",
         }
     }

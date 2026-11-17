@@ -321,9 +321,9 @@ fn show(
             let wanted = match part {
                 World::Name => world.map(|(_, _, ours)| {
                     if ours {
-                        "World Record (You)"
+                        "Server Record (You)"
                     } else {
-                        "World Record"
+                        "Server Record"
                     }
                     .into()
                 }),

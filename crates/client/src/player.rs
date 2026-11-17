@@ -90,12 +90,14 @@ fn key_commands(mut actions: MessageReader<Action>, mut toasts: MessageWriter<To
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn place() -> String {
-    if cfg!(target_arch = "wasm32") {
-        "the browser's storage".to_string()
-    } else {
-        crate::paths::player_key().display().to_string()
-    }
+    crate::paths::player_key().display().to_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn place() -> String {
+    "the browser's storage".to_string()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
