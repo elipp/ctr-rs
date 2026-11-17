@@ -419,6 +419,18 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[leaf("purge", "Delete them")],
     ),
     node(
+        "score",
+        "The leaderboards of relic races and time trials",
+        &[node(
+            "key",
+            "The key that is you on the boards",
+            &[
+                leaf("export", "Print it, to back it up or move it (keep it secret)"),
+                takes("import", "Replace ours with an exported one", "<key>"),
+            ],
+        )],
+    ),
+    node(
         "debug",
         "For testing",
         &[
@@ -646,6 +658,7 @@ mod tests {
                 "clear",
                 "net",
                 "cache",
+                "score",
                 "debug"
             ]
         );

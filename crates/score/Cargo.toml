@@ -1,0 +1,10 @@
+[package]
+name = "score"
+version = "0.1.0"
+edition = "2024"
+
+# What the leaderboard's client and `score-server` must agree on: the request signing.
+[dependencies]
+data-encoding = "2.11.1"
+iroh-base = { version = "1.4.1", default-features = false, features = ["key"] }
+sha2 = "0.11.1"

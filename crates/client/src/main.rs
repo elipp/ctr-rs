@@ -83,6 +83,7 @@ mod probe;
 mod projectile;
 
 mod pb;
+mod player;
 mod props;
 mod race_on;
 mod public_lobbies;

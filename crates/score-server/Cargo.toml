@@ -1,0 +1,17 @@
+[package]
+name = "score-server"
+version = "0.1.0"
+edition = "2024"
+
+# holds world records
+[[bin]]
+name = "score-server"
+path = "src/main.rs"
+
+[dependencies]
+iroh = "1.4.1"
+realm-proto = { path = "../realm-proto" }
+serde = { version = "1", features = ["derive"], optional = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.54", features = ["rt", "sync", "macros", "time", "signal"] }

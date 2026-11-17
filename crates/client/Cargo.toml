@@ -52,6 +52,7 @@ net = { path = "../net" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 race = { path = "../race" }
+score = { path = "../score" }
 math = { path = "../math" }
 weapon = { path = "../weapon" }
 map = { path = "../map" }

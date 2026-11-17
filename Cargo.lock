@@ -2459,6 +2459,7 @@ dependencies = [
  "race",
  "render",
  "rfd",
+ "score",
  "serde",
  "serde_json",
  "vehicle",
@@ -3085,6 +3086,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer",
+ "const-oid",
  "crypto-common 0.2.2",
 ]
 
@@ -7434,6 +7436,15 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "score"
+version = "0.1.0"
+dependencies = [
+ "data-encoding",
+ "iroh-base",
+ "sha2",
+]
 
 [[package]]
 name = "score-server"

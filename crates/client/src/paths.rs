@@ -21,6 +21,12 @@ pub fn config_file() -> PathBuf {
     cache().join("config.json")
 }
 
+/// The player key (`player.rs`), beside the settings. (Not in a browser: the page's storage.)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn player_key() -> PathBuf {
+    cache().join("player.key")
+}
+
 /// Where the panic that ended the last run is written, see `crash.rs`. (Not in a browser.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crash_log() -> PathBuf {

@@ -450,6 +450,25 @@ function setConfigAside() {
   }
 }
 window.ctrSetConfigAside = setConfigAside;
+// Not in the "kept" IndexedDB store: that is the disc's, cleared whole to make it again, and the
+// key is the player's identity on the leaderboards.
+const PLAYER_KEY = "ctr-rs.player-key";
+window.ctrLoadPlayerKey = () => {
+  try {
+    return localStorage.getItem(PLAYER_KEY);
+  } catch (e) {
+    console.warn(`could not read the player key: ${e}`);
+    return null;
+  }
+};
+window.ctrSavePlayerKey = (text) => {
+  try {
+    localStorage.setItem(PLAYER_KEY, text);
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+};
 
 // The game reads the image from here (a wasm program's memory never shrinks, so it is not copied
 // in), and lets go of it once it has taken what it needs.

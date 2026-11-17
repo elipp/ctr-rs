@@ -166,6 +166,10 @@ pub enum Action {
     SetConfig(crate::config::Setting),
     /// Toast the version of this build (`version.rs`).
     Version,
+    /// Print the player key (`player.rs`).
+    ScoreKeyExport,
+    /// Replace the player key with one exported before.
+    ScoreKeyImport(String),
     /// Empty the console (`console.rs`). What was typed before stays in the history.
     Clear,
     /// Say that to everyone in the lobby: a line that is not a `/command`.
@@ -239,6 +243,7 @@ const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of 
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
+const SCORE_USAGE: &str = "Usage: /score key export | key import <key>";
 const RACE_USAGE: &str = "Usage: /race start | relic | time-trial | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
@@ -308,6 +313,7 @@ impl Action {
                 }),
             "track" => Action::track(rest),
             "cache" => Action::cache(rest),
+            "score" => Action::score(rest),
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
             "version" => Err("Usage: /version".into()),
@@ -414,6 +420,16 @@ impl Action {
             "purge" => Ok(Action::PurgeCache),
             "" => Err(CACHE_USAGE.into()),
             _ => Err(format!("Unknown command: /cache {sub}\n{CACHE_USAGE}")),
+        }
+    }
+
+    fn score(line: &str) -> Result<Action, String> {
+        let (sub, rest) = word(line);
+        let (what, rest) = word(rest);
+        match (sub, what) {
+            ("key", "export") if rest.is_empty() => Ok(Action::ScoreKeyExport),
+            ("key", "import") if !rest.is_empty() => Ok(Action::ScoreKeyImport(rest.into())),
+            _ => Err(SCORE_USAGE.into()),
         }
     }
 
@@ -2071,6 +2087,10 @@ mod tests {
         ));
         assert!(Action::parse("config set msaa 8").is_err());
         assert!(matches!(Action::parse("version"), Ok(Action::Version)));
+        assert!(matches!(Action::parse("score key export"), Ok(Action::ScoreKeyExport)));
+        assert!(matches!(Action::parse("score key import ab12"), Ok(Action::ScoreKeyImport(k)) if k == "ab12"));
+        assert!(Action::parse("score key import").is_err());
+        assert!(Action::parse("score key export now").is_err());
         assert!(Action::parse("version 1").is_err());
         assert!(matches!(Action::parse("clear"), Ok(Action::Clear)));
         assert!(Action::parse("clear all").is_err());
