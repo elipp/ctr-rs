@@ -30,6 +30,9 @@ pub struct Record {
     pub run: Run,
     /// As the board sent it, for the cache.
     bytes: Vec<u8>,
+    /// The race's time at each of the run's checkpoints, for the HUD's splits: None until its
+    /// ghost is first built, which plays a copy out once.
+    splits: Option<Vec<i32>>,
 }
 
 /// The #1 of the board of the last solo race. Kept here, not in `CurrentRace`: every restart is
@@ -37,7 +40,8 @@ pub struct Record {
 #[derive(Resource, Default)]
 pub struct WorldRecord {
     board: Option<BoardId>,
-    /// Never ours: it would look the same as the best's ghost.
+    /// Ours too, to show it is: but then there is no world ghost, which would look the same as
+    /// the best's (or be slower than it).
     record: Option<Record>,
     asking: Option<Asking>,
     asked: Option<Instant>,
@@ -83,7 +87,7 @@ impl WorldRecord {
     pub fn start(&mut self, level: &loader::lev::Level, sim: &crate::props::Sim, race: &CurrentRace) -> Option<Ghost> {
         let board = board_of(race)?;
         if self.board != Some(board) {
-            let record = cache::load(board).filter(|r| !is_ours(&r.entry));
+            let record = cache::load(board);
             *self = WorldRecord {
                 board: Some(board),
                 untold: record.is_some(),
@@ -99,12 +103,31 @@ impl WorldRecord {
             self.asking = Some(Asking::Top(net::score::ask(server, Request::Top { board, n: 1 })));
             self.asked = Some(Instant::now());
         }
-        crate::pb::ghost_of(level, sim, race, &self.record.as_ref()?.run)
+        self.ghost(level, sim, race)
     }
 
-    /// The board's #1 is `record` now (None: there is none, or it is ours).
+    /// The record's ghost at tick 0 unless the record is ours, its splits worked out if they
+    /// aren't yet (ours too: they are what the HUD's splits are against).
+    fn ghost(&mut self, level: &loader::lev::Level, sim: &crate::props::Sim, race: &CurrentRace) -> Option<Ghost> {
+        let record = self.record.as_mut()?;
+        let ghost = crate::pb::ghost_of(level, sim, race, &record.run)?;
+        if record.splits.is_none() {
+            record.splits = Some(ghost.splits(level));
+        }
+        (!is_ours(&record.entry)).then_some(ghost)
+    }
+
+    /// The record of `race`'s board, its splits once known, and whether it is ours.
+    pub fn of(&self, race: &CurrentRace) -> Option<(&Entry, Option<&[i32]>, bool)> {
+        if self.board.is_none() || board_of(race) != self.board {
+            return None;
+        }
+        let record = self.record.as_ref()?;
+        Some((&record.entry, record.splits.as_deref(), is_ours(&record.entry)))
+    }
+
+    /// The board's #1 is `record` now (None: there is none).
     fn set(&mut self, board: BoardId, record: Option<Record>) {
-        let record = record.filter(|r| !is_ours(&r.entry));
         match &record {
             Some(record) => cache::save(board, record),
             None => cache::remove(board),
@@ -144,13 +167,13 @@ fn answer(
                 }
                 return;
             }
-            Some(entry) if !is_ours(&entry) => {
+            Some(entry) => {
                 let Some(server) = net::score::default_score() else { return };
                 let id = entry.run_id;
                 world.asking = Some(Asking::Run(entry, net::score::ask(server, Request::Run { id })));
                 return;
             }
-            _ => None,
+            None => None,
         },
         (Some(Asking::Run(entry, _)), Ok(Response::Run(Some(bytes)))) => match Run::from_bytes(&bytes) {
             Ok(run)
@@ -159,7 +182,12 @@ fn answer(
                     && run.laps == board.laps
                     && run.sim_version == board.sim_version =>
             {
-                Some(Record { entry, run, bytes })
+                Some(Record {
+                    entry,
+                    run,
+                    bytes,
+                    splits: None,
+                })
             }
             Ok(_) => {
                 warn!("world record: run {} is of another board", entry.run_id);
@@ -190,12 +218,12 @@ fn answer(
     };
     // Before `OnGrid` the sim isn't on the race's grid yet: `drive_tick`'s start builds it.
     if race.phase >= Phase::OnGrid {
-        let ghost = world.record.as_ref().and_then(|r| crate::pb::ghost_of(&track.0, &sim, race, &r.run));
-        race.ghosts.world = ghost;
+        race.ghosts.world = world.ghost(&track.0, &sim, race);
     }
 }
 
-/// Says who holds the world record, once its ghost is in the race.
+/// Says who holds the world record, once its ghost is in the race (ours has none: once the race
+/// is on the grid, as a ghost would be).
 fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: MessageWriter<Toast>) {
     if !world.untold {
         return;
@@ -203,14 +231,21 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
     let Some(race) = race_on.get().filter(|race| board_of(race) == world.board) else {
         return;
     };
-    let Some(record) = world.record.as_ref().filter(|_| race.ghosts.world.is_some()) else {
+    let Some(record) = world.record.as_ref() else {
         return;
     };
     let entry = &record.entry;
-    toasts.write(Toast::new(
-        format!("World record {} by {}, {}", crate::laps::clock(entry.final_ms), who(entry), date(entry.at)),
-        4000,
-    ));
+    let ours = is_ours(entry);
+    if !(race.ghosts.world.is_some() || ours && race.phase >= Phase::OnGrid) {
+        return;
+    }
+    let time = crate::laps::clock(entry.final_ms);
+    let text = if ours {
+        format!("You hold the world record: {time}, {}", date(entry.at))
+    } else {
+        format!("World record {time} by {}, {}", who(entry), date(entry.at))
+    };
+    toasts.write(Toast::new(text, 4000));
     world.untold = false;
 }
 
@@ -329,7 +364,12 @@ mod cache {
         let bytes = loader::store::read(&path(board)).ok()?;
         let (entry, run_bytes): (score::Entry, Vec<u8>) = bitcode::decode(&bytes).ok()?;
         let run = race::solo::Run::from_bytes(&run_bytes).ok()?;
-        Some(Record { entry, run, bytes: run_bytes })
+        Some(Record {
+            entry,
+            run,
+            bytes: run_bytes,
+            splits: None,
+        })
     }
 
     pub fn save(board: BoardId, record: &Record) {

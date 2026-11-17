@@ -5,9 +5,12 @@
 //!
 //! A relic race has no lap rows: under TIME is the next relic to earn and its time instead, and
 //! under that the personal best. A time trial has the best between TIME TRIAL and the lap rows.
+//! Under the best, a solo run has the board's world record if there is one ("(You)" and white if
+//! it is ours), and how far ahead of it or behind we were at the last checkpoint passed.
 //!
 //! A free drive has neither: it has no laps to count and no end. In TIME's place it has the
-//! track's personal bests, if any.
+//! track's personal bests, if any, the relic best's time followed by the relic it earned, spinning
+//! in its tier's colour as at the end of a relic race (`solo_end`).
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -15,6 +18,7 @@ use render::font::{Font, Gradient};
 use crate::font::CtrText;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews, ViewKart};
+use crate::subtract::SubtractMaterial;
 
 /// Where the blocks are: both from the top, TIME from the left and LAP from the right, in lines
 /// and pixels of retail's screen.
@@ -74,7 +78,28 @@ pub(crate) fn tier_gradient(tier: race::relic::Tier) -> Gradient {
 /// retail's clock units, 960 a second (`elapsed_time_ms` is 32 a tick), not milliseconds.
 pub(crate) fn clock(units: i32) -> String {
     let t = units.max(0);
-    format!("{}:{:02}:{:02}", t / 0xe100, t / 0x3c0 % 60, t % 0x3c0 * 100 / 0x3c0)
+    format!(
+        "{}:{:02}:{:02}",
+        t / 0xe100,
+        t / 0x3c0 % 60,
+        t % 0x3c0 * 100 / 0x3c0
+    )
+}
+
+/// A split against the world record, in retail's clock units: "-1.25", "+0.40", "+1:02.10".
+fn delta(units: i32) -> String {
+    let sign = match units.signum() {
+        -1 => "-",
+        1 => "+",
+        _ => "",
+    };
+    let t = units.unsigned_abs();
+    let (minutes, seconds, hundredths) = (t / 0xe100, t / 0x3c0 % 60, t % 0x3c0 * 100 / 0x3c0);
+    if minutes > 0 {
+        format!("{sign}{minutes}:{seconds:02}.{hundredths:02}")
+    } else {
+        format!("{sign}{seconds}.{hundredths:02}")
+    }
 }
 
 /// The TIME block.
@@ -107,6 +132,20 @@ struct BestName;
 #[derive(Component)]
 struct BestTime;
 
+/// The world record's label, its time, and our split against it.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum World {
+    Name,
+    Time,
+    Split,
+}
+
+/// Ahead of the world record at a checkpoint (behind is `Gradient::RED`).
+const AHEAD: Gradient = Gradient {
+    top: [0x80, 0xff, 0x60],
+    bottom: [0x10, 0xa0, 0x10],
+};
+
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
 struct LapRows(usize);
@@ -125,9 +164,33 @@ struct BestsBlock;
 #[derive(Component)]
 struct FreeBest(race::solo::Kind, bool);
 
-/// The relic the free drive's relic best earned.
+/// The line of the relic best's time and its relic, which goes out of the layout with the time
+/// (an empty line would still take the block's gaps).
 #[derive(Component)]
-struct FreeRelic;
+struct FreeRelicLine;
+
+/// The space after the relic best's time that its relic is drawn over.
+#[derive(Component)]
+struct FreeRelicSlot;
+
+/// The relic over a [`FreeRelicSlot`]: its pivot, the model its child, its middle on the pivot.
+#[derive(Component)]
+struct FreeRelicIcon {
+    tier: race::relic::Tier,
+    /// The model's height in world units.
+    height: f32,
+}
+
+/// How tall the relic after the time is, in lines: a little over the large font's 16.
+const ICON_LINES: f32 = 20.0;
+
+/// The slot's width and its gap after the time, in pixels of retail's screen. (The relic is
+/// narrower than it is tall, and its arms turn out to its sides.)
+const ICON_WIDTH: f32 = 14.0;
+const ICON_GAP: f32 = 4.0;
+
+/// How far in front of the HUD camera the relic hangs, in pixels.
+const ICON_DEPTH: f32 = 100.0;
 
 /// The personal bests of the track driven freely. `stale` once any race is on: one may have
 /// set a best, and the race may have been on this very track.
@@ -137,6 +200,8 @@ struct FreeBests {
     stale: bool,
     relic: Option<i32>,
     trial: Option<i32>,
+    /// The tier of the relic shown after the relic best's time: None when the block is hidden.
+    icon: Option<race::relic::Tier>,
 }
 
 impl Default for FreeBests {
@@ -146,6 +211,7 @@ impl Default for FreeBests {
             stale: true,
             relic: None,
             trial: None,
+            icon: None,
         }
     }
 }
@@ -155,7 +221,10 @@ pub struct LapsPlugin;
 impl Plugin for LapsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FreeBests>()
-            .add_systems(Update, (show, show_bests).run_if(crate::drive::driving));
+            .add_systems(
+                Update,
+                (show, (show_bests, free_relic).chain()).distributive_run_if(crate::drive::driving),
+            );
     }
 }
 
@@ -169,25 +238,38 @@ fn show(
     sim: Res<crate::props::Sim>,
     hud: HudViews,
     race_on: Res<crate::race_on::RaceOn>,
+    world_record: Res<crate::world_record::WorldRecord>,
     mut blocks: Query<(&HudView, &mut Visibility), Or<(With<TimeBlock>, With<LapBlock>)>>,
     time_blocks: Query<&HudView, With<TimeBlock>>,
     mut rows: Query<(Entity, &HudView, &mut LapRows)>,
-    mut texts: Query<(
-        &HudView,
-        &mut CtrText,
-        Has<Total>,
-        Has<LapCount>,
-        Option<&RowLabel>,
-        Option<&RowTime>,
-        Has<TargetName>,
-        Has<TargetTime>,
-        Has<BestTime>,
-        Has<TimeLabel>,
-    )>,
+    mut texts: Query<
+        (
+            &HudView,
+            &mut CtrText,
+            Has<Total>,
+            Has<LapCount>,
+            Option<&RowLabel>,
+            Option<&RowTime>,
+            Has<TargetName>,
+            Has<TargetTime>,
+            Has<BestTime>,
+            Has<TimeLabel>,
+        ),
+        Without<World>,
+    >,
     mut relic_nodes: Query<
         (&mut Node, Has<BestName>, Has<BestTime>),
-        Or<(With<TargetName>, With<TargetTime>, With<BestName>, With<BestTime>)>,
+        (
+            Or<(
+                With<TargetName>,
+                With<TargetTime>,
+                With<BestName>,
+                With<BestTime>,
+            )>,
+            Without<World>,
+        ),
     >,
+    mut world_texts: Query<(&HudView, &World, &mut CtrText, &mut Node)>,
 ) {
     let missing = hud.missing(time_blocks.iter().copied());
     if !missing.is_empty() {
@@ -222,6 +304,7 @@ fn show(
         }
     });
     let best = solo.and_then(|race| race.best);
+    let world = solo.and_then(|race| world_record.of(race));
     // (Out of the layout without one, or the block's gaps would push the lap rows down; the best
     // goes up in the target's place.)
     let display = |on: bool| if on { Display::Flex } else { Display::None };
@@ -253,6 +336,64 @@ fn show(
             times.clear();
         } else if !finished {
             times.push(race.event_ms - driver.lap_time);
+        }
+        // How far ahead (-) or behind (+) the record we were at the last checkpoint we passed.
+        let split = world.and_then(|(_, splits, _)| {
+            let ours = &race.splits[slot];
+            let at = ours.len().checked_sub(1)?;
+            Some(ours[at] - splits?.get(at)?)
+        });
+        for (v, &part, mut text, mut node) in &mut world_texts {
+            if v.0 != view {
+                continue;
+            }
+            let wanted = match part {
+                World::Name => world.map(|(_, _, ours)| {
+                    if ours {
+                        "World Record (You)"
+                    } else {
+                        "World Record"
+                    }
+                    .into()
+                }),
+                World::Time => world.map(|(entry, _, _)| clock(entry.final_ms)),
+                World::Split => split.map(delta),
+            };
+            if part != World::Split
+                && let Some((_, _, ours)) = world
+            {
+                let gradient = if ours {
+                    Gradient::WHITE
+                } else {
+                    Gradient::YELLOW
+                };
+                if text.gradient != gradient {
+                    text.gradient = gradient;
+                }
+            }
+            let display = display(wanted.is_some());
+            if node.display != display {
+                node.display = display;
+            }
+            if part == World::Split
+                && let Some(split) = split
+            {
+                let gradient = if split < 0 {
+                    AHEAD
+                } else if split > 0 {
+                    Gradient::RED
+                } else {
+                    Gradient::WHITE
+                };
+                if text.gradient != gradient {
+                    text.gradient = gradient;
+                }
+            }
+            if let Some(wanted) = wanted
+                && text.text != wanted
+            {
+                text.text = wanted;
+            }
         }
         if let Some((entity, _, mut count)) = rows.iter_mut().find(|(_, v, _)| v.0 == view)
             && count.0 != times.len()
@@ -310,11 +451,12 @@ fn show_bests(
     mut bests: ResMut<FreeBests>,
     mut blocks: Query<&mut Visibility, With<BestsBlock>>,
     mut texts: Query<(&FreeBest, &mut CtrText, &mut Node)>,
-    mut relic: Query<(&mut CtrText, &mut Node), (With<FreeRelic>, Without<FreeBest>)>,
+    mut relic_line: Query<&mut Node, (With<FreeRelicLine>, Without<FreeBest>)>,
 ) {
     // (A lobby's free drive has its own things up there.)
     if race_on.is_on() || lobby.is_some_and(|lobby| lobby.is_open()) {
         bests.stale = true;
+        bests.icon = None;
         for mut visibility in &mut blocks {
             visibility.set_if_neq(Visibility::Hidden);
         }
@@ -328,6 +470,7 @@ fn show_bests(
             stale: false,
             relic: best(race::solo::Kind::Relic),
             trial: best(race::solo::Kind::TimeTrial),
+            icon: None,
         };
     }
     let shown = if bests.relic.is_some() || bests.trial.is_some() {
@@ -338,20 +481,17 @@ fn show_bests(
     for mut visibility in &mut blocks {
         visibility.set_if_neq(shown);
     }
-    let tier = bests.relic.and_then(|ms| race::relic::earned(level.0, race::DEFAULT_LAPS, ms));
-    for (mut text, mut node) in &mut relic {
-        let display = if tier.is_some() { Display::Flex } else { Display::None };
+    let tier = bests
+        .relic
+        .and_then(|ms| race::relic::earned(level.0, race::DEFAULT_LAPS, ms));
+    let icon = tier.filter(|_| shown == Visibility::Inherited);
+    if bests.icon != icon {
+        bests.icon = icon;
+    }
+    for mut node in &mut relic_line {
+        let display = if bests.relic.is_some() { Display::Flex } else { Display::None };
         if node.display != display {
             node.display = display;
-        }
-        let Some(tier) = tier else {
-            continue;
-        };
-        if text.text != tier_name(tier) {
-            text.text = tier_name(tier).into();
-        }
-        if text.gradient != tier_gradient(tier) {
-            text.gradient = tier_gradient(tier);
         }
     }
     for (&FreeBest(kind, is_time), mut text, mut node) in &mut texts {
@@ -359,14 +499,101 @@ fn show_bests(
             race::solo::Kind::Relic => bests.relic,
             race::solo::Kind::TimeTrial => bests.trial,
         };
-        let display = if ms.is_some() { Display::Flex } else { Display::None };
+        let display = if ms.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != display {
             node.display = display;
         }
-        let wanted = if is_time { ms.map_or_else(String::new, clock) } else { continue };
+        let wanted = if is_time {
+            ms.map_or_else(String::new, clock)
+        } else {
+            continue;
+        };
         if text.text != wanted {
             text.text = wanted;
         }
+    }
+}
+
+/// Puts the relic after the relic best's time when it earned one, in its tier's colour, and
+/// turns it as the ceremony's turns.
+#[allow(clippy::too_many_arguments)]
+fn free_relic(
+    mut commands: Commands,
+    sim: Res<crate::props::Sim>,
+    fixed: Res<Time<Fixed>>,
+    bests: Res<FreeBests>,
+    model: Res<crate::solo_end::RelicModel>,
+    textures: Res<crate::Textures>,
+    hud: HudViews,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    slots: Query<(&HudView, &ComputedNode, &UiGlobalTransform), With<FreeRelicSlot>>,
+    mut icons: Query<(Entity, &FreeRelicIcon, &HudView, &mut Transform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
+) {
+    for (entity, icon, ..) in &icons {
+        if bests.icon != Some(icon.tier) {
+            commands.entity(entity).despawn();
+        }
+    }
+    let Some(tier) = bests.icon else {
+        return;
+    };
+    let missing = hud.missing(icons.iter().filter(|(_, icon, ..)| icon.tier == tier).map(|(_, _, v, _)| *v));
+    if !missing.is_empty() {
+        let Some(built) = crate::solo_end::build(&model.0, tier, &textures, &mut images) else {
+            return;
+        };
+        let middle = (built.low + built.high) / 2.0;
+        for view in missing {
+            let pivot = commands
+                .spawn((
+                    FreeRelicIcon {
+                        tier,
+                        height: built.high.y - built.low.y,
+                    },
+                    HudView(view),
+                    // (Out of sight until placed over its slot.)
+                    Transform::from_scale(Vec3::ZERO),
+                    Visibility::default(),
+                ))
+                .id();
+            built.spawn(
+                Transform::from_translation(-middle),
+                pivot,
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &mut subtract_materials,
+            );
+        }
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let ticks = sim.race.tick as f32 + fixed.overstep_fraction();
+    let angle = ticks / crate::solo_end::SPIN_TICKS * std::f32::consts::TAU;
+    for (_, icon, view, mut transform) in &mut icons {
+        let (Some(kart), Some((_, slot, at))) = (hud.get(view.0), slots.iter().find(|(v, ..)| *v == view)) else {
+            continue;
+        };
+        // Laid out in the view's part of the window, in its physical pixels; the HUD camera looks
+        // at the middle of the whole window, with y up.
+        let centre = kart.rect(window).min + at.translation * slot.inverse_scale_factor;
+        transform.translation = Vec3::new(
+            centre.x - window.width() / 2.0,
+            window.height() / 2.0 - centre.y,
+            -ICON_DEPTH,
+        );
+        transform.scale = Vec3::splat(ICON_LINES * hud::PIXEL.y / icon.height);
+        transform.rotation = Quat::from_rotation_y(angle);
     }
 }
 
@@ -390,12 +617,19 @@ fn spawn(commands: &mut Commands, view: usize) {
         Visibility::Hidden,
         Pickable::IGNORE,
         children![
-            (view, TimeLabel, text("Time", Font::Middle, Gradient::ORANGE)),
+            (
+                view,
+                TimeLabel,
+                text("Time", Font::Middle, Gradient::ORANGE)
+            ),
             (view, Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
             (view, TargetName, text("", Font::Middle, SAPPHIRE)),
             (view, TargetTime, text("", Font::Large, SAPPHIRE)),
             (BestName, text("Best", Font::Middle, Gradient::WHITE)),
             (view, BestTime, text("", Font::Large, Gradient::WHITE)),
+            (view, World::Name, text("", Font::Middle, Gradient::YELLOW)),
+            (view, World::Time, text("", Font::Large, Gradient::YELLOW)),
+            (view, World::Split, text("", Font::Middle, Gradient::WHITE)),
             (
                 view,
                 LapRows(0),
@@ -423,11 +657,38 @@ fn spawn(commands: &mut Commands, view: usize) {
                     ..default()
                 },
             ),
-            (FreeBest(Kind::Relic, false), text("Relic", Font::Middle, Gradient::ORANGE)),
-            (FreeBest(Kind::Relic, true), text("", Font::Large, Gradient::ORANGE)),
-            (FreeRelic, text("", Font::Middle, Gradient::ORANGE)),
-            (FreeBest(Kind::TimeTrial, false), text("Time Trial", Font::Middle, Gradient::ORANGE)),
-            (FreeBest(Kind::TimeTrial, true), text("", Font::Large, Gradient::ORANGE)),
+            (
+                FreeBest(Kind::Relic, false),
+                text("Relic", Font::Middle, Gradient::ORANGE)
+            ),
+            (
+                FreeRelicLine,
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: hud::x(ICON_GAP),
+                    ..default()
+                },
+                children![
+                    (FreeBest(Kind::Relic, true), text("", Font::Large, Gradient::ORANGE)),
+                    (
+                        view,
+                        FreeRelicSlot,
+                        Node {
+                            width: hud::x(ICON_WIDTH),
+                            height: hud::y(Font::Large.line_height() as f32),
+                            ..default()
+                        },
+                    ),
+                ],
+            ),
+            (
+                FreeBest(Kind::TimeTrial, false),
+                text("Time Trial", Font::Middle, Gradient::ORANGE)
+            ),
+            (
+                FreeBest(Kind::TimeTrial, true),
+                text("", Font::Large, Gradient::ORANGE)
+            ),
         ],
     ));
     commands.spawn((
@@ -459,7 +720,11 @@ fn spawn_row(commands: &mut Commands, rows: Entity, view: usize, i: usize, time:
                     ..default()
                 },
             ),
-            (HudView(view), RowTime(i), text(time, Font::Middle, Gradient::WHITE)),
+            (
+                HudView(view),
+                RowTime(i),
+                text(time, Font::Middle, Gradient::WHITE)
+            ),
         ],
     ));
 }

@@ -39,7 +39,7 @@ const RELIC_LINES: f32 = 50.0;
 const GROW_TICKS: f32 = 24.0;
 
 /// `UI_REWARD_PICKUP_ROT_SLOW`: a turn in 64 ticks (`UI_ThTick_Reward`).
-const SPIN_TICKS: f32 = 64.0;
+pub(crate) const SPIN_TICKS: f32 = 64.0;
 
 /// `OtherFX` of the relic unlocked.
 const RELIC_SFX: u16 = 0x67;
@@ -300,7 +300,7 @@ fn relic(
 }
 
 /// The relic's mesh, every face in `tier`'s colour.
-fn build(
+pub(crate) fn build(
     model: &Model,
     tier: Tier,
     textures: &Textures,

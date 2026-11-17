@@ -200,6 +200,18 @@ impl Ghost {
         &self.race
     }
 
+    /// The race's time at each checkpoint the run passes ([`Race::splits`]), played out on a copy
+    /// to the run's finish, or to its pads' end if it doesn't finish.
+    pub fn splits(&self, level: &Level) -> Vec<i32> {
+        let mut ghost = self.clone();
+        while ghost.race.tick < ghost.demo.length
+            && ghost.kart().driver.actions_flag_set & actions::RACE_FINISHED == 0
+        {
+            ghost.tick(level);
+        }
+        ghost.race.splits.swap_remove(0)
+    }
+
     pub fn kart(&self) -> &crate::Kart {
         &self.race.karts[0]
     }
