@@ -430,6 +430,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     takes("time-trial", "Your time trial best", "[track]"),
                 ],
             ),
+            node(
+                "top",
+                "List the first of a track's board",
+                &[
+                    takes("relic", "The relic race board", "[track]"),
+                    takes("time-trial", "The time trial board", "[track]"),
+                ],
+            ),
             leaf("forget", "Delete you and your runs from the boards"),
             node(
                 "key",

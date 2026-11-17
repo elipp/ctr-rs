@@ -574,6 +574,7 @@ pub(super) fn run(
             | Action::ScoreKeyExport
             | Action::ScoreKeyImport(_)
             | Action::ScoreSubmit { .. }
+            | Action::ScoreTop { .. }
             | Action::ScoreForget(_)
             | Action::Clear => continue,
             Action::StopRace => {

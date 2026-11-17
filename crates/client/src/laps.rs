@@ -50,6 +50,16 @@ const PLATINUM: Gradient = Gradient {
     bottom: [0x60, 0x60, 0x60],
 };
 
+/// A relic's name.
+pub(crate) fn tier_name(tier: race::relic::Tier) -> &'static str {
+    use race::relic::Tier;
+    match tier {
+        Tier::Sapphire => "Sapphire",
+        Tier::Gold => "Gold",
+        Tier::Platinum => "Platinum",
+    }
+}
+
 /// The colour of a relic's name and time.
 pub(crate) fn tier_gradient(tier: race::relic::Tier) -> Gradient {
     use race::relic::Tier;
@@ -64,7 +74,7 @@ pub(crate) fn tier_gradient(tier: race::relic::Tier) -> Gradient {
 /// retail's clock units, 960 a second (`elapsed_time_ms` is 32 a tick), not milliseconds.
 pub(crate) fn clock(units: i32) -> String {
     let t = units.max(0);
-    format!("{}:{:02}:{:02}", t / 0xe100, t / 0x3c0 % 60, t * 100 / 0x3c0 % 100)
+    format!("{}:{:02}:{:02}", t / 0xe100, t / 0x3c0 % 60, t % 0x3c0 * 100 / 0x3c0)
 }
 
 /// The TIME block.
@@ -114,6 +124,10 @@ struct BestsBlock;
 
 #[derive(Component)]
 struct FreeBest(race::solo::Kind, bool);
+
+/// The relic the free drive's relic best earned.
+#[derive(Component)]
+struct FreeRelic;
 
 /// The personal bests of the track driven freely. `stale` once any race is on: one may have
 /// set a best, and the race may have been on this very track.
@@ -296,6 +310,7 @@ fn show_bests(
     mut bests: ResMut<FreeBests>,
     mut blocks: Query<&mut Visibility, With<BestsBlock>>,
     mut texts: Query<(&FreeBest, &mut CtrText, &mut Node)>,
+    mut relic: Query<(&mut CtrText, &mut Node), (With<FreeRelic>, Without<FreeBest>)>,
 ) {
     // (A lobby's free drive has its own things up there.)
     if race_on.is_on() || lobby.is_some_and(|lobby| lobby.is_open()) {
@@ -323,11 +338,22 @@ fn show_bests(
     for mut visibility in &mut blocks {
         visibility.set_if_neq(shown);
     }
-    // (The relic's label is in the colour of the relic it earned, as `solo_end.rs` names it.)
-    let tier = bests
-        .relic
-        .and_then(|ms| race::relic::earned(level.0, race::DEFAULT_LAPS, ms))
-        .map_or(Gradient::WHITE, tier_gradient);
+    let tier = bests.relic.and_then(|ms| race::relic::earned(level.0, race::DEFAULT_LAPS, ms));
+    for (mut text, mut node) in &mut relic {
+        let display = if tier.is_some() { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+        let Some(tier) = tier else {
+            continue;
+        };
+        if text.text != tier_name(tier) {
+            text.text = tier_name(tier).into();
+        }
+        if text.gradient != tier_gradient(tier) {
+            text.gradient = tier_gradient(tier);
+        }
+    }
     for (&FreeBest(kind, is_time), mut text, mut node) in &mut texts {
         let ms = match kind {
             race::solo::Kind::Relic => bests.relic,
@@ -336,9 +362,6 @@ fn show_bests(
         let display = if ms.is_some() { Display::Flex } else { Display::None };
         if node.display != display {
             node.display = display;
-        }
-        if kind == race::solo::Kind::Relic && !is_time && text.gradient != tier {
-            text.gradient = tier;
         }
         let wanted = if is_time { ms.map_or_else(String::new, clock) } else { continue };
         if text.text != wanted {
@@ -400,8 +423,9 @@ fn spawn(commands: &mut Commands, view: usize) {
                     ..default()
                 },
             ),
-            (FreeBest(Kind::Relic, false), text("Relic", Font::Middle, Gradient::WHITE)),
-            (FreeBest(Kind::Relic, true), text("", Font::Large, Gradient::WHITE)),
+            (FreeBest(Kind::Relic, false), text("Relic", Font::Middle, Gradient::ORANGE)),
+            (FreeBest(Kind::Relic, true), text("", Font::Large, Gradient::ORANGE)),
+            (FreeRelic, text("", Font::Middle, Gradient::ORANGE)),
             (FreeBest(Kind::TimeTrial, false), text("Time Trial", Font::Middle, Gradient::ORANGE)),
             (FreeBest(Kind::TimeTrial, true), text("", Font::Large, Gradient::ORANGE)),
         ],

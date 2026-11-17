@@ -62,6 +62,11 @@ pub fn pbs() -> PathBuf {
     root().join(".cache").join("pbs")
 }
 
+/// The boards' #1 runs (`world_record.rs`), in `loader::store`: everything in it may go.
+pub fn world_records() -> PathBuf {
+    root().join(".cache").join("world-records")
+}
+
 fn cache() -> PathBuf {
     if cfg!(debug_assertions) {
         root().join(".cache")

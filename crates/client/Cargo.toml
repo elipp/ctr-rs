@@ -53,6 +53,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 race = { path = "../race" }
 score = { path = "../score" }
+# The world record cache (`world_record.rs`) keeps the board's `Entry` as the protocol encodes it.
+bitcode = "0.6.9"
 math = { path = "../math" }
 weapon = { path = "../weapon" }
 map = { path = "../map" }

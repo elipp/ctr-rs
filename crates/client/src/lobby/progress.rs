@@ -2,6 +2,7 @@
 
 use super::cup::{self, Finisher};
 use super::{ANNOUNCE_COLOR, Lobby};
+use crate::console::console;
 use crate::race_on::{RaceOn, SoloEnd};
 use crate::toast::Toast;
 use bevy::prelude::*;
@@ -35,7 +36,7 @@ pub(super) const AFTERMATH_SECONDS: u32 = 15;
 const FINISH_TOAST_MS: u64 = 4000;
 
 /// The `place`th (from 0) as a person says it: 1st, 2nd, 3rd, 4th, ... 11th, 12th, 21st.
-pub(super) fn ordinal(place: usize) -> String {
+pub(crate) fn ordinal(place: usize) -> String {
     let n = place + 1;
     let suffix = match (n % 10, n % 100) {
         (_, 11..=13) => "th",
@@ -100,24 +101,43 @@ pub(super) fn finish(
             && let Some(ms) = sim.race.final_ms(slot)
         {
             use crate::pb::Verdict;
-            debug!("{kind:?} run finished in {} (tick {at})", crate::laps::clock(ms));
+            debug!(
+                "{kind:?} run finished in {} (tick {at})",
+                crate::laps::clock(ms)
+            );
             let verdict = crate::pb::finished(&track.0, &sim, race);
             let relic = kind == race::solo::Kind::Relic;
-            let earned = |ms| relic.then(|| race::relic::earned(race.track, race.rules.laps, ms)).flatten();
+            let earned = |ms| {
+                relic
+                    .then(|| race::relic::earned(race.track, race.rules.laps, ms))
+                    .flatten()
+            };
             let (new_best, had, best) = match verdict {
                 Some(Verdict::First) => (true, None, None),
                 Some(Verdict::Better { old }) => (true, earned(old.final_ms), None),
                 Some(Verdict::Worse { best }) => (false, None, Some(best.final_ms)),
                 None => (false, None, None),
             };
+            let submit = (new_best && net::score::default_score().is_some())
+                .then_some(crate::race_on::Submit::Offered);
+            // `/score submit` only sends bests over the default laps.
+            if submit.is_some() && race.rules.laps == race::DEFAULT_LAPS {
+                let kind = match kind {
+                    race::solo::Kind::Relic => "relic",
+                    race::solo::Kind::TimeTrial => "time-trial",
+                };
+                console!(
+                    "New best! If you missed submitting it to the board:\n /score submit {kind} {}",
+                    crate::maps::stable_name(race.track)
+                );
+            }
             race.solo_end = Some(SoloEnd {
                 at,
                 perfect: sim.race.perfect(slot),
                 new_best,
                 best,
                 relic: earned(ms).filter(|&tier| new_best && Some(tier) > had),
-                submit: (new_best && net::score::default_score().is_some())
-                    .then_some(crate::race_on::Submit::Offered),
+                submit,
             });
             continue;
         }
@@ -211,7 +231,9 @@ pub(super) fn pace(
         net.ahead
             .iter()
             .enumerate()
-            .filter(|&(slot, _)| slot != race.slot && !race.finished.get(slot).copied().unwrap_or(false))
+            .filter(|&(slot, _)| {
+                slot != race.slot && !race.finished.get(slot).copied().unwrap_or(false)
+            })
             .fold(0.0_f32, |most, (_, &a)| most.max(a))
     });
     let speed = match &fx {

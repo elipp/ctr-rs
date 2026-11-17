@@ -58,6 +58,7 @@ use hud::waiting;
 pub(crate) use progress::SPECTATE_BUFFER;
 use placing::placing;
 use progress::{RollbackToasts, finish, pace, rollback_toasts};
+pub(crate) use progress::ordinal;
 use report::report;
 
 pub(crate) mod commands;

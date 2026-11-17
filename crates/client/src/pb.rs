@@ -312,9 +312,15 @@ fn load(kind: Kind, map_hash: u64, laps: u8) -> Option<(Run, Vec<u8>)> {
 /// None if there is none. A best that no longer finishes still drives (it's the run as it was
 /// played), so `race.best` is not asked.
 pub fn ghost(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Ghost> {
-    let spec = *race.specs.first()?;
     let (run, _) = load(race.solo?, race.hash, race.rules.laps)?;
-    Some(Ghost::new(level, sim.start().clone(), spec_for(&run, spec), &run))
+    ghost_of(level, sim, race, &run)
+}
+
+/// `run` as a ghost of the race, at tick 0 on the level loaded (the race's): only once
+/// `drive_tick` has put the sim on the race's grid, as `sim.start()` is then the race's.
+pub fn ghost_of(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace, run: &Run) -> Option<Ghost> {
+    let spec = *race.specs.first()?;
+    Some(Ghost::new(level, sim.start().clone(), spec_for(run, spec), run))
 }
 
 /// Notes that no best is on the board any more (`/score forget`).

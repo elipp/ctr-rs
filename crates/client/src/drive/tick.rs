@@ -78,6 +78,7 @@ pub(super) fn drive_tick(
     shown: Shown,
     mut memory: Local<Memory>,
     mut brains: ResMut<crate::learned::Brains>,
+    mut world_record: ResMut<crate::world_record::WorldRecord>,
 ) {
     let Shown {
         mut particles,
@@ -179,6 +180,7 @@ pub(super) fn drive_tick(
             }
             race.best = best;
             race.ghosts.best = crate::pb::ghost(&track.0, &sim, race);
+            race.ghosts.world = world_record.start(&track.0, &sim, race);
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.

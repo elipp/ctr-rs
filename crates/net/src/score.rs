@@ -12,8 +12,9 @@ use score::{ALPN, Action, Auth, MAX_RESPONSE, Request, Response, Submit};
 use crate::Error;
 use crate::pending::Pending;
 
-/// The score server's id, built in, unless `CTR_SCORE` names another. None until one is deployed.
-pub const DEFAULT_SCORE: Option<&str> = None;
+/// The score server's id, built in, unless `CTR_SCORE` names another.
+pub const DEFAULT_SCORE: Option<&str> =
+    Some("5df2ac8b08aa429a23e4403832b21d28c6972255ff800c6ed2d2480e1638a4b2");
 
 /// The score server: the id in `CTR_SCORE` if there is one (to try a server of one's own), else
 /// [`DEFAULT_SCORE`].

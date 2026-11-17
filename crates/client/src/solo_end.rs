@@ -95,14 +95,6 @@ fn tint(tier: Tier) -> [u8; 3] {
     }
 }
 
-fn name(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Sapphire => "SAPPHIRE",
-        Tier::Gold => "GOLD",
-        Tier::Platinum => "PLATINUM",
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn panel(
     mut commands: Commands,
@@ -176,7 +168,7 @@ fn panel(
             ),
             Line::Perfect => (end.perfect.then(|| "PERFECT -10".to_string()), flash),
             Line::Relic => (
-                end.relic.map(|tier| format!("{} RELIC AWARDED!", name(tier))),
+                end.relic.map(|tier| format!("{} RELIC AWARDED!", crate::laps::tier_name(tier).to_uppercase())),
                 end.relic.map_or(flash, crate::laps::tier_gradient),
             ),
             Line::Best => (end.new_best.then(|| "NEW HIGH SCORE!".to_string()), flash),
@@ -184,7 +176,14 @@ fn panel(
                 end.best.map(|ms| format!("BEST {}", crate::laps::clock(ms))),
                 Gradient::WHITE,
             ),
-            Line::Submit => (submit_line(end.submit, &pads, &config), Gradient::WHITE),
+            Line::Submit => (
+                submit_line(end.submit, &pads, &config),
+                match end.submit {
+                    Some(Submit::Offered) => Gradient::YELLOW,
+                    Some(Submit::Refused) => Gradient::RED,
+                    _ => Gradient::WHITE,
+                },
+            ),
         };
         let display = if wanted.is_some() {
             Display::Flex
@@ -215,10 +214,7 @@ fn submit_line(
             format!("{}: SUBMIT", crate::ghost::select_label(pads, config)?.to_uppercase())
         }
         Submit::Sending => "SUBMITTING...".to_string(),
-        Submit::Accepted { rank: 1, .. } => "FIRST ON THE BOARD!".to_string(),
-        Submit::Accepted { rank, top_ms } => {
-            format!("RANK {rank}, TOP {}", crate::laps::clock(top_ms))
-        }
+        Submit::Accepted { rank, top_ms } => crate::scores::placed(rank, top_ms).to_uppercase(),
         Submit::Refused => "NOT SUBMITTED".to_string(),
     })
 }

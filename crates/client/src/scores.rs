@@ -189,12 +189,7 @@ fn answer(
         Ok(Response::Submitted(Submitted { run_id, rank, pb_ms, top_ms })) => {
             crate::pb::submitted(&sent, run_id);
             info!("submitted as run {run_id}: rank {rank}, best {pb_ms} ms, #1 {top_ms} ms");
-            let said = if rank == 1 {
-                "Your best is #1 on the board!".to_string()
-            } else {
-                format!("Your best is #{rank} on the board. #1: {}", crate::laps::clock(top_ms))
-            };
-            (Submit::Accepted { rank, top_ms }, Ok(said))
+            (Submit::Accepted { rank, top_ms }, Ok(placed(rank, top_ms)))
         }
         Ok(Response::Rejected(rejected)) => {
             if matches!(rejected, Rejected::NoFinish | Rejected::Mismatch { .. }) {
@@ -227,6 +222,17 @@ fn answer(
         Err(why) => {
             toasts.write(Toast::new(why, 5000).color(RED));
         }
+    }
+}
+
+/// Where the board put a submitted best, for both the end screen's line and the toast once that
+/// screen is gone.
+pub(crate) fn placed(rank: u32, top_ms: i32) -> String {
+    // The server's ranks start at 1.
+    let place = crate::lobby::ordinal((rank as usize).saturating_sub(1));
+    match rank {
+        1 => format!("{place} on the board!"),
+        _ => format!("{place} on the board, top {}", crate::laps::clock(top_ms)),
     }
 }
 

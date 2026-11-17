@@ -64,6 +64,7 @@ impl PluginGroup for HudPlugins {
             .add(crate::version::VersionPlugin)
             .add(crate::player::PlayerPlugin)
             .add(crate::scores::ScoresPlugin)
+            .add(crate::world_record::WorldRecordPlugin)
     }
 }
 

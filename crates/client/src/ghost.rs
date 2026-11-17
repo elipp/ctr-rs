@@ -1,6 +1,6 @@
 //! A solo run's ghosts, raced against: each a `race::solo::Ghost` (a race of its own, fed a
 //! stored run's pads) in `CurrentRace::ghosts`, its kart drawn see-through and greyed. There are
-//! two: our personal best and the world record (the leaderboard's #1, which nothing fetches yet).
+//! two: our personal best and the world record (the leaderboard's #1, `world_record.rs`).
 //! Select or [`Control::Ghost`] cycles which are shown ([`GhostPick`]).
 //!
 //! The kart has a [`KartMotion`] but no `KartSlot`: everything that draws or hears a kart by its

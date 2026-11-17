@@ -93,6 +93,7 @@ mod remote;
 mod resources;
 mod scene;
 mod scores;
+mod world_record;
 mod scoreboard;
 mod shadow;
 mod shield;
