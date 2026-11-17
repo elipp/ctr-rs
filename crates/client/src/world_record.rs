@@ -226,7 +226,11 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
     let text = if ours {
         format!("You hold the world record\n{time}\n{}", date(entry.at))
     } else {
-        format!("World record {time}\n{}\n{}", who(entry), date(entry.at))
+        let by = match entry.nick.as_str() {
+            "" => who(entry),
+            nick => nick.to_string(),
+        };
+        format!("World record {time}\nby {by}\n{}", date(entry.at))
     };
     toasts.write(Toast::new(text, 4000));
     world.untold = false;
