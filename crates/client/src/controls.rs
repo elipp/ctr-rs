@@ -39,8 +39,8 @@ pub enum Control {
     /// Opens the menu that picks the racer of a local player (`drive/chooser.rs`), as a pad's
     /// Select does.
     RacerMenu,
-    /// Shows or hides a solo run's personal best's ghost (`ghost.rs`), as a pad's Select does
-    /// in one.
+    /// Cycles which of a solo run's ghosts are shown (`ghost.rs`), as a pad's Select does in
+    /// one.
     Ghost,
     /// Mutes or unmutes the music, and every sound (`sound.rs`).
     MuteMusic,

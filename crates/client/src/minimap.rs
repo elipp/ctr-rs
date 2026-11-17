@@ -59,7 +59,7 @@ struct Map {
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum Dot {
     Kart(usize),
-    Ghost,
+    Ghost(crate::ghost::Source),
 }
 
 /// The dots tinted each colour (by character, then white), and their size in texels.
@@ -200,7 +200,7 @@ fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     race_on: Res<crate::race_on::RaceOn>,
-    ghost_shown: Res<crate::ghost::GhostShown>,
+    config: Res<crate::config::Config>,
     hud: HudViews,
     images: Option<Res<DotImages>>,
     maps: Query<(Entity, &HudView, &Map, Option<&Children>)>,
@@ -211,10 +211,15 @@ fn show(
     };
     let karts = &sim.race.karts;
     let flash = sim.race.objects.ticks() & 2 != 0;
-    let ghost = (race_on.get())
-        .and_then(|race| race.ghost.as_ref())
-        .filter(|_| ghost_shown.0)
-        .map(|ghost| ghost.kart());
+    let ghosts: Vec<_> = (race_on.get().map(|race| &race.ghosts))
+        .map(|ghosts| {
+            let shown = ghosts.shown(config.ghosts);
+            (ghosts.iter())
+                .filter(|&(source, _)| shown.has(source))
+                .map(|(source, ghost)| (Dot::Ghost(source), ghost.kart()))
+                .collect()
+        })
+        .unwrap_or_default();
     for (map_entity, &HudView(view), map, children) in &maps {
         let Some(kart) = hud.get(view) else {
             continue;
@@ -224,7 +229,7 @@ fn show(
             if let Ok((entity, dot, ..)) = dots.get(child)
                 && match *dot {
                     Dot::Kart(slot) => slot >= karts.len(),
-                    Dot::Ghost => ghost.is_none(),
+                    Dot::Ghost(_) => !ghosts.iter().any(|&(d, _)| d == *dot),
                 }
             {
                 commands.entity(entity).despawn();
@@ -232,15 +237,18 @@ fn show(
         }
         // The picture's top left on retail's screen, which the dots are placed from.
         let (left, top) = (RIGHT - map.size.0 as i32, BOTTOM - map.size.1 as i32);
-        let ghost = ghost.map(|kart| (Dot::Ghost, kart));
-        for (dot, kart) in karts.iter().enumerate().map(|(slot, kart)| (Dot::Kart(slot), kart)).chain(ghost) {
+        for (dot, kart) in karts.iter().enumerate().map(|(slot, kart)| (Dot::Kart(slot), kart)).chain(ghosts.iter().copied()) {
             let d = &kart.driver;
             let character = (d.character as usize).min(CHARACTER_COLORS.len() - 1);
             // (Retail's one player has the player's dot and the bots the others: here the others
             // are the other players too.) A player's ghost flickers between Crash's blue and
-            // Cortex's red every frame (`UI_Map_DrawGhosts`).
+            // Cortex's red every frame (`UI_Map_DrawGhosts`); the world record's is out of step
+            // with ours, so that the two read apart.
             let image = match dot {
-                Dot::Ghost => &images.bot[(sim.race.objects.ticks() & 1) as usize],
+                Dot::Ghost(source) => {
+                    let phase = (source == crate::ghost::Source::World) as u32;
+                    &images.bot[(sim.race.objects.ticks().wrapping_add(phase) & 1) as usize]
+                }
                 Dot::Kart(slot) if slot != own => &images.bot[character],
                 Dot::Kart(_) if flash => &images.player[character],
                 Dot::Kart(_) => images.player.last().unwrap(),

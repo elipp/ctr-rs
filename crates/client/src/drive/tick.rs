@@ -178,7 +178,7 @@ pub(super) fn drive_tick(
                 race.relic_target = race::relic::target(race.track, race.rules.laps, best);
             }
             race.best = best;
-            race.ghost = crate::pb::ghost(&track.0, &sim, race);
+            race.ghosts.best = crate::pb::ghost(&track.0, &sim, race);
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.

@@ -669,7 +669,13 @@ impl KartBuilder<'_, '_> {
     /// The kart of a solo run's ghost (`ghost.rs`) where `kart` is: see-through and greyed, in
     /// the world's layer, driven by its [`KartMotion`] but in no [`KartSlot`], and with none of
     /// the effects (they all go by the slot).
-    pub fn spawn_ghost(&mut self, model: &Model, wheel_icons: &[Icon], kart: &race::Kart) -> Entity {
+    pub fn spawn_ghost(
+        &mut self,
+        model: &Model,
+        wheel_icons: &[Icon],
+        kart: &race::Kart,
+        fade: crate::ghost::Fade,
+    ) -> Entity {
         let (root, parts, base) = spawn_body(
             model,
             wheel_icons,
@@ -677,7 +683,7 @@ impl KartBuilder<'_, '_> {
             Transform::default(),
             0,
             Some(KartMotion::new(kart)),
-            Some(crate::ghost::Fade::GHOST),
+            Some(fade),
             &mut self.commands,
             &mut self.images,
             &mut self.meshes,
@@ -712,20 +718,23 @@ impl KartBuilder<'_, '_> {
 pub fn show(
     fixed: Res<Time<Fixed>>,
     race_on: Res<crate::race_on::RaceOn>,
-    ghosts: Res<crate::ghost::GhostShown>,
+    config: Res<crate::config::Config>,
     mut karts: Query<(
         &mut Transform,
         &mut Visibility,
         &KartMotion,
         Has<Kart>,
-        Has<crate::ghost::GhostKart>,
+        Option<&crate::ghost::GhostKart>,
     )>,
 ) {
     let t = fixed.overstep_fraction();
     // A spectator has no kart of its own: the others' are all drawn, and ours is not.
     let spectating = race_on.get().is_some_and(|race| race.spectating());
+    let ghosts = race_on.get().map(|race| race.ghosts.shown(config.ghosts));
     for (mut transform, mut visibility, motion, ours, ghost) in &mut karts {
-        let want = if motion.hidden || (ours && spectating) || (ghost && !ghosts.0) {
+        let hidden_ghost =
+            ghost.is_some_and(|g| ghosts.is_none_or(|shown| !shown.has(g.source)));
+        let want = if motion.hidden || (ours && spectating) || hidden_ghost {
             Visibility::Hidden
         } else {
             Visibility::Inherited
