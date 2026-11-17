@@ -17,6 +17,16 @@ impl std::fmt::Display for Stopped {
     }
 }
 
+/// Where a [`Pending::spawn_replying`] job answers.
+pub(crate) struct Reply<T>(mpsc::Sender<T>);
+
+impl<T> Reply<T> {
+    pub(crate) fn send(self, answer: T) {
+        // (Nobody to tell if the game dropped the `Pending`.)
+        let _ = self.0.send(answer);
+    }
+}
+
 pub struct Pending<T> {
     result: Mutex<Receiver<T>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -30,10 +40,17 @@ impl<T: Send + 'static> Pending<T> {
     where
         F: Future<Output = T> + 'static,
     {
+        Pending::spawn_replying(name, move |reply| async move { reply.send(job().await) })
+    }
+
+    /// [`spawn`](Self::spawn) for a job that answers through its [`Reply`] and then goes on,
+    /// unpolled: to close its endpoint, which the answer shouldn't wait for.
+    pub(crate) fn spawn_replying<F>(name: &str, job: impl FnOnce(Reply<T>) -> F + Send + 'static) -> Pending<T>
+    where
+        F: Future<Output = ()> + 'static,
+    {
         let (tx, result) = mpsc::channel();
-        let run = move || async move {
-            let _ = tx.send(job().await);
-        };
+        let run = move || job(Reply(tx));
         #[cfg(not(target_arch = "wasm32"))]
         let thread = std::thread::Builder::new()
             .name(name.into())

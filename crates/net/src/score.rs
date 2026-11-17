@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use iroh::{EndpointAddr, EndpointId, SecretKey};
-use score::{ALPN, Action, Auth, MAX_RESPONSE, Request, Response, Submit};
+use score::{ALPN, Action, Auth, BoardId, Entry, MAX_RESPONSE, Request, Response, Submit};
 
 use crate::Error;
-use crate::pending::Pending;
+use crate::pending::{Pending, Reply};
 
 /// The score server's id, built in, unless `CTR_SCORE` names another.
 pub const DEFAULT_SCORE: Option<&str> =
@@ -43,13 +43,49 @@ static CLOCK_OFFSET: AtomicI64 = AtomicI64::new(0);
 
 /// Asks `server` an unsigned request (a read).
 pub fn ask(server: EndpointId, request: Request) -> Answer {
-    Pending::spawn("score", move || async move {
-        let job = with_connection(server, |connection| async move {
+    Pending::spawn_replying("score", move |reply| {
+        with_connection(server, READ_TIMEOUT, reply, |connection| async move {
             exchange(&connection, &request).await
-        });
-        n0_future::time::timeout(READ_TIMEOUT, job)
-            .await
-            .unwrap_or_else(|_| Err("the score server took too long".into()))
+        })
+    })
+}
+
+/// What [`record`] found of a board's #1's run.
+#[derive(Debug)]
+pub enum Fetched {
+    /// The run `record` was told it knows: not fetched again.
+    Known,
+    /// `Run::to_bytes`.
+    Run(Vec<u8>),
+    /// Deleted between the two requests.
+    Gone,
+}
+
+/// A board's #1 (None: nobody is on it yet) and its run, or why not.
+pub type RecordAnswer = Pending<Result<Option<(Entry, Fetched)>, String>>;
+
+/// The #1 of `board` and, unless it is the run `known` (a run id), its run: both on one
+/// connection, which is most of a request's time.
+pub fn record(server: EndpointId, board: BoardId, known: Option<i64>) -> RecordAnswer {
+    Pending::spawn_replying("score", move |reply| {
+        with_connection(server, READ_TIMEOUT, reply, move |connection| async move {
+            let entry = match exchange(&connection, &Request::Top { board, n: 1 }).await? {
+                Response::Top(top) => match top.into_iter().next() {
+                    Some(entry) => entry,
+                    None => return Ok(None),
+                },
+                other => return Err(format!("the score server answered a top with {other:?}").into()),
+            };
+            if known == Some(entry.run_id) {
+                return Ok(Some((entry, Fetched::Known)));
+            }
+            let id = entry.run_id;
+            match exchange(&connection, &Request::Run { id }).await? {
+                Response::Run(Some(bytes)) => Ok(Some((entry, Fetched::Run(bytes)))),
+                Response::Run(None) => Ok(Some((entry, Fetched::Gone))),
+                other => Err(format!("the score server answered a run with {other:?}").into()),
+            }
+        })
     })
 }
 
@@ -83,8 +119,8 @@ pub fn forget(server: EndpointId, key: SecretKey) -> Answer {
 /// Sends the request `signed_at` makes for a `ts`, and if the server's answer says our clock is
 /// off, once more with its clock.
 fn signed(server: EndpointId, signed_at: impl Fn(u64) -> Request + Send + 'static) -> Answer {
-    Pending::spawn("score", move || async move {
-        let job = with_connection(server, |connection| async move {
+    Pending::spawn_replying("score", move |reply| {
+        with_connection(server, SUBMIT_TIMEOUT, reply, |connection| async move {
             let ts = signing_time();
             match exchange(&connection, &signed_at(ts)).await? {
                 // Only a clock that's off is worth another try: anything else would be told the
@@ -96,10 +132,7 @@ fn signed(server: EndpointId, signed_at: impl Fn(u64) -> Request + Send + 'stati
                 }
                 response => Ok(response),
             }
-        });
-        n0_future::time::timeout(SUBMIT_TIMEOUT, job)
-            .await
-            .unwrap_or_else(|_| Err("the score server took too long".into()))
+        })
     })
 }
 
@@ -113,27 +146,38 @@ fn signing_time() -> u64 {
     unix_now().saturating_add_signed(CLOCK_OFFSET.load(Ordering::Relaxed))
 }
 
-/// Binds a throwaway endpoint, connects to `server`, and runs `job` on the connection.
-async fn with_connection<F, Fut>(server: EndpointId, job: F) -> Result<Response, String>
-where
+/// Binds a throwaway endpoint, connects to `server`, runs `job` on the connection, and replies
+/// with what it gave, or an error if all that took over `timeout`. Only then is the endpoint
+/// closed: that waits for the server to see the close, which may take seconds over relays.
+async fn with_connection<T, F, Fut>(
+    server: EndpointId,
+    timeout: Duration,
+    reply: Reply<Result<T, String>>,
+    job: F,
+) where
     F: FnOnce(Connection) -> Fut,
-    Fut: Future<Output = Result<Response, Error>>,
+    Fut: Future<Output = Result<T, Error>>,
 {
-    let endpoint = crate::endpoint_builder()
-        .bind()
-        .await
-        .map_err(|e| e.to_string())?;
-    let result = match endpoint.connect(EndpointAddr::new(server), ALPN).await {
-        Ok(connection) => {
-            let result = job(connection.clone()).await;
-            connection.close(0u32.into(), b"bye");
-            result.map_err(|e| e.to_string())
-        }
-        Err(e) if crate::realm::is_alpn_mismatch(&e) => Err(crate::realm::OUTDATED.into()),
-        Err(e) => Err(e.to_string()),
+    let endpoint = match crate::dialer_builder().bind().await {
+        Ok(endpoint) => endpoint,
+        Err(e) => return reply.send(Err(e.to_string())),
     };
+    let work = async {
+        match endpoint.connect(EndpointAddr::new(server), ALPN).await {
+            Ok(connection) => {
+                let result = job(connection.clone()).await;
+                connection.close(0u32.into(), b"bye");
+                result.map_err(|e| e.to_string())
+            }
+            Err(e) if crate::realm::is_alpn_mismatch(&e) => Err(crate::realm::OUTDATED.into()),
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    let result = n0_future::time::timeout(timeout, work)
+        .await
+        .unwrap_or_else(|_| Err("the score server took too long".into()));
+    reply.send(result);
     endpoint.close().await;
-    result
 }
 
 async fn exchange(connection: &Connection, request: &Request) -> Result<Response, Error> {

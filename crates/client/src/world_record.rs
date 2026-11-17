@@ -8,6 +8,7 @@
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use race::solo::{Ghost, Kind, Run};
+use net::score::Fetched;
 use score::{BoardId, Entry, Request, Response};
 
 use crate::command::Action;
@@ -43,16 +44,12 @@ pub struct WorldRecord {
     /// Ours too, to show it is: but then there is no world ghost, which would look the same as
     /// the best's (or be slower than it).
     record: Option<Record>,
-    asking: Option<Asking>,
+    asking: Option<net::score::RecordAnswer>,
     asked: Option<Instant>,
     /// `record` is another run than the last one told (or than none), and not yet told.
     untold: bool,
 }
 
-enum Asking {
-    Top(net::score::Answer),
-    Run(Entry, net::score::Answer),
-}
 
 /// `/score top`s on their way: the track's name, the board.
 #[derive(Resource, Default)]
@@ -100,7 +97,8 @@ impl WorldRecord {
         if self.asking.is_none() && stale
             && let Some(server) = net::score::default_score()
         {
-            self.asking = Some(Asking::Top(net::score::ask(server, Request::Top { board, n: 1 })));
+            let known = self.record.as_ref().map(|r| r.entry.run_id);
+            self.asking = Some(net::score::record(server, board, known));
             self.asked = Some(Instant::now());
         }
         self.ghost(level, sim, race)
@@ -147,35 +145,24 @@ fn answer(
     sim: Res<crate::props::Sim>,
 ) {
     let world = &mut *world;
-    let (Some(board), Some(asking)) = (world.board, world.asking.as_ref()) else {
+    let (Some(board), Some(answer)) = (world.board, world.asking.as_ref()) else {
         return;
-    };
-    let answer = match asking {
-        Asking::Top(answer) | Asking::Run(_, answer) => answer,
     };
     let Some(response) = answer.poll() else {
         return;
     };
-    let response = response.map_err(|e| e.to_string()).and_then(|r| r);
-    let record = match (world.asking.take(), response) {
-        (Some(Asking::Top(_)), Ok(Response::Top(top))) => match top.into_iter().next() {
-            Some(entry) if world.record.as_ref().is_some_and(|r| r.entry.run_id == entry.run_id) => {
-                // The same run: only the nick (and the suspect mark) may have changed.
-                if let Some(record) = world.record.as_mut() {
-                    record.entry = entry;
-                    cache::save(board, record);
-                }
-                return;
+    world.asking = None;
+    let record = match response.map_err(|e| e.to_string()).and_then(|r| r) {
+        Ok(None) => None,
+        Ok(Some((entry, Fetched::Known))) => {
+            // The same run: only the nick (and the suspect mark) may have changed.
+            if let Some(record) = world.record.as_mut().filter(|r| r.entry.run_id == entry.run_id) {
+                record.entry = entry;
+                cache::save(board, record);
             }
-            Some(entry) => {
-                let Some(server) = net::score::default_score() else { return };
-                let id = entry.run_id;
-                world.asking = Some(Asking::Run(entry, net::score::ask(server, Request::Run { id })));
-                return;
-            }
-            None => None,
-        },
-        (Some(Asking::Run(entry, _)), Ok(Response::Run(Some(bytes)))) => match Run::from_bytes(&bytes) {
+            return;
+        }
+        Ok(Some((entry, Fetched::Run(bytes)))) => match Run::from_bytes(&bytes) {
             Ok(run)
                 if run.kind == board.kind
                     && run.map_hash == board.map_hash
@@ -198,16 +185,12 @@ fn answer(
                 return;
             }
         },
-        // Deleted between the two asks: the next start asks again.
-        (Some(Asking::Run(..)), Ok(Response::Run(None))) => {
+        // Deleted between the two requests: the next start asks again.
+        Ok(Some((_, Fetched::Gone))) => {
             world.asked = None;
             return;
         }
-        (_, Ok(other)) => {
-            warn!("world record: the score server answered {other:?}");
-            return;
-        }
-        (_, Err(e)) => {
+        Err(e) => {
             info!("world record: {e}");
             return;
         }

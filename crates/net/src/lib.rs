@@ -139,10 +139,15 @@ fn relay_mode() -> RelayMode {
 
 /// The endpoint of a session or a fetch, as [`set_relay_only`] says.
 fn endpoint_builder() -> Builder {
+    dialer_builder().address_lookup(PkarrPublisher::n0_dns())
+}
+
+/// [`endpoint_builder`] for an endpoint that only dials out: nobody looks its throwaway key up,
+/// so its address isn't published.
+fn dialer_builder() -> Builder {
     // The preset's lookups, its resolvers wrapped.
     let builder = Endpoint::builder(presets::N0)
         .clear_address_lookup()
-        .address_lookup(PkarrPublisher::n0_dns())
         .address_lookup(Dotless(PkarrResolver::n0_dns()));
     #[cfg(not(target_arch = "wasm32"))]
     let builder = builder.address_lookup(Dotless(iroh::address_lookup::DnsAddressLookup::n0_dns()));
