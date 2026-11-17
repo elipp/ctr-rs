@@ -2,9 +2,11 @@
 //! the kart the camera follows when it is not ours.
 
 use bevy::prelude::*;
+use render::font::{Font, Gradient};
 use render::mesh::SCALE;
 
 use crate::drive::ChaseCamera;
+use crate::font::CtrText;
 use crate::kart::KartSlot;
 
 /// The box of the name over the kart in a slot. Its children are the name's text: the
@@ -21,9 +23,12 @@ pub(crate) struct NameText;
 #[derive(Component)]
 pub(crate) struct NameOutline(Vec2);
 
-/// Who the camera follows, once we have finished.
+/// Who the camera follows, once we have finished: the [`WatchingName`] over the hint.
 #[derive(Component)]
 pub(crate) struct WatchingLabel;
+
+#[derive(Component)]
+pub(crate) struct WatchingName;
 
 /// How far above the kart's position the name floats, in the game's units, clear of the kart and
 /// its driver (retail's 25 is down on the driver's head). The box's bottom edge is a further
@@ -88,9 +93,10 @@ pub(crate) fn overhead(
     >,
     mut texts: Query<
         (&mut Text, Option<&NameOutline>, &mut Node),
-        (Without<OverheadName>, Without<WatchingLabel>),
+        Without<OverheadName>,
     >,
-    mut watching: Query<(Entity, &mut Text, &mut Visibility), With<WatchingLabel>>,
+    mut watching: Query<(Entity, &mut Visibility), With<WatchingLabel>>,
+    mut watching_name: Query<&mut CtrText, With<WatchingName>>,
 ) {
     // (Not in a split screen: the plates are placed by the one camera.)
     let split = drive.is_some_and(|d| d.views().len() > 1);
@@ -147,34 +153,44 @@ pub(crate) fn overhead(
         }
     }
     if watching.is_empty() {
-        commands.spawn((
-            WatchingLabel,
-            Text::new(""),
-            TextFont {
-                font_size: 26.0.into(),
-                ..default()
-            },
-            TextColor(Color::srgb(1.0, 0.9, 0.2)),
-            TextLayout::justify(Justify::Center),
-            Visibility::Hidden,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(60.0),
-                width: Val::Percent(100.0),
-                ..default()
-            },
-        ));
+        commands
+            .spawn((
+                WatchingLabel,
+                Visibility::Hidden,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(60.0),
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|label| {
+                label.spawn((
+                    WatchingName,
+                    CtrText::new("", Font::Middle, Gradient::YELLOW),
+                    Pickable::IGNORE,
+                ));
+                label.spawn((
+                    CtrText::new("R1 / L1: change the camera", Font::Middle, Gradient::YELLOW),
+                    Pickable::IGNORE,
+                ));
+            });
     }
     let followed = race.watching != race.slot;
-    for (_, mut text, mut visibility) in &mut watching {
-        let line = if followed {
-            format!("{}\nR1 / L1: change the camera", race.kart_label(race.watching))
-        } else {
-            String::new()
-        };
-        if text.0 != line {
-            text.0 = line;
+    let name = if followed {
+        race.kart_label(race.watching).to_string()
+    } else {
+        String::new()
+    };
+    for mut text in &mut watching_name {
+        if text.text != name {
+            text.text = name.clone();
         }
+    }
+    for (_, mut visibility) in &mut watching {
         *visibility = if followed {
             Visibility::Inherited
         } else {

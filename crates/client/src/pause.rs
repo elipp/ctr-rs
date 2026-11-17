@@ -60,12 +60,15 @@ use crate::cup_wizard::{self, CupItem, Draft, Go};
 use crate::font::{CtrText, TexelSize};
 use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
 use crate::lobby::Lobby;
+use crate::maps;
 use crate::race_on::RaceOn;
 use crate::public_lobbies::{self, PublicLobbies, Status};
 use crate::suggest;
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 use crate::text_field::{TextField, Typed};
 use crate::toast::Toast;
+use crate::track_picture::TrackPictures;
+use crate::LevelNumber;
 use crate::version::VERSION;
 
 /// Whether the menu is open, and what it was asked to do.
@@ -160,6 +163,7 @@ pub(crate) enum View {
     Weapons,
     Bots,
     BotPool,
+    Tracks,
 }
 
 impl View {
@@ -200,6 +204,8 @@ pub(crate) enum Item {
     BotsMenu,
     Bots(BotsItem),
     Quit,
+    TrackSelect,
+    Track(u32),
     /// A volume, which Left and Right change.
     Volume(Slider),
     /// Shows the driving keys.
@@ -224,6 +230,7 @@ pub(crate) struct Entry {
     kind: Kind,
     section: bool,
     inline: bool,
+    font: Font,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,6 +242,8 @@ pub(crate) enum Kind {
     Slider(Slider),
     Preview(Icons),
     Grid(Icons),
+    /// A `LevelId`; resolved through `TrackPictures` at spawn, as `items` has no `Assets<Image>`.
+    TrackPicture(u32),
 }
 
 impl Entry {
@@ -245,7 +254,13 @@ impl Entry {
             kind,
             section: false,
             inline: false,
+            font: Font::Middle,
         }
+    }
+
+    pub(crate) fn large(mut self) -> Entry {
+        self.font = Font::Large;
+        self
     }
 
     /// Label and value on one centred line ("Name abc"), instead of in the two columns.
@@ -323,12 +338,14 @@ fn items(
         View::Weapons => return ("Weapons".into(), cup_wizard::weapon_items(config)),
         View::Bots => return ("Bots".into(), bots_menu::items(lobby)),
         View::BotPool => return ("Character pool".into(), bots_menu::pool_items(menu.bot_pool)),
+        View::Tracks => return ("Track select".into(), track_items()),
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
     if !race_on.shared() {
         items.push(entry(Item::Restart, "Restart"));
     }
+    items.push(entry(Item::TrackSelect, "Track select"));
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
     if !lobby.is_open() && !race_on.is_on() {
         items.push(entry(Item::PlaySolo, "Play solo"));
@@ -370,6 +387,15 @@ fn typed_into(mut items: Vec<Entry>, menu: &PauseMenu) -> Vec<Entry> {
             editing: true,
         };
     }
+    items
+}
+
+fn track_items() -> Vec<Entry> {
+    let mut items: Vec<Entry> = maps::cycle()
+        .into_iter()
+        .map(|id| Entry::new(Item::Track(id), maps::name(id), Kind::TrackPicture(id)).large())
+        .collect();
+    items.push(entry(Item::Back, "Back"));
     items
 }
 
@@ -510,6 +536,10 @@ struct Wedge(Handle<Image>);
 #[derive(Component)]
 struct Arrow(usize);
 
+/// Item index, for re-tinting the border with the row's pick.
+#[derive(Component)]
+struct PictureFrame(usize);
+
 /// White so that `ImageNode::color` can tint them like the row's text.
 #[derive(Resource)]
 struct Arrows {
@@ -524,6 +554,7 @@ struct Art<'w> {
     sheets: ResMut<'w, icon_grid::Sheets>,
     textures: Res<'w, crate::Textures>,
     images: ResMut<'w, Assets<Image>>,
+    pictures: ResMut<'w, TrackPictures>,
 }
 
 const ARROW: usize = 4;
@@ -531,6 +562,12 @@ const ARROW_HEIGHT: usize = 7;
 const ARROW_GAP: usize = 4;
 
 const CARET: usize = 2;
+
+/// A track's picture is fitted into this, in texels: the disc's pictures (169x71) at two thirds,
+/// three rows to the page. Maps' pictures (captures, minimaps) have other shapes.
+const TRACK_PICTURE: UVec2 = UVec2::new(112, 47);
+/// The picture's box with its border, and the row's padding; taller than the large font's line.
+const TRACK_ROW_TEXELS: usize = TRACK_PICTURE.y as usize + 2 + 2 * ROW_PADDING;
 
 pub struct PausePlugin;
 
@@ -564,7 +601,7 @@ fn input(
     size: Res<TexelSize>,
     pads: crate::drive::Pads,
     lobby: Res<Lobby>,
-    race_on: Res<RaceOn>,
+    (race_on, level): (Res<RaceOn>, Res<LevelNumber>),
     mut public: ResMut<PublicLobbies>,
     mut config: ResMut<Config>,
     time: Res<Time<Real>>,
@@ -606,7 +643,7 @@ fn input(
         .map(|event| accordion::wheel_lines(event, font_size))
         .sum();
     // The items' list scrolls by rows.
-    let row = size.0.y * ROW_TEXELS as f32;
+    let row = size.0.y * PageLayout::of(menu.view).row as f32;
     let wheeled_px: f32 = wheel
         .iter()
         .map(|event| accordion::wheel_lines(event, row) * row)
@@ -969,6 +1006,18 @@ fn input(
                     menu.selected = 0;
                 }
             }
+            Some(Item::TrackSelect) => {
+                menu.view = View::Tracks;
+                menu.selected = track_items()
+                    .iter()
+                    .position(|e| e.item == Item::Track(level.0))
+                    .unwrap_or(0);
+                menu.follow = true;
+            }
+            Some(Item::Track(id)) => {
+                menu.open = false;
+                actions.write(Action::Track(id));
+            }
             Some(Item::Info | Item::Volume(_) | Item::LobbyName) | None => {}
             Some(Item::Quit) => {
                 exit.write(AppExit::Success);
@@ -1246,7 +1295,10 @@ fn show(
     mut list: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<List>>,
     mut texts: Query<&mut CtrText, Without<icon_grid::GridCaption<PauseMenu>>>,
     mut knobs: Query<(&Knob, &mut Node)>,
-    mut arrows: Query<(&Arrow, &mut ImageNode)>,
+    (mut arrows, mut picture_frames): (
+        Query<(&Arrow, &mut ImageNode)>,
+        Query<(&PictureFrame, &mut BorderColor), Without<icon_grid::GridIcon<PauseMenu>>>,
+    ),
     mut about_lines: accordion::Lines<PauseMenu>,
     mut frames: icon_grid::Frames<PauseMenu>,
     mut captions: icon_grid::Captions<PauseMenu>,
@@ -1326,6 +1378,12 @@ fn show(
             image.color = tint;
         }
     }
+    for (frame, mut border) in &mut picture_frames {
+        let tint = BorderColor::all(tint(frame.0 == menu.selected));
+        if *border != tint {
+            *border = tint;
+        }
+    }
     let on_grid = shown.single().ok().and_then(|(_, shown)| {
         let entry = shown.items.get(menu.selected)?;
         matches!(entry.kind, Kind::Grid(_)).then_some((menu.selected, menu.grid_cursor))
@@ -1345,6 +1403,10 @@ struct PageLayout {
     min_width: usize,
     /// Left padding in both columns of paired rows, on top of the panel's own.
     indent: usize,
+    /// The list's most height: a whole number of `row`s, so no row shows cut off. Every row is
+    /// at least `row` tall (Back too), so scrolling stays on whole rows; the wheel steps by it.
+    list: usize,
+    row: usize,
 }
 
 impl PageLayout {
@@ -1356,10 +1418,20 @@ impl PageLayout {
                 min_width: 280,
                 // No paired rows on these pages (all inline or full-width).
                 indent: 0,
+                list: LIST_TEXELS,
+                row: ROW_TEXELS,
+            },
+            View::Tracks => PageLayout {
+                min_width: 0,
+                indent: 8,
+                list: 3 * TRACK_ROW_TEXELS,
+                row: TRACK_ROW_TEXELS,
             },
             _ => PageLayout {
                 min_width: 0,
                 indent: 8,
+                list: LIST_TEXELS,
+                row: ROW_TEXELS,
             },
         }
     }
@@ -1444,7 +1516,7 @@ fn spawn(
                 display: Display::Grid,
                 grid_template_columns: RepeatedGridTrack::auto(2),
                 align_self: AlignSelf::Stretch,
-                max_height: size.y(LIST_TEXELS),
+                max_height: size.y(layout.list),
                 min_width: size.x(layout.min_width),
                 overflow: Overflow::scroll_y(),
                 ..default()
@@ -1456,18 +1528,21 @@ fn spawn(
         let picked = i == selected;
         // Padding, not margin: a margin would be a dead strip for pointer picking.
         let top = size.y(ROW_PADDING + if item.section { SECTION_GAP } else { 0 });
-        let text = |text: String| CtrText::new(text, Font::Middle, gradient(picked));
+        let font = item.font;
+        let text = |text: String| CtrText::new(text, font, gradient(picked));
         let value_cell = if item.paired() {
             // (The label's padding is the gap, so that pointing between the two still picks.)
             let label = cell(commands, list, i, size, true, |node| {
                 node.padding.left = size.x(layout.indent);
                 node.padding.right = size.x(16);
                 node.padding.top = top;
+                node.min_height = size.y(layout.row);
             });
             commands.spawn((ChildOf(label), text(item.label)));
             cell(commands, list, i, size, true, |node| {
                 node.padding.left = size.x(layout.indent);
                 node.padding.top = top;
+                node.min_height = size.y(layout.row);
             })
         } else {
             // A grid's cell doesn't take: a click in the gaps between icons would take the icon
@@ -1477,6 +1552,7 @@ fn spawn(
                 node.grid_column = GridPlacement::span(2);
                 node.justify_content = JustifyContent::Center;
                 node.padding.top = top;
+                node.min_height = size.y(layout.row);
             });
             if !item.label.is_empty() {
                 let gap = if item.kind == Kind::Button { 0 } else { INLINE_GAP };
@@ -1514,7 +1590,7 @@ fn spawn(
                         ChildOf(value_cell),
                         Node {
                             width: size.x(CARET),
-                            height: size.y(Font::Middle.line_height()),
+                            height: size.y(font.line_height()),
                             margin: UiRect::left(size.x(1)),
                             ..default()
                         },
@@ -1532,9 +1608,59 @@ fn spawn(
                 let sheet = art.sheets.get(icons.sheet, &art.textures.vram, &mut art.images);
                 icon_grid::spawn::<PauseMenu>(commands, value_cell, i, &icons, sheet, size, true);
             }
+            Kind::TrackPicture(id) => {
+                spawn_track_picture(commands, value_cell, i, id, picked, size, art);
+            }
             Kind::Button => {}
         }
     }
+}
+
+/// Centred in a [`TRACK_PICTURE`] box whatever its shape, so the column stays aligned; the box
+/// stays empty if the track has no picture. The border hugs the picture, outside the box.
+#[allow(clippy::too_many_arguments)]
+fn spawn_track_picture(
+    commands: &mut Commands,
+    parent: Entity,
+    i: usize,
+    id: u32,
+    picked: bool,
+    size: &TexelSize,
+    art: &mut Art,
+) {
+    let holder = commands
+        .spawn((
+            ChildOf(parent),
+            Node {
+                width: size.x(TRACK_PICTURE.x as usize + 2),
+                height: size.y(TRACK_PICTURE.y as usize + 2),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .id();
+    let Some(picture) = art.pictures.of(id, &mut art.images) else {
+        return;
+    };
+    let box_size = TRACK_PICTURE.as_vec2();
+    let fitted = picture.rect.size() * (box_size / picture.rect.size()).min_element();
+    let mut image = ImageNode::new(picture.image).with_mode(NodeImageMode::Stretch);
+    image.rect = Some(picture.rect);
+    // (Bevy's border is inside the node's size and the image draws inside the border.)
+    commands.spawn((
+        ChildOf(holder),
+        PictureFrame(i),
+        image,
+        Node {
+            width: Val::Px((fitted.x + 2.0) * size.0.x),
+            height: Val::Px((fitted.y + 2.0) * size.0.y),
+            border: UiRect::axes(size.x(1), size.y(1)),
+            ..default()
+        },
+        BorderColor::all(tint(picked)),
+        Pickable::IGNORE,
+    ));
 }
 
 /// `way`: -1 left, 1 right.
