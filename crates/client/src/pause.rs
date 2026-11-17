@@ -625,7 +625,7 @@ fn input(
     mut focus_lost: MessageReader<KeyboardFocusLost>,
     mut wheel: MessageReader<MouseWheel>,
     size: Res<TexelSize>,
-    pads: crate::drive::Pads,
+    mut pads: crate::drive::Pads,
     lobby: Res<Lobby>,
     (race_on, level): (Res<RaceOn>, Res<LevelNumber>),
     mut public: ResMut<PublicLobbies>,
@@ -720,7 +720,7 @@ fn input(
             }
         }
         save(&mut menu, &config, &mut toasts);
-        return finish(was_open, &menu, &mut keys);
+        return finish(was_open, &menu, &mut keys, &mut pads);
     }
     if let Some((item, mut field)) = menu.typing.take().filter(|_| menu.open) {
         menu.clicked = None;
@@ -754,12 +754,12 @@ fn input(
                 sound(MENU_BACK_SFX);
             }
         }
-        return finish(was_open, &menu, &mut keys);
+        return finish(was_open, &menu, &mut keys, &mut pads);
     }
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         if menu.open && !leave(&menu, &lobby, &mut actions, &mut toasts) {
             sound(MENU_BACK_SFX);
-            return finish(was_open, &menu, &mut keys);
+            return finish(was_open, &menu, &mut keys, &mut pads);
         }
         menu.open = !menu.open;
         menu.view = View::Main;
@@ -779,7 +779,7 @@ fn input(
         }
         sound(MENU_TAKE_SFX);
         save(&mut menu, &config, &mut toasts);
-        return finish(was_open, &menu, &mut keys);
+        return finish(was_open, &menu, &mut keys, &mut pads);
     } else if menu.open {
         let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
         let enter = key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
@@ -1095,7 +1095,7 @@ fn input(
         }
     }
     save(&mut menu, &config, &mut toasts);
-    finish(was_open, &menu, &mut keys);
+    finish(was_open, &menu, &mut keys, &mut pads);
 }
 
 /// `way` is screen order (+y down). A grid gets first claim on the move; only `Steered::Off`
@@ -1327,10 +1327,16 @@ fn save(menu: &mut PauseMenu, config: &Config, toasts: &mut MessageWriter<Toast>
     }
 }
 
-/// The keys that opened, worked or closed the menu are not for anything else.
-fn finish(was_open: bool, menu: &PauseMenu, keys: &mut ButtonInput<KeyCode>) {
+/// The keys and buttons that opened, worked or closed the menu are not for anything else.
+fn finish(
+    was_open: bool,
+    menu: &PauseMenu,
+    keys: &mut ButtonInput<KeyCode>,
+    pads: &mut crate::drive::Pads,
+) {
     if was_open || menu.open {
         keys.reset_all();
+        pads.consume();
     }
 }
 
