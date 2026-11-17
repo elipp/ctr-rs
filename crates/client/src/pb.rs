@@ -130,6 +130,19 @@ mod store {
         }
     }
 
+    /// The names of the files there are.
+    pub fn names() -> Result<Vec<String>, String> {
+        let dir = crate::paths::pbs();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("{}: {e}", dir.display())),
+        };
+        Ok(entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .collect())
+    }
+
     pub fn save(name: &str, bytes: &[u8]) -> Result<(), String> {
         let dir = crate::paths::pbs();
         std::fs::create_dir_all(&dir)
@@ -164,6 +177,10 @@ mod store {
 
     pub fn load(name: &str) -> Result<Option<Vec<u8>>, String> {
         Ok(saved().lock().map_err(|e| e.to_string())?.get(name).cloned())
+    }
+
+    pub fn names() -> Result<Vec<String>, String> {
+        Ok(saved().lock().map_err(|e| e.to_string())?.keys().cloned().collect())
     }
 
     pub fn save(name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -298,6 +315,25 @@ pub fn ghost(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Optio
     let spec = *race.specs.first()?;
     let (run, _) = load(race.solo?, race.hash, race.rules.laps)?;
     Some(Ghost::new(level, sim.start().clone(), spec_for(&run, spec), &run))
+}
+
+/// Notes that no best is on the board any more (`/score forget`).
+pub fn forget_submitted() {
+    let names = match store::names() {
+        Ok(names) => names,
+        Err(e) => {
+            warn!("personal bests: {e}");
+            return;
+        }
+    };
+    for name in names.iter().filter(|n| n.ends_with(".time")) {
+        let timed = store::load(name).ok().flatten();
+        if let Some(timed) = timed.as_deref().and_then(Timed::from_bytes)
+            && timed.run_id.is_some()
+        {
+            Timed { run_id: None, ..timed }.save();
+        }
+    }
 }
 
 /// The best stored for `kind`, `map_hash` and `laps`, and its [`Timed`]; if that is missing or

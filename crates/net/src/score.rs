@@ -32,8 +32,8 @@ pub type Answer = Pending<Result<Response, String>>;
 /// How long a read may take, connecting included.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// How long a submit may take: the server may queue it for a free verifier (10 s) and then replay
-/// a whole race.
+/// How long a signed request may take: a submit may be queued for a free verifier (10 s) and
+/// then replay a whole race.
 const SUBMIT_TIMEOUT: Duration = Duration::from_secs(40);
 
 /// What the server's clock is ahead of ours by, in seconds, as an `Unauthorized` said: kept for
@@ -61,25 +61,37 @@ pub fn submit(
     claimed_ms: i32,
     run: Vec<u8>,
 ) -> Answer {
+    signed(server, move |ts| {
+        Request::Submit(Submit {
+            auth: Auth::sign(&key, Action::Submit, ts, &run),
+            nick: nick.clone(),
+            version: version.clone(),
+            claimed_ms,
+            run: run.clone(),
+        })
+    })
+}
+
+/// Deletes `key`'s player and runs from the boards.
+pub fn forget(server: EndpointId, key: SecretKey) -> Answer {
+    signed(server, move |ts| Request::Forget {
+        auth: Auth::sign(&key, Action::Forget, ts, &[]),
+    })
+}
+
+/// Sends the request `signed_at` makes for a `ts`, and if the server's answer says our clock is
+/// off, once more with its clock.
+fn signed(server: EndpointId, signed_at: impl Fn(u64) -> Request + Send + 'static) -> Answer {
     Pending::spawn("score", move || async move {
         let job = with_connection(server, |connection| async move {
-            let request = |ts| {
-                Request::Submit(Submit {
-                    auth: Auth::sign(&key, Action::Submit, ts, &run),
-                    nick: nick.clone(),
-                    version: version.clone(),
-                    claimed_ms,
-                    run: run.clone(),
-                })
-            };
             let ts = signing_time();
-            match exchange(&connection, &request(ts)).await? {
+            match exchange(&connection, &signed_at(ts)).await? {
                 // Only a clock that's off is worth another try: anything else would be told the
                 // same.
                 Response::Unauthorized { now, .. } if ts.abs_diff(now) > score::MAX_SKEW => {
                     let offset = now as i64 - unix_now() as i64;
                     CLOCK_OFFSET.store(offset, Ordering::Relaxed);
-                    exchange(&connection, &request(signing_time())).await
+                    exchange(&connection, &signed_at(signing_time())).await
                 }
                 response => Ok(response),
             }

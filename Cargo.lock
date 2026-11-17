@@ -7545,8 +7545,10 @@ dependencies = [
 name = "score-server"
 version = "0.1.0"
 dependencies = [
+ "data-encoding",
  "instance",
  "iroh",
+ "jiff",
  "map",
  "race",
  "rusqlite",
@@ -7555,6 +7557,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "vehicle",
 ]
 
 [[package]]

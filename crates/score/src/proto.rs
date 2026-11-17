@@ -43,6 +43,9 @@ pub enum Request {
     Player { board: BoardId, key: [u8; 32] },
     /// A run's bytes, for a ghost.
     Run { id: i64 },
+    /// Delete the signer's player row and every run of theirs. Signed over an empty body, for
+    /// [`crate::Action::Forget`].
+    Forget { auth: crate::Auth },
 }
 
 /// A run to rank.
@@ -70,6 +73,8 @@ pub enum Response {
     Top(Vec<Entry>),
     Player(Option<Entry>),
     Run(Option<Vec<u8>>),
+    /// The signer is gone from the boards, with this many runs.
+    Forgotten { runs: u32 },
     /// Too many submits from this key: try later.
     TooMany,
     /// No verifier came free in time: try again.
@@ -92,6 +97,9 @@ pub struct Entry {
     pub perfect: bool,
     /// Unix seconds, as SQLite keeps them and `jiff::Timestamp::from_second` takes them.
     pub at: i64,
+    /// Much like an earlier run of another player's, and as fast: maybe a copy of its ghost
+    /// (TIME-TRIAL-RELIC-LEADERBOARDS.md, "Run theft"). Shown, not hidden: the operator decides.
+    pub suspect: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -121,6 +129,7 @@ pub enum Rejected {
     NoFinish,
     Mismatch { ours_ms: i32 },
     Duplicate { of_run: i64 },
+    Banned,
 }
 
 impl Rejected {
@@ -134,6 +143,22 @@ impl Rejected {
             Rejected::NoFinish => 4,
             Rejected::Mismatch { .. } => 5,
             Rejected::Duplicate { .. } => 6,
+            Rejected::Banned => 7,
+        }
+    }
+
+    /// The name of a [`Rejected::code`], for the operator's `stats`.
+    pub fn code_name(code: u8) -> &'static str {
+        match code {
+            0 => "bad format",
+            1 => "wrong sim version",
+            2 => "unknown map",
+            3 => "wrong seed",
+            4 => "no finish",
+            5 => "mismatch",
+            6 => "duplicate",
+            7 => "banned",
+            _ => "?",
         }
     }
 }
@@ -150,6 +175,7 @@ impl std::fmt::Display for Rejected {
                 write!(f, "the server's replay times {ours_ms} ms (a bug)")
             }
             Rejected::Duplicate { of_run } => write!(f, "the same inputs as run {of_run}"),
+            Rejected::Banned => f.write_str("this key is banned from the boards"),
         }
     }
 }

@@ -176,6 +176,9 @@ pub enum Action {
         kind: race::solo::Kind,
         track: Option<u32>,
     },
+    /// Delete us and our runs from the boards, once confirmed with our key's fingerprint
+    /// (`scores.rs`): None asks for it.
+    ScoreForget(Option<String>),
     /// Empty the console (`console.rs`). What was typed before stays in the history.
     Clear,
     /// Say that to everyone in the lobby: a line that is not a `/command`.
@@ -249,7 +252,7 @@ const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of 
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
-const SCORE_USAGE: &str = "Usage: /score submit relic | time-trial [track] | key export | key import <key>";
+const SCORE_USAGE: &str = "Usage: /score submit relic | time-trial [track] | forget | key export | key import <key>";
 const RACE_USAGE: &str = "Usage: /race start | relic | time-trial | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
@@ -435,6 +438,10 @@ impl Action {
         match (sub, what) {
             ("key", "export") if rest.is_empty() => Ok(Action::ScoreKeyExport),
             ("key", "import") if !rest.is_empty() => Ok(Action::ScoreKeyImport(rest.into())),
+            ("forget", "") => Ok(Action::ScoreForget(None)),
+            ("forget", fingerprint) if rest.is_empty() => {
+                Ok(Action::ScoreForget(Some(fingerprint.into())))
+            }
             ("submit", kind @ ("relic" | "time-trial")) => Ok(Action::ScoreSubmit {
                 kind: match kind {
                     "relic" => race::solo::Kind::Relic,
@@ -2112,6 +2119,11 @@ mod tests {
             Ok(Action::ScoreSubmit { kind: race::solo::Kind::Relic, track: None })
         ));
         assert!(Action::parse("score submit").is_err());
+        assert!(matches!(Action::parse("score forget"), Ok(Action::ScoreForget(None))));
+        assert!(matches!(
+            Action::parse("score forget 1a2b3c4d"),
+            Ok(Action::ScoreForget(Some(f))) if f == "1a2b3c4d"
+        ));
         assert!(Action::parse("version 1").is_err());
         assert!(matches!(Action::parse("clear"), Ok(Action::Clear)));
         assert!(Action::parse("clear all").is_err());

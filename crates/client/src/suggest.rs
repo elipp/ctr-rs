@@ -430,6 +430,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     takes("time-trial", "Your time trial best", "[track]"),
                 ],
             ),
+            leaf("forget", "Delete you and your runs from the boards"),
             node(
                 "key",
                 "The key that is you on the boards",

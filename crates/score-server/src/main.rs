@@ -6,10 +6,13 @@
 //! Like the realm, the endpoint has no IP transports: it is reached through the relay only, so it
 //! never learns a player's address. Its key is kept in a file, so that its id stays the same.
 //!
-//! `score-server --maps <dir of .ctrmap> [--db <file>] [--key <key file>] [--port <udp port>]`
+//! `score-server --maps <dir of .ctrmap> [--db <file>] [--key <key file>] [--port <udp port>]`,
+//! or `score-server [--db <file>] <operator command>` (`operator.rs`) beside a running one.
 
 mod auth;
 mod db;
+mod operator;
+mod suspect;
 mod tracks;
 
 use std::fs;
@@ -52,29 +55,33 @@ struct Args {
     port: u16,
     key: PathBuf,
     db: PathBuf,
-    maps: PathBuf,
+    maps: Option<PathBuf>,
+    /// An operator command and its arguments; empty to serve.
+    command: Vec<String>,
 }
 
+const USAGE: &str = "usage: score-server --maps <dir> [--db <file>] [--key <file>] [--port <udp port>], \
+    or score-server [--db <file>] <stats | suspects | ban <key> | unban <key> | delete <run id>>";
+
+/// The flags may come anywhere, so that an operator command can follow the image's entrypoint
+/// flags (`docker compose run score stats`).
 fn args() -> Result<Args, String> {
     let (mut port, mut key, mut db, mut maps) =
         (DEFAULT_PORT, PathBuf::from(DEFAULT_KEY), PathBuf::from(DEFAULT_DB), None);
+    let mut command = Vec::new();
     let mut it = std::env::args().skip(1);
-    while let Some(flag) = it.next() {
-        let mut value = || it.next().ok_or(format!("{flag} needs a value"));
-        match flag.as_str() {
+    while let Some(arg) = it.next() {
+        let mut value = || it.next().ok_or(format!("{arg} needs a value"));
+        match arg.as_str() {
             "--port" => port = value()?.parse().map_err(|e| format!("bad port: {e}"))?,
             "--key" => key = value()?.into(),
             "--db" => db = value()?.into(),
             "--maps" => maps = Some(value()?.into()),
-            _ => return Err(format!("unknown argument '{flag}'")),
+            flag if flag.starts_with("--") => return Err(format!("unknown argument '{flag}'")),
+            _ => command.push(arg),
         }
     }
-    Ok(Args {
-        port,
-        key,
-        db,
-        maps: maps.ok_or("--maps is needed")?,
-    })
+    Ok(Args { port, key, db, maps, command })
 }
 
 /// The key in `path`, or a new one, which is then kept there.
@@ -227,6 +234,21 @@ async fn verify(app: &Arc<App>, bytes: &[u8], claimed_ms: i32) -> Result<Verifie
     Ok(Verified { run, board, outcome, pads_hash })
 }
 
+/// The earlier run of another player's that `v` is much like, if any.
+fn suspect_of(app: &App, key: &score::PublicKey, v: &Verified) -> Option<i64> {
+    let near = app.db.lock().unwrap().near(
+        v.board,
+        key,
+        v.outcome.final_ms,
+        suspect::WITHIN,
+        suspect::CANDIDATES,
+    );
+    let near = near.map_err(|e| error!("{e}")).ok()?;
+    near.into_iter()
+        .find(|n| Run::from_bytes(&n.run).is_ok_and(|run| suspect::alike(&run, &v.run)))
+        .map(|n| n.id)
+}
+
 async fn submit(app: &Arc<App>, s: Submit) -> Response {
     // `now` is the signing clock, `Auth::ts`'s; `at` what is stored and shown.
     let now = unix_now();
@@ -241,10 +263,6 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
     if let Err(e) = app.db.lock().unwrap().seen(&key, &nick, &version, at) {
         return failed(e);
     }
-    let Some(_slot) = app.limits.start(&key, now) else {
-        return Response::TooMany;
-    };
-
     let reject = |rejected: Rejected| {
         info!("{who} rejected: {rejected}");
         if let Err(e) = app.db.lock().unwrap().rejected(&key, rejected.code(), &version, at) {
@@ -252,12 +270,22 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
         }
         Response::Rejected(rejected)
     };
+    let banned = app.db.lock().unwrap().banned(&key);
+    match banned {
+        Ok(false) => {}
+        Ok(true) => return reject(Rejected::Banned),
+        Err(e) => return failed(e),
+    }
+    let Some(_slot) = app.limits.start(&key, now) else {
+        return Response::TooMany;
+    };
     let v = match verify(app, &s.run, s.claimed_ms).await {
         Ok(v) => v,
         Err(Refusal::Rejected(r)) => return reject(r),
         Err(Refusal::Busy) => return Response::Busy,
         Err(Refusal::Internal(e)) => return failed(e),
     };
+    let suspect_of = suspect_of(app, &key, &v);
 
     let db = app.db.lock().unwrap();
     let inserted = db.insert(&NewRun {
@@ -271,6 +299,7 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
         run: &s.run,
         signed_ts: s.auth.ts,
         signature: &s.auth.sig,
+        suspect_of,
     });
     let run_id = match inserted {
         Ok(Ok(id)) => id,
@@ -286,8 +315,13 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
         (Ok(None), _) => return failed("a run just inserted isn't on its board"),
     };
     info!(
-        "{who} {:?} {:016x} {} laps: {} ms, run {run_id}, rank {}",
-        v.board.kind, v.board.map_hash, v.board.laps, v.outcome.final_ms, best.rank
+        "{who} {:?} {:016x} {} laps: {} ms, run {run_id}, rank {}{}",
+        v.board.kind,
+        v.board.map_hash,
+        v.board.laps,
+        v.outcome.final_ms,
+        best.rank,
+        suspect_of.map_or(String::new(), |of| format!(", suspect: much like run {of}"))
     );
     Response::Submitted(Submitted {
         run_id,
@@ -297,9 +331,26 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
     })
 }
 
+fn forget(app: &App, auth: score::Auth) -> Response {
+    let now = unix_now();
+    let key = match app.seen.check(&auth, Action::Forget, &[], now) {
+        Ok(key) => key,
+        Err(e) => return Response::Unauthorized { why: e.to_string(), now },
+    };
+    let forgotten = app.db.lock().unwrap().forget(&key);
+    match forgotten {
+        Ok(runs) => {
+            info!("{} forgotten, with {runs} runs", score::fingerprint(&key));
+            Response::Forgotten { runs }
+        }
+        Err(e) => failed(e),
+    }
+}
+
 async fn handle(app: &Arc<App>, request: Request) -> Response {
     match request {
         Request::Submit(s) => submit(app, s).await,
+        Request::Forget { auth } => forget(app, auth),
         Request::Boards { sim_version } => {
             app.db.lock().unwrap().boards(sim_version).map_or_else(failed, Response::Boards)
         }
@@ -362,10 +413,14 @@ async fn shutdown() {
 }
 
 async fn run() -> Result<(), Error> {
-    let args = args().map_err(|e| {
-        format!("{e} (usage: score-server --maps <dir> [--db <file>] [--key <file>] [--port <udp port>])")
-    })?;
-    let tracks = Tracks::load(&args.maps)?;
+    let args = args().map_err(|e| format!("{e} ({USAGE})"))?;
+    if !args.command.is_empty() {
+        let db = Db::open(&args.db).map_err(|e| format!("{}: {e}", args.db.display()))?;
+        let at = unix_now() as i64;
+        return operator::run(&db, &args.command, at).map_err(|e| format!("{e} ({USAGE})").into());
+    }
+    let maps = args.maps.ok_or_else(|| format!("--maps is needed ({USAGE})"))?;
+    let tracks = Tracks::load(&maps)?;
     let db = Db::open(&args.db).map_err(|e| format!("{}: {e}", args.db.display()))?;
     let endpoint = bind(secret_key(&args.key)?, args.port).await?;
     info!("score id: {} (sim version {})", endpoint.id(), race::SIM_VERSION);

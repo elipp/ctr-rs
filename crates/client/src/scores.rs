@@ -1,6 +1,9 @@
-//! Sending personal bests to the score server (TIME-TRIAL-RELIC-LEADERBOARDS.md, "Client"). Only
-//! ever when the player asks, and only the stored best: the board keeps each player's best, so
-//! any other run would be pointless to send. One submit at a time, as the server allows.
+//! Sending personal bests to the score server (TIME-TRIAL-RELIC-LEADERBOARDS.md, "Client"), and
+//! `/score forget`. Only ever when the player asks, and only the stored best: the board keeps
+//! each player's best, so any other run would be pointless to send. One signed request at a time
+//! (the server takes one submit at a time).
+
+use crate::console::console;
 
 use bevy::prelude::*;
 use race::solo::Kind;
@@ -20,7 +23,12 @@ struct Scores {
 
 struct Sending {
     answer: net::score::Answer,
-    sent: ToSubmit,
+    job: Job,
+}
+
+enum Job {
+    Submit(ToSubmit),
+    Forget,
 }
 
 pub struct ScoresPlugin;
@@ -28,7 +36,7 @@ pub struct ScoresPlugin;
 impl Plugin for ScoresPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Scores>()
-            .add_systems(Update, (command, end_screen, answer).chain());
+            .add_systems(Update, (command, forget, end_screen, answer).chain());
     }
 }
 
@@ -41,7 +49,7 @@ fn start(
     nick: &str,
 ) -> Result<(), String> {
     if scores.sending.is_some() {
-        return Err("A best is on its way to the board already".into());
+        return Err("The board hasn't answered the last request yet".into());
     }
     let server = net::score::default_score().ok_or("No score server is set (CTR_SCORE)")?;
     let sent = crate::pb::to_submit(id, kind, laps)?;
@@ -54,8 +62,54 @@ fn start(
         sent.final_ms,
         sent.bytes.clone(),
     );
-    scores.sending = Some(Sending { answer, sent });
+    scores.sending = Some(Sending { answer, job: Job::Submit(sent) });
     Ok(())
+}
+
+/// `/score forget` tells what it does, and does it once given our key's fingerprint: a typo or a
+/// line from the history can't wipe a player out.
+fn forget(
+    mut actions: MessageReader<Action>,
+    mut scores: ResMut<Scores>,
+    mut toasts: MessageWriter<Toast>,
+) {
+    for action in actions.read() {
+        let Action::ScoreForget(confirm) = action else {
+            continue;
+        };
+        let mut asked = || -> Result<Option<String>, String> {
+            let key = crate::player::key()?;
+            let fingerprint = score::fingerprint(&key.public());
+            let Some(confirm) = confirm else {
+                return Ok(Some(fingerprint));
+            };
+            if !confirm.eq_ignore_ascii_case(&fingerprint) {
+                return Err(format!("You are {fingerprint}, not {confirm}"));
+            }
+            if scores.sending.is_some() {
+                return Err("The board hasn't answered the last request yet".into());
+            }
+            let server = net::score::default_score().ok_or("No score server is set (CTR_SCORE)")?;
+            let answer = net::score::forget(server, key);
+            scores.sending = Some(Sending { answer, job: Job::Forget });
+            Ok(None)
+        };
+        match asked() {
+            Ok(Some(fingerprint)) => {
+                console!(
+                    "This deletes you ({fingerprint}) and all your runs from the boards, for \
+                     good. Your bests stay here and can be submitted again. To go on: /score \
+                     forget {fingerprint}"
+                );
+            }
+            Ok(None) => {
+                toasts.write(Toast::new("Asking the board to forget you", 2000));
+            }
+            Err(why) => {
+                toasts.write(Toast::new(why, 3000).color(RED));
+            }
+        }
+    }
 }
 
 fn command(
@@ -115,15 +169,22 @@ fn answer(
     let Some(answer) = scores.sending.as_ref().and_then(|s| s.answer.poll()) else {
         return;
     };
-    let Some(Sending { sent, .. }) = scores.sending.take() else {
+    let Some(Sending { job, .. }) = scores.sending.take() else {
         return;
+    };
+    let response = answer.map_err(|e| e.to_string()).and_then(|a| a);
+    let sent = match job {
+        Job::Submit(sent) => sent,
+        Job::Forget => {
+            forgotten(response, &mut toasts);
+            return;
+        }
     };
     // The end screen that sent it, if it is still up: no other can be Sending.
     let end = race_on
         .get_mut()
         .and_then(|race| race.solo_end.as_mut())
         .filter(|end| end.submit == Some(Submit::Sending));
-    let response = answer.map_err(|e| e.to_string()).and_then(|a| a);
     let (submit, said) = match response {
         Ok(Response::Submitted(Submitted { run_id, rank, pb_ms, top_ms })) => {
             crate::pb::submitted(&sent, run_id);
@@ -167,4 +228,28 @@ fn answer(
             toasts.write(Toast::new(why, 5000).color(RED));
         }
     }
+}
+
+fn forgotten(response: Result<Response, String>, toasts: &mut MessageWriter<Toast>) {
+    let why = match response {
+        Ok(Response::Forgotten { runs }) => {
+            crate::pb::forget_submitted();
+            let runs = match runs {
+                1 => "1 run".to_string(),
+                n => format!("{n} runs"),
+            };
+            toasts.write(Toast::new(format!("The board forgot you, and {runs}"), 4000));
+            return;
+        }
+        Ok(Response::Unauthorized { why, .. }) => {
+            format!("The board turned the signature down: {why}")
+        }
+        Ok(Response::Failed) => "The board failed to forget you".into(),
+        Ok(other) => {
+            warn!("the score server answered a forget with {other:?}");
+            "The board answered nonsense".into()
+        }
+        Err(e) => format!("Could not reach the board: {e}"),
+    };
+    toasts.write(Toast::new(why, 5000).color(RED));
 }
