@@ -15,6 +15,7 @@ import package::view_output::{ViewOutput, view_output};
 struct Ordering {
     nearer: f32,
     relief: f32,
+    _pad: vec2<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100)
