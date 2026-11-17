@@ -6809,6 +6809,8 @@ version = "0.1.0"
 dependencies = [
  "instance",
  "loader",
+ "map",
+ "race",
  "render",
 ]
 
@@ -6860,6 +6862,7 @@ dependencies = [
  "hadris-iso",
  "instance",
  "loader",
+ "map",
  "math",
  "vehicle",
  "weapon",

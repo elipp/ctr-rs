@@ -1,6 +1,6 @@
 //! A race alone against the clock (a relic race or a time trial), as a recorded run: the one place
 //! that sets it up, so that the client and a replay (local personal bests, later a leaderboard's
-//! verifier: RELIC-RACE-LEADERBOARDS.md) can never set it up differently.
+//! verifier: TIME-TRIAL-RELIC-LEADERBOARDS.md) can never set it up differently.
 //!
 //! The file is [`MAGIC`], [`FORMAT`] (little-endian) and the [`Run`] in `bitcode`, compressed with
 //! zstd. Bitcode is not self-describing: any change to `Run` or `vehicle::demo` must bump
@@ -53,6 +53,22 @@ impl Kind {
             Kind::TimeTrial => LevMode::TimeTrial,
         }
     }
+}
+
+/// The seed of every run on a board (`kind`, `map_hash`, `laps`): the leaderboard refuses any
+/// other. Relic and time trial hide the fruit and weapon crates, so the RNG is only read by a
+/// crash's tumble; it is pinned anyway, so that nobody can fish for a lucky seed if that changes.
+/// Spelled out (splitmix64) rather than `std::hash`, whose output may change between Rust
+/// versions: a change here voids every board.
+pub fn board_seed(kind: Kind, map_hash: u64, laps: u8) -> u16 {
+    let kind = match kind {
+        Kind::Relic => 0u64,
+        Kind::TimeTrial => 1,
+    };
+    let mut z = map_hash ^ (kind << 8 | u64::from(laps)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ z >> 30).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ z >> 27).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (z ^ z >> 31) as u16
 }
 
 /// The race at tick 0, the ceremony to come. `objects` are the level's at tick 0, after
@@ -214,5 +230,14 @@ mod tests {
         };
         assert_eq!(Run::from_bytes(&run.to_bytes()), Ok(run));
         assert!(Run::from_bytes(b"nope").is_err());
+    }
+
+    /// Pinned: a change voids every leaderboard (and is a `SIM_VERSION` bump's business).
+    #[test]
+    fn board_seed_is_stable() {
+        let hash = 0x0123_4567_89ab_cdef;
+        assert_eq!(board_seed(Kind::Relic, hash, 3), 62048);
+        assert_eq!(board_seed(Kind::TimeTrial, hash, 3), 11478);
+        assert_ne!(board_seed(Kind::Relic, hash, 3), board_seed(Kind::Relic, hash, 5));
     }
 }

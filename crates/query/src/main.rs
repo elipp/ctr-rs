@@ -59,6 +59,9 @@ commands:
                                       prints each track's name string instead
   portraits | weapons                 decodes the HUD pictures the way the viewer does and
                                       counts the texels of each
+  verify RUN MAPS                     replays a solo run (a personal best's `.run`) as the
+                                      leaderboard would and prints its outcome; MAPS is the
+                                      run's `.ctrmap`, or a folder of them to find it in by hash
 
 environment: CTR_BIN is the disc image.
 ";
@@ -1007,6 +1010,13 @@ fn run() -> Result<(), String> {
     if matches!(command.as_str(), "portraits" | "weapons") {
         return hud_pictures(&command);
     }
+    if command == "verify" {
+        let mut args = Args(args);
+        let run = PathBuf::from(args.positional("RUN")?);
+        let maps = PathBuf::from(args.positional("MAPS")?);
+        args.finish()?;
+        return verify(&run, &maps);
+    }
     if command == "strings" {
         return strings(Args(args));
     }
@@ -1097,6 +1107,85 @@ fn run() -> Result<(), String> {
         other => return Err(format!("unknown command `{other}` (see `ctr-query help`)")),
     }
     Ok(())
+}
+
+/// What `score-server` will do with a submitted run, minus the board.
+fn verify(run: &std::path::Path, maps: &std::path::Path) -> Result<(), String> {
+    use race::solo::{Run, board_seed};
+    let bytes = std::fs::read(run).map_err(|e| format!("{}: {e}", run.display()))?;
+    let run = Run::from_bytes(&bytes)?;
+    let seed = board_seed(run.kind, run.map_hash, run.laps);
+    println!(
+        "{:?}, {} laps, character {}, map {:016x}, sim {} (ours {}), seed {}{}, {} ticks",
+        run.kind,
+        run.laps,
+        run.demo.character,
+        run.map_hash,
+        run.sim_version,
+        race::SIM_VERSION,
+        run.seed,
+        if run.seed == seed { String::new() } else { format!(" (the board's is {seed})") },
+        run.demo.length,
+    );
+    let map = find_map(maps, run.map_hash)?;
+    let track = race::track::track_of(&map).map_err(|e| e.to_string())?;
+    let made = race::track::sim_level(&map, track, run.kind.lev_mode());
+    for why in &made.left_out {
+        println!("a bot path amendment is left out: {why}");
+    }
+    let objects = instance::Objects::new(&made.level, made.dram);
+    let path = disc_path();
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let character = run.demo.character;
+    let file = big
+        .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character as u32).get())
+        .map_err(|e| format!("racer {character}: {e}"))?;
+    let dram = DramFile::parse(&file).map_err(|e| format!("racer {character}: {e}"))?;
+    let model = loader::model::Model::parse(&dram).map_err(|e| format!("racer {character}: {e}"))?;
+    let spec = race::KartSpec {
+        character,
+        anim_num_frames: race::track::anim_num_frames(&model),
+        bot: false,
+        line: None,
+    };
+    match run.replay(&made.level, objects, spec) {
+        Some(o) => println!(
+            "{} ms{} at tick {}",
+            o.final_ms,
+            if o.perfect { " (perfect)" } else { "" },
+            o.finish_tick
+        ),
+        None => println!("no finish"),
+    }
+    Ok(())
+}
+
+/// `maps` if it is a map file, else the map of its folder whose hash is `hash`.
+fn find_map(maps: &std::path::Path, hash: u64) -> Result<map::Map, String> {
+    let read = |path: &std::path::Path| {
+        let map = map::Map::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let ours = map.hash().map_err(|e| e.to_string())?;
+        Ok::<_, String>((map, ours))
+    };
+    if !maps.is_dir() {
+        let (map, ours) = read(maps)?;
+        if ours != hash {
+            println!("the map's hash is {ours:016x}, not the run's");
+        }
+        return Ok(map);
+    }
+    let entries = std::fs::read_dir(maps).map_err(|e| format!("{}: {e}", maps.display()))?;
+    for entry in entries {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().is_some_and(|e| e == "ctrmap")
+            && let Ok((map, ours)) = read(&path)
+            && ours == hash
+        {
+            println!("map {}", path.display());
+            return Ok(map);
+        }
+    }
+    Err(format!("no map in {} has the hash {hash:016x}", maps.display()))
 }
 
 fn main() -> ExitCode {

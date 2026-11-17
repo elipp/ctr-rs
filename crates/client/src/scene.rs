@@ -17,6 +17,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use instance::lev_init::LevMode;
 use loader::level::LevelId;
 use loader::model::Model;
+pub(crate) use race::track::anim_num_frames;
 use render::mesh::{self, PARTS, Part};
 
 /// Tells the page what the game is about to do (`web::stage`), in a `wasm-debug` build; otherwise
@@ -39,15 +40,6 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
     };
     let kart = race::Kart::birth(&track.0, 0, &spec);
     drive::Drive::new(track, &kart.driver, character, anim_num_frames)
-}
-
-/// The frames of the first eight animations of a kart `model` (`Driver::animNumFrames`).
-pub(crate) fn anim_num_frames(model: &Model) -> [u16; 8] {
-    let mut frames = [0; 8];
-    for (n, anim) in frames.iter_mut().zip(&model.headers[0].animations) {
-        *n = anim.num_frames;
-    }
-    frames
 }
 
 /// Makes our kart in the race of `character`, where it is and as it goes: its engine class

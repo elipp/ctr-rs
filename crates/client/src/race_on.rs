@@ -288,6 +288,15 @@ impl CurrentRace {
     ) -> CurrentRace {
         let locals = (0..characters.len()).collect();
         let hash = crate::maps::hash(track).unwrap_or(0);
+        // The one place a solo race's rules are made: they don't change after, so `props.rs` and
+        // `pb.rs` take the board's seed from them.
+        let rules = match solo {
+            Some(kind) => net::Rules {
+                seed: race::solo::board_seed(kind, hash, rules.laps),
+                ..rules
+            },
+            None => rules,
+        };
         let mut race = CurrentRace::new(
             0,
             locals,

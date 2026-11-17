@@ -12,6 +12,7 @@ pub mod infer;
 pub mod nn;
 pub mod relic;
 pub mod solo;
+pub mod track;
 pub mod rev;
 pub mod rng;
 pub mod rollback;
