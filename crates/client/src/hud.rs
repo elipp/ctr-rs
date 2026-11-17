@@ -58,9 +58,13 @@ impl PluginGroup for HudPlugins {
             .add(crate::hud_view::HudViewPlugin)
             .add(crate::slide_meter::SlideMeterPlugin)
             .add(crate::speedometer::SpeedometerPlugin)
+            .add(crate::ghost::GhostPlugin)
             .add(crate::toast::ToastPlugin)
             .add(crate::wrong_way::WrongWayPlugin)
             .add(crate::version::VersionPlugin)
+            .add(crate::player::PlayerPlugin)
+            .add(crate::scores::ScoresPlugin)
+            .add(crate::world_record::WorldRecordPlugin)
     }
 }
 

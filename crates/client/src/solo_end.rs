@@ -15,7 +15,7 @@ use render::mesh;
 use crate::font::CtrText;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews};
-use crate::race_on::{RaceOn, SoloEnd};
+use crate::race_on::{RaceOn, SoloEnd, Submit};
 use crate::subtract::SubtractMaterial;
 use crate::wumpa_icon::HudModel;
 use crate::Textures;
@@ -39,7 +39,7 @@ const RELIC_LINES: f32 = 50.0;
 const GROW_TICKS: f32 = 24.0;
 
 /// `UI_REWARD_PICKUP_ROT_SLOW`: a turn in 64 ticks (`UI_ThTick_Reward`).
-const SPIN_TICKS: f32 = 64.0;
+pub(crate) const SPIN_TICKS: f32 = 64.0;
 
 /// `OtherFX` of the relic unlocked.
 const RELIC_SFX: u16 = 0x67;
@@ -58,6 +58,7 @@ enum Line {
     Relic,
     Best,
     OldBest,
+    Submit,
 }
 
 /// The relic's pivot; its child is the model, its middle on the pivot.
@@ -94,19 +95,13 @@ fn tint(tier: Tier) -> [u8; 3] {
     }
 }
 
-fn name(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Sapphire => "SAPPHIRE",
-        Tier::Gold => "GOLD",
-        Tier::Platinum => "PLATINUM",
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn panel(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     race_on: Res<RaceOn>,
+    config: Res<crate::config::Config>,
+    pads: crate::drive::Pads,
     hud: HudViews,
     panels: Query<(&HudView, &mut Visibility), With<Panel>>,
     mut lines: Query<(&Line, &mut CtrText, &mut Node)>,
@@ -140,7 +135,8 @@ fn panel(
                 line(Line::Perfect),
                 line(Line::Relic),
                 line(Line::Best),
-                line(Line::OldBest)
+                line(Line::OldBest),
+                line(Line::Submit)
             ],
         ));
     }
@@ -167,18 +163,26 @@ fn panel(
     for (line, mut text, mut node) in &mut lines {
         let (wanted, gradient) = match line {
             Line::Time => (
-                Some(format!("YOUR TIME {}", crate::laps::clock(total))),
+                Some(format!("YOUR TIME {}", race::clock::time(total))),
                 Gradient::ORANGE,
             ),
             Line::Perfect => (end.perfect.then(|| "PERFECT -10".to_string()), flash),
             Line::Relic => (
-                end.relic.map(|tier| format!("{} RELIC AWARDED!", name(tier))),
+                end.relic.map(|tier| format!("{} RELIC AWARDED!", crate::laps::tier_name(tier).to_uppercase())),
                 end.relic.map_or(flash, crate::laps::tier_gradient),
             ),
             Line::Best => (end.new_best.then(|| "NEW HIGH SCORE!".to_string()), flash),
             Line::OldBest => (
-                end.best.map(|ms| format!("BEST {}", crate::laps::clock(ms))),
+                end.best.map(|ms| format!("BEST {}", race::clock::time(ms))),
                 Gradient::WHITE,
+            ),
+            Line::Submit => (
+                submit_line(end.submit, &pads, &config),
+                match end.submit {
+                    Some(Submit::Offered) => Gradient::YELLOW,
+                    Some(Submit::Refused) => Gradient::RED,
+                    _ => Gradient::WHITE,
+                },
             ),
         };
         let display = if wanted.is_some() {
@@ -197,6 +201,22 @@ fn panel(
             text.gradient = gradient;
         }
     }
+}
+
+/// (The font has no '#'.)
+fn submit_line(
+    submit: Option<Submit>,
+    pads: &crate::drive::Pads,
+    config: &crate::config::Config,
+) -> Option<String> {
+    Some(match submit? {
+        Submit::Offered => {
+            format!("{}: SUBMIT", crate::ghost::select_label(pads, config)?.to_uppercase())
+        }
+        Submit::Sending => "SUBMITTING...".to_string(),
+        Submit::Accepted { rank, top_ms } => crate::scores::placed(rank, top_ms).to_uppercase(),
+        Submit::Refused => "NOT SUBMITTED".to_string(),
+    })
 }
 
 /// Puts the relic up when the run earned one (in its tier's colour: the model's own colours are
@@ -280,7 +300,7 @@ fn relic(
 }
 
 /// The relic's mesh, every face in `tier`'s colour.
-fn build(
+pub(crate) fn build(
     model: &Model,
     tier: Tier,
     textures: &Textures,

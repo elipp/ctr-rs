@@ -4,7 +4,7 @@
 //! voids) old bests instead of leaving stale times next to runs that no longer make them.
 
 use bevy::prelude::*;
-use race::solo::{Kind, Outcome, Run};
+use race::solo::{Ghost, Kind, Outcome, Run};
 
 use crate::props::Sim;
 use crate::race_on::CurrentRace;
@@ -41,11 +41,15 @@ struct Timed {
     run_digest: u64,
     /// None: the run no longer finishes. Kept too, or a dead best would replay on every look.
     outcome: Option<Outcome>,
+    /// The board's id of the run, once the score server has taken it. Here because it holds
+    /// exactly as long as the time does: a new best is other bytes, and a new `SIM_VERSION` is
+    /// another board.
+    run_id: Option<i64>,
 }
 
 impl Timed {
     const MAGIC: &[u8; 4] = b"CTRT";
-    const LEN: usize = 36;
+    const LEN: usize = 45;
 
     fn to_bytes(&self) -> Vec<u8> {
         let mut b = Self::MAGIC.to_vec();
@@ -62,6 +66,8 @@ impl Timed {
         b.extend(o.map_or(0, |o| o.final_ms).to_le_bytes());
         b.push(o.is_some_and(|o| o.perfect) as u8);
         b.extend(o.map_or(0, |o| o.finish_tick).to_le_bytes());
+        b.push(self.run_id.is_some() as u8);
+        b.extend(self.run_id.unwrap_or(0).to_le_bytes());
         debug_assert_eq!(b.len(), Self::LEN);
         b
     }
@@ -80,6 +86,7 @@ impl Timed {
             perfect: rest[27] != 0,
             finish_tick: u32_at(28),
         });
+        let run_id = (rest[32] != 0).then(|| i64::from_le_bytes(rest[33..41].try_into().unwrap()));
         Some(Timed {
             kind,
             map_hash: u64_at(1),
@@ -87,6 +94,7 @@ impl Timed {
             sim_version: u32_at(10),
             run_digest: u64_at(14),
             outcome,
+            run_id,
         })
     }
 
@@ -98,6 +106,7 @@ impl Timed {
             sim_version: race::SIM_VERSION,
             run_digest: map::fnv1a(run_bytes),
             outcome,
+            run_id: None,
         }
     }
 
@@ -119,6 +128,19 @@ mod store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }
+    }
+
+    /// The names of the files there are.
+    pub fn names() -> Result<Vec<String>, String> {
+        let dir = crate::paths::pbs();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("{}: {e}", dir.display())),
+        };
+        Ok(entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .collect())
     }
 
     pub fn save(name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -157,6 +179,10 @@ mod store {
         Ok(saved().lock().map_err(|e| e.to_string())?.get(name).cloned())
     }
 
+    pub fn names() -> Result<Vec<String>, String> {
+        Ok(saved().lock().map_err(|e| e.to_string())?.keys().cloned().collect())
+    }
+
     pub fn save(name: &str, bytes: &[u8]) -> Result<(), String> {
         saved()
             .lock()
@@ -172,14 +198,21 @@ mod store {
 pub fn best(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Outcome> {
     let spec = *race.specs.first()?;
     let kind = race.solo?;
-    stored(kind, race.hash, race.rules.laps, |run| {
+    let (_, timed) = stored(kind, race.hash, race.rules.laps, |run| {
         run.replay(level, sim.start().clone(), spec_for(run, spec))
-    })
+    })?;
+    timed.outcome
 }
 
-/// The time of the stored best of `kind` over `laps` on track `id`, whatever level is loaded: a
-/// replay, if one is needed, builds the race's level off the scene (`assets::sim_level`).
+/// The time of the stored best of `kind` over `laps` on track `id`, whatever level is loaded.
 pub fn best_on(id: u32, kind: Kind, laps: u8) -> Option<Outcome> {
+    stored_on(id, kind, laps)?.1.outcome
+}
+
+/// The stored best of `kind` over `laps` on track `id`, and its [`Timed`], whatever level is
+/// loaded: a replay, if one is needed, builds the race's level off the scene
+/// (`assets::sim_level`).
+fn stored_on(id: u32, kind: Kind, laps: u8) -> Option<(Vec<u8>, Timed)> {
     let hash = crate::maps::hash(id)?;
     stored(kind, hash, laps, |run| {
         let map = crate::maps::get(id)?;
@@ -187,6 +220,46 @@ pub fn best_on(id: u32, kind: Kind, laps: u8) -> Option<Outcome> {
         let objects = instance::Objects::new(&level, dram);
         run.replay(&level, objects, racer_spec(run.demo.character))
     })
+}
+
+/// A stored best as the score server takes it.
+pub struct ToSubmit {
+    pub kind: Kind,
+    pub map_hash: u64,
+    pub laps: u8,
+    /// `Run::to_bytes`, as stored.
+    pub bytes: Vec<u8>,
+    pub final_ms: i32,
+}
+
+/// The stored best of `kind` over `laps` on track `id`, if it can go to the board: or why not.
+pub fn to_submit(id: u32, kind: Kind, laps: u8) -> Result<ToSubmit, String> {
+    let (bytes, timed) = stored_on(id, kind, laps).ok_or("No best on this track yet")?;
+    if let Some(run_id) = timed.run_id {
+        return Err(format!("This best is on the board already (run {run_id})"));
+    }
+    let outcome = timed.outcome.ok_or("This best no longer finishes in this version")?;
+    Ok(ToSubmit {
+        kind,
+        map_hash: timed.map_hash,
+        laps,
+        bytes,
+        final_ms: outcome.final_ms,
+    })
+}
+
+/// Notes that the board took `sent` as `run_id`, unless the stored best is another run by now.
+pub fn submitted(sent: &ToSubmit, run_id: i64) {
+    let stem = stem(sent.kind, sent.map_hash, sent.laps);
+    let Ok(Some(bytes)) = store::load(&format!("{stem}.time")) else {
+        return;
+    };
+    let Some(timed) = Timed::from_bytes(&bytes) else {
+        return;
+    };
+    if timed.run_digest == map::fnv1a(&sent.bytes) && timed.sim_version == race::SIM_VERSION {
+        Timed { run_id: Some(run_id), ..timed }.save();
+    }
 }
 
 /// `spec`, if the run is of its character; else the run's own character's.
@@ -208,16 +281,10 @@ fn racer_spec(character: usize) -> race::KartSpec {
     }
 }
 
-/// The best stored for `kind`, `map_hash` and `laps`: its [`Timed`], or if that is missing or
-/// stale, what `replay` makes of it (and the `Timed` written for next time).
-fn stored(
-    kind: Kind,
-    map_hash: u64,
-    laps: u8,
-    replay: impl FnOnce(&Run) -> Option<Outcome>,
-) -> Option<Outcome> {
-    let stem = stem(kind, map_hash, laps);
-    let name = format!("{stem}.run");
+/// The run stored as the best for `kind`, `map_hash` and `laps`, and its bytes; None if there is
+/// none or it can't be read (logged).
+fn load(kind: Kind, map_hash: u64, laps: u8) -> Option<(Run, Vec<u8>)> {
+    let name = format!("{}.run", stem(kind, map_hash, laps));
     let bytes = match store::load(&name) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return None,
@@ -226,23 +293,72 @@ fn stored(
             return None;
         }
     };
-    let run = match Run::from_bytes(&bytes) {
-        Ok(run) if run.map_hash == map_hash && run.laps == laps && run.kind == kind => run,
+    match Run::from_bytes(&bytes) {
+        Ok(run) if run.map_hash == map_hash && run.laps == laps && run.kind == kind => {
+            Some((run, bytes))
+        }
         Ok(_) => {
             warn!("personal best {name}: of another kind, map or lap count");
-            return None;
+            None
         }
         Err(e) => {
             warn!("personal best {name}: {e}");
-            return None;
+            None
+        }
+    }
+}
+
+/// The stored best of the solo race, at tick 0 on the level loaded (the race's), to race against;
+/// None if there is none. A best that no longer finishes still drives (it's the run as it was
+/// played), so `race.best` is not asked.
+pub fn ghost(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Ghost> {
+    let (run, _) = load(race.solo?, race.hash, race.rules.laps)?;
+    ghost_of(level, sim, race, &run)
+}
+
+/// `run` as a ghost of the race, at tick 0 on the level loaded (the race's): only once
+/// `drive_tick` has put the sim on the race's grid, as `sim.start()` is then the race's.
+pub fn ghost_of(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace, run: &Run) -> Option<Ghost> {
+    let spec = *race.specs.first()?;
+    Some(Ghost::new(level, sim.start().clone(), spec_for(run, spec), run))
+}
+
+/// Notes that no best is on the board any more (`/score forget`).
+pub fn forget_submitted() {
+    let names = match store::names() {
+        Ok(names) => names,
+        Err(e) => {
+            warn!("personal bests: {e}");
+            return;
         }
     };
+    for name in names.iter().filter(|n| n.ends_with(".time")) {
+        let timed = store::load(name).ok().flatten();
+        if let Some(timed) = timed.as_deref().and_then(Timed::from_bytes)
+            && timed.run_id.is_some()
+        {
+            Timed { run_id: None, ..timed }.save();
+        }
+    }
+}
+
+/// The best stored for `kind`, `map_hash` and `laps`, and its [`Timed`]; if that is missing or
+/// stale, made of what `replay` makes of it (and written for next time).
+fn stored(
+    kind: Kind,
+    map_hash: u64,
+    laps: u8,
+    replay: impl FnOnce(&Run) -> Option<Outcome>,
+) -> Option<(Vec<u8>, Timed)> {
+    let stem = stem(kind, map_hash, laps);
+    let name = format!("{stem}.run");
+    let (run, bytes) = load(kind, map_hash, laps)?;
     let fresh = Timed::of(&run, &bytes, None);
     let timed = store::load(&format!("{stem}.time")).ok().flatten();
     if let Some(timed) = timed.as_deref().and_then(Timed::from_bytes)
-        && timed == (Timed { outcome: timed.outcome, ..fresh })
+        && timed == (Timed { outcome: timed.outcome, run_id: timed.run_id, ..fresh })
     {
-        return timed.outcome;
+        return Some((bytes, timed));
     }
     let outcome = replay(&run);
     if outcome.is_none() {
@@ -252,8 +368,9 @@ fn stored(
             race::SIM_VERSION
         );
     }
-    Timed { outcome, ..fresh }.save();
-    outcome
+    let timed = Timed { outcome, ..fresh };
+    timed.save();
+    Some((bytes, timed))
 }
 
 /// Re-times the run just finished on the level loaded (the race's), and keeps it if it beats
@@ -315,6 +432,7 @@ mod tests {
                 sim_version: 12,
                 run_digest: 0xfedc_ba98_7654_3210,
                 outcome,
+                run_id: outcome.map(|_| 42),
             };
             assert_eq!(Timed::from_bytes(&timed.to_bytes()), Some(timed));
         }

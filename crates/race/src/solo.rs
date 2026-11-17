@@ -1,6 +1,6 @@
 //! A race alone against the clock (a relic race or a time trial), as a recorded run: the one place
 //! that sets it up, so that the client and a replay (local personal bests, later a leaderboard's
-//! verifier: RELIC-RACE-LEADERBOARDS.md) can never set it up differently.
+//! verifier: TIME-TRIAL-RELIC-LEADERBOARDS.md) can never set it up differently.
 //!
 //! The file is [`MAGIC`], [`FORMAT`] (little-endian) and the [`Run`] in `bitcode`, compressed with
 //! zstd. Bitcode is not self-describing: any change to `Run` or `vehicle::demo` must bump
@@ -53,6 +53,22 @@ impl Kind {
             Kind::TimeTrial => LevMode::TimeTrial,
         }
     }
+}
+
+/// The seed of every run on a board (`kind`, `map_hash`, `laps`): the leaderboard refuses any
+/// other. Relic and time trial hide the fruit and weapon crates, so the RNG is only read by a
+/// crash's tumble; it is pinned anyway, so that nobody can fish for a lucky seed if that changes.
+/// Spelled out (splitmix64) rather than `std::hash`, whose output may change between Rust
+/// versions: a change here voids every board.
+pub fn board_seed(kind: Kind, map_hash: u64, laps: u8) -> u16 {
+    let kind = match kind {
+        Kind::Relic => 0u64,
+        Kind::TimeTrial => 1,
+    };
+    let mut z = map_hash ^ (kind << 8 | u64::from(laps)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ z >> 30).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ z >> 27).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (z ^ z >> 31) as u16
 }
 
 /// The race at tick 0, the ceremony to come. `objects` are the level's at tick 0, after
@@ -116,13 +132,10 @@ impl Run {
     /// Plays the run on `level` from `objects` (as for [`start`]) with the kart `spec`, whose
     /// character must be the demo's. None if the kart hasn't finished when the pads run out.
     pub fn replay(&self, level: &Level, objects: Objects, spec: KartSpec) -> Option<Outcome> {
-        debug_assert_eq!(spec.character, self.demo.character);
-        let mut race = start(level, objects, spec, self.kind, self.laps, self.seed);
-        let mut held = 0;
+        let mut ghost = Ghost::new(level, objects, spec, self);
         for tick in 0..self.demo.length {
-            let input = self.demo.input(tick, held)?;
-            held = input.buttons_held;
-            race.tick(level, &[Pad::of_input(&input)]);
+            ghost.tick(level);
+            let race = ghost.race();
             if race.karts[0].driver.actions_flag_set & actions::RACE_FINISHED != 0 {
                 return Some(Outcome {
                     final_ms: race.final_ms(0)?,
@@ -154,6 +167,56 @@ impl Run {
     }
 }
 
+/// A run played back on a race of its own, a tick at a time: [`Run::replay`], and the ghost drawn
+/// next to a live run, which must never drive differently from what a replay times.
+#[derive(Clone)]
+pub struct Ghost {
+    race: Race,
+    demo: Demo,
+    held: u32,
+}
+
+impl Ghost {
+    /// At tick 0 on `level` from `objects` (as for [`start`]), the kart `spec`, whose character
+    /// must be the run's.
+    pub fn new(level: &Level, objects: Objects, spec: KartSpec, run: &Run) -> Ghost {
+        debug_assert_eq!(spec.character, run.demo.character);
+        Ghost {
+            race: start(level, objects, spec, run.kind, run.laps, run.seed),
+            demo: run.demo.clone(),
+            held: 0,
+        }
+    }
+
+    /// Plays the next tick with the run's pad; past the run's end (the finish, where the sim takes
+    /// no more pads) a neutral one.
+    pub fn tick(&mut self, level: &Level) {
+        let input = self.demo.input(self.race.tick, self.held).unwrap_or_default();
+        self.held = input.buttons_held;
+        self.race.tick(level, &[Pad::of_input(&input)]);
+    }
+
+    pub fn race(&self) -> &Race {
+        &self.race
+    }
+
+    /// The race's time at each checkpoint the run passes ([`Race::splits`]), played out on a copy
+    /// to the run's finish, or to its pads' end if it doesn't finish.
+    pub fn splits(&self, level: &Level) -> Vec<i32> {
+        let mut ghost = self.clone();
+        while ghost.race.tick < ghost.demo.length
+            && ghost.kart().driver.actions_flag_set & actions::RACE_FINISHED == 0
+        {
+            ghost.tick(level);
+        }
+        ghost.race.splits.swap_remove(0)
+    }
+
+    pub fn kart(&self) -> &crate::Kart {
+        &self.race.karts[0]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +242,14 @@ mod tests {
         };
         assert_eq!(Run::from_bytes(&run.to_bytes()), Ok(run));
         assert!(Run::from_bytes(b"nope").is_err());
+    }
+
+    /// Pinned: a change voids every leaderboard (and is a `SIM_VERSION` bump's business).
+    #[test]
+    fn board_seed_is_stable() {
+        let hash = 0x0123_4567_89ab_cdef;
+        assert_eq!(board_seed(Kind::Relic, hash, 3), 62048);
+        assert_eq!(board_seed(Kind::TimeTrial, hash, 3), 11478);
+        assert_ne!(board_seed(Kind::Relic, hash, 3), board_seed(Kind::Relic, hash, 5));
     }
 }

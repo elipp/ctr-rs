@@ -155,7 +155,7 @@ impl Plugin for DrivePlugin {
             .add_systems(Startup, spawn_hud)
             .add_systems(
                 FixedUpdate,
-                (drive_tick, crate::flash::step, crate::projectile::tick)
+                (drive_tick, crate::ghost::step, crate::flash::step, crate::projectile::tick)
                     .chain()
                     .run_if(driving),
             )

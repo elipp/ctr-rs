@@ -160,7 +160,10 @@ impl Plugin for FontPlugin {
                 // Glyphs are respawned on every text change. Spawned after propagation, they'd
                 // keep `InheritedVisibility(false)` for a frame: text blinks, a respawned menu
                 // flashes.
-                .before(VisibilitySystems::VisibilityPropagate),
+                .before(VisibilitySystems::VisibilityPropagate)
+                // Bevy leaves `Stack` unordered, and ours ran first: glyphs missing from the
+                // stack draw at index 0, under their own panel, for a frame.
+                .before(UiSystems::Stack),
         );
     }
 }

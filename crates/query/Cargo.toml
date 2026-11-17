@@ -11,4 +11,6 @@ path = "src/main.rs"
 [dependencies]
 instance = { path = "../instance" }
 loader = { path = "../loader" }
+map = { path = "../map" }
+race = { path = "../race" }
 render = { path = "../render" }

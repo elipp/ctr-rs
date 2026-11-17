@@ -17,6 +17,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use instance::lev_init::LevMode;
 use loader::level::LevelId;
 use loader::model::Model;
+pub(crate) use race::track::anim_num_frames;
 use render::mesh::{self, PARTS, Part};
 
 /// Tells the page what the game is about to do (`web::stage`), in a `wasm-debug` build; otherwise
@@ -39,15 +40,6 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
     };
     let kart = race::Kart::birth(&track.0, 0, &spec);
     drive::Drive::new(track, &kart.driver, character, anim_num_frames)
-}
-
-/// The frames of the first eight animations of a kart `model` (`Driver::animNumFrames`).
-pub(crate) fn anim_num_frames(model: &Model) -> [u16; 8] {
-    let mut frames = [0; 8];
-    for (n, anim) in frames.iter_mut().zip(&model.headers[0].animations) {
-        *n = anim.num_frames;
-    }
-    frames
 }
 
 /// Makes our kart in the race of `character`, where it is and as it goes: its engine class
@@ -452,6 +444,34 @@ pub(crate) fn spawn_parts(
     subtract_materials: &mut Assets<SubtractMaterial>,
     layer: usize,
 ) -> [Option<Handle<Mesh>>; PARTS] {
+    spawn_faded_parts(
+        parts,
+        base,
+        transform,
+        parent,
+        commands,
+        meshes,
+        materials,
+        subtract_materials,
+        layer,
+        None,
+    )
+}
+
+/// [`spawn_parts`], see-through at `alpha` if given: every part blends then, the opaque ones too.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_faded_parts(
+    parts: [mesh::MeshPart; PARTS],
+    base: &StandardMaterial,
+    transform: Transform,
+    parent: Option<Entity>,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
+    layer: usize,
+    alpha: Option<f32>,
+) -> [Option<Handle<Mesh>>; PARTS] {
     spawn_layers(
         Vec::from(parts),
         &[],
@@ -463,6 +483,7 @@ pub(crate) fn spawn_parts(
         materials,
         subtract_materials,
         layer,
+        alpha,
     )
     .try_into()
     .unwrap()
@@ -481,6 +502,7 @@ pub(crate) fn spawn_layers(
     materials: &mut Assets<StandardMaterial>,
     subtract_materials: &mut Assets<SubtractMaterial>,
     layer: usize,
+    alpha: Option<f32>,
 ) -> Vec<Option<Handle<Mesh>>> {
     let mut handles = vec![None; parts.len()];
     for (slot, part) in parts.into_iter().enumerate() {
@@ -501,6 +523,7 @@ pub(crate) fn spawn_layers(
         handles[slot] = Some(handle.clone());
         let with = |alpha_mode| StandardMaterial {
             alpha_mode,
+            base_color: alpha.map_or(base.base_color, |a| base.base_color.with_alpha(a)),
             depth_bias: base.depth_bias - (order as f32) * DEPTH_BIAS_PER_ORDER,
             ..base.clone()
         };
@@ -511,7 +534,8 @@ pub(crate) fn spawn_layers(
         entity.insert(RenderLayers::layer(layer));
         match i {
             i if i == Part::Opaque as usize => {
-                entity.insert(MeshMaterial3d(materials.add(with(AlphaMode::Mask(0.5)))))
+                let mode = alpha.map_or(AlphaMode::Mask(0.5), |_| AlphaMode::Blend);
+                entity.insert(MeshMaterial3d(materials.add(with(mode))))
             }
             i if i == Part::Average as usize => {
                 entity.insert(MeshMaterial3d(materials.add(with(AlphaMode::Blend))))
@@ -612,6 +636,7 @@ pub(crate) fn setup(
         &mut materials,
         &mut subtract_materials,
         0,
+        None,
     );
     commands.insert_resource(SceneryState {
         scenery: level.scenery.clone(),

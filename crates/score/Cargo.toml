@@ -1,0 +1,13 @@
+[package]
+name = "score"
+version = "0.1.0"
+edition = "2024"
+
+# What the leaderboard's client and `score-server` must agree on: the protocol (bitcode over iroh,
+# like the rest of the wire formats) and the request signing.
+[dependencies]
+bitcode = "0.6.9"
+data-encoding = "2.11.1"
+iroh-base = { version = "1.4.1", default-features = false, features = ["key"] }
+race = { path = "../race" }
+sha2 = "0.11.1"

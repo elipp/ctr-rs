@@ -419,6 +419,37 @@ pub(crate) const COMMANDS: &[Spec] = &[
         &[leaf("purge", "Delete them")],
     ),
     node(
+        "score",
+        "The leaderboards of relic races and time trials",
+        &[
+            node(
+                "submit",
+                "Send your best on a track to its board",
+                &[
+                    takes("relic", "Your relic race best", "[track]"),
+                    takes("time-trial", "Your time trial best", "[track]"),
+                ],
+            ),
+            node(
+                "top",
+                "List the first of a track's board",
+                &[
+                    takes("relic", "The relic race board", "[track]"),
+                    takes("time-trial", "The time trial board", "[track]"),
+                ],
+            ),
+            leaf("forget", "Delete you and your runs from the boards"),
+            node(
+                "key",
+                "The key that is you on the boards",
+                &[
+                    leaf("export", "Print it, to back it up or move it (keep it secret)"),
+                    takes("import", "Replace ours with an exported one", "<key>"),
+                ],
+            ),
+        ],
+    ),
+    node(
         "debug",
         "For testing",
         &[
@@ -646,6 +677,7 @@ mod tests {
                 "clear",
                 "net",
                 "cache",
+                "score",
                 "debug"
             ]
         );

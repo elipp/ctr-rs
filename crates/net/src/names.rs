@@ -5,24 +5,11 @@ use std::time::Duration;
 
 use iroh::EndpointId;
 
-/// The most characters of a nickname.
-pub const NICK_MAX: usize = 12;
+pub use score::{NICK_MAX, clean_nick, nick_char};
 
 /// How long a player waits between changes of its nickname (the game's to keep: see
 /// [`Session::set_nickname`]).
 pub const NICK_COOLDOWN: Duration = Duration::from_secs(60);
-
-/// A nickname as it is kept and sent: trimmed, without control characters, and at most
-/// [`NICK_MAX`] characters. Empty means none.
-pub fn clean_nick(nick: &str) -> String {
-    nick.chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .trim()
-        .chars()
-        .take(NICK_MAX)
-        .collect()
-}
 
 /// The most characters of a chat line.
 pub const CHAT_MAX: usize = 200;

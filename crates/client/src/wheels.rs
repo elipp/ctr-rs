@@ -115,8 +115,12 @@ pub fn spawn(
     vram: &Vram,
     kart: Entity,
     layer: usize,
+    fade: Option<crate::ghost::Fade>,
 ) {
-    let (atlas, uvs) = sprite_atlas(icons, vram);
+    let (mut atlas, uvs) = sprite_atlas(icons, vram);
+    if let Some(fade) = fade {
+        fade.rgba(&mut atlas.rgba);
+    }
     let mut image = Image::new(
         Extent3d {
             width: atlas.width as u32,
@@ -133,7 +137,7 @@ pub fn spawn(
     let image = crate::shared_image(images, image);
     let material = materials.add(WheelMaterial {
         base: StandardMaterial {
-            base_color: Color::WHITE,
+            base_color: Color::WHITE.with_alpha(fade.map_or(1.0, |f| f.alpha)),
             base_color_texture: Some(image),
             unlit: true,
             cull_mode: None,

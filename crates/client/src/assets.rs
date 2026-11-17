@@ -130,26 +130,18 @@ pub(crate) fn load_level(id: u32, mode: instance::lev_init::LevMode) -> LevelDat
     }
 }
 
-/// The level a race of `mode` on map `id` runs on, and its texture pages. `pb.rs` replays on it
-/// without a scene: anything here that the sim reads (instances, nav paths) must be what the
-/// scene's race had, or a stored best re-times differently off the scene.
+/// The level a race of `mode` on map `id` runs on, and its texture pages
+/// (`race::track::sim_level`).
 pub(crate) fn sim_level(
     map: &map::Map,
     id: u32,
     mode: instance::lev_init::LevMode,
 ) -> (Level, &DramFile, &[loader::vram::VramImage]) {
-    let (level, dram, images) = match (&map.relic, mode) {
-        (Some(r), instance::lev_init::LevMode::Relic | instance::lev_init::LevMode::TimeTrial) => {
-            (&r.level, &r.dram, &r.vram)
-        }
-        _ => (&map.level, &map.dram, &map.vram),
-    };
-    let mut level = level.clone();
-    instance::lev_init::lev_init_all(&mut level.instances, mode);
-    for why in loader::nav_amend::Amendments::builtin().apply(id, &mut level.nav_paths) {
+    let made = race::track::sim_level(map, id, mode);
+    for why in made.left_out {
         warn!("level {id:#x}: a bot path amendment is left out: {why}");
     }
-    (level, dram, images)
+    (made.level, made.dram, made.vram)
 }
 
 /// The texture pages that every track shares (`shared.vrm`).

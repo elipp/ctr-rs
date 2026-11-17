@@ -110,6 +110,10 @@ pub struct Config {
     pub pixel_scale: u32,
     /// Whether the window fills the screen (`/config set fullscreen`, F11).
     pub fullscreen: bool,
+    /// Which of a solo run's ghosts to race against (`ghost.rs`).
+    pub ghosts: crate::ghost::GhostPick,
+    /// The ghost's key has been pressed once: the race start stops saying what it does.
+    pub ghost_hint_done: bool,
 }
 
 /// The most relays that can be added; every one is probed when an endpoint starts.
@@ -139,6 +143,8 @@ impl Default for Config {
             even_weapon_odds: false,
             pixel_scale: 1,
             fullscreen: false,
+            ghosts: crate::ghost::GhostPick::default(),
+            ghost_hint_done: false,
         }
     }
 }
@@ -394,8 +400,8 @@ impl Setting {
                 if value.chars().count() > net::NICK_MAX {
                     return Err(format!("A nickname is up to {} characters", net::NICK_MAX));
                 }
-                if value.chars().any(char::is_control) {
-                    return Err("A nickname cannot hold control characters".into());
+                if let Some(c) = value.chars().find(|&c| !net::nick_char(c)) {
+                    return Err(format!("A nickname cannot hold '{}'", c.escape_default()));
                 }
                 Ok(Setting::Nickname(value.to_string()))
             }

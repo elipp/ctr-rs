@@ -571,6 +571,11 @@ pub(super) fn run(
             | Action::Character(_)
             | Action::Track(_)
             | Action::Version
+            | Action::ScoreKeyExport
+            | Action::ScoreKeyImport(_)
+            | Action::ScoreSubmit { .. }
+            | Action::ScoreTop { .. }
+            | Action::ScoreForget(_)
             | Action::Clear => continue,
             Action::StopRace => {
                 // Like a race that has been won, without the wait and the toast.

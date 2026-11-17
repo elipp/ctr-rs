@@ -1,0 +1,27 @@
+[package]
+name = "score-server"
+version = "0.1.0"
+edition = "2024"
+
+# The solo leaderboards: re-sims submitted runs and ranks them (TIME-TRIAL-RELIC-LEADERBOARDS.md).
+[[bin]]
+name = "score-server"
+path = "src/main.rs"
+
+[dependencies]
+data-encoding = "2.11.1"
+instance = { path = "../instance" }
+iroh = "1.4.1"
+# The operator commands' dates, in UTC.
+jiff = { version = "1.0.0", default-features = false, features = ["std"] }
+map = { path = "../map" }
+race = { path = "../race" }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+score = { path = "../score" }
+sha2 = "0.11"
+tokio = { version = "1.54", features = ["rt-multi-thread", "sync", "macros", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+vehicle = { path = "../vehicle" }

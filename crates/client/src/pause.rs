@@ -35,8 +35,8 @@
 //! kart, open the command line or switch the level.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
 use bevy::ecs::system::SystemParam;
+use bevy::image::ImageSampler;
 use bevy::input::ButtonState;
 use bevy::input::InputSystems;
 use bevy::input::keyboard::{KeyboardFocusLost, KeyboardInput};
@@ -44,12 +44,13 @@ use bevy::input::mouse::MouseWheel;
 use bevy::picking::events::{PointerClick, PointerMove, PointerPress, PointerRelease};
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
 use render::font::{Font, Gradient};
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 
+use crate::LevelNumber;
 use crate::about;
 use crate::accordion::{self, Accordion, HasAccordion, Steer};
 use crate::bots_menu::{self, BotsItem};
@@ -57,18 +58,17 @@ use crate::command::Action;
 use crate::config::Config;
 use crate::controls::{self, Control};
 use crate::cup_wizard::{self, CupItem, Draft, Go};
-use crate::font::{CtrText, TexelSize};
+use crate::font::{CtrText, Fonts, TexelSize};
 use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
 use crate::lobby::Lobby;
 use crate::maps;
-use crate::race_on::RaceOn;
 use crate::public_lobbies::{self, PublicLobbies, Status};
-use crate::suggest;
+use crate::race_on::RaceOn;
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
+use crate::suggest;
 use crate::text_field::{TextField, Typed};
 use crate::toast::Toast;
 use crate::track_picture::TrackPictures;
-use crate::LevelNumber;
 use crate::version::VERSION;
 
 /// Whether the menu is open, and what it was asked to do.
@@ -116,6 +116,7 @@ pub struct PauseMenu {
     /// Seeded with a `suggest` name on entering `View::NameLobby`, so a pad or a touch screen,
     /// which can't type, can still create with Create.
     lobby_name: String,
+    private_lobby: bool,
 }
 
 impl PauseMenu {
@@ -164,6 +165,8 @@ pub(crate) enum View {
     Bots,
     BotPool,
     Tracks,
+    /// "Quit the game?": Quit is too easy to take by mistake.
+    ConfirmQuit,
 }
 
 impl View {
@@ -184,14 +187,17 @@ impl View {
 pub(crate) enum Item {
     Resume,
     Restart,
+    /// `/race stop`: back to the free drive.
+    EndRace,
     PlaySolo,
     Solo(race::solo::Kind),
     LeaveLobby,
     PlayOnline,
     /// Shows the realm's list.
     PublicLobbies,
-    CreatePublic,
-    CreatePrivate,
+    /// Creates a lobby, public or private as `PauseMenu::private_lobby`, which Left and Right
+    /// toggle.
+    NewLobby,
     LobbyName,
     /// Creates the public lobby named in `View::NameLobby`.
     CreateLobby,
@@ -203,7 +209,9 @@ pub(crate) enum Item {
     Cup(CupItem),
     BotsMenu,
     Bots(BotsItem),
+    /// Asks first (`View::ConfirmQuit`).
     Quit,
+    QuitNow,
     TrackSelect,
     Track(u32),
     /// A volume, which Left and Right change.
@@ -238,7 +246,10 @@ pub(crate) enum Kind {
     Button,
     Value(String),
     Cycle(String),
-    Field { text: String, editing: bool },
+    Field {
+        text: String,
+        editing: bool,
+    },
     Slider(Slider),
     Preview(Icons),
     Grid(Icons),
@@ -278,9 +289,7 @@ impl Entry {
     /// Unpaired rows span both columns, centred. An empty label unpairs any kind, so e.g. a
     /// cycle can carry its own numbering in its value ("1. Dingo Canyon").
     fn paired(&self) -> bool {
-        !self.inline
-            && !self.label.is_empty()
-            && !matches!(self.kind, Kind::Button | Kind::Grid(_))
+        !self.inline && !self.label.is_empty() && !matches!(self.kind, Kind::Button | Kind::Grid(_))
     }
 }
 
@@ -309,8 +318,12 @@ fn items(
         View::PlayOnline => {
             let items = vec![
                 entry(Item::PublicLobbies, "Public lobbies"),
-                entry(Item::CreatePublic, "Create lobby - public"),
-                entry(Item::CreatePrivate, "Create lobby - private"),
+                Entry::new(
+                    Item::NewLobby,
+                    NEW_LOBBY,
+                    Kind::Cycle(LOBBY_PRIVACY[menu.private_lobby as usize].into()),
+                )
+                .inline(),
                 entry(Item::Back, "Back"),
             ];
             return ("Play online".into(), items);
@@ -337,13 +350,26 @@ fn items(
         }
         View::Weapons => return ("Weapons".into(), cup_wizard::weapon_items(config)),
         View::Bots => return ("Bots".into(), bots_menu::items(lobby)),
-        View::BotPool => return ("Character pool".into(), bots_menu::pool_items(menu.bot_pool)),
+        View::BotPool => {
+            return (
+                "Character pool".into(),
+                bots_menu::pool_items(menu.bot_pool),
+            );
+        }
         View::Tracks => return ("Track select".into(), track_items()),
+        View::ConfirmQuit => {
+            let items = vec![entry(Item::QuitNow, "Quit"), entry(Item::Back, "Cancel")];
+            return ("Quit the game?".into(), items);
+        }
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
     if !race_on.shared() {
         items.push(entry(Item::Restart, "Restart"));
+    }
+    // (Not a lobby's: the host ends it for everyone, which is `/race stop`'s to do.)
+    if race_on.is_on() && !race_on.shared() {
+        items.push(entry(Item::EndRace, "End race"));
     }
     items.push(entry(Item::TrackSelect, "Track select"));
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
@@ -368,11 +394,7 @@ fn items(
         items.push(entry(Item::Quit, "Quit"));
     }
     // A lobby's race goes on.
-    let title = if !race_on.shared() {
-        "Paused"
-    } else {
-        "Menu"
-    };
+    let title = if !race_on.shared() { "Paused" } else { "Menu" };
     (title.into(), items)
 }
 
@@ -558,6 +580,10 @@ struct Art<'w> {
 }
 
 const ARROW: usize = 4;
+
+const NEW_LOBBY: &str = "Create lobby";
+/// `Item::NewLobby`'s options, by `PauseMenu::private_lobby`.
+const LOBBY_PRIVACY: [&str; 2] = ["Public", "Private"];
 const ARROW_HEIGHT: usize = 7;
 const ARROW_GAP: usize = 4;
 
@@ -599,7 +625,7 @@ fn input(
     mut focus_lost: MessageReader<KeyboardFocusLost>,
     mut wheel: MessageReader<MouseWheel>,
     size: Res<TexelSize>,
-    pads: crate::drive::Pads,
+    mut pads: crate::drive::Pads,
     lobby: Res<Lobby>,
     (race_on, level): (Res<RaceOn>, Res<LevelNumber>),
     mut public: ResMut<PublicLobbies>,
@@ -694,7 +720,7 @@ fn input(
             }
         }
         save(&mut menu, &config, &mut toasts);
-        return finish(was_open, &menu, &mut keys);
+        return finish(was_open, &menu, &mut keys, &mut pads);
     }
     if let Some((item, mut field)) = menu.typing.take().filter(|_| menu.open) {
         menu.clicked = None;
@@ -728,12 +754,12 @@ fn input(
                 sound(MENU_BACK_SFX);
             }
         }
-        return finish(was_open, &menu, &mut keys);
+        return finish(was_open, &menu, &mut keys, &mut pads);
     }
     if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
         if menu.open && !leave(&menu, &lobby, &mut actions, &mut toasts) {
             sound(MENU_BACK_SFX);
-            return finish(was_open, &menu, &mut keys);
+            return finish(was_open, &menu, &mut keys, &mut pads);
         }
         menu.open = !menu.open;
         menu.view = View::Main;
@@ -753,7 +779,7 @@ fn input(
         }
         sound(MENU_TAKE_SFX);
         save(&mut menu, &config, &mut toasts);
-        return finish(was_open, &menu, &mut keys);
+        return finish(was_open, &menu, &mut keys, &mut pads);
     } else if menu.open {
         let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
         let enter = key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
@@ -775,7 +801,8 @@ fn input(
                 sound(MENU_TAKE_SFX);
             }
         } else {
-            let up = key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up;
+            let up =
+                key(&[KeyCode::ArrowUp, KeyCode::KeyW]) || pad(GamepadButton::DPadUp) || stick_up;
             let down = key(&[KeyCode::ArrowDown, KeyCode::KeyS])
                 || pad(GamepadButton::DPadDown)
                 || stick_down;
@@ -790,7 +817,13 @@ fn input(
                 menu.follow = true;
                 sound(MENU_MOVE_SFX);
             }
-            let cycle = matches!(items.get(menu.selected), Some(Entry { kind: Kind::Cycle(_), .. }));
+            let cycle = matches!(
+                items.get(menu.selected),
+                Some(Entry {
+                    kind: Kind::Cycle(_),
+                    ..
+                })
+            );
             if way.x != 0 && cycle && menu.stepped.is_none() {
                 menu.stepped = Some((menu.selected, way.x));
             }
@@ -799,7 +832,14 @@ fn input(
         }
         if let Some((i, way)) = menu.stepped.take()
             && let Some(entry) = items.get(i)
-            && step(entry.item, way, &mut menu, &mut config, &lobby, &mut actions)
+            && step(
+                entry.item,
+                way,
+                &mut menu,
+                &mut config,
+                &lobby,
+                &mut actions,
+            )
         {
             sound(MENU_MOVE_SFX);
         }
@@ -823,6 +863,14 @@ fn input(
         };
         let taken_entry = taken.and_then(|i| items.get(i));
         let taken_item = match taken_entry {
+            // The one cycle that taking doesn't step: it's the action, the cycle its option.
+            Some(Entry {
+                item: Item::NewLobby,
+                ..
+            }) => {
+                sound(MENU_TAKE_SFX);
+                Some(Item::NewLobby)
+            }
             Some(Entry {
                 item,
                 kind: Kind::Cycle(_),
@@ -903,6 +951,10 @@ fn input(
                 menu.open = false;
                 menu.restart = true;
             }
+            Some(Item::EndRace) => {
+                menu.open = false;
+                actions.write(Action::StopRace);
+            }
             Some(Item::Solo(kind)) => {
                 menu.open = false;
                 actions.write(Action::StartSolo(kind));
@@ -919,17 +971,18 @@ fn input(
                 menu.view = View::PlayOnline;
                 menu.selected = 0;
             }
-            Some(Item::CreatePublic) => {
+            Some(Item::NewLobby) if menu.private_lobby => {
+                menu.open = false;
+                actions.write(Action::CreateLobby { public: None });
+            }
+            Some(Item::NewLobby) => {
                 // (A browser's std hasher has fixed keys: the time is what differs there.)
                 let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
                 menu.lobby_name = suggest::lobby_name_at(seed % suggest::LOBBY_NAME_COUNT);
                 menu.view = View::NameLobby;
                 menu.selected = 0;
-                menu.typing = field(Item::LobbyName, &mut menu, &config).map(|f| (Item::LobbyName, f));
-            }
-            Some(Item::CreatePrivate) => {
-                menu.open = false;
-                actions.write(Action::CreateLobby { public: None });
+                menu.typing =
+                    field(Item::LobbyName, &mut menu, &config).map(|f| (Item::LobbyName, f));
             }
             Some(Item::CreateLobby) => create_public(&mut menu, &mut actions),
             Some(Item::PublicLobbies) => {
@@ -1020,6 +1073,11 @@ fn input(
             }
             Some(Item::Info | Item::Volume(_) | Item::LobbyName) | None => {}
             Some(Item::Quit) => {
+                menu.view = View::ConfirmQuit;
+                // (On Cancel: taking Quit twice by habit must not quit.)
+                menu.selected = 1;
+            }
+            Some(Item::QuitNow) => {
                 exit.write(AppExit::Success);
             }
         }
@@ -1037,7 +1095,7 @@ fn input(
         }
     }
     save(&mut menu, &config, &mut toasts);
-    finish(was_open, &menu, &mut keys);
+    finish(was_open, &menu, &mut keys, &mut pads);
 }
 
 /// `way` is screen order (+y down). A grid gets first claim on the move; only `Steered::Off`
@@ -1080,10 +1138,12 @@ fn step(
     actions: &mut MessageWriter<Action>,
 ) -> bool {
     match item {
-        Item::Cup(item) => {
-            cup_wizard::step(item, way, &mut menu.cup, config, &mut menu.unsaved)
-        }
+        Item::Cup(item) => cup_wizard::step(item, way, &mut menu.cup, config, &mut menu.unsaved),
         Item::Bots(item) => write(actions, bots_menu::step(item, way, lobby.bots)),
+        Item::NewLobby => {
+            menu.private_lobby ^= true;
+            true
+        }
         _ => false,
     }
 }
@@ -1179,12 +1239,7 @@ fn create_public(menu: &mut PauseMenu, actions: &mut MessageWriter<Action>) {
 }
 
 /// Returns whether anything changed, for the sound; marks the config unsaved itself.
-fn take_icon(
-    item: Item,
-    icon: usize,
-    menu: &mut PauseMenu,
-    config: &mut Config,
-) -> bool {
+fn take_icon(item: Item, icon: usize, menu: &mut PauseMenu, config: &mut Config) -> bool {
     match item {
         Item::Cup(item) => {
             let changed = cup_wizard::take_icon(item, icon, config);
@@ -1272,10 +1327,16 @@ fn save(menu: &mut PauseMenu, config: &Config, toasts: &mut MessageWriter<Toast>
     }
 }
 
-/// The keys that opened, worked or closed the menu are not for anything else.
-fn finish(was_open: bool, menu: &PauseMenu, keys: &mut ButtonInput<KeyCode>) {
+/// The keys and buttons that opened, worked or closed the menu are not for anything else.
+fn finish(
+    was_open: bool,
+    menu: &PauseMenu,
+    keys: &mut ButtonInput<KeyCode>,
+    pads: &mut crate::drive::Pads,
+) {
     if was_open || menu.open {
         keys.reset_all();
+        pads.consume();
     }
 }
 
@@ -1288,7 +1349,7 @@ fn show(
     (lobby, race_on): (Res<Lobby>, Res<RaceOn>),
     public: Res<PublicLobbies>,
     config: Res<Config>,
-    size: Res<TexelSize>,
+    (size, fonts): (Res<TexelSize>, Res<Fonts>),
     mut art: Art,
     shown: Query<(Entity, &Shown)>,
     rows: Query<(&Row, &Children, &ComputedNode, &UiGlobalTransform)>,
@@ -1323,8 +1384,25 @@ fn show(
             menu.selected = menu.selected.min(wanted.items.len() - 1);
             let about = menu.about.as_ref().filter(|_| menu.view == View::About);
             let scroll = menu.scroll;
-            let layout = PageLayout::of(menu.view);
-            spawn(&mut commands, wanted, menu.selected, scroll, about, layout, &size, &mut art);
+            let mut layout = PageLayout::of(menu.view);
+            // As wide as its widest option, so the centred panel holds still while it toggles.
+            if menu.view == View::PlayOnline {
+                layout.min_width = LOBBY_PRIVACY
+                    .iter()
+                    .map(|value| inline_cycle_width(&fonts, Font::Middle, NEW_LOBBY, value))
+                    .max()
+                    .unwrap_or(0);
+            }
+            spawn(
+                &mut commands,
+                wanted,
+                menu.selected,
+                scroll,
+                about,
+                layout,
+                &size,
+                &mut art,
+            );
         }
         return;
     }
@@ -1555,7 +1633,11 @@ fn spawn(
                 node.min_height = size.y(layout.row);
             });
             if !item.label.is_empty() {
-                let gap = if item.kind == Kind::Button { 0 } else { INLINE_GAP };
+                let gap = if item.kind == Kind::Button {
+                    0
+                } else {
+                    INLINE_GAP
+                };
                 commands.spawn((
                     ChildOf(only),
                     text(item.label),
@@ -1583,7 +1665,10 @@ fn spawn(
                 ));
                 spawn_arrow(commands, value_cell, i, 1, picked, size, &art.arrows);
             }
-            Kind::Field { text: typed, editing } => {
+            Kind::Field {
+                text: typed,
+                editing,
+            } => {
                 commands.spawn((ChildOf(value_cell), text(typed)));
                 if editing {
                     commands.spawn((
@@ -1601,11 +1686,15 @@ fn spawn(
             }
             Kind::Slider(slider) => spawn_track(commands, value_cell, slider, size, &art.wedge),
             Kind::Preview(icons) => {
-                let sheet = art.sheets.get(icons.sheet, &art.textures.vram, &mut art.images);
+                let sheet = art
+                    .sheets
+                    .get(icons.sheet, &art.textures.vram, &mut art.images);
                 icon_grid::spawn::<PauseMenu>(commands, value_cell, i, &icons, sheet, size, false);
             }
             Kind::Grid(icons) => {
-                let sheet = art.sheets.get(icons.sheet, &art.textures.vram, &mut art.images);
+                let sheet = art
+                    .sheets
+                    .get(icons.sheet, &art.textures.vram, &mut art.images);
                 icon_grid::spawn::<PauseMenu>(commands, value_cell, i, &icons, sheet, size, true);
             }
             Kind::TrackPicture(id) => {
@@ -1614,6 +1703,12 @@ fn spawn(
             Kind::Button => {}
         }
     }
+}
+
+/// An inline [`Kind::Cycle`] row's width in texels with `value` showing, as `spawn` lays it out.
+fn inline_cycle_width(fonts: &Fonts, font: Font, label: &str, value: &str) -> usize {
+    let width = |text| fonts.atlas(font).layout(text).width;
+    width(label) + INLINE_GAP + 2 * (ARROW + ARROW_GAP) + width(value)
 }
 
 /// Centred in a [`TRACK_PICTURE`] box whatever its shape, so the column stays aligned; the box
@@ -1693,12 +1788,14 @@ fn spawn_arrow(
         ))
         // Stop propagation: the row cell takes a click on a cycle as a step +1, which would
         // step twice.
-        .observe(move |mut click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
-            click.propagate(false);
-            if click.button == PointerButton::Primary {
-                step(&mut menu);
-            }
-        })
+        .observe(
+            move |mut click: On<PointerClick>, mut menu: ResMut<PauseMenu>| {
+                click.propagate(false);
+                if click.button == PointerButton::Primary {
+                    step(&mut menu);
+                }
+            },
+        )
         .observe(
             move |mut release: On<PointerRelease>, mut menu: ResMut<PauseMenu>| {
                 if matches!(release.pointer.id, PointerId::Touch(_)) {

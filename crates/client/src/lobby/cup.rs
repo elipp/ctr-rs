@@ -22,8 +22,7 @@ pub const MAX_NAME: usize = 24;
 /// The most tracks in a cup.
 pub const MAX_TRACKS: usize = 32;
 
-/// The most laps a race of a cup can have.
-pub const MAX_LAPS: u8 = 20;
+pub use race::MAX_LAPS;
 
 /// How many places score in a cup, and the most that a race waits for (`UI_CupStandings`: the
 /// first four of the race get points).

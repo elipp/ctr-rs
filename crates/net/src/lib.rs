@@ -15,7 +15,9 @@ mod dotless;
 mod limit;
 mod names;
 mod peers;
+mod pending;
 mod realm;
+pub mod score;
 mod session;
 mod ticket;
 mod transfers;
@@ -26,7 +28,8 @@ pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 /// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
 /// (where std's panics).
 pub use n0_future::time::Instant;
-pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
+pub use pending::{Pending, Stopped};
+pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names, nick_char};
 pub use realm::{
     Browse, BrowseError, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public, PublicLobby,
     browse, default_realm, lobby_name,
@@ -136,10 +139,15 @@ fn relay_mode() -> RelayMode {
 
 /// The endpoint of a session or a fetch, as [`set_relay_only`] says.
 fn endpoint_builder() -> Builder {
+    dialer_builder().address_lookup(PkarrPublisher::n0_dns())
+}
+
+/// [`endpoint_builder`] for an endpoint that only dials out: nobody looks its throwaway key up,
+/// so its address isn't published.
+fn dialer_builder() -> Builder {
     // The preset's lookups, its resolvers wrapped.
     let builder = Endpoint::builder(presets::N0)
         .clear_address_lookup()
-        .address_lookup(PkarrPublisher::n0_dns())
         .address_lookup(Dotless(PkarrResolver::n0_dns()));
     #[cfg(not(target_arch = "wasm32"))]
     let builder = builder.address_lookup(Dotless(iroh::address_lookup::DnsAddressLookup::n0_dns()));

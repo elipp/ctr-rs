@@ -14,7 +14,7 @@ use crate::controls::{Control, Controls};
 /// ours to read.
 #[derive(SystemParam)]
 pub(crate) struct Pads<'w, 's> {
-    pads: Query<'w, 's, (Entity, &'static Gamepad)>,
+    pads: Query<'w, 's, (Entity, &'static mut Gamepad)>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
@@ -27,6 +27,14 @@ impl Pads<'_, '_> {
     pub(crate) fn entities(&self) -> impl Iterator<Item = (Entity, &Gamepad)> {
         let focused = self.windows.iter().any(|w| w.focused);
         self.pads.iter().filter(move |_| focused)
+    }
+
+    /// The buttons pushed or let go of this frame are not for anything that reads them later in
+    /// it. Held ones stay held.
+    pub(crate) fn consume(&mut self) {
+        for (_, mut pad) in &mut self.pads {
+            pad.digital_mut().clear();
+        }
     }
 }
 

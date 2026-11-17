@@ -118,6 +118,14 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrSaveMap)]
     pub fn save_map(key: &str, bytes: &[u8]);
 
+    /// The player key (`player.rs`) as text, none if the page has none or cannot read it.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrLoadPlayerKey)]
+    pub fn load_player_key() -> Option<String>;
+
+    /// Keeps the player key; what went wrong if the page could not.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrSavePlayerKey)]
+    pub fn save_player_key(text: &str) -> Option<String>;
+
     /// Deletes the maps the page keeps.
     #[wasm_bindgen(js_namespace = window, js_name = ctrPurgeMaps)]
     pub fn purge_maps();

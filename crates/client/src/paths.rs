@@ -21,6 +21,12 @@ pub fn config_file() -> PathBuf {
     cache().join("config.json")
 }
 
+/// The player key (`player.rs`), beside the settings. (Not in a browser: the page's storage.)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn player_key() -> PathBuf {
+    cache().join("player.key")
+}
+
 /// Where the panic that ended the last run is written, see `crash.rs`. (Not in a browser.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crash_log() -> PathBuf {
@@ -54,6 +60,11 @@ pub fn track_pictures() -> PathBuf {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn pbs() -> PathBuf {
     root().join(".cache").join("pbs")
+}
+
+/// The boards' #1 runs (`world_record.rs`), in `loader::store`: everything in it may go.
+pub fn world_records() -> PathBuf {
+    root().join(".cache").join("world-records")
 }
 
 fn cache() -> PathBuf {

@@ -94,6 +94,9 @@ pub struct CurrentRace {
     pub relic_target: Option<(race::relic::Tier, i32)>,
     /// A solo run's personal best's time, as it was when the race went on the grid.
     pub best: Option<i32>,
+    /// A solo run's ghosts, driving next to ours (`ghost.rs`): they keep pace with the race's
+    /// sim, tick for tick from the grid on.
+    pub ghosts: crate::ghost::Ghosts,
     /// What a solo run's finish did to the personal best, once it is settled
     /// (`lobby::progress::finish`): the ceremony (`solo_end.rs`) goes by it.
     pub solo_end: Option<SoloEnd>,
@@ -134,6 +137,18 @@ pub struct SoloEnd {
     pub best: Option<i32>,
     /// The relic the run earned that the old best hadn't (`NEW_RELIC`).
     pub relic: Option<race::relic::Tier>,
+    /// The new best's way to the board (`scores.rs`), when one is offered.
+    pub submit: Option<Submit>,
+}
+
+/// Where an end screen's submit is at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Submit {
+    Offered,
+    Sending,
+    Accepted { rank: u32, top_ms: i32 },
+    /// Why is told in a toast: it's too long for the screen.
+    Refused,
 }
 
 /// The netcode of a lobby's race.
@@ -261,6 +276,7 @@ impl CurrentRace {
             solo: None,
             relic_target: None,
             best: None,
+            ghosts: Default::default(),
             solo_end: None,
             phase: Phase::Starting,
             go: false,
@@ -284,6 +300,15 @@ impl CurrentRace {
     ) -> CurrentRace {
         let locals = (0..characters.len()).collect();
         let hash = crate::maps::hash(track).unwrap_or(0);
+        // The one place a solo race's rules are made: they don't change after, so `props.rs` and
+        // `pb.rs` take the board's seed from them.
+        let rules = match solo {
+            Some(kind) => net::Rules {
+                seed: race::solo::board_seed(kind, hash, rules.laps),
+                ..rules
+            },
+            None => rules,
+        };
         let mut race = CurrentRace::new(
             0,
             locals,

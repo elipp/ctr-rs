@@ -7,6 +7,7 @@ edition = "2024"
 coll = { path = "../coll" }
 instance = { path = "../instance" }
 loader = { path = "../loader" }
+map = { path = "../map" }
 math = { path = "../math" }
 vehicle = { path = "../vehicle" }
 weapon = { path = "../weapon" }

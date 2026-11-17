@@ -78,6 +78,7 @@ pub(super) fn drive_tick(
     shown: Shown,
     mut memory: Local<Memory>,
     mut brains: ResMut<crate::learned::Brains>,
+    mut world_record: ResMut<crate::world_record::WorldRecord>,
 ) {
     let Shown {
         mut particles,
@@ -112,9 +113,10 @@ pub(super) fn drive_tick(
         sfx.set_paused(host_paused);
         *was_host_paused = host_paused;
     }
-    // The pause menu (or the effects panel's freeze) stops the race, unless the race is
-    // everyone's.
-    let paused = ((hold.menu.open || hold.fx.holds()) && !shared) || host_paused;
+    // The effects panel's freeze stops the race, unless the race is everyone's. (It holds only the
+    // race, so that `/debug fx step` can run ticks: the pause menu stops the clock instead,
+    // `loading::hold_clock`.)
+    let paused = (hold.fx.holds() && !shared) || host_paused;
     if paused && !*was_paused {
         // Nothing moves between ticks now, so the interpolation must not either.
         for view in &mut drive.views {
@@ -177,6 +179,8 @@ pub(super) fn drive_tick(
                 race.relic_target = race::relic::target(race.track, race.rules.laps, best);
             }
             race.best = best;
+            race.ghosts.best = crate::pb::ghost(&track.0, &sim, race);
+            race.ghosts.world = world_record.start(&track.0, &sim, race);
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.

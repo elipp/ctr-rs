@@ -140,7 +140,7 @@ impl Effects {
     }
 }
 
-/// What stops an offline race: the pause menu, or the panel's freeze.
+/// What `drive_tick` takes from the pause menu (its restart) and the panel (its freeze).
 #[derive(SystemParam)]
 pub struct Hold<'w> {
     pub menu: ResMut<'w, crate::pause::PauseMenu>,
