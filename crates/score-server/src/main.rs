@@ -228,7 +228,9 @@ async fn verify(app: &Arc<App>, bytes: &[u8], claimed_ms: i32) -> Result<Verifie
 }
 
 async fn submit(app: &Arc<App>, s: Submit) -> Response {
+    // `now` is the signing clock, `Auth::ts`'s; `at` what is stored and shown.
     let now = unix_now();
+    let at = now as i64;
     let key = match app.seen.check(&s.auth, Action::Submit, &s.run, now) {
         Ok(key) => key,
         Err(e) => return Response::Unauthorized { why: e.to_string(), now },
@@ -236,7 +238,7 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
     let who = score::fingerprint(&key);
     let nick = score::clean_nick(&s.nick);
     let version: String = s.version.chars().filter(|c| !c.is_control()).take(MAX_VERSION).collect();
-    if let Err(e) = app.db.lock().unwrap().seen(&key, &nick, &version, now) {
+    if let Err(e) = app.db.lock().unwrap().seen(&key, &nick, &version, at) {
         return failed(e);
     }
     let Some(_slot) = app.limits.start(&key, now) else {
@@ -245,7 +247,7 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
 
     let reject = |rejected: Rejected| {
         info!("{who} rejected: {rejected}");
-        if let Err(e) = app.db.lock().unwrap().rejected(&key, rejected.code(), &version, now) {
+        if let Err(e) = app.db.lock().unwrap().rejected(&key, rejected.code(), &version, at) {
             error!("{e}");
         }
         Response::Rejected(rejected)
@@ -264,7 +266,7 @@ async fn submit(app: &Arc<App>, s: Submit) -> Response {
         character: v.run.demo.character as u8,
         final_ms: v.outcome.final_ms,
         perfect: v.outcome.perfect,
-        at: now,
+        at,
         pads_hash: &v.pads_hash,
         run: &s.run,
         signed_ts: s.auth.ts,

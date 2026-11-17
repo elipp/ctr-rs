@@ -10,12 +10,10 @@ use std::time::Duration;
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use realm_proto::{ALPN, Listing, MAX_RESPONSE, Reject, Request, Response, State, is_name_char};
-use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-#[cfg(not(target_arch = "wasm32"))]
-use std::thread::JoinHandle;
+use std::sync::mpsc::Sender;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, oneshot, watch};
 
+use crate::pending::Pending;
 use crate::{Error, Event};
 
 /// The realm that lobbies are listed in unless the player picks another.
@@ -368,7 +366,7 @@ pub struct PublicLobby {
 }
 
 /// What a host is told when the realm turns its protocol away.
-const OUTDATED: &str = "please update the game";
+pub(crate) const OUTDATED: &str = "please update the game";
 
 /// Why a list could not be fetched.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -390,7 +388,7 @@ impl std::fmt::Display for BrowseError {
 
 /// Whether a failed connection is the realm turning our protocol away: TLS alert 120,
 /// `no_application_protocol`, which QUIC reports as "the cryptographic handshake failed: error 120".
-fn is_alpn_mismatch(e: &(dyn std::error::Error + 'static)) -> bool {
+pub(crate) fn is_alpn_mismatch(e: &(dyn std::error::Error + 'static)) -> bool {
     let mut e = Some(e);
     while let Some(err) = e {
         if err.to_string().contains("handshake failed: error 120") {
@@ -402,55 +400,28 @@ fn is_alpn_mismatch(e: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 /// The list being fetched from a realm, which [`Browse::poll`] hands over when it is here.
-pub struct Browse {
-    result: Mutex<Receiver<Result<Vec<PublicLobby>, BrowseError>>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    _thread: JoinHandle<()>,
-}
+pub struct Browse(Pending<Result<Vec<PublicLobby>, BrowseError>>);
 
 impl Browse {
     /// The list or what went wrong, once, when the realm has answered.
     pub fn poll(&self) -> Option<Result<Vec<PublicLobby>, BrowseError>> {
-        match self.result.lock().unwrap().try_recv() {
-            Ok(result) => Some(result),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err(BrowseError::Failed("the network thread stopped".into()))),
-        }
+        self.0
+            .poll()
+            .map(|r| r.unwrap_or_else(|stopped| Err(BrowseError::Failed(stopped.to_string()))))
     }
 }
 
 /// How long the whole fetch may take.
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Fetches the lobbies listed in `realm`, on a thread of its own (in a browser, a task of the
-/// page): the game polls the [`Browse`].
+/// Fetches the lobbies listed in `realm` in the background: the game polls the [`Browse`].
 /// `build` is the version of the sim (`race::SIM_VERSION`), to tell which lobbies we can join.
 pub fn browse(realm: EndpointId, build: u32) -> Browse {
-    let (tx, result) = mpsc::channel();
-    let list = move || async move {
-        let list = n0_future::time::timeout(BROWSE_TIMEOUT, fetch(realm, build))
+    Browse(Pending::spawn("realm", move || async move {
+        n0_future::time::timeout(BROWSE_TIMEOUT, fetch(realm, build))
             .await
-            .unwrap_or_else(|_| Err(BrowseError::Failed("the realm took too long".into())));
-        let _ = tx.send(list);
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let thread = std::thread::Builder::new()
-        .name("realm".into())
-        .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("the network runtime")
-                .block_on(list())
-        })
-        .expect("the network thread");
-    #[cfg(target_arch = "wasm32")]
-    n0_future::task::spawn(list());
-    Browse {
-        result: Mutex::new(result),
-        #[cfg(not(target_arch = "wasm32"))]
-        _thread: thread,
-    }
+            .unwrap_or_else(|_| Err(BrowseError::Failed("the realm took too long".into())))
+    }))
 }
 
 async fn fetch(realm: EndpointId, build: u32) -> Result<Vec<PublicLobby>, BrowseError> {

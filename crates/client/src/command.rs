@@ -170,6 +170,12 @@ pub enum Action {
     ScoreKeyExport,
     /// Replace the player key with one exported before.
     ScoreKeyImport(String),
+    /// Send the stored best of that kind on that track (the one shown if None) to the board
+    /// (`scores.rs`).
+    ScoreSubmit {
+        kind: race::solo::Kind,
+        track: Option<u32>,
+    },
     /// Empty the console (`console.rs`). What was typed before stays in the history.
     Clear,
     /// Say that to everyone in the lobby: a line that is not a `/command`.
@@ -243,7 +249,7 @@ const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of 
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
 const CACHE_USAGE: &str = "Usage: /cache purge";
-const SCORE_USAGE: &str = "Usage: /score key export | key import <key>";
+const SCORE_USAGE: &str = "Usage: /score submit relic | time-trial [track] | key export | key import <key>";
 const RACE_USAGE: &str = "Usage: /race start | relic | time-trial | restart | stop";
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
@@ -429,6 +435,16 @@ impl Action {
         match (sub, what) {
             ("key", "export") if rest.is_empty() => Ok(Action::ScoreKeyExport),
             ("key", "import") if !rest.is_empty() => Ok(Action::ScoreKeyImport(rest.into())),
+            ("submit", kind @ ("relic" | "time-trial")) => Ok(Action::ScoreSubmit {
+                kind: match kind {
+                    "relic" => race::solo::Kind::Relic,
+                    _ => race::solo::Kind::TimeTrial,
+                },
+                track: match rest {
+                    "" => None,
+                    track => Some(crate::maps::resolve(track)?),
+                },
+            }),
             _ => Err(SCORE_USAGE.into()),
         }
     }
@@ -2091,6 +2107,11 @@ mod tests {
         assert!(matches!(Action::parse("score key import ab12"), Ok(Action::ScoreKeyImport(k)) if k == "ab12"));
         assert!(Action::parse("score key import").is_err());
         assert!(Action::parse("score key export now").is_err());
+        assert!(matches!(
+            Action::parse("score submit relic"),
+            Ok(Action::ScoreSubmit { kind: race::solo::Kind::Relic, track: None })
+        ));
+        assert!(Action::parse("score submit").is_err());
         assert!(Action::parse("version 1").is_err());
         assert!(matches!(Action::parse("clear"), Ok(Action::Clear)));
         assert!(Action::parse("clear all").is_err());

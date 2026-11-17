@@ -15,7 +15,9 @@ mod dotless;
 mod limit;
 mod names;
 mod peers;
+mod pending;
 mod realm;
+pub mod score;
 mod session;
 mod ticket;
 mod transfers;
@@ -26,6 +28,7 @@ pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 /// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
 /// (where std's panics).
 pub use n0_future::time::Instant;
+pub use pending::{Pending, Stopped};
 pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names, nick_char};
 pub use realm::{
     Browse, BrowseError, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public, PublicLobby,

@@ -59,6 +59,9 @@ map = { path = "../map" }
 cutscene = { path = "../cutscene" }
 # Where a release build keeps its files (`paths.rs`).
 directories = "6.0.0"
+# Dates, like when a world record ghost was submitted: in UTC, so no time zone database (which a
+# browser build would have to bundle).
+jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The disc image picker (`disc.rs`). On Linux through the desktop portal (or zenity), which needs

@@ -92,6 +92,7 @@ mod rect_menu;
 mod remote;
 mod resources;
 mod scene;
+mod scores;
 mod scoreboard;
 mod shadow;
 mod shield;

@@ -116,6 +116,8 @@ pub(super) fn finish(
                 new_best,
                 best,
                 relic: earned(ms).filter(|&tier| new_best && Some(tier) > had),
+                submit: (new_best && net::score::default_score().is_some())
+                    .then_some(crate::race_on::Submit::Offered),
             });
             continue;
         }

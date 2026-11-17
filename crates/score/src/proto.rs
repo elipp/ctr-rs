@@ -90,8 +90,8 @@ pub struct Entry {
     pub character: u8,
     pub final_ms: i32,
     pub perfect: bool,
-    /// Unix seconds.
-    pub at: u64,
+    /// Unix seconds, as SQLite keeps them and `jiff::Timestamp::from_second` takes them.
+    pub at: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]

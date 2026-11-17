@@ -15,7 +15,7 @@ use render::mesh;
 use crate::font::CtrText;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews};
-use crate::race_on::{RaceOn, SoloEnd};
+use crate::race_on::{RaceOn, SoloEnd, Submit};
 use crate::subtract::SubtractMaterial;
 use crate::wumpa_icon::HudModel;
 use crate::Textures;
@@ -58,6 +58,7 @@ enum Line {
     Relic,
     Best,
     OldBest,
+    Submit,
 }
 
 /// The relic's pivot; its child is the model, its middle on the pivot.
@@ -107,6 +108,8 @@ fn panel(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     race_on: Res<RaceOn>,
+    config: Res<crate::config::Config>,
+    pads: crate::drive::Pads,
     hud: HudViews,
     panels: Query<(&HudView, &mut Visibility), With<Panel>>,
     mut lines: Query<(&Line, &mut CtrText, &mut Node)>,
@@ -140,7 +143,8 @@ fn panel(
                 line(Line::Perfect),
                 line(Line::Relic),
                 line(Line::Best),
-                line(Line::OldBest)
+                line(Line::OldBest),
+                line(Line::Submit)
             ],
         ));
     }
@@ -180,6 +184,7 @@ fn panel(
                 end.best.map(|ms| format!("BEST {}", crate::laps::clock(ms))),
                 Gradient::WHITE,
             ),
+            Line::Submit => (submit_line(end.submit, &pads, &config), Gradient::WHITE),
         };
         let display = if wanted.is_some() {
             Display::Flex
@@ -197,6 +202,25 @@ fn panel(
             text.gradient = gradient;
         }
     }
+}
+
+/// (The font has no '#'.)
+fn submit_line(
+    submit: Option<Submit>,
+    pads: &crate::drive::Pads,
+    config: &crate::config::Config,
+) -> Option<String> {
+    Some(match submit? {
+        Submit::Offered => {
+            format!("{}: SUBMIT", crate::ghost::select_label(pads, config)?.to_uppercase())
+        }
+        Submit::Sending => "SUBMITTING...".to_string(),
+        Submit::Accepted { rank: 1, .. } => "FIRST ON THE BOARD!".to_string(),
+        Submit::Accepted { rank, top_ms } => {
+            format!("RANK {rank}, TOP {}", crate::laps::clock(top_ms))
+        }
+        Submit::Refused => "NOT SUBMITTED".to_string(),
+    })
 }
 
 /// Puts the relic up when the run earned one (in its tier's colour: the model's own colours are

@@ -421,14 +421,24 @@ pub(crate) const COMMANDS: &[Spec] = &[
     node(
         "score",
         "The leaderboards of relic races and time trials",
-        &[node(
-            "key",
-            "The key that is you on the boards",
-            &[
-                leaf("export", "Print it, to back it up or move it (keep it secret)"),
-                takes("import", "Replace ours with an exported one", "<key>"),
-            ],
-        )],
+        &[
+            node(
+                "submit",
+                "Send your best on a track to its board",
+                &[
+                    takes("relic", "Your relic race best", "[track]"),
+                    takes("time-trial", "Your time trial best", "[track]"),
+                ],
+            ),
+            node(
+                "key",
+                "The key that is you on the boards",
+                &[
+                    leaf("export", "Print it, to back it up or move it (keep it secret)"),
+                    takes("import", "Replace ours with an exported one", "<key>"),
+                ],
+            ),
+        ],
     ),
     node(
         "debug",

@@ -82,7 +82,7 @@ pub struct NewRun<'a> {
     pub character: u8,
     pub final_ms: i32,
     pub perfect: bool,
-    pub at: u64,
+    pub at: i64,
     pub pads_hash: &'a [u8; 32],
     pub run: &'a [u8],
     pub signed_ts: u64,
@@ -100,23 +100,23 @@ impl Db {
     }
 
     /// A signed request from `key`: the player is (re)labelled `nick`, and seen now.
-    pub fn seen(&self, key: &PublicKey, nick: &str, version: &str, now: u64) -> rusqlite::Result<()> {
+    pub fn seen(&self, key: &PublicKey, nick: &str, version: &str, now: i64) -> rusqlite::Result<()> {
         self.0
             .execute(
                 "INSERT INTO players (key, nick, first_seen, last_seen, connections, client_version)
                  VALUES (?1, ?2, ?3, ?3, 1, ?4)
                  ON CONFLICT (key) DO UPDATE SET nick = ?2, last_seen = ?3,
                    connections = connections + 1, client_version = ?4",
-                params![key.as_bytes(), nick, now as i64, version],
+                params![key.as_bytes(), nick, now, version],
             )
             .map(drop)
     }
 
-    pub fn rejected(&self, key: &PublicKey, reason: u8, version: &str, now: u64) -> rusqlite::Result<()> {
+    pub fn rejected(&self, key: &PublicKey, reason: u8, version: &str, now: i64) -> rusqlite::Result<()> {
         self.0
             .execute(
                 "INSERT INTO rejections (player, at, reason, client_version) VALUES (?1, ?2, ?3, ?4)",
-                params![key.as_bytes(), now as i64, reason, version],
+                params![key.as_bytes(), now, reason, version],
             )
             .map(drop)
     }
@@ -151,7 +151,7 @@ impl Db {
                 run.character,
                 run.final_ms,
                 run.perfect,
-                run.at as i64,
+                run.at,
                 run.pads_hash,
                 run.run,
                 run.signed_ts as i64,
@@ -239,6 +239,6 @@ fn entry(row: &rusqlite::Row) -> rusqlite::Result<Entry> {
         character: row.get("character")?,
         final_ms: row.get("final_ms")?,
         perfect: row.get("perfect")?,
-        at: row.get::<_, i64>("submitted_at")? as u64,
+        at: row.get("submitted_at")?,
     })
 }

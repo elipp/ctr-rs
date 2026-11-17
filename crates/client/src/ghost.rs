@@ -310,11 +310,11 @@ fn toggle(
     let Some(race) = race_on.get().filter(|race| race.solo.is_some()) else {
         return;
     };
-    if menu.open {
+    // An end screen that offers a submit has Select for it.
+    if menu.open || race.solo_end.is_some_and(|end| end.submit.is_some()) {
         return;
     }
-    let key = keys.any_just_pressed(config.controls.keys(Control::Ghost).iter().copied());
-    if !key && !pads.iter().any(|p| p.just_pressed(GamepadButton::Select)) {
+    if !select_pressed(&keys, &pads, &config) {
         return;
     }
     let have = race.ghosts.have();
@@ -351,17 +351,35 @@ fn hint(
     }
     let tick = sim.race.tick;
     if last_tick.is_none_or(|last| tick < last) {
-        // (Whether a pad is plugged in, not which one drives: a keyboard player with a pad in
-        // reads Select too.)
-        let key = config.controls.keys(Control::Ghost).first().copied();
-        let key = key.map(crate::controls::label);
-        let button = match (pads.iter().next().is_some(), key) {
-            (true, Some(key)) => format!("Select / {key}"),
-            (true, None) => "Select".to_string(),
-            (false, Some(key)) => key.to_string(),
-            (false, None) => return,
+        let Some(button) = select_label(&pads, &config) else {
+            return;
         };
         toasts.write(Toast::new(format!("{button}: ghosts"), 4000));
     }
     *last_tick = Some(tick);
+}
+
+/// How Select and the ghost's key are named to the player: the end screen's submit
+/// (`scores.rs`) is on them too. None if neither can be pressed.
+pub fn select_label(pads: &crate::drive::Pads, config: &crate::config::Config) -> Option<String> {
+    // (Whether a pad is plugged in, not which one drives: a keyboard player with a pad in reads
+    // Select too.)
+    let key = config.controls.keys(Control::Ghost).first().copied();
+    let key = key.map(crate::controls::label);
+    match (pads.iter().next().is_some(), key) {
+        (true, Some(key)) => Some(format!("Select / {key}")),
+        (true, None) => Some("Select".to_string()),
+        (false, Some(key)) => Some(key.to_string()),
+        (false, None) => None,
+    }
+}
+
+/// Select or the ghost's key, just pressed.
+pub fn select_pressed(
+    keys: &ButtonInput<KeyCode>,
+    pads: &crate::drive::Pads,
+    config: &crate::config::Config,
+) -> bool {
+    keys.any_just_pressed(config.controls.keys(Control::Ghost).iter().copied())
+        || pads.iter().any(|p| p.just_pressed(GamepadButton::Select))
 }
