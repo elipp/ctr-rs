@@ -98,11 +98,23 @@ fn show(
         let Some(kart) = hud.get(view) else {
             continue;
         };
+        // After our finish R1/L1 move the camera (`race.watching`) but not `sim.own`, which a
+        // spectator's already follows; only view 0 can watch.
+        let watched = race_on
+            .get()
+            .filter(|_| view == 0)
+            .and_then(|race| hud.driver(race.watching))
+            .unwrap_or(kart.driver);
         // `driverRank` is -1 until the kart has a place.
-        let rank = kart.driver.driver_rank;
+        let rank = watched.driver_rank;
         let place = usize::try_from(rank).ok().map(|rank| rank + 1);
-        // A solo run has no place (`UI_INSTANCE_InitAll` makes no `big1` for it).
-        let shown = place.filter(|&p| race_on.is_on() && race_on.solo().is_none() && p <= digits.0.len());
+        // A solo run has no place (`UI_INSTANCE_InitAll` makes no `big1` for it). Before
+        // `OnGrid` the karts' ranks are the last race's, on the scene the cup flag is still
+        // coming in over.
+        let on_grid = race_on
+            .get()
+            .is_some_and(|race| race.phase >= crate::race_on::Phase::OnGrid && race.solo.is_none());
+        let shown = place.filter(|&p| on_grid && p <= digits.0.len());
         visibility.set_if_neq(if shown.is_some() {
             Visibility::Inherited
         } else {

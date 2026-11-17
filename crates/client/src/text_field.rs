@@ -19,6 +19,9 @@ pub enum Typed {
     Done(String),
     /// Carries the text from before editing started.
     Cancelled(String),
+    /// Up (-1) or Down (1): the text is kept, as with `Done`, but the owner moves on instead of
+    /// acting on it.
+    Moved(String, i32),
 }
 
 impl TextField {
@@ -41,6 +44,8 @@ impl TextField {
         match &event.logical_key {
             Key::Enter => return Typed::Done(self.text.clone()),
             Key::Escape => return Typed::Cancelled(self.before.clone()),
+            Key::ArrowUp => return Typed::Moved(self.text.clone(), -1),
+            Key::ArrowDown => return Typed::Moved(self.text.clone(), 1),
             Key::Backspace => {
                 self.text.pop();
                 return Typed::Typing;
@@ -98,5 +103,13 @@ mod tests {
             field.key(&press(Key::Escape, None)),
             Typed::Cancelled("old".into())
         );
+    }
+
+    #[test]
+    fn up_and_down_keep_what_was_typed() {
+        let mut field = TextField::new("", 10, |_| true);
+        typed(&mut field, "new");
+        assert_eq!(field.key(&press(Key::ArrowDown, None)), Typed::Moved("new".into(), 1));
+        assert_eq!(field.key(&press(Key::ArrowUp, None)), Typed::Moved("new".into(), -1));
     }
 }

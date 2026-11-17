@@ -4,7 +4,8 @@
 //!
 //! * `/lobby create [public [name]]`: open a lobby (`/lobby close` closes it); a public one is listed in
 //!   the realm under that name, for anyone to find; the command line offers a name (`command.rs`)
-//! * the pause menu's "Public lobbies" (`pause.rs`): the realm's list, where a lobby is joined by taking it
+//! * the pause menu's "Play online" (`pause.rs`): the realm's list, where a lobby is joined by taking it,
+//!   and creating a public or a private lobby
 //! * `/lobby join <address>`: join the lobby at an address
 //! * `/lobby spectate <address>`: join the lobby at an address to watch its races, not to drive in them
 //! * `/cache purge`: delete the maps other players sent us (the `.cache/custom-tracks` folder, see `paths.rs`)

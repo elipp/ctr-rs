@@ -96,22 +96,26 @@ impl Controller<'_, '_> {
     /// What `device` tapped this frame, to work a menu with: the driving keys and buttons, as
     /// the pause menu's are not for one player. `stick` is which way the left stick was
     /// pushed last frame (-1, 0 or 1 up), which the caller keeps to tap with it.
-    pub fn menu(&self, device: &Device, taken: &[Entity], stick: &mut i32) -> MenuTaps {
+    pub fn menu(&self, device: &Device, taken: &[Entity], stick: &mut IVec2) -> MenuTaps {
         let (controls, pads) = self.sources(device, taken);
         let key = |control| controls.is_some_and(|c| c.just_pressed(control, &self.keys));
         let pad = |button| pads.iter().any(|p| p.just_pressed(button));
-        let y = pads
+        let at = pads
             .iter()
-            .map(|p| p.left_stick().y)
-            .find(|y| *y != 0.0)
-            .unwrap_or(0.0);
-        let pushed = (y > MENU_STICK) as i32 - (y < -MENU_STICK) as i32;
-        let tapped = |way: i32| pushed == way && *stick != way;
-        let (stick_up, stick_down) = (tapped(1), tapped(-1));
+            .map(|p| p.left_stick())
+            .find(|s| *s != Vec2::ZERO)
+            .unwrap_or(Vec2::ZERO);
+        let axis = |v: f32| (v > MENU_STICK) as i32 - (v < -MENU_STICK) as i32;
+        let pushed = IVec2::new(axis(at.x), axis(at.y));
+        let was = *stick;
         *stick = pushed;
+        let tapped_x = |way: i32| pushed.x == way && was.x != way;
+        let tapped_y = |way: i32| pushed.y == way && was.y != way;
         MenuTaps {
-            up: key(Control::Gas) || pad(GamepadButton::DPadUp) || stick_up,
-            down: key(Control::Brake) || pad(GamepadButton::DPadDown) || stick_down,
+            up: key(Control::Gas) || pad(GamepadButton::DPadUp) || tapped_y(1),
+            down: key(Control::Brake) || pad(GamepadButton::DPadDown) || tapped_y(-1),
+            left: key(Control::Left) || pad(GamepadButton::DPadLeft) || tapped_x(-1),
+            right: key(Control::Right) || pad(GamepadButton::DPadRight) || tapped_x(1),
             take: key(Control::Hop) || pad(GamepadButton::South),
             back: key(Control::Item) || pad(GamepadButton::East),
             toggle: key(Control::RacerMenu) || pad(GamepadButton::Select),
@@ -127,6 +131,8 @@ const MENU_STICK: f32 = 0x60 as f32 / 127.0;
 pub(super) struct MenuTaps {
     pub up: bool,
     pub down: bool,
+    pub left: bool,
+    pub right: bool,
     /// Hop, or Cross.
     pub take: bool,
     /// Item, or Circle.

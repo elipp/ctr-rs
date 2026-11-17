@@ -1,5 +1,5 @@
 //! Reusable icon grid: Mask mode (cup wizard's weapons, the bots' character pool) and Pick
-//! mode (meant for replacing the text list in `drive/chooser.rs`).
+//! mode (the racer menu, `drive/chooser.rs`, one grid per local player).
 //!
 //! Stateless by design: the owner keeps the real state (e.g. `Config::masked_weapons`) and the
 //! cursor, rebuilds [`Icons`] from it every frame, and the menu respawns the grid when `Icons`
@@ -210,6 +210,19 @@ pub struct GridCaption<R> {
     owner: PhantomData<fn() -> R>,
 }
 
+fn gap(interactive: bool) -> usize {
+    if interactive { 2 } else { 1 }
+}
+
+/// The texels [`spawn`]'s cells take, without the caption.
+pub fn extent(len: usize, columns: usize, size: UVec2, interactive: bool) -> UVec2 {
+    let columns = columns.max(1);
+    let rows = len.div_ceil(columns);
+    let (gap, frame) = (gap(interactive) as u32, if interactive { 2 } else { 0 });
+    let across = |n: usize, cell: u32| n as u32 * (cell + frame) + n.saturating_sub(1) as u32 * gap;
+    UVec2::new(across(columns.min(len), size.x), across(rows, size.y))
+}
+
 /// A non-`interactive` grid (preview) has no observers, frames or caption, so [`update`] never
 /// touches it. Nor does a grid without names have a caption.
 pub fn spawn<R: HasIconGrid>(
@@ -221,7 +234,7 @@ pub fn spawn<R: HasIconGrid>(
     size: &TexelSize,
     interactive: bool,
 ) -> Entity {
-    let gap = if interactive { 2 } else { 1 };
+    let gap = gap(interactive);
     let holder = commands
         .spawn((
             ChildOf(parent),
@@ -325,14 +338,14 @@ pub type Frames<'w, 's, R> = Query<'w, 's, (&'static GridIcon<R>, &'static mut B
 pub type Captions<'w, 's, R> =
     Query<'w, 's, (&'static GridCaption<R>, &'static mut CtrText), Without<GridIcon<R>>>;
 
-/// `cursor`: `None` when the owner's selection isn't on a grid.
+/// `cursor`: the cursor's icon on grid `grid`, `None` when the owner's selection isn't on it.
 pub fn update<R: HasIconGrid>(
-    cursor: Option<(usize, usize)>,
+    cursor: impl Fn(usize) -> Option<usize>,
     frames: &mut Frames<R>,
     captions: &mut Captions<R>,
 ) {
     for (icon, mut border) in frames {
-        let colour = if cursor == Some((icon.grid, icon.icon)) {
+        let colour = if cursor(icon.grid) == Some(icon.icon) {
             CURSOR
         } else if icon.picked {
             PICKED
@@ -344,12 +357,9 @@ pub fn update<R: HasIconGrid>(
         }
     }
     for (caption, mut text) in captions {
-        let name = match cursor {
-            Some((grid, icon)) if grid == caption.grid => {
-                caption.names.get(icon).map_or("", String::as_str)
-            }
-            _ => "",
-        };
+        let name = cursor(caption.grid)
+            .and_then(|icon| caption.names.get(icon))
+            .map_or("", String::as_str);
         if text.text != name {
             text.text = name.to_string();
         }

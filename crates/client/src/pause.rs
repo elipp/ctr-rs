@@ -4,8 +4,9 @@
 //! it, as a tap does on a touch screen. Items that do not fit scroll: with the mouse wheel, and
 //! to keep the pick shown as the keys move it.
 //!
-//! Outside a lobby it also offers "Public lobbies": the realm's list (`public_lobbies.rs`), where
-//! taking a lobby joins it. Backspace goes back from there to the menu, not to the race.
+//! Outside a lobby it also offers "Play online": the realm's list (`public_lobbies.rs`), where
+//! taking a lobby joins it, and creating a public or a private lobby. Private lobbies have no
+//! name on the wire (`Action::CreateLobby`), so only the public one asks for one.
 //!
 //! "Options" has the effects', the music's and the voices' volumes as retail's options menu draws
 //! them (`MainFreeze_MenuPtrOptions`): a wedge that grows to the right, with a white knob on it.
@@ -43,6 +44,8 @@ use bevy::input::mouse::MouseWheel;
 use bevy::picking::events::{PointerClick, PointerMove, PointerPress, PointerRelease};
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
 use render::font::{Font, Gradient};
@@ -57,11 +60,15 @@ use crate::cup_wizard::{self, CupItem, Draft, Go};
 use crate::font::{CtrText, TexelSize};
 use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
 use crate::lobby::Lobby;
+use crate::maps;
 use crate::race_on::RaceOn;
 use crate::public_lobbies::{self, PublicLobbies, Status};
+use crate::suggest;
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 use crate::text_field::{TextField, Typed};
 use crate::toast::Toast;
+use crate::track_picture::TrackPictures;
+use crate::LevelNumber;
 use crate::version::VERSION;
 
 /// Whether the menu is open, and what it was asked to do.
@@ -106,6 +113,9 @@ pub struct PauseMenu {
     icon_taken: Option<(usize, usize)>,
     /// The pool page's draft: only meaningful in `View::BotPool` (see `bots_menu.rs`).
     bot_pool: u16,
+    /// Seeded with a `suggest` name on entering `View::NameLobby`, so a pad or a touch screen,
+    /// which can't type, can still create with Create.
+    lobby_name: String,
 }
 
 impl PauseMenu {
@@ -138,8 +148,11 @@ impl HasAccordion for PauseMenu {
 pub(crate) enum View {
     #[default]
     Main,
+    PlaySolo,
+    PlayOnline,
     /// The public lobbies.
     Browser,
+    NameLobby,
     /// The volumes.
     Options,
     /// The keyboard's driving keys.
@@ -150,6 +163,7 @@ pub(crate) enum View {
     Weapons,
     Bots,
     BotPool,
+    Tracks,
 }
 
 impl View {
@@ -159,6 +173,7 @@ impl View {
             View::Controls => View::Options,
             View::Weapons => View::CupWizard,
             View::BotPool => View::Bots,
+            View::Browser | View::NameLobby => View::PlayOnline,
             _ => View::Main,
         }
     }
@@ -169,10 +184,17 @@ impl View {
 pub(crate) enum Item {
     Resume,
     Restart,
+    PlaySolo,
     Solo(race::solo::Kind),
     LeaveLobby,
+    PlayOnline,
     /// Shows the realm's list.
     PublicLobbies,
+    CreatePublic,
+    CreatePrivate,
+    LobbyName,
+    /// Creates the public lobby named in `View::NameLobby`.
+    CreateLobby,
     /// Shows the volumes.
     Options,
     /// Shows the version and the licenses.
@@ -182,6 +204,8 @@ pub(crate) enum Item {
     BotsMenu,
     Bots(BotsItem),
     Quit,
+    TrackSelect,
+    Track(u32),
     /// A volume, which Left and Right change.
     Volume(Slider),
     /// Shows the driving keys.
@@ -206,6 +230,7 @@ pub(crate) struct Entry {
     kind: Kind,
     section: bool,
     inline: bool,
+    font: Font,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -217,6 +242,8 @@ pub(crate) enum Kind {
     Slider(Slider),
     Preview(Icons),
     Grid(Icons),
+    /// A `LevelId`; resolved through `TrackPictures` at spawn, as `items` has no `Assets<Image>`.
+    TrackPicture(u32),
 }
 
 impl Entry {
@@ -227,7 +254,13 @@ impl Entry {
             kind,
             section: false,
             inline: false,
+            font: Font::Middle,
         }
+    }
+
+    pub(crate) fn large(mut self) -> Entry {
+        self.font = Font::Large;
+        self
     }
 
     /// Label and value on one centred line ("Name abc"), instead of in the two columns.
@@ -265,7 +298,36 @@ fn items(
     config: &Config,
 ) -> (String, Vec<Entry>) {
     match menu.view {
+        View::PlaySolo => {
+            let items = vec![
+                entry(Item::Solo(race::solo::Kind::Relic), "Relic race"),
+                entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"),
+                entry(Item::Back, "Back"),
+            ];
+            return ("Play solo".into(), items);
+        }
+        View::PlayOnline => {
+            let items = vec![
+                entry(Item::PublicLobbies, "Public lobbies"),
+                entry(Item::CreatePublic, "Create lobby - public"),
+                entry(Item::CreatePrivate, "Create lobby - private"),
+                entry(Item::Back, "Back"),
+            ];
+            return ("Play online".into(), items);
+        }
         View::Browser => return ("Public lobbies".into(), browser_items(public)),
+        View::NameLobby => {
+            let name = Kind::Field {
+                text: menu.lobby_name.clone(),
+                editing: false,
+            };
+            let items = vec![
+                Entry::new(Item::LobbyName, "Name", name),
+                entry(Item::CreateLobby, "Create"),
+                entry(Item::Back, "Back"),
+            ];
+            return ("Public lobby".into(), typed_into(items, menu));
+        }
         View::Options => return ("Options".into(), options_items()),
         View::Controls => return ("Controls".into(), controls_items(config, menu.capturing)),
         View::About => return ("About".into(), vec![entry(Item::Back, "Back")]),
@@ -276,16 +338,17 @@ fn items(
         View::Weapons => return ("Weapons".into(), cup_wizard::weapon_items(config)),
         View::Bots => return ("Bots".into(), bots_menu::items(lobby)),
         View::BotPool => return ("Character pool".into(), bots_menu::pool_items(menu.bot_pool)),
+        View::Tracks => return ("Track select".into(), track_items()),
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
     if !race_on.shared() {
         items.push(entry(Item::Restart, "Restart"));
     }
+    items.push(entry(Item::TrackSelect, "Track select"));
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
     if !lobby.is_open() && !race_on.is_on() {
-        items.push(entry(Item::Solo(race::solo::Kind::Relic), "Relic race"));
-        items.push(entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"));
+        items.push(entry(Item::PlaySolo, "Play solo"));
     }
     // (Bots only race in a lobby's series: offline there's nothing for them to fill.)
     if lobby.is_host() {
@@ -295,7 +358,7 @@ fn items(
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
     } else {
-        items.push(entry(Item::PublicLobbies, "Public lobbies"));
+        items.push(entry(Item::PlayOnline, "Play online"));
     }
     items.push(entry(Item::Options, "Options"));
     items.push(entry(Item::About, "About"));
@@ -324,6 +387,15 @@ fn typed_into(mut items: Vec<Entry>, menu: &PauseMenu) -> Vec<Entry> {
             editing: true,
         };
     }
+    items
+}
+
+fn track_items() -> Vec<Entry> {
+    let mut items: Vec<Entry> = maps::cycle()
+        .into_iter()
+        .map(|id| Entry::new(Item::Track(id), maps::name(id), Kind::TrackPicture(id)).large())
+        .collect();
+    items.push(entry(Item::Back, "Back"));
     items
 }
 
@@ -464,6 +536,10 @@ struct Wedge(Handle<Image>);
 #[derive(Component)]
 struct Arrow(usize);
 
+/// Item index, for re-tinting the border with the row's pick.
+#[derive(Component)]
+struct PictureFrame(usize);
+
 /// White so that `ImageNode::color` can tint them like the row's text.
 #[derive(Resource)]
 struct Arrows {
@@ -478,6 +554,7 @@ struct Art<'w> {
     sheets: ResMut<'w, icon_grid::Sheets>,
     textures: Res<'w, crate::Textures>,
     images: ResMut<'w, Assets<Image>>,
+    pictures: ResMut<'w, TrackPictures>,
 }
 
 const ARROW: usize = 4;
@@ -485,6 +562,12 @@ const ARROW_HEIGHT: usize = 7;
 const ARROW_GAP: usize = 4;
 
 const CARET: usize = 2;
+
+/// A track's picture is fitted into this, in texels: the disc's pictures (169x71) at two thirds,
+/// three rows to the page. Maps' pictures (captures, minimaps) have other shapes.
+const TRACK_PICTURE: UVec2 = UVec2::new(112, 47);
+/// The picture's box with its border, and the row's padding; taller than the large font's line.
+const TRACK_ROW_TEXELS: usize = TRACK_PICTURE.y as usize + 2 + 2 * ROW_PADDING;
 
 pub struct PausePlugin;
 
@@ -518,7 +601,7 @@ fn input(
     size: Res<TexelSize>,
     pads: crate::drive::Pads,
     lobby: Res<Lobby>,
-    race_on: Res<RaceOn>,
+    (race_on, level): (Res<RaceOn>, Res<LevelNumber>),
     mut public: ResMut<PublicLobbies>,
     mut config: ResMut<Config>,
     time: Res<Time<Real>>,
@@ -560,7 +643,7 @@ fn input(
         .map(|event| accordion::wheel_lines(event, font_size))
         .sum();
     // The items' list scrolls by rows.
-    let row = size.0.y * ROW_TEXELS as f32;
+    let row = size.0.y * PageLayout::of(menu.view).row as f32;
     let wheeled_px: f32 = wheel
         .iter()
         .map(|event| accordion::wheel_lines(event, row) * row)
@@ -622,13 +705,28 @@ fn input(
         if pad(GamepadButton::North) || pad(GamepadButton::Start) {
             typed = Some(Typed::Cancelled(String::new()));
         }
+        let pad_way = (pad(GamepadButton::DPadDown) || stick_down) as i32
+            - (pad(GamepadButton::DPadUp) || stick_up) as i32;
+        if typed.is_none() && pad_way != 0 {
+            typed = Some(Typed::Moved(field.text.clone(), pad_way));
+        }
         match typed {
             None | Some(Typed::Typing) => menu.typing = Some((item, field)),
             Some(Typed::Done(text)) => {
-                commit(item, text, &mut menu, &config);
+                commit(item, text, true, &mut menu, &config, &mut actions);
                 sound(MENU_TAKE_SFX);
             }
-            Some(Typed::Cancelled(_)) => sound(MENU_BACK_SFX),
+            Some(Typed::Moved(text, way)) => {
+                commit(item, text, false, &mut menu, &config, &mut actions);
+                let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
+                navigate(&mut menu, &items, IVec2::new(0, way));
+                menu.follow = true;
+                sound(MENU_MOVE_SFX);
+            }
+            Some(Typed::Cancelled(_)) => {
+                cancel(item, &mut menu);
+                sound(MENU_BACK_SFX);
+            }
         }
         return finish(was_open, &menu, &mut keys);
     }
@@ -813,6 +911,27 @@ fn input(
                 menu.open = false;
                 actions.write(Action::CloseLobby);
             }
+            Some(Item::PlaySolo) => {
+                menu.view = View::PlaySolo;
+                menu.selected = 0;
+            }
+            Some(Item::PlayOnline) => {
+                menu.view = View::PlayOnline;
+                menu.selected = 0;
+            }
+            Some(Item::CreatePublic) => {
+                // (A browser's std hasher has fixed keys: the time is what differs there.)
+                let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
+                menu.lobby_name = suggest::lobby_name_at(seed % suggest::LOBBY_NAME_COUNT);
+                menu.view = View::NameLobby;
+                menu.selected = 0;
+                menu.typing = field(Item::LobbyName, &mut menu, &config).map(|f| (Item::LobbyName, f));
+            }
+            Some(Item::CreatePrivate) => {
+                menu.open = false;
+                actions.write(Action::CreateLobby { public: None });
+            }
+            Some(Item::CreateLobby) => create_public(&mut menu, &mut actions),
             Some(Item::PublicLobbies) => {
                 menu.view = View::Browser;
                 menu.selected = 0;
@@ -887,7 +1006,19 @@ fn input(
                     menu.selected = 0;
                 }
             }
-            Some(Item::Info | Item::Volume(_)) | None => {}
+            Some(Item::TrackSelect) => {
+                menu.view = View::Tracks;
+                menu.selected = track_items()
+                    .iter()
+                    .position(|e| e.item == Item::Track(level.0))
+                    .unwrap_or(0);
+                menu.follow = true;
+            }
+            Some(Item::Track(id)) => {
+                menu.open = false;
+                actions.write(Action::Track(id));
+            }
+            Some(Item::Info | Item::Volume(_) | Item::LobbyName) | None => {}
             Some(Item::Quit) => {
                 exit.write(AppExit::Success);
             }
@@ -995,14 +1126,56 @@ fn remove(item: Item, menu: &mut PauseMenu, config: &Config) -> bool {
 fn field(item: Item, menu: &mut PauseMenu, config: &Config) -> Option<TextField> {
     match item {
         Item::Cup(item) => cup_wizard::field(item, &mut menu.cup, config),
+        Item::LobbyName => Some(TextField::new(
+            menu.lobby_name.clone(),
+            net::MAX_LOBBY_NAME,
+            net::is_lobby_name_char,
+        )),
         _ => None,
     }
 }
 
-fn commit(item: Item, text: String, menu: &mut PauseMenu, config: &Config) {
-    if let Item::Cup(item) = item {
-        cup_wizard::commit(item, text, &mut menu.cup, config);
+/// `submit`: Enter, rather than moving off the field.
+fn commit(
+    item: Item,
+    text: String,
+    submit: bool,
+    menu: &mut PauseMenu,
+    config: &Config,
+    actions: &mut MessageWriter<Action>,
+) {
+    match item {
+        Item::Cup(item) => cup_wizard::commit(item, text, &mut menu.cup, config),
+        Item::LobbyName => {
+            menu.lobby_name = text;
+            if submit {
+                create_public(menu, actions);
+            }
+        }
+        _ => {}
     }
+}
+
+/// Escape on a field. The field is the name dialog's whole point, so there it backs out of the
+/// dialog; elsewhere it only gives the text back (which `commit` never saw).
+fn cancel(item: Item, menu: &mut PauseMenu) {
+    if item == Item::LobbyName {
+        menu.view = menu.view.parent();
+        menu.selected = 0;
+        menu.scroll = 0.0;
+        menu.grid_cursor = 0;
+    }
+}
+
+/// Can't fail: the field only admits `net::is_lobby_name_char`s up to `MAX_LOBBY_NAME`, which is
+/// all `net::lobby_name` checks; it still collapses the spaces. An empty name is the realm's
+/// default (`Lobby::host`).
+fn create_public(menu: &mut PauseMenu, actions: &mut MessageWriter<Action>) {
+    let Ok(name) = net::lobby_name(&menu.lobby_name) else {
+        return;
+    };
+    menu.open = false;
+    actions.write(Action::CreateLobby { public: Some(name) });
 }
 
 /// Returns whether anything changed, for the sound; marks the config unsaved itself.
@@ -1122,7 +1295,10 @@ fn show(
     mut list: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<List>>,
     mut texts: Query<&mut CtrText, Without<icon_grid::GridCaption<PauseMenu>>>,
     mut knobs: Query<(&Knob, &mut Node)>,
-    mut arrows: Query<(&Arrow, &mut ImageNode)>,
+    (mut arrows, mut picture_frames): (
+        Query<(&Arrow, &mut ImageNode)>,
+        Query<(&PictureFrame, &mut BorderColor), Without<icon_grid::GridIcon<PauseMenu>>>,
+    ),
     mut about_lines: accordion::Lines<PauseMenu>,
     mut frames: icon_grid::Frames<PauseMenu>,
     mut captions: icon_grid::Captions<PauseMenu>,
@@ -1202,11 +1378,21 @@ fn show(
             image.color = tint;
         }
     }
+    for (frame, mut border) in &mut picture_frames {
+        let tint = BorderColor::all(tint(frame.0 == menu.selected));
+        if *border != tint {
+            *border = tint;
+        }
+    }
     let on_grid = shown.single().ok().and_then(|(_, shown)| {
         let entry = shown.items.get(menu.selected)?;
         matches!(entry.kind, Kind::Grid(_)).then_some((menu.selected, menu.grid_cursor))
     });
-    icon_grid::update(on_grid, &mut frames, &mut captions);
+    icon_grid::update(
+        |grid| on_grid.filter(|&(g, _)| g == grid).map(|(_, icon)| icon),
+        &mut frames,
+        &mut captions,
+    );
 }
 
 /// Per-page geometry, in texels.
@@ -1217,6 +1403,10 @@ struct PageLayout {
     min_width: usize,
     /// Left padding in both columns of paired rows, on top of the panel's own.
     indent: usize,
+    /// The list's most height: a whole number of `row`s, so no row shows cut off. Every row is
+    /// at least `row` tall (Back too), so scrolling stays on whole rows; the wheel steps by it.
+    list: usize,
+    row: usize,
 }
 
 impl PageLayout {
@@ -1228,10 +1418,20 @@ impl PageLayout {
                 min_width: 280,
                 // No paired rows on these pages (all inline or full-width).
                 indent: 0,
+                list: LIST_TEXELS,
+                row: ROW_TEXELS,
+            },
+            View::Tracks => PageLayout {
+                min_width: 0,
+                indent: 8,
+                list: 3 * TRACK_ROW_TEXELS,
+                row: TRACK_ROW_TEXELS,
             },
             _ => PageLayout {
                 min_width: 0,
                 indent: 8,
+                list: LIST_TEXELS,
+                row: ROW_TEXELS,
             },
         }
     }
@@ -1316,7 +1516,7 @@ fn spawn(
                 display: Display::Grid,
                 grid_template_columns: RepeatedGridTrack::auto(2),
                 align_self: AlignSelf::Stretch,
-                max_height: size.y(LIST_TEXELS),
+                max_height: size.y(layout.list),
                 min_width: size.x(layout.min_width),
                 overflow: Overflow::scroll_y(),
                 ..default()
@@ -1328,18 +1528,21 @@ fn spawn(
         let picked = i == selected;
         // Padding, not margin: a margin would be a dead strip for pointer picking.
         let top = size.y(ROW_PADDING + if item.section { SECTION_GAP } else { 0 });
-        let text = |text: String| CtrText::new(text, Font::Middle, gradient(picked));
+        let font = item.font;
+        let text = |text: String| CtrText::new(text, font, gradient(picked));
         let value_cell = if item.paired() {
             // (The label's padding is the gap, so that pointing between the two still picks.)
             let label = cell(commands, list, i, size, true, |node| {
                 node.padding.left = size.x(layout.indent);
                 node.padding.right = size.x(16);
                 node.padding.top = top;
+                node.min_height = size.y(layout.row);
             });
             commands.spawn((ChildOf(label), text(item.label)));
             cell(commands, list, i, size, true, |node| {
                 node.padding.left = size.x(layout.indent);
                 node.padding.top = top;
+                node.min_height = size.y(layout.row);
             })
         } else {
             // A grid's cell doesn't take: a click in the gaps between icons would take the icon
@@ -1349,6 +1552,7 @@ fn spawn(
                 node.grid_column = GridPlacement::span(2);
                 node.justify_content = JustifyContent::Center;
                 node.padding.top = top;
+                node.min_height = size.y(layout.row);
             });
             if !item.label.is_empty() {
                 let gap = if item.kind == Kind::Button { 0 } else { INLINE_GAP };
@@ -1386,7 +1590,7 @@ fn spawn(
                         ChildOf(value_cell),
                         Node {
                             width: size.x(CARET),
-                            height: size.y(Font::Middle.line_height()),
+                            height: size.y(font.line_height()),
                             margin: UiRect::left(size.x(1)),
                             ..default()
                         },
@@ -1404,9 +1608,59 @@ fn spawn(
                 let sheet = art.sheets.get(icons.sheet, &art.textures.vram, &mut art.images);
                 icon_grid::spawn::<PauseMenu>(commands, value_cell, i, &icons, sheet, size, true);
             }
+            Kind::TrackPicture(id) => {
+                spawn_track_picture(commands, value_cell, i, id, picked, size, art);
+            }
             Kind::Button => {}
         }
     }
+}
+
+/// Centred in a [`TRACK_PICTURE`] box whatever its shape, so the column stays aligned; the box
+/// stays empty if the track has no picture. The border hugs the picture, outside the box.
+#[allow(clippy::too_many_arguments)]
+fn spawn_track_picture(
+    commands: &mut Commands,
+    parent: Entity,
+    i: usize,
+    id: u32,
+    picked: bool,
+    size: &TexelSize,
+    art: &mut Art,
+) {
+    let holder = commands
+        .spawn((
+            ChildOf(parent),
+            Node {
+                width: size.x(TRACK_PICTURE.x as usize + 2),
+                height: size.y(TRACK_PICTURE.y as usize + 2),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .id();
+    let Some(picture) = art.pictures.of(id, &mut art.images) else {
+        return;
+    };
+    let box_size = TRACK_PICTURE.as_vec2();
+    let fitted = picture.rect.size() * (box_size / picture.rect.size()).min_element();
+    let mut image = ImageNode::new(picture.image).with_mode(NodeImageMode::Stretch);
+    image.rect = Some(picture.rect);
+    // (Bevy's border is inside the node's size and the image draws inside the border.)
+    commands.spawn((
+        ChildOf(holder),
+        PictureFrame(i),
+        image,
+        Node {
+            width: Val::Px((fitted.x + 2.0) * size.0.x),
+            height: Val::Px((fitted.y + 2.0) * size.0.y),
+            border: UiRect::axes(size.x(1), size.y(1)),
+            ..default()
+        },
+        BorderColor::all(tint(picked)),
+        Pickable::IGNORE,
+    ));
 }
 
 /// `way`: -1 left, 1 right.

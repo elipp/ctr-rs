@@ -65,6 +65,10 @@ impl HudViews<'_> {
         })
     }
 
+    pub fn driver(&self, slot: usize) -> Option<&vehicle::Driver> {
+        Some(&self.sim.race.karts.get(slot)?.driver)
+    }
+
     /// The usable views, in order.
     pub fn iter(&self) -> impl Iterator<Item = ViewKart<'_>> {
         (0..self.drive.views().len()).map_while(|view| self.get(view))
