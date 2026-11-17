@@ -262,7 +262,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "autopilot",
-        about: "Have the brain bots' policy drive our kart",
+        about: "Let a bot \"brain\" drive our kart",
         options: &[leaf("on", "The policy drives"), leaf("off", "We drive")],
         arg: None,
     },

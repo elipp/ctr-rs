@@ -4,8 +4,9 @@
 //! it, as a tap does on a touch screen. Items that do not fit scroll: with the mouse wheel, and
 //! to keep the pick shown as the keys move it.
 //!
-//! Outside a lobby it also offers "Public lobbies": the realm's list (`public_lobbies.rs`), where
-//! taking a lobby joins it. Backspace goes back from there to the menu, not to the race.
+//! Outside a lobby it also offers "Play online": the realm's list (`public_lobbies.rs`), where
+//! taking a lobby joins it, and creating a public or a private lobby. Private lobbies have no
+//! name on the wire (`Action::CreateLobby`), so only the public one asks for one.
 //!
 //! "Options" has the effects', the music's and the voices' volumes as retail's options menu draws
 //! them (`MainFreeze_MenuPtrOptions`): a wedge that grows to the right, with a white knob on it.
@@ -43,6 +44,8 @@ use bevy::input::mouse::MouseWheel;
 use bevy::picking::events::{PointerClick, PointerMove, PointerPress, PointerRelease};
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
 use render::font::{Font, Gradient};
@@ -59,6 +62,7 @@ use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
 use crate::lobby::Lobby;
 use crate::race_on::RaceOn;
 use crate::public_lobbies::{self, PublicLobbies, Status};
+use crate::suggest;
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 use crate::text_field::{TextField, Typed};
 use crate::toast::Toast;
@@ -106,6 +110,9 @@ pub struct PauseMenu {
     icon_taken: Option<(usize, usize)>,
     /// The pool page's draft: only meaningful in `View::BotPool` (see `bots_menu.rs`).
     bot_pool: u16,
+    /// Seeded with a `suggest` name on entering `View::NameLobby`, so a pad or a touch screen,
+    /// which can't type, can still create with Create.
+    lobby_name: String,
 }
 
 impl PauseMenu {
@@ -138,8 +145,11 @@ impl HasAccordion for PauseMenu {
 pub(crate) enum View {
     #[default]
     Main,
+    PlaySolo,
+    PlayOnline,
     /// The public lobbies.
     Browser,
+    NameLobby,
     /// The volumes.
     Options,
     /// The keyboard's driving keys.
@@ -159,6 +169,7 @@ impl View {
             View::Controls => View::Options,
             View::Weapons => View::CupWizard,
             View::BotPool => View::Bots,
+            View::Browser | View::NameLobby => View::PlayOnline,
             _ => View::Main,
         }
     }
@@ -169,10 +180,17 @@ impl View {
 pub(crate) enum Item {
     Resume,
     Restart,
+    PlaySolo,
     Solo(race::solo::Kind),
     LeaveLobby,
+    PlayOnline,
     /// Shows the realm's list.
     PublicLobbies,
+    CreatePublic,
+    CreatePrivate,
+    LobbyName,
+    /// Creates the public lobby named in `View::NameLobby`.
+    CreateLobby,
     /// Shows the volumes.
     Options,
     /// Shows the version and the licenses.
@@ -265,7 +283,36 @@ fn items(
     config: &Config,
 ) -> (String, Vec<Entry>) {
     match menu.view {
+        View::PlaySolo => {
+            let items = vec![
+                entry(Item::Solo(race::solo::Kind::Relic), "Relic race"),
+                entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"),
+                entry(Item::Back, "Back"),
+            ];
+            return ("Play solo".into(), items);
+        }
+        View::PlayOnline => {
+            let items = vec![
+                entry(Item::PublicLobbies, "Public lobbies"),
+                entry(Item::CreatePublic, "Create lobby - public"),
+                entry(Item::CreatePrivate, "Create lobby - private"),
+                entry(Item::Back, "Back"),
+            ];
+            return ("Play online".into(), items);
+        }
         View::Browser => return ("Public lobbies".into(), browser_items(public)),
+        View::NameLobby => {
+            let name = Kind::Field {
+                text: menu.lobby_name.clone(),
+                editing: false,
+            };
+            let items = vec![
+                Entry::new(Item::LobbyName, "Name", name),
+                entry(Item::CreateLobby, "Create"),
+                entry(Item::Back, "Back"),
+            ];
+            return ("Public lobby".into(), typed_into(items, menu));
+        }
         View::Options => return ("Options".into(), options_items()),
         View::Controls => return ("Controls".into(), controls_items(config, menu.capturing)),
         View::About => return ("About".into(), vec![entry(Item::Back, "Back")]),
@@ -284,8 +331,7 @@ fn items(
     }
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
     if !lobby.is_open() && !race_on.is_on() {
-        items.push(entry(Item::Solo(race::solo::Kind::Relic), "Relic race"));
-        items.push(entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"));
+        items.push(entry(Item::PlaySolo, "Play solo"));
     }
     // (Bots only race in a lobby's series: offline there's nothing for them to fill.)
     if lobby.is_host() {
@@ -295,7 +341,7 @@ fn items(
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
     } else {
-        items.push(entry(Item::PublicLobbies, "Public lobbies"));
+        items.push(entry(Item::PlayOnline, "Play online"));
     }
     items.push(entry(Item::Options, "Options"));
     items.push(entry(Item::About, "About"));
@@ -622,13 +668,28 @@ fn input(
         if pad(GamepadButton::North) || pad(GamepadButton::Start) {
             typed = Some(Typed::Cancelled(String::new()));
         }
+        let pad_way = (pad(GamepadButton::DPadDown) || stick_down) as i32
+            - (pad(GamepadButton::DPadUp) || stick_up) as i32;
+        if typed.is_none() && pad_way != 0 {
+            typed = Some(Typed::Moved(field.text.clone(), pad_way));
+        }
         match typed {
             None | Some(Typed::Typing) => menu.typing = Some((item, field)),
             Some(Typed::Done(text)) => {
-                commit(item, text, &mut menu, &config);
+                commit(item, text, true, &mut menu, &config, &mut actions);
                 sound(MENU_TAKE_SFX);
             }
-            Some(Typed::Cancelled(_)) => sound(MENU_BACK_SFX),
+            Some(Typed::Moved(text, way)) => {
+                commit(item, text, false, &mut menu, &config, &mut actions);
+                let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
+                navigate(&mut menu, &items, IVec2::new(0, way));
+                menu.follow = true;
+                sound(MENU_MOVE_SFX);
+            }
+            Some(Typed::Cancelled(_)) => {
+                cancel(item, &mut menu);
+                sound(MENU_BACK_SFX);
+            }
         }
         return finish(was_open, &menu, &mut keys);
     }
@@ -813,6 +874,27 @@ fn input(
                 menu.open = false;
                 actions.write(Action::CloseLobby);
             }
+            Some(Item::PlaySolo) => {
+                menu.view = View::PlaySolo;
+                menu.selected = 0;
+            }
+            Some(Item::PlayOnline) => {
+                menu.view = View::PlayOnline;
+                menu.selected = 0;
+            }
+            Some(Item::CreatePublic) => {
+                // (A browser's std hasher has fixed keys: the time is what differs there.)
+                let seed = RandomState::new().hash_one(time.elapsed().as_nanos());
+                menu.lobby_name = suggest::lobby_name_at(seed % suggest::LOBBY_NAME_COUNT);
+                menu.view = View::NameLobby;
+                menu.selected = 0;
+                menu.typing = field(Item::LobbyName, &mut menu, &config).map(|f| (Item::LobbyName, f));
+            }
+            Some(Item::CreatePrivate) => {
+                menu.open = false;
+                actions.write(Action::CreateLobby { public: None });
+            }
+            Some(Item::CreateLobby) => create_public(&mut menu, &mut actions),
             Some(Item::PublicLobbies) => {
                 menu.view = View::Browser;
                 menu.selected = 0;
@@ -887,7 +969,7 @@ fn input(
                     menu.selected = 0;
                 }
             }
-            Some(Item::Info | Item::Volume(_)) | None => {}
+            Some(Item::Info | Item::Volume(_) | Item::LobbyName) | None => {}
             Some(Item::Quit) => {
                 exit.write(AppExit::Success);
             }
@@ -995,14 +1077,56 @@ fn remove(item: Item, menu: &mut PauseMenu, config: &Config) -> bool {
 fn field(item: Item, menu: &mut PauseMenu, config: &Config) -> Option<TextField> {
     match item {
         Item::Cup(item) => cup_wizard::field(item, &mut menu.cup, config),
+        Item::LobbyName => Some(TextField::new(
+            menu.lobby_name.clone(),
+            net::MAX_LOBBY_NAME,
+            net::is_lobby_name_char,
+        )),
         _ => None,
     }
 }
 
-fn commit(item: Item, text: String, menu: &mut PauseMenu, config: &Config) {
-    if let Item::Cup(item) = item {
-        cup_wizard::commit(item, text, &mut menu.cup, config);
+/// `submit`: Enter, rather than moving off the field.
+fn commit(
+    item: Item,
+    text: String,
+    submit: bool,
+    menu: &mut PauseMenu,
+    config: &Config,
+    actions: &mut MessageWriter<Action>,
+) {
+    match item {
+        Item::Cup(item) => cup_wizard::commit(item, text, &mut menu.cup, config),
+        Item::LobbyName => {
+            menu.lobby_name = text;
+            if submit {
+                create_public(menu, actions);
+            }
+        }
+        _ => {}
     }
+}
+
+/// Escape on a field. The field is the name dialog's whole point, so there it backs out of the
+/// dialog; elsewhere it only gives the text back (which `commit` never saw).
+fn cancel(item: Item, menu: &mut PauseMenu) {
+    if item == Item::LobbyName {
+        menu.view = menu.view.parent();
+        menu.selected = 0;
+        menu.scroll = 0.0;
+        menu.grid_cursor = 0;
+    }
+}
+
+/// Can't fail: the field only admits `net::is_lobby_name_char`s up to `MAX_LOBBY_NAME`, which is
+/// all `net::lobby_name` checks; it still collapses the spaces. An empty name is the realm's
+/// default (`Lobby::host`).
+fn create_public(menu: &mut PauseMenu, actions: &mut MessageWriter<Action>) {
+    let Ok(name) = net::lobby_name(&menu.lobby_name) else {
+        return;
+    };
+    menu.open = false;
+    actions.write(Action::CreateLobby { public: Some(name) });
 }
 
 /// Returns whether anything changed, for the sound; marks the config unsaved itself.
