@@ -1206,7 +1206,11 @@ fn show(
         let entry = shown.items.get(menu.selected)?;
         matches!(entry.kind, Kind::Grid(_)).then_some((menu.selected, menu.grid_cursor))
     });
-    icon_grid::update(on_grid, &mut frames, &mut captions);
+    icon_grid::update(
+        |grid| on_grid.filter(|&(g, _)| g == grid).map(|(_, icon)| icon),
+        &mut frames,
+        &mut captions,
+    );
 }
 
 /// Per-page geometry, in texels.

@@ -146,6 +146,7 @@ impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LocalPlayers(1))
             .init_resource::<Chosen>()
+            .init_resource::<chooser::ChooserPointer>()
             .add_systems(Update, (chooser::input, chooser::sync, chooser::show).chain().run_if(driving))
             .insert_resource(crate::exhaust::Particles::new())
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
