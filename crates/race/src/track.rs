@@ -53,3 +53,15 @@ pub fn anim_num_frames(model: &Model) -> [u16; 8] {
     }
     frames
 }
+
+/// [`anim_num_frames`] of every character's kart (`GAME_CHARACTER_IDS` order), as the retail
+/// disc's hi models have them: for whoever replays runs without the models (the leaderboard).
+/// `tests/anim_frames.rs` checks them against the disc.
+pub const ANIM_NUM_FRAMES: [[u16; 8]; loader::source::CHARACTERS as usize] = {
+    const KART: [u16; 8] = [21, 7, 15, 4, 0, 0, 0, 0];
+    const OXIDE: [u16; 8] = [21, 1, 1, 1, 0, 0, 0, 0];
+    [
+        KART, KART, KART, KART, KART, KART, KART, KART, KART, KART, KART, KART, KART, KART, KART,
+        OXIDE,
+    ]
+};

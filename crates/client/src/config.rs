@@ -400,8 +400,8 @@ impl Setting {
                 if value.chars().count() > net::NICK_MAX {
                     return Err(format!("A nickname is up to {} characters", net::NICK_MAX));
                 }
-                if value.chars().any(char::is_control) {
-                    return Err("A nickname cannot hold control characters".into());
+                if let Some(c) = value.chars().find(|&c| !net::nick_char(c)) {
+                    return Err(format!("A nickname cannot hold '{}'", c.escape_default()));
                 }
                 Ok(Setting::Nickname(value.to_string()))
             }

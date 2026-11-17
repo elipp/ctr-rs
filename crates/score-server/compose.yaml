@@ -1,0 +1,21 @@
+services:
+  score:
+    # The registry names the image: set REGISTRY_HOST (non-empty) in the environment or in a
+    # .env file next to this one (not committed).
+    image: ${REGISTRY_HOST:?set REGISTRY_HOST}/ctr-score
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: crates/score-server/Dockerfile
+    # Host networking, as the realm's.
+    network_mode: host
+    restart: unless-stopped
+    # SCORE_MAPS: the folder of .ctrmap the boards are for (built-in tracks exported from the
+    # operator's disc), a path on the host, in the environment or the .env file. They can't ship
+    # in the image. Restart to pick up new maps.
+    volumes:
+      - score-data:/data
+      - ${SCORE_MAPS:?set SCORE_MAPS}:/maps:ro
+
+volumes:
+  score-data:

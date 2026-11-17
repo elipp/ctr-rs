@@ -339,6 +339,9 @@ pub const MAX_KARTS: usize = 8;
 /// The laps of a race unless it is told otherwise (`gGT->numLaps`).
 pub const DEFAULT_LAPS: u8 = 3;
 
+/// The most laps a race can have (a cup's, a leaderboard's).
+pub const MAX_LAPS: u8 = 20;
+
 /// How many checkpoints a lap is cut by (see [`Race::splits`]).
 pub const CHECKPOINTS_PER_LAP: usize = 2;
 

@@ -3,15 +3,19 @@ name = "score-server"
 version = "0.1.0"
 edition = "2024"
 
-# holds world records
+# The solo leaderboards: re-sims submitted runs and ranks them (TIME-TRIAL-RELIC-LEADERBOARDS.md).
 [[bin]]
 name = "score-server"
 path = "src/main.rs"
 
 [dependencies]
+instance = { path = "../instance" }
 iroh = "1.4.1"
-realm-proto = { path = "../realm-proto" }
-serde = { version = "1", features = ["derive"], optional = true }
+map = { path = "../map" }
+race = { path = "../race" }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+score = { path = "../score" }
+sha2 = "0.11"
+tokio = { version = "1.54", features = ["rt-multi-thread", "sync", "macros", "time", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1.54", features = ["rt", "sync", "macros", "time", "signal"] }

@@ -26,7 +26,7 @@ pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
 /// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
 /// (where std's panics).
 pub use n0_future::time::Instant;
-pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names};
+pub use names::{CHAT_MAX, NICK_COOLDOWN, NICK_MAX, clean_chat, clean_nick, display_names, nick_char};
 pub use realm::{
     Browse, BrowseError, DEFAULT_LOBBY_NAME, DEFAULT_REALM, LOBBY_CAPACITY, MAX_LOBBY_NAME, Public, PublicLobby,
     browse, default_realm, lobby_name,

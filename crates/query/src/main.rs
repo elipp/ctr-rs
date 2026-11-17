@@ -1134,17 +1134,12 @@ fn verify(run: &std::path::Path, maps: &std::path::Path) -> Result<(), String> {
         println!("a bot path amendment is left out: {why}");
     }
     let objects = instance::Objects::new(&made.level, made.dram);
-    let path = disc_path();
-    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let character = run.demo.character;
-    let file = big
-        .read(&mut disc, BigIndex::RACER_MODEL_HI.nth(character as u32).get())
-        .map_err(|e| format!("racer {character}: {e}"))?;
-    let dram = DramFile::parse(&file).map_err(|e| format!("racer {character}: {e}"))?;
-    let model = loader::model::Model::parse(&dram).map_err(|e| format!("racer {character}: {e}"))?;
     let spec = race::KartSpec {
         character,
-        anim_num_frames: race::track::anim_num_frames(&model),
+        anim_num_frames: *race::track::ANIM_NUM_FRAMES
+            .get(character)
+            .ok_or(format!("no character {character}"))?,
         bot: false,
         line: None,
     };
