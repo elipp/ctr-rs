@@ -44,12 +44,23 @@ pub(crate) fn items(lobby: &Lobby) -> Vec<Entry> {
     };
     let mut difficulty = difficulty_name(bots.difficulty).to_string();
     difficulty[..1].make_ascii_uppercase();
+    let kind_help = match bots.kind {
+        BotKind::Brain => "Brain: bots driven by the learned policy.",
+        BotKind::Retail => "Retail: the original game's bots, on its bot paths.",
+    };
+    let pick_help = match bots.pick {
+        BotPick::Ordered => "Ordered: characters in the pool's order, then repeats.",
+        BotPick::Random => "Random: characters from the pool at random, then repeats.",
+    };
     vec![
-        Entry::new(Item::Bots(BotsItem::Kind), "AI", Kind::Cycle(kind.into())),
+        Entry::new(Item::Bots(BotsItem::Kind), "AI", Kind::Cycle(kind.into())).help(kind_help),
         Entry::new(Item::Bots(BotsItem::Difficulty), "Difficulty", Kind::Cycle(difficulty)),
-        Entry::new(Item::Bots(BotsItem::Count), "Max bots", Kind::Cycle(bots.count.to_string())),
-        Entry::new(Item::Bots(BotsItem::Pick), "Pick", Kind::Cycle(pick.into())),
-        entry(Item::Bots(BotsItem::Pool), "Character pool"),
+        Entry::new(Item::Bots(BotsItem::Count), "Max bots", Kind::Cycle(bots.count.to_string()))
+            .help("At most this many bots fill the places the players leave."),
+        Entry::new(Item::Bots(BotsItem::Pick), "Char pick", Kind::Cycle(pick.into()))
+            .help(pick_help),
+        entry(Item::Bots(BotsItem::Pool), "Character pool")
+            .help("The characters the bots are picked from."),
         entry(Item::Back, "Back"),
     ]
 }

@@ -306,7 +306,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
             "set",
             "Change a setting",
             &[
-                takes("nickname", "The name others see (12 at most)", "<name>"),
+                takes("nick", "The name others see (12 at most)", "<name>"),
                 // (A browser has none of these four: see `config.rs`.)
                 #[cfg(not(target_arch = "wasm32"))]
                 node(
@@ -708,7 +708,7 @@ mod tests {
         assert!(Menu::of("hello").is_none());
         assert!(Menu::of("/teapot ").is_none());
         assert!(Menu::of("/race start ").is_none());
-        assert!(Menu::of("/config set nickname Big Bob").is_none());
+        assert!(Menu::of("/config set nick Big Bob").is_none());
     }
 
     #[test]
