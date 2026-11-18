@@ -90,6 +90,10 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = ctrTakeRacerStep)]
     pub fn take_racer_step() -> i32;
 
+    /// Whether the page shows its touch controls.
+    #[wasm_bindgen(js_namespace = window, js_name = ctrHasTouch)]
+    pub fn has_touch() -> bool;
+
     /// Draws at that part of the screen's resolution from now on.
     #[wasm_bindgen(js_namespace = window, js_name = ctrSetRenderScale)]
     pub fn set_render_scale(scale: f32);

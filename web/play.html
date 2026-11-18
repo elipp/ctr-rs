@@ -247,6 +247,7 @@ const typing = document.getElementById("typing");
 const touchGame = document.getElementById("touch-game");
 const touchLine = document.getElementById("touch-line");
 const hasTouch = navigator.maxTouchPoints > 0 || matchMedia("(any-pointer: coarse)").matches;
+window.ctrHasTouch = () => hasTouch;
 let lineOpen = false;
 let menuOpen = false;
 let typed = null;

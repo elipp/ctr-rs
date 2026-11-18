@@ -1313,6 +1313,11 @@ impl Plugin for CommandPlugin {
 
 const GREETING: &str =
     "Press Enter and / to see the list of available commands, or Escape/Start button to show the menu.";
+/// The page's touch controls: a tap on the console opens the line, and its Menu button is top
+/// right (`web/play.html`).
+#[cfg(target_arch = "wasm32")]
+const TOUCH_GREETING: &str =
+    "Tap here and type / to see the list of available commands, or the Menu button (top right) to show the menu.";
 const GREETING_COLOR: Color = Color::srgb(1.0, 0.95, 0.4);
 
 /// Once, when the first level is up (behind the loading screen it would go unseen).
@@ -1326,7 +1331,15 @@ fn greet(
     }
     *greeted = true;
     logs.write(Log::default().then_bold("Welcome to ctr-rs!", GREETING_COLOR));
-    logs.write(Log::colored(GREETING, GREETING_COLOR));
+    #[cfg(target_arch = "wasm32")]
+    let greeting = if crate::web::has_touch() {
+        TOUCH_GREETING
+    } else {
+        GREETING
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let greeting = GREETING;
+    logs.write(Log::colored(greeting, GREETING_COLOR));
 }
 
 /// Which of the modifier keys are held.
