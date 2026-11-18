@@ -253,7 +253,7 @@ fn pool(text: &str) -> Result<u16, String> {
 }
 
 const LOBBY_USAGE: &str = "Usage: /lobby create [private | public [name]] | join <address> | spectate [address] | close";
-const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nickname Penta";
+const CONFIG_USAGE: &str = "Usage: /config set <setting> <value>, like /config set nick Penta";
 const PROMOTE_USAGE: &str = "Usage: /promote <player>, to make them the host of the lobby";
 const CHARACTER_USAGE: &str = "Usage: /character <name>";
 const TRACK_USAGE: &str = "Usage: /track <name> | list";
@@ -1304,10 +1304,42 @@ impl Plugin for CommandPlugin {
         app.init_resource::<CommandLine>()
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
-            .add_systems(Update, (open, submit, show, show_offer_picture).chain());
+            .add_systems(Update, (open, submit, show, show_offer_picture).chain())
+            .add_systems(Update, greet.run_if(crate::drive::driving));
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, tell_page.after(submit));
     }
+}
+
+const GREETING: &str =
+    "Press Enter and / to see the list of available commands, or Escape/Start button to show the menu.";
+/// The page's touch controls: a tap on the console opens the line, and its Menu button is top
+/// right (`web/play.html`).
+#[cfg(target_arch = "wasm32")]
+const TOUCH_GREETING: &str =
+    "Tap here and type / to see the list of available commands, or the Menu button (top right) to show the menu.";
+const GREETING_COLOR: Color = Color::srgb(1.0, 0.95, 0.4);
+
+/// Once, when the first level is up (behind the loading screen it would go unseen).
+fn greet(
+    mut greeted: Local<bool>,
+    loading: Option<Res<crate::loading::Loading>>,
+    mut logs: MessageWriter<Log>,
+) {
+    if *greeted || loading.is_some() {
+        return;
+    }
+    *greeted = true;
+    logs.write(Log::default().then_bold("Welcome to ctr-rs!", GREETING_COLOR));
+    #[cfg(target_arch = "wasm32")]
+    let greeting = if crate::web::has_touch() {
+        TOUCH_GREETING
+    } else {
+        GREETING
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let greeting = GREETING;
+    logs.write(Log::colored(greeting, GREETING_COLOR));
 }
 
 /// Which of the modifier keys are held.
@@ -2075,16 +2107,16 @@ mod tests {
         assert!(Action::parse("debug fx confetti").is_err());
         assert!(Action::parse("debug fx sparkles").is_err());
         assert!(matches!(
-            Action::parse("config set nickname  Big Bob "),
+            Action::parse("config set nick  Big Bob "),
             Ok(Action::SetConfig(crate::config::Setting::Nickname(n))) if n == "Big Bob"
         ));
         assert!(matches!(
-            Action::parse("config set nickname"),
+            Action::parse("config set nick"),
             Ok(Action::SetConfig(crate::config::Setting::Nickname(n))) if n.is_empty()
         ));
-        assert!(Action::parse("config set nickname 0123456789abc").is_err());
+        assert!(Action::parse("config set nick 0123456789abc").is_err());
         assert!(Action::parse("config set colour red").is_err());
-        assert!(Action::parse("config get nickname").is_err());
+        assert!(Action::parse("config get nick").is_err());
         assert!(matches!(
             Action::parse("config set vsync off"),
             Ok(Action::SetConfig(crate::config::Setting::Vsync(false)))

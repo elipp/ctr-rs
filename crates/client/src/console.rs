@@ -135,7 +135,6 @@ impl Log {
     }
 
     /// Adds a piece in bold after the others.
-    #[expect(dead_code, reason = "no line has a bold piece yet")]
     pub fn then_bold(mut self, text: impl Into<String>, color: Color) -> Log {
         self = self.then(text, color);
         if let Some(piece) = self.pieces.last_mut() {

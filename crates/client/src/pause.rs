@@ -1,12 +1,14 @@
-//! The pause menu, in the game's fonts. Escape, P or a pad's Start opens and closes it. Up and
-//! Down (W and S, the D-pad, the left stick pushed most of the way) pick an item, Return or Space (Cross) takes it, and Backspace
-//! (Triangle) goes back to the race. The mouse picks an item by pointing at it, and a click takes
+//! The pause menu, in the game's fonts. Escape, P or a pad's Start opens it; P and Start close
+//! it from any view. Up and Down (W and S, the D-pad, the left stick pushed most of the way) pick
+//! an item, Return or Space (Cross) takes it, and Escape or Backspace (Triangle) go back a view,
+//! closing the menu from the top one. The mouse picks an item by pointing at it, and a click takes
 //! it, as a tap does on a touch screen. Items that do not fit scroll: with the mouse wheel, and
 //! to keep the pick shown as the keys move it.
 //!
-//! Outside a lobby it also offers "Play online": the realm's list (`public_lobbies.rs`), where
+//! Outside a lobby it also offers "Multiplayer": the realm's list (`public_lobbies.rs`), where
 //! taking a lobby joins it, and creating a public or a private lobby. Private lobbies have no
 //! name on the wire (`Action::CreateLobby`), so only the public one asks for one.
+//! Its "Split screen" (out of a race) is `/players`: Left and Right step it.
 //!
 //! "Options" has the effects', the music's and the voices' volumes as retail's options menu draws
 //! them (`MainFreeze_MenuPtrOptions`): a wedge that grows to the right, with a white knob on it.
@@ -150,7 +152,7 @@ pub(crate) enum View {
     #[default]
     Main,
     PlaySolo,
-    PlayOnline,
+    Multiplayer,
     /// The public lobbies.
     Browser,
     NameLobby,
@@ -176,7 +178,7 @@ impl View {
             View::Controls => View::Options,
             View::Weapons => View::CupWizard,
             View::BotPool => View::Bots,
-            View::Browser | View::NameLobby => View::PlayOnline,
+            View::Browser | View::NameLobby => View::Multiplayer,
             _ => View::Main,
         }
     }
@@ -191,8 +193,10 @@ pub(crate) enum Item {
     EndRace,
     PlaySolo,
     Solo(race::solo::Kind),
+    /// How many local players share the screen (`/players`), which Left and Right step.
+    SplitScreen,
     LeaveLobby,
-    PlayOnline,
+    Multiplayer,
     /// Shows the realm's list.
     PublicLobbies,
     /// Creates a lobby, public or private as `PauseMenu::private_lobby`, which Left and Right
@@ -239,6 +243,8 @@ pub(crate) struct Entry {
     section: bool,
     inline: bool,
     font: Font,
+    /// What the row means, in the footer while it is picked.
+    help: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,7 +272,13 @@ impl Entry {
             section: false,
             inline: false,
             font: Font::Middle,
+            help: None,
         }
+    }
+
+    pub(crate) fn help(mut self, help: &'static str) -> Entry {
+        self.help = Some(help);
+        self
     }
 
     pub(crate) fn large(mut self) -> Entry {
@@ -305,28 +317,52 @@ fn items(
     menu: &PauseMenu,
     public: &PublicLobbies,
     config: &Config,
+    players: usize,
 ) -> (String, Vec<Entry>) {
     match menu.view {
         View::PlaySolo => {
             let items = vec![
-                entry(Item::Solo(race::solo::Kind::Relic), "Relic race"),
-                entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"),
+                entry(Item::Solo(race::solo::Kind::Relic), "Relic race")
+                    .help("Rules:\n- Time crates stop the clock\n- Collect all to get a -10 second bonus\n\nNOTE: you can submit your best times to the online leaderboards!"),
+                entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial")
+                    .help("Rules:\n- Drive the fastest possible 3-lap time\n\nNOTE: you can submit your best times to the online leaderboards!"),
                 entry(Item::Back, "Back"),
             ];
             return ("Play solo".into(), items);
         }
-        View::PlayOnline => {
-            let items = vec![
-                entry(Item::PublicLobbies, "Public lobbies"),
+        View::Multiplayer => {
+            let mut items = vec![
+                entry(Item::PublicLobbies, "Public lobbies")
+                    .help(
+                        "Lobbies that others have listed for anyone to join. Others see you by \
+                         your nick: use '/config set nick <name>' to set it.",
+                    ),
                 Entry::new(
                     Item::NewLobby,
                     NEW_LOBBY,
                     Kind::Cycle(LOBBY_PRIVACY[menu.private_lobby as usize].into()),
                 )
-                .inline(),
-                entry(Item::Back, "Back"),
+                .inline()
+                .help(if menu.private_lobby {
+                    "Private: not listed. Others join by its address (/lobby join)."
+                } else {
+                    "Public: listed under Public lobbies for anyone to join."
+                }),
             ];
-            return ("Play online".into(), items);
+            // (`/players` is refused in a race; the view is only offered out of a lobby.)
+            if !race_on.is_on() {
+                items.push(
+                    Entry::new(
+                        Item::SplitScreen,
+                        SPLIT_SCREEN,
+                        Kind::Cycle(split_screen_value(players)),
+                    )
+                    .inline()
+                    .starts_section(),
+                );
+            }
+            items.push(entry(Item::Back, "Back"));
+            return ("Multiplayer".into(), items);
         }
         View::Browser => return ("Public lobbies".into(), browser_items(public)),
         View::NameLobby => {
@@ -369,7 +405,7 @@ fn items(
     }
     // (Not a lobby's: the host ends it for everyone, which is `/race stop`'s to do.)
     if race_on.is_on() && !race_on.shared() {
-        items.push(entry(Item::EndRace, "End race"));
+        items.push(entry(Item::EndRace, "End race").help("Back to the free drive."));
     }
     items.push(entry(Item::TrackSelect, "Track select"));
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
@@ -384,7 +420,7 @@ fn items(
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
     } else {
-        items.push(entry(Item::PlayOnline, "Play online"));
+        items.push(entry(Item::Multiplayer, "Multiplayer"));
     }
     items.push(entry(Item::Options, "Options"));
     items.push(entry(Item::About, "About"));
@@ -516,6 +552,13 @@ const STICK_PUSHED: f32 = 0x60 as f32 / 127.0;
 /// The about page's lines shown at once, and their height in texels of the 2D art.
 const ABOUT_LINES: usize = 22;
 const ABOUT_TEXELS: f32 = 5.0;
+/// Between the panel and its footer, in texels.
+const FOOTER_GAP: usize = 3;
+const FOOTER_TEXELS: f32 = 5.0;
+/// [`PANEL`] nearly opaque: the race behind washed the text out.
+const FOOTER_BACKGROUND: Color = Color::srgba(0.04, 0.04, 0.06, 0.92);
+/// White with a little blue.
+const FOOTER_TEXT: Color = Color::srgb(0.78, 0.88, 1.0);
 
 /// The most the items take down, in texels of the 2D art (of its 240): taller, they scroll.
 const LIST_TEXELS: usize = 180;
@@ -541,6 +584,11 @@ struct Shown {
 /// The items, which scroll when they do not fit.
 #[derive(Component)]
 struct List;
+
+/// The picked row's [`Entry::help`], under the panel. Only there when some row of the view has
+/// one.
+#[derive(Component)]
+struct Footer;
 
 /// A cell of an item, and the item's place in the menu.
 #[derive(Component)]
@@ -582,6 +630,14 @@ struct Art<'w> {
 const ARROW: usize = 4;
 
 const NEW_LOBBY: &str = "Create lobby";
+const SPLIT_SCREEN: &str = "Split screen";
+
+fn split_screen_value(players: usize) -> String {
+    match players {
+        1 => "Off".into(),
+        n => format!("{n} players"),
+    }
+}
 /// `Item::NewLobby`'s options, by `PauseMenu::private_lobby`.
 const LOBBY_PRIVACY: [&str; 2] = ["Public", "Private"];
 const ARROW_HEIGHT: usize = 7;
@@ -609,6 +665,8 @@ impl Plugin for PausePlugin {
                 input
                     .after(InputSystems)
                     .after(crate::command::capture)
+                    // (Its keys reset must come first, or `]`/`[` switch the level while typing.)
+                    .before(crate::scene::switch_level)
                     .run_if(crate::drive::driving),
             )
             .add_systems(Update, show.run_if(crate::drive::driving));
@@ -627,7 +685,7 @@ fn input(
     size: Res<TexelSize>,
     mut pads: crate::drive::Pads,
     lobby: Res<Lobby>,
-    (race_on, level): (Res<RaceOn>, Res<LevelNumber>),
+    (race_on, level, players): (Res<RaceOn>, Res<LevelNumber>, Res<crate::drive::LocalPlayers>),
     mut public: ResMut<PublicLobbies>,
     mut config: ResMut<Config>,
     time: Res<Time<Real>>,
@@ -744,7 +802,7 @@ fn input(
             }
             Some(Typed::Moved(text, way)) => {
                 commit(item, text, false, &mut menu, &config, &mut actions);
-                let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
+                let (_, items) = items(&lobby, &race_on, &menu, &public, &config, players.0);
                 navigate(&mut menu, &items, IVec2::new(0, way));
                 menu.follow = true;
                 sound(MENU_MOVE_SFX);
@@ -756,7 +814,12 @@ fn input(
         }
         return finish(was_open, &menu, &mut keys, &mut pads);
     }
-    if key(&[KeyCode::Escape, KeyCode::KeyP]) || pad(GamepadButton::Start) {
+    // In a submenu Escape is Back (below); P and Start still close the menu from anywhere.
+    let in_submenu = menu.open && menu.view != View::Main;
+    if (key(&[KeyCode::Escape]) && !in_submenu)
+        || key(&[KeyCode::KeyP])
+        || pad(GamepadButton::Start)
+    {
         if menu.open && !leave(&menu, &lobby, &mut actions, &mut toasts) {
             sound(MENU_BACK_SFX);
             return finish(was_open, &menu, &mut keys, &mut pads);
@@ -781,7 +844,7 @@ fn input(
         save(&mut menu, &config, &mut toasts);
         return finish(was_open, &menu, &mut keys, &mut pads);
     } else if menu.open {
-        let (_, items) = items(&lobby, &race_on, &menu, &public, &config);
+        let (_, items) = items(&lobby, &race_on, &menu, &public, &config, players.0);
         let enter = key(&[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
             || pad(GamepadButton::South);
         let about = menu.view == View::About;
@@ -837,7 +900,7 @@ fn input(
                 way,
                 &mut menu,
                 &mut config,
-                &lobby,
+                (&lobby, players.0),
                 &mut actions,
             )
         {
@@ -876,7 +939,7 @@ fn input(
                 kind: Kind::Cycle(_),
                 ..
             }) => {
-                if step(*item, 1, &mut menu, &mut config, &lobby, &mut actions) {
+                if step(*item, 1, &mut menu, &mut config, (&lobby, players.0), &mut actions) {
                     sound(MENU_MOVE_SFX);
                 }
                 None
@@ -928,7 +991,7 @@ fn input(
                 time.delta_secs(),
             );
         }
-        if key(&[KeyCode::Backspace]) || pad(GamepadButton::North) {
+        if key(&[KeyCode::Backspace, KeyCode::Escape]) || pad(GamepadButton::North) {
             sound(MENU_BACK_SFX);
             if menu.view != View::Main {
                 if leave(&menu, &lobby, &mut actions, &mut toasts) {
@@ -967,8 +1030,8 @@ fn input(
                 menu.view = View::PlaySolo;
                 menu.selected = 0;
             }
-            Some(Item::PlayOnline) => {
-                menu.view = View::PlayOnline;
+            Some(Item::Multiplayer) => {
+                menu.view = View::Multiplayer;
                 menu.selected = 0;
             }
             Some(Item::NewLobby) if menu.private_lobby => {
@@ -1071,7 +1134,8 @@ fn input(
                 menu.open = false;
                 actions.write(Action::Track(id));
             }
-            Some(Item::Info | Item::Volume(_) | Item::LobbyName) | None => {}
+            Some(Item::Info | Item::Volume(_) | Item::LobbyName | Item::SplitScreen)
+            | None => {}
             Some(Item::Quit) => {
                 menu.view = View::ConfirmQuit;
                 // (On Cancel: taking Quit twice by habit must not quit.)
@@ -1134,10 +1198,15 @@ fn step(
     way: i32,
     menu: &mut PauseMenu,
     config: &mut Config,
-    lobby: &Lobby,
+    (lobby, players): (&Lobby, usize),
     actions: &mut MessageWriter<Action>,
 ) -> bool {
     match item {
+        Item::SplitScreen => {
+            let n = (players as i32 - 1 + way).rem_euclid(crate::drive::MAX_PLAYERS as i32) + 1;
+            actions.write(Action::Players(Some(n as u8)));
+            true
+        }
         Item::Cup(item) => cup_wizard::step(item, way, &mut menu.cup, config, &mut menu.unsaved),
         Item::Bots(item) => write(actions, bots_menu::step(item, way, lobby.bots)),
         Item::NewLobby => {
@@ -1346,7 +1415,7 @@ fn finish(
 fn show(
     mut commands: Commands,
     mut menu: ResMut<PauseMenu>,
-    (lobby, race_on): (Res<Lobby>, Res<RaceOn>),
+    (lobby, race_on, players): (Res<Lobby>, Res<RaceOn>, Res<crate::drive::LocalPlayers>),
     public: Res<PublicLobbies>,
     config: Res<Config>,
     (size, fonts): (Res<TexelSize>, Res<Fonts>),
@@ -1355,7 +1424,10 @@ fn show(
     rows: Query<(&Row, &Children, &ComputedNode, &UiGlobalTransform)>,
     mut list: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<List>>,
     mut texts: Query<&mut CtrText, Without<icon_grid::GridCaption<PauseMenu>>>,
-    mut knobs: Query<(&Knob, &mut Node)>,
+    (mut knobs, mut footer): (
+        Query<(&Knob, &mut Node), Without<Footer>>,
+        Query<(&mut Text, &mut Node), (With<Footer>, Without<accordion::AccordionLine<PauseMenu>>)>,
+    ),
     (mut arrows, mut picture_frames): (
         Query<(&Arrow, &mut ImageNode)>,
         Query<(&PictureFrame, &mut BorderColor), Without<icon_grid::GridIcon<PauseMenu>>>,
@@ -1365,7 +1437,7 @@ fn show(
     mut captions: icon_grid::Captions<PauseMenu>,
 ) {
     let wanted = menu.open.then(|| {
-        let (title, items) = items(&lobby, &race_on, &menu, &public, &config);
+        let (title, items) = items(&lobby, &race_on, &menu, &public, &config, players.0);
         Shown { items, title }
     });
     let current = shown.single().ok();
@@ -1386,12 +1458,15 @@ fn show(
             let scroll = menu.scroll;
             let mut layout = PageLayout::of(menu.view);
             // As wide as its widest option, so the centred panel holds still while it toggles.
-            if menu.view == View::PlayOnline {
-                layout.min_width = LOBBY_PRIVACY
+            if menu.view == View::Multiplayer {
+                let privacy = LOBBY_PRIVACY
                     .iter()
-                    .map(|value| inline_cycle_width(&fonts, Font::Middle, NEW_LOBBY, value))
-                    .max()
-                    .unwrap_or(0);
+                    .map(|value| inline_cycle_width(&fonts, Font::Middle, NEW_LOBBY, value));
+                let players = (1..=crate::drive::MAX_PLAYERS).map(|n| {
+                    let value = split_screen_value(n);
+                    inline_cycle_width(&fonts, Font::Middle, SPLIT_SCREEN, &value)
+                });
+                layout.min_width = privacy.chain(players).max().unwrap_or(0);
             }
             spawn(
                 &mut commands,
@@ -1438,6 +1513,19 @@ fn show(
         let at = size.x(volume(&config, knob.0) as usize * (TRACK - KNOB) / 100);
         if node.left != at {
             node.left = at;
+        }
+    }
+    if let Ok((mut text, mut node)) = footer.single_mut()
+        && let Some((_, shown)) = shown.single().ok()
+    {
+        let help = shown.items.get(menu.selected).and_then(|item| item.help);
+        let display = if help.is_some() { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+        let help = help.unwrap_or_default();
+        if text.0 != help {
+            text.0 = help.into();
         }
     }
     for (row, children, ..) in &rows {
@@ -1496,6 +1584,13 @@ impl PageLayout {
                 min_width: 280,
                 // No paired rows on these pages (all inline or full-width).
                 indent: 0,
+                list: LIST_TEXELS,
+                row: ROW_TEXELS,
+            },
+            // Room for the footer's rule texts, which would otherwise wrap to a narrow column.
+            View::PlaySolo => PageLayout {
+                min_width: 200,
+                indent: 8,
                 list: LIST_TEXELS,
                 row: ROW_TEXELS,
             },
@@ -1583,6 +1678,36 @@ fn spawn(
     ));
     if let Some(list) = about {
         spawn_about(commands, panel, list, size);
+    }
+    // Absolute, so the panel is no wider for it (the text wraps to the panel's width instead)
+    // and does not change height as the pick moves between rows with and without help.
+    if items.iter().any(|item| item.help.is_some()) {
+        let help = items.get(selected).and_then(|item| item.help);
+        commands.spawn((
+            ChildOf(panel),
+            Footer,
+            Text::new(help.unwrap_or_default()),
+            crate::font::bold(TextFont {
+                font_size: (size.0.y * FOOTER_TEXELS).into(),
+                ..default()
+            }),
+            TextColor(FOOTER_TEXT),
+            Node {
+                display: if help.is_some() { Display::Flex } else { Display::None },
+                position_type: PositionType::Absolute,
+                top: Val::Percent(100.0),
+                // (Out to the panel's border.)
+                left: Val::Px(-size.0.x),
+                right: Val::Px(-size.0.x),
+                margin: UiRect::top(size.y(FOOTER_GAP)),
+                padding: UiRect::axes(size.x(6), size.y(3)),
+                border: UiRect::axes(size.x(1), size.y(1)),
+                ..default()
+            },
+            BackgroundColor(FOOTER_BACKGROUND),
+            BorderColor::all(BORDER),
+            Pickable::IGNORE,
+        ));
     }
     // Second column left-aligned (user's choice; centre and right were tried). Centred, typed
     // text shifted left with every char.

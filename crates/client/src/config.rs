@@ -1,7 +1,7 @@
 //! The player's settings, kept in `config.json` (see `paths.rs`), or in a browser in the page's
 //! storage (`web.rs`): read when the viewer starts, and written whenever one changes.
 //!
-//! * `/config set nickname [name]`: what the others call us instead of our key (up to
+//! * `/config set nick [name]`: what the others call us instead of our key (up to
 //!   [`net::NICK_MAX`] characters; none clears it). It can change at any time, in a race too, but
 //!   only every [`net::NICK_COOLDOWN`]
 //! * `/config set vsync on|off`: whether the window waits for the display (on at first)
@@ -346,7 +346,7 @@ fn render_scale(value: &str) -> Option<f32> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
+const USAGE: &str = "Usage: /config set nick [name, up to 12 characters]\n\
     /config set vsync on|off\n\
     /config set fullscreen [on|off]\n\
     /config set fps-max <frames a second, 0 for no limit>\n\
@@ -356,7 +356,7 @@ const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
     /config set volume music|sfx|voice <0-100>\n\
     /config set global-voices on|off";
 #[cfg(target_arch = "wasm32")]
-const USAGE: &str = "Usage: /config set nickname [name, up to 12 characters]\n\
+const USAGE: &str = "Usage: /config set nick [name, up to 12 characters]\n\
     /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>\n\
@@ -396,7 +396,7 @@ impl Setting {
             "render-scale" => render_scale(value)
                 .map(Setting::RenderScale)
                 .ok_or_else(|| RENDER_SCALE_USAGE.to_string()),
-            "nickname" => {
+            "nick" => {
                 if value.chars().count() > net::NICK_MAX {
                     return Err(format!("A nickname is up to {} characters", net::NICK_MAX));
                 }
