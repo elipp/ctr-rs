@@ -322,8 +322,10 @@ fn items(
     match menu.view {
         View::PlaySolo => {
             let items = vec![
-                entry(Item::Solo(race::solo::Kind::Relic), "Relic race"),
-                entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial"),
+                entry(Item::Solo(race::solo::Kind::Relic), "Relic race")
+                    .help("Rules:\n- Time crates stop the clock\n- Collect all to get a -10 second bonus\n\nNOTE: you can submit your best times to the online leaderboards!"),
+                entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial")
+                    .help("Rules:\n- Drive the fastest possible 3-lap time\n\nNOTE: you can submit your best times to the online leaderboards!"),
                 entry(Item::Back, "Back"),
             ];
             return ("Play solo".into(), items);
@@ -333,7 +335,7 @@ fn items(
                 entry(Item::PublicLobbies, "Public lobbies")
                     .help(
                         "Lobbies that others have listed for anyone to join. Others see you by \
-                         your nick: '/config set nick <name>' sets it.",
+                         your nick: use '/config set nick <name>' to set it.",
                     ),
                 Entry::new(
                     Item::NewLobby,
@@ -1582,6 +1584,13 @@ impl PageLayout {
                 min_width: 280,
                 // No paired rows on these pages (all inline or full-width).
                 indent: 0,
+                list: LIST_TEXELS,
+                row: ROW_TEXELS,
+            },
+            // Room for the footer's rule texts, which would otherwise wrap to a narrow column.
+            View::PlaySolo => PageLayout {
+                min_width: 200,
+                indent: 8,
                 list: LIST_TEXELS,
                 row: ROW_TEXELS,
             },
