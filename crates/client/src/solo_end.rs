@@ -55,6 +55,7 @@ struct Panel;
 enum Line {
     Time,
     Perfect,
+    Final,
     Relic,
     Best,
     OldBest,
@@ -109,9 +110,15 @@ fn panel(
     let mut panels = panels;
     for view in hud.missing(panels.iter().map(|(v, _)| *v)) {
         let line = |line: Line| {
+            // (The large font has no parentheses.)
+            let font = if line == Line::Perfect {
+                Font::Middle
+            } else {
+                Font::Large
+            };
             (
                 line,
-                CtrText::new("", Font::Large, Gradient::ORANGE).fixed(hud::PIXEL),
+                CtrText::new("", font, Gradient::ORANGE).fixed(hud::PIXEL),
                 Node::default(),
             )
         };
@@ -133,6 +140,7 @@ fn panel(
             children![
                 line(Line::Time),
                 line(Line::Perfect),
+                line(Line::Final),
                 line(Line::Relic),
                 line(Line::Best),
                 line(Line::OldBest),
@@ -154,6 +162,7 @@ fn panel(
     };
     let slot = race_on.get().map_or(0, |race| race.viewed());
     let total = sim.race.final_ms(slot).unwrap_or(0);
+    let bonus = if end.perfect { race::PERFECT_BONUS_MS } else { 0 };
     // Retail's text flashes orange and white, a frame each.
     let flash = if sim.race.tick % 2 == 0 {
         Gradient::ORANGE
@@ -163,10 +172,19 @@ fn panel(
     for (line, mut text, mut node) in &mut lines {
         let (wanted, gradient) = match line {
             Line::Time => (
-                Some(format!("YOUR TIME {}", race::clock::time(total))),
+                Some(format!("YOUR TIME {}", race::clock::time(total + bonus))),
                 Gradient::ORANGE,
             ),
-            Line::Perfect => (end.perfect.then(|| "PERFECT -10".to_string()), flash),
+            Line::Perfect => (
+                end.perfect
+                    .then(|| format!("- {} SECONDS (PERFECT)", bonus / race::clock::SECOND)),
+                flash,
+            ),
+            Line::Final => (
+                end.perfect
+                    .then(|| format!("FINAL TIME {}", race::clock::time(total))),
+                Gradient::ORANGE,
+            ),
             Line::Relic => (
                 end.relic.map(|tier| format!("{} RELIC AWARDED!", crate::laps::tier_name(tier).to_uppercase())),
                 end.relic.map_or(flash, crate::laps::tier_gradient),
