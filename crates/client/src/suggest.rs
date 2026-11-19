@@ -363,7 +363,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
                 ),
                 node(
                     "server-records",
-                    "Race the leaderboard's #1 in solo races",
+                    "Race the server #1 ghost in solo races",
                     &[
                         leaf("on", "Download it from the score server"),
                         leaf("off", "Ask nothing of the server"),
