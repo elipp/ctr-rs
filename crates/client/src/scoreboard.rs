@@ -179,7 +179,7 @@ fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
         lines.sort_by_key(|line| std::cmp::Reverse(line.points));
     }
     let (title, footer) = match standings {
-        Some(s) if s.stopped || s.next.is_none() => (format!("{}: final standings", s.cup), None),
+        Some(s) if s.stopped || s.next.is_none() => (format!("Cup '{}': Final standings", s.cup), None),
         Some(s) => (
             format!("{}: race {} of {}", s.cup, s.race as usize + 1, s.races),
             s.next.as_ref().map(|(_, track)| format!("Next: {track}")),
