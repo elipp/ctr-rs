@@ -86,8 +86,8 @@ pub struct PauseMenu {
     clicked: Option<usize>,
     /// RESTART was taken: the next tick puts the race back on the grid.
     pub restart: bool,
-    /// Character select was taken: the first player's racer menu opens (`chooser::input`).
-    pub racer_menu: bool,
+    /// The first player's racer menu as a submenu of this one; see [`RacerMenu`].
+    pub racer_menu: RacerMenu,
     /// The way the keyboard slides a volume, -1, 0 or 1: Left or Right is held.
     slide_keys: i32,
     /// The ways the left stick was pushed the last frame (right and up 1), to tap with it.
@@ -124,7 +124,31 @@ pub struct PauseMenu {
     private_lobby: bool,
 }
 
+/// Hands the first player's racer menu (`chooser::input`) back and forth with Character select,
+/// so that leaving it lands back on that item. A racer menu opened by its own key is not this
+/// menu's, and leaves to the drive.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum RacerMenu {
+    #[default]
+    No,
+    /// Taken here: opens next update.
+    Asked,
+    /// Open for this menu. The menu opening (Escape) closes it.
+    Nested,
+    /// Left without a pick: the menu reopens next update.
+    Back,
+    /// Left with a pick (or never opened): the pause ends next update. Not ended by the racer
+    /// menu itself, as ending it cuts the sounds played in it, the pick's included.
+    Done,
+}
+
 impl PauseMenu {
+    /// The pause is on, offline (`loading::hold_clock`, the sounds): the menu or its racer menu
+    /// is up.
+    pub fn holds(&self) -> bool {
+        self.open || self.racer_menu != RacerMenu::No
+    }
+
     /// Systems with their own hotkeys (mute, `/cup pause` key, racer menu) must check this.
     pub fn takes_keys(&self) -> bool {
         self.capturing.is_some() || self.typing.is_some()
@@ -775,6 +799,24 @@ pub(crate) fn input(
             sounds.menu(id);
         }
     };
+    let was_holding = menu.holds();
+    // The pause's sounds (`MainFrame_TogglePauseAudio`): its end cuts the sounds played in it, so
+    // a sound of what ended it goes after this.
+    let hold_sounds = |menu: &PauseMenu| {
+        if let Some(sounds) = sounds.as_ref().filter(|_| offline && menu.holds() != was_holding) {
+            if menu.holds() {
+                sounds.pause();
+            } else {
+                sounds.unpause();
+            }
+        }
+    };
+    if menu.racer_menu == RacerMenu::Done {
+        menu.racer_menu = RacerMenu::No;
+        hold_sounds(&menu);
+        sound(MENU_TAKE_SFX);
+        return finish(was_open, &menu, &mut keys, &mut pads);
+    }
     let key = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
     // The left stick of the first pad that has it pushed, as the D-pad: tapped as it is pushed
@@ -851,9 +893,19 @@ pub(crate) fn input(
     }
     // In a submenu Escape is Back (below); P and Start still close the menu from anywhere.
     let in_submenu = menu.open && menu.view != View::Main;
+    // (Backspace and North are Back in a submenu, and the racer menu is one.)
+    let to_racers = !menu.open && matches!(menu.racer_menu, RacerMenu::Nested | RacerMenu::Back);
+    let racers_back = to_racers
+        && (menu.racer_menu == RacerMenu::Back
+            || key(&[KeyCode::Backspace])
+            || pad(GamepadButton::North));
+    if menu.racer_menu == RacerMenu::Back {
+        menu.racer_menu = RacerMenu::No;
+    }
     if (key(&[KeyCode::Escape]) && !in_submenu)
         || key(&[KeyCode::KeyP])
         || pad(GamepadButton::Start)
+        || racers_back
     {
         if menu.open && !leave(&menu, &lobby, &mut actions, &mut toasts) {
             sound(MENU_BACK_SFX);
@@ -867,15 +919,14 @@ pub(crate) fn input(
         menu.capturing = None;
         menu.typing = None;
         menu.grid_cursor = 0;
-        test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
-        if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
-            if menu.open {
-                sounds.pause();
-            } else {
-                sounds.unpause();
-            }
+        if to_racers {
+            let (_, items) = items(&lobby, &race_on, &menu, &public, &config, players.0);
+            menu.selected = items.iter().position(|e| e.item == Item::CharSelect).unwrap_or(0);
+            menu.follow = true;
         }
-        sound(MENU_TAKE_SFX);
+        test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
+        hold_sounds(&menu);
+        sound(if to_racers { MENU_BACK_SFX } else { MENU_TAKE_SFX });
         save(&mut menu, &config, &mut toasts);
         return finish(was_open, &menu, &mut keys, &mut pads);
     } else if menu.open {
@@ -1051,7 +1102,7 @@ pub(crate) fn input(
             }
             Some(Item::CharSelect) => {
                 menu.open = false;
-                menu.racer_menu = true;
+                menu.racer_menu = RacerMenu::Asked;
             }
             Some(Item::EndRace) => {
                 menu.open = false;
@@ -1196,15 +1247,11 @@ pub(crate) fn input(
             menu.grid_cursor = 0;
         }
         test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
-        // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
-        if !menu.open
-            && let Some(sounds) = sounds.as_ref().filter(|_| offline)
-        {
-            sounds.unpause();
-            // A leaderboard goes up over the race: taking it is not a way out of the pause.
-            if matches!(taken_item, Some(Item::Leaderboard(_))) {
-                sound(MENU_TAKE_SFX);
-            }
+        // Leaving the pause cuts the sound of what left it.
+        hold_sounds(&menu);
+        // A leaderboard goes up over the race: taking it is not a way out of the pause.
+        if offline && !menu.holds() && matches!(taken_item, Some(Item::Leaderboard(_))) {
+            sound(MENU_TAKE_SFX);
         }
     }
     save(&mut menu, &config, &mut toasts);

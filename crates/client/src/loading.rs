@@ -476,7 +476,7 @@ fn hold_clock(
     mut time: ResMut<Time<Virtual>>,
 ) {
     let hold = loading.is_some()
-        || (menu.open && !race_on.shared())
+        || (menu.holds() && !race_on.shared())
         || screens
             .iter()
             .any(|s| s.holds_clock && !s.leaving && s.position > COVERED_AT);
