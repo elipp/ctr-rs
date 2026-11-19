@@ -302,13 +302,13 @@ pub fn update(
     tire_sprites: Query<&Mesh3d, With<TireSprites>>,
     shard_sprites: Query<&Mesh3d, With<ShardSprites>>,
     fire: Option<Res<Fire>>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let Some(fire) = fire else {
         return;
     };
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     if let Some(mesh) = sprites.iter().next()
         && let Some(mut mesh) = meshes.get_mut(&mesh.0)
     {

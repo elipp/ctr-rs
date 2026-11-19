@@ -26,7 +26,7 @@ use crate::hud_view::HudView;
 use crate::icon_grid::{self, HasIconGrid, Icons, Mode, SheetId, Steered};
 use crate::kart::{KartBuilder, KartSlot};
 use crate::lobby::Lobby;
-use crate::pause::{BORDER, PANEL, PauseMenu};
+use crate::pause::{BORDER, PANEL, PauseMenu, RacerMenu};
 use crate::props::Sim;
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
 use crate::{CHARACTERS, player_layer};
@@ -144,14 +144,21 @@ pub(super) fn input(
     mut chosen: ResMut<Chosen>,
     lobby: Res<Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
-    pause: Res<PauseMenu>,
+    mut pause: ResMut<PauseMenu>,
     sounds: Option<Res<Sounds>>,
     mut pointer: ResMut<ChooserPointer>,
     karts: Query<(Entity, &KartSlot), With<Extra>>,
     mut builder: KartBuilder,
     mut actions: MessageWriter<Action>,
 ) {
-    // The pause menu has the controls (and the pads' buttons are its own then).
+    // The pause menu has the controls (and the pads' buttons are its own then). Opened over
+    // its own racer menu (Escape), it takes it back.
+    if pause.open && pause.racer_menu == RacerMenu::Nested {
+        pause.racer_menu = RacerMenu::No;
+        if let Some(view) = drive.views.first_mut() {
+            view.chooser.open = false;
+        }
+    }
     if pause.open || pause.takes_keys() {
         *pointer = ChooserPointer::default();
         return;
@@ -165,6 +172,16 @@ pub(super) fn input(
     let taken: Vec<Entity> = drive.views.iter().filter_map(|v| v.device.pad()).collect();
     let pointed = pointer.pointed.take();
     let pointer_taken = pointer.taken.take();
+    // (Taken even when it is open already: left set, it would open it again once closed.)
+    // Closed under it some other way (the views rebuilt), it would hold the pause for good.
+    if pause.racer_menu == RacerMenu::Nested && !drive.views.first().is_some_and(|v| v.chooser.open) {
+        pause.racer_menu = RacerMenu::Done;
+    }
+    // (Done unless it opens, below: the pause must still be ended.)
+    let asked = pause.racer_menu == RacerMenu::Asked;
+    if asked {
+        pause.racer_menu = RacerMenu::Done;
+    }
     let mut picked = Vec::new();
     for view in 0..drive.views.len() {
         let device = drive.views[view].device.clone();
@@ -177,14 +194,21 @@ pub(super) fn input(
         };
         let chooser = &mut drive.views[view].chooser;
         chooser.stick = stick;
+        let nested = view == 0 && (asked || pause.racer_menu == RacerMenu::Nested);
         if !chooser.open {
             // (No menu in a race or a cup: the racers are fixed then.)
-            if !taps.toggle || locked {
+            if !(taps.toggle || nested) || locked {
                 continue;
             }
             chooser.open_on(current);
+            if nested {
+                pause.racer_menu = RacerMenu::Nested;
+            }
             sound(MENU_TAKE_SFX);
             continue;
+        }
+        if view == 0 && asked {
+            pause.racer_menu = RacerMenu::Nested;
         }
         let way = IVec2::new(
             taps.right as i32 - taps.left as i32,
@@ -205,10 +229,20 @@ pub(super) fn input(
         if taps.take || clicked.is_some() {
             chooser.open = false;
             picked.push((view, chooser.pick));
-            sound(MENU_TAKE_SFX);
+            if nested {
+                // (The menu sounds it as the pause ends.)
+                pause.racer_menu = RacerMenu::Done;
+            } else {
+                sound(MENU_TAKE_SFX);
+            }
         } else if taps.back || taps.toggle {
             chooser.open = false;
-            sound(MENU_BACK_SFX);
+            if nested {
+                // (The menu sounds it as it reopens.)
+                pause.racer_menu = RacerMenu::Back;
+            } else {
+                sound(MENU_BACK_SFX);
+            }
         }
     }
     for (view, character) in picked {

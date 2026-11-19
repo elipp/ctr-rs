@@ -88,7 +88,9 @@ pub const FAR_CAM: Zoom = Zoom {
     percentage1: 0xf0,
     percentage2: 0xff,
     angle: [0x80, 0xe0, 0x60],
-    vert_distance: 0x60,
+    // Not retail's 0x60: that lifts the far camera too high above the kart. (Also the floor
+    // and underwater clearance, which stays above the near camera's.)
+    vert_distance: 0x50,
 };
 
 /// `QUADBLOCK_FLAG_CAMERA_SEARCH`

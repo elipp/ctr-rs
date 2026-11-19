@@ -2,8 +2,8 @@
 //! 223) with the same news but none of its layout or timing, shown for a time trial too (less the
 //! relic's lines). The time, the perfect bonus, the relic the run earned (the pack's spinning
 //! relic in the tier's colour) and the personal best (new or kept), centred on the screen in place
-//! of the TIME block, from the settled finish (`CurrentRace::solo_end`) until the race ends
-//! [`TICKS`] after it.
+//! of the TIME block, from the settled finish (`CurrentRace::solo_end`) until the player goes on
+//! (Cross or Space: not Enter, which opens the command line).
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -23,8 +23,13 @@ use crate::Textures;
 /// `STATIC_RELIC`
 pub const RELIC_MODEL: i16 = 0x61;
 
-/// How long the race goes on after its finish for the ceremony.
-pub const TICKS: u32 = 10 * crate::GAME_TICK_HZ as u32;
+/// How long after the finish before Cross or Space goes on: one pressed for the race's last
+/// moments shouldn't skip the ceremony.
+const CONTINUE_AFTER_TICKS: u32 = crate::GAME_TICK_HZ as u32;
+
+/// The prompt goes between yellow and orange this often: slower than the other lines' flash, which
+/// would be too loud for a line that stays up.
+const PROMPT_BLINK_TICKS: u32 = 8;
 
 /// The relic of the racers' pack.
 #[derive(Resource)]
@@ -33,6 +38,9 @@ pub struct RelicModel(pub Model);
 /// Where the panel's first line is, and the relic's middle, in lines of retail's screen.
 const TOP: f32 = 40.0;
 const RELIC_Y: f32 = 170.0;
+
+/// Between the panel's lines, in lines of retail's screen.
+const ROW_GAP: f32 = 6.0;
 
 /// How tall the relic is grown, in lines, and the ticks it grows for.
 const RELIC_LINES: f32 = 50.0;
@@ -60,6 +68,7 @@ enum Line {
     Best,
     OldBest,
     Submit,
+    Continue,
 }
 
 /// The relic's pivot; its child is the model, its middle on the pivot.
@@ -76,7 +85,7 @@ impl Plugin for SoloEndPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (panel, relic).distributive_run_if(crate::drive::driving),
+            (continue_on_key, panel, relic).distributive_run_if(crate::drive::driving),
         );
     }
 }
@@ -116,10 +125,19 @@ fn panel(
             } else {
                 Font::Large
             };
+            // (An empty line above the prompt.)
+            let margin = if line == Line::Continue {
+                UiRect::top(hud::y(Font::Large.line_height() as f32 + ROW_GAP))
+            } else {
+                UiRect::ZERO
+            };
             (
                 line,
                 CtrText::new("", font, Gradient::ORANGE).fixed(hud::PIXEL),
-                Node::default(),
+                Node {
+                    margin,
+                    ..default()
+                },
             )
         };
         commands.spawn((
@@ -132,7 +150,7 @@ fn panel(
                 top: hud::y(TOP),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: hud::y(6.0),
+                row_gap: hud::y(ROW_GAP),
                 ..default()
             },
             Visibility::Hidden,
@@ -144,7 +162,8 @@ fn panel(
                 line(Line::Relic),
                 line(Line::Best),
                 line(Line::OldBest),
-                line(Line::Submit)
+                line(Line::Submit),
+                line(Line::Continue)
             ],
         ));
     }
@@ -202,6 +221,17 @@ fn panel(
                     _ => Gradient::WHITE,
                 },
             ),
+            Line::Continue => (
+                (sim.race.tick >= end.at + CONTINUE_AFTER_TICKS).then(|| {
+                    let keys = if pads.iter().next().is_some() { "X / SPACE" } else { "SPACE" };
+                    format!("{keys} to CONTINUE")
+                }),
+                if sim.race.tick / PROMPT_BLINK_TICKS % 2 == 0 {
+                    Gradient::YELLOW
+                } else {
+                    Gradient::ORANGE
+                },
+            ),
         };
         let display = if wanted.is_some() {
             Display::Flex
@@ -219,6 +249,31 @@ fn panel(
             text.gradient = gradient;
         }
     }
+}
+
+/// Cross or Space, once the ceremony has been up a moment, ends the race.
+fn continue_on_key(
+    sim: Res<crate::props::Sim>,
+    mut race_on: ResMut<RaceOn>,
+    menu: Res<crate::pause::PauseMenu>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut pads: crate::drive::Pads,
+) {
+    let Some(end) = race_on.get_mut().and_then(|race| race.solo_end.as_mut()) else {
+        return;
+    };
+    if menu.open || end.continued || sim.race.tick < end.at + CONTINUE_AFTER_TICKS {
+        return;
+    }
+    let pressed = keys.just_pressed(KeyCode::Space)
+        || pads.iter().any(|p| p.just_pressed(GamepadButton::South));
+    if !pressed {
+        return;
+    }
+    end.continued = true;
+    // (Not a hop in the free drive the race ends into.)
+    keys.clear_just_pressed(KeyCode::Space);
+    pads.consume();
 }
 
 /// (The font has no '#'.)
@@ -247,7 +302,7 @@ fn relic(
     model: Res<RelicModel>,
     textures: Res<Textures>,
     sounds: Res<crate::sound::Sounds>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     hud: HudViews,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut relics: Query<(Entity, &Relic, &HudView, &mut Transform)>,
@@ -298,7 +353,7 @@ fn relic(
         }
         return;
     }
-    let ticks = sim.race.tick.saturating_sub(at) as f32 + fixed.overstep_fraction();
+    let ticks = sim.race.tick.saturating_sub(at) as f32 + between.fraction();
     let grown = (ticks / GROW_TICKS).min(1.0);
     let angle = ticks / SPIN_TICKS * std::f32::consts::TAU;
     for (_, relic, view, mut transform) in &mut relics {

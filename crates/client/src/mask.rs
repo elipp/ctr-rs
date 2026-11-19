@@ -179,7 +179,7 @@ fn spawn_part(
 /// frame of its animation.
 pub fn update(
     sim: Res<crate::props::Sim>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     karts: Query<(&KartSlot, &KartMotion)>,
     mut instances: Query<(
         &mut MaskPart,
@@ -196,7 +196,7 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
 
     for (mut part, attached, mut transform, mut visibility, children) in &mut instances {
         let Ok((slot, motion)) = karts.get(attached.0) else {

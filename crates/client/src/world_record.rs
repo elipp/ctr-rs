@@ -73,19 +73,26 @@ fn board_of(race: &CurrentRace) -> Option<BoardId> {
     })
 }
 
-fn is_ours(entry: &Entry) -> bool {
+pub(crate) fn is_ours(entry: &Entry) -> bool {
     crate::player::key().is_ok_and(|key| *key.public().as_bytes() == entry.key)
 }
 
 impl WorldRecord {
     /// At each start of a solo race (`drive_tick`, as it builds the best's ghost): the world
     /// record's ghost at tick 0 if one is known, and the board asked again unless it was lately.
+    /// Not `opted` (`Config::server_records`): none at all, the cached one neither, and an ask
+    /// on its way is dropped.
     pub fn start(
         &mut self,
         level: &loader::lev::Level,
         sim: &crate::props::Sim,
         race: &CurrentRace,
+        opted: bool,
     ) -> Option<Ghost> {
+        if !opted {
+            *self = WorldRecord::default();
+            return None;
+        }
         let board = board_of(race)?;
         if self.board != Some(board) {
             let record = cache::load(board);
@@ -261,7 +268,7 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
 
 /// A board's player as shown: the nick and the key's fingerprint, which tells apart two of the
 /// same nick.
-fn who(entry: &Entry) -> String {
+pub(crate) fn who(entry: &Entry) -> String {
     let fingerprint = score::PublicKey::from_bytes(&entry.key)
         .map_or_else(|_| "?".to_string(), |key| score::fingerprint(&key));
     match entry.nick.as_str() {
@@ -271,7 +278,7 @@ fn who(entry: &Entry) -> String {
 }
 
 /// In UTC: the client has no time zone database (`Cargo.toml`).
-fn date(at: i64) -> String {
+pub(crate) fn date(at: i64) -> String {
     jiff::Timestamp::from_second(at)
         .map_or_else(|_| "?".to_string(), |t| t.strftime("%Y-%m-%d").to_string())
 }
@@ -280,6 +287,7 @@ fn top(
     mut actions: MessageReader<Action>,
     mut tops: ResMut<Tops>,
     level: Res<crate::resources::LevelNumber>,
+    mut board_shown: ResMut<crate::scoreboard::TopBoard>,
     mut toasts: MessageWriter<Toast>,
 ) {
     for action in actions.read() {
@@ -302,7 +310,11 @@ fn top(
             ))
         };
         match asked() {
-            Ok((board, answer)) => tops.0.push((crate::maps::stable_name(id), board, answer)),
+            Ok((board, answer)) => {
+                let name = crate::maps::stable_name(id);
+                board_shown.loading(title(&name, board));
+                tops.0.push((name, board, answer));
+            }
             Err(why) => {
                 toasts.write(Toast::new(why, 3000).color(RED));
             }
@@ -310,7 +322,24 @@ fn top(
     }
 }
 
-fn listed(mut tops: ResMut<Tops>, mut toasts: MessageWriter<Toast>) {
+/// The scoreboard's title of a board.
+fn title(name: &str, board: BoardId) -> String {
+    format!("{}: {name}, {} laps", kind_name(board.kind), board.laps)
+}
+
+fn kind_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Relic => "Relic race",
+        Kind::TimeTrial => "Time trial",
+    }
+}
+
+fn listed(
+    mut tops: ResMut<Tops>,
+    mut toasts: MessageWriter<Toast>,
+    mut board_shown: ResMut<crate::scoreboard::TopBoard>,
+    time: Res<Time<Real>>,
+) {
     let mut i = 0;
     while i < tops.0.len() {
         let Some(response) = tops.0[i].2.poll() else {
@@ -318,11 +347,15 @@ fn listed(mut tops: ResMut<Tops>, mut toasts: MessageWriter<Toast>) {
             continue;
         };
         let (name, board, _) = tops.0.remove(i);
-        let kind = match board.kind {
-            Kind::Relic => "Relic race",
-            Kind::TimeTrial => "Time trial",
-        };
-        match response.map_err(|e| e.to_string()).and_then(|r| r) {
+        let kind = kind_name(board.kind);
+        let response = response.map_err(|e| e.to_string()).and_then(|r| r);
+        match &response {
+            Ok(Response::Top(top)) => {
+                board_shown.loaded(title(&name, board), top, time.elapsed_secs())
+            }
+            _ => board_shown.failed(),
+        }
+        match response {
             Ok(Response::Top(top)) if top.is_empty() => {
                 console!("{kind}, {name}: nobody on the board yet")
             }

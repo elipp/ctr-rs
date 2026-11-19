@@ -281,16 +281,6 @@ impl KartMotion {
         *self = KartMotion::new(kart);
     }
 
-    /// Nothing moves between ticks now (the pause): stay where the last one put the kart.
-    pub fn freeze(&mut self) {
-        self.previous = self.current;
-        self.previous_offset = self.offset;
-        if let Some(held) = &mut self.held {
-            held.previous_weight = held.weight;
-        }
-        *self = self.clone().settled();
-    }
-
     /// The ticks that the rollbacks of the kart replayed, on average.
     pub fn replayed_average(&self) -> f32 {
         self.replayed_average
@@ -716,7 +706,7 @@ impl KartBuilder<'_, '_> {
 
 /// Puts every kart where its sim has it, between the last two ticks.
 pub fn show(
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     race_on: Res<crate::race_on::RaceOn>,
     config: Res<crate::config::Config>,
     mut karts: Query<(
@@ -727,7 +717,7 @@ pub fn show(
         Option<&crate::ghost::GhostKart>,
     )>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     // A spectator has no kart of its own: the others' are all drawn, and ours is not.
     let spectating = race_on.get().is_some_and(|race| race.spectating());
     let ghosts = race_on.get().map(|race| race.ghosts.shown(config.ghosts));
@@ -803,11 +793,11 @@ pub fn hide_parts(
 /// it, blended by how far the render is through the tick, so that the 30 Hz animation moves
 /// smoothly at any frame rate.
 pub fn animate(
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut karts: Query<(&KartMotion, &mut KartRig)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (motion, mut rig) in &mut karts {
         if rig.burnt != motion.burnt
             && let Some(frame) = animation_pose(&rig.header, motion.animation.0, motion.animation.1)

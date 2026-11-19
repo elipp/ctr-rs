@@ -126,7 +126,7 @@ impl Default for Orbit {
 pub(super) fn chase(
     drive: Res<Drive>,
     race_on: Res<crate::race_on::RaceOn>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     time: Res<Time<Real>>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -168,7 +168,7 @@ pub(super) fn chase(
     } else if lines != 0.0 {
         orbit.zoom = (orbit.zoom * ZOOM_PER_LINE.powf(lines)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
     }
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     let (a, b) = (drive.views[0].previous_view, drive.views[0].current_view);
     let mut eye = a.eye.lerp(b.eye, t);
     let mut target = a.target.lerp(b.target, t);
@@ -211,10 +211,10 @@ pub(super) fn chase(
 /// by the mouse: that is ours.)
 pub(super) fn chase_extra(
     drive: Res<Drive>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut cameras: Query<(&MainView, &mut Transform), Without<ChaseCamera>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (main, mut transform) in &mut cameras {
         let Some(view) = drive.views.get(main.0) else {
             continue;

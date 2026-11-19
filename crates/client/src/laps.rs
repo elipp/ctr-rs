@@ -499,7 +499,7 @@ fn show_bests(
 fn free_relic(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     bests: Res<FreeBests>,
     model: Res<crate::solo_end::RelicModel>,
     textures: Res<crate::Textures>,
@@ -558,7 +558,7 @@ fn free_relic(
     let Ok(window) = windows.single() else {
         return;
     };
-    let ticks = sim.race.tick as f32 + fixed.overstep_fraction();
+    let ticks = sim.race.tick as f32 + between.fraction();
     let angle = ticks / crate::solo_end::SPIN_TICKS * std::f32::consts::TAU;
     for (_, icon, view, mut transform) in &mut icons {
         let (Some(kart), Some((_, slot, at))) =

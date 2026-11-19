@@ -390,10 +390,10 @@ pub fn update(
     mut smoke: Query<(&Smoke, &Attached, &Mesh3d, &mut Transform)>,
     karts: Query<(&Transform, &KartSlot), Without<Smoke>>,
     particles: Res<Particles>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (smoke, attached, mesh, mut transform) in &mut smoke {
         let Ok((pose, slot)) = karts.get(attached.0) else {
             continue;
@@ -462,10 +462,10 @@ pub fn update_sparks(
     lines: Query<(&SparkLines, &Attached, &Mesh3d)>,
     karts: Query<(&Transform, &KartSlot), Without<SparkLines>>,
     particles: Res<Particles>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (lines, attached, mesh) in &lines {
         let Ok((kart, slot)) = karts.get(attached.0) else {
             continue;

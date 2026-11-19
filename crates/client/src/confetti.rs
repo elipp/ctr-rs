@@ -88,11 +88,6 @@ impl ConfettiView {
             .collect();
     }
 
-    /// The race is paused: nothing moves between ticks.
-    pub fn freeze(&mut self) {
-        self.pieces[0] = self.pieces[1].clone();
-    }
-
     /// The pieces `t` of the way from the last tick to this one.
     fn pieces(&self, t: f32) -> impl Iterator<Item = Piece> {
         self.pieces[1]
@@ -115,7 +110,7 @@ pub struct ConfettiMesh;
 pub fn draw(
     mut commands: Commands,
     drive: Res<crate::drive::Drive>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     camera: Query<&Transform, With<crate::drive::ChaseCamera>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -123,7 +118,7 @@ pub fn draw(
 ) {
     show(
         drive.confetti(),
-        fixed.overstep_fraction(),
+        between.fraction(),
         camera.iter().next(),
         &mut commands,
         &mut meshes,

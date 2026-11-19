@@ -466,7 +466,8 @@ pub fn bring_in(world: &mut World, same_level: bool) {
 /// The one place the game clock is stopped: while a scene settles ([`Loading`]), while a flag
 /// that holds it is coming in, and while the pause menu is open over a race that is not shared.
 /// Stopping the clock rather than the race alone stops `FixedUpdate` (the level's animations
-/// count `GameTick` there) and `overstep_fraction`, which what is drawn between ticks goes by.
+/// count `GameTick` there) and `Time<Fixed>`, which what is drawn between ticks goes by
+/// (`between::Between`).
 fn hold_clock(
     loading: Option<Res<Loading>>,
     screens: Query<&LoadingScreen>,
@@ -475,7 +476,7 @@ fn hold_clock(
     mut time: ResMut<Time<Virtual>>,
 ) {
     let hold = loading.is_some()
-        || (menu.open && !race_on.shared())
+        || (menu.holds() && !race_on.shared())
         || screens
             .iter()
             .any(|s| s.holds_clock && !s.leaving && s.position > COVERED_AT);
@@ -570,7 +571,7 @@ fn missing(
     karts: &Query<(), With<KartScene>>,
     chase: &Query<(), With<drive::ChaseCamera>>,
 ) -> Option<&'static str> {
-    // (The viewer has neither.)
+    // (The viewer and the podium have neither.)
     if !driving {
         return None;
     }
@@ -586,13 +587,13 @@ fn missing(
 /// Counts the frames of the load, and lets the game go on when the scene is whole.
 fn finish(
     mut loading: ResMut<Loading>,
-    driving: Option<Res<drive::Drive>>,
+    mode: Res<State<crate::Mode>>,
     karts: Query<(), With<KartScene>>,
     chase: Query<(), With<drive::ChaseCamera>>,
     mut commands: Commands,
 ) {
     loading.frames += 1;
-    let lacks = missing(driving.is_some(), &karts, &chase);
+    let lacks = missing(*mode.get() == crate::Mode::Drive, &karts, &chase);
     if loading.frames < MIN_FRAMES || (lacks.is_some() && loading.frames < GIVE_UP_FRAMES) {
         return;
     }

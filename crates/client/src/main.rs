@@ -29,6 +29,7 @@ mod accordion;
 mod animation;
 mod assets;
 mod banner;
+mod between;
 mod billboard;
 mod command;
 mod confetti;
@@ -173,10 +174,7 @@ fn main() {
         .character
         .filter(|&c| (c as usize) < CHARACTERS.len())
         .unwrap_or(0);
-    let options = Options {
-        racer,
-        driving: true,
-    };
+    let options = Options { racer };
     let LevelData { level, dram, vram } = load_level(track_id, instance::lev_init::LevMode::Arcade);
     let character_data = load_character(racer);
     let Shared {
@@ -191,7 +189,6 @@ fn main() {
     } = load_shared();
     let loaded = Track(level, LevelId(track_id), instance::lev_init::LevMode::Arcade);
     let textures = Textures { dram, vram };
-    let drive = new_drive(&loaded, &character_data.racer, racer as usize);
 
     // See the executor below: without a render thread, `CTR_EXECUTOR=multi` keeps the defaults.
     let single_threaded = std::env::var("CTR_EXECUTOR").as_deref() != Ok("multi");
@@ -231,6 +228,9 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     let plugins = plugins.disable::<bevy::app::PanicHandlerPlugin>();
     app.add_plugins(plugins);
+    app.world_mut()
+        .resource_mut::<bevy::app::MainScheduleOrder>()
+        .insert_after(StateTransition, LevelChange);
     // The page keeps the last of these for when the browser ends it without a word.
     #[cfg(all(target_arch = "wasm32", feature = "wasm-debug"))]
     app.add_systems(Last, web::beat);
@@ -263,14 +263,17 @@ fn main() {
         .init_resource::<MeshOptions>()
         .init_resource::<CrateBias>()
         .insert_resource(LevelNumber(track_id))
-        .add_systems(Startup, (setup, spawn_kart).chain())
         .add_systems(Update, log_draws)
         // Before the frame's systems, with the commands of the last all applied: a system that
         // queued a command on an entity of the scene (the lap rows, the glyphs of a text) would
         // find it despawned by the change, and Bevy panics on that. (A race that starts on
-        // another level is such a change.) After the input and the command line's capture of the
-        // keys (`command.rs`), which clears them while it is open.
-        .add_systems(PreUpdate, switch_level.after(command::capture))
+        // another level is such a change.) After all of `PreUpdate`, the input and the command
+        // line's capture of the keys (`command.rs`) included, which clears them while it is
+        // open. And after `StateTransition`: the next race's start leaves the podium
+        // (`podium::from_lobby`, in `PreUpdate`), whose `OnExit` puts the level to go back to in
+        // place, and the race's track loads over that, not the other way round.
+        .init_schedule(LevelChange)
+        .add_systems(LevelChange, switch_level)
         .add_systems(Last, limit_frame_rate)
         // After the cameras and karts have moved this frame, before their transforms propagate.
         .add_systems(
@@ -293,6 +296,7 @@ fn main() {
         .add_plugins(drop_map::DropMapPlugin)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
         .add_plugins(unlit::UnlitPlugin)
+        .add_plugins(between::BetweenPlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(
             FixedUpdate,
@@ -303,7 +307,7 @@ fn main() {
                 props::animate,
                 banner::wave,
                 // Driving ticks the objects with the karts (`drive_tick`).
-                props::tick_objects.run_if(not(resource_exists::<drive::Drive>)),
+                props::tick_objects.run_if(not(drive::driving)),
                 props::pose_hazards,
                 props::hide_fruit,
                 props::pose_crates,
@@ -344,11 +348,19 @@ fn main() {
             world.register_system(nav::spawn_text),
         ],
     };
-    // The systems of both modes are there all the time: the race's run with the `Drive` resource
-    // (`drive::driving`), the viewer's without it, and `/debug viewer` takes it away or gives it
-    // back (`switch_mode`).
+    app.init_state::<Mode>()
+        .add_systems(OnEnter(Mode::Drive), scene::enter_mode)
+        .add_systems(OnEnter(Mode::Viewer), scene::enter_mode)
+        .add_systems(OnExit(Mode::Drive), scene::exit_drive)
+        .add_systems(
+            OnTransition {
+                exited: Mode::Drive,
+                entered: Mode::Viewer,
+            },
+            scene::keep_viewer_start,
+        );
     app.insert_resource(sound::Sounds::load(disc::source()));
-    app.insert_resource(drive).add_plugins((
+    app.add_plugins((
         drive::DrivePlugin,
         sound::SoundPlugin,
         lobby::LobbyPlugin,
@@ -371,7 +383,7 @@ fn main() {
         ordered::OrderedPlugin,
     ));
     app.add_plugins((track_picture::TrackPicturePlugin, mesh_stats::MeshStatsPlugin));
-    app.add_systems(Update, fly.run_if(not(drive::driving)))
+    app.add_systems(Update, fly.run_if(in_state(Mode::Viewer)))
         .init_resource::<scene::Picked>()
         .add_systems(Update, (
                 switch_mode,

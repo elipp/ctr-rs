@@ -138,6 +138,7 @@ pub(super) fn finish(
                 best,
                 relic: earned(ms).filter(|&tier| new_best && Some(tier) > had),
                 submit,
+                continued: false,
             });
             continue;
         }
@@ -170,11 +171,11 @@ pub(super) fn finish(
             .get(waited_for.saturating_sub(1))
             .copied()
     };
-    // A solo run goes on for its ceremony, which has no time of its own until it is settled.
+    // A solo run goes on through its ceremony until the player asks to go on.
     let aftermath = match (race.solo, race.solo_end) {
         (None, _) => AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32,
-        (Some(_), Some(_)) => crate::solo_end::TICKS,
-        (Some(_), None) => return,
+        (Some(_), Some(end)) if end.continued => 0,
+        (Some(_), _) => return,
     };
     let over_at = last_waited.map(|at| at + aftermath);
     if !over_at.is_some_and(|at| at < settled) {

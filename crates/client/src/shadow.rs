@@ -85,10 +85,10 @@ pub fn spawn(
 pub fn update(
     mut shadows: Query<(&Shadow, &Attached, &Mesh3d, &mut Visibility)>,
     karts: Query<&KartMotion, With<KartSlot>>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (shadow, attached, mesh, mut visibility) in &mut shadows {
         let pose = karts
             .get(attached.0)

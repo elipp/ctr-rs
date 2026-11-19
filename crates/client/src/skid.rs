@@ -195,11 +195,11 @@ pub fn update(
     marks: Query<(&Marks, &Attached, &Mesh3d)>,
     karts: Query<&KartSlot>,
     sim: Res<crate::props::Sim>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     // The kart is drawn between its last two ticks; the marks' heads go with it.
-    let behind = 1.0 - fixed.overstep_fraction();
+    let behind = 1.0 - between.fraction();
     let point = |p: [i16; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
 
     let shown: Vec<_> = sim

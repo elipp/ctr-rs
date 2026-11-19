@@ -102,7 +102,7 @@ fn update(
     sim: Res<Sim>,
     hud: HudViews,
     config: Res<crate::config::Config>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     real: Res<Time<Real>>,
     mut trails: Query<(&crate::drive::ViewOf, &mut ClockTrail)>,
     // The last tick seen, and when it was.
@@ -147,7 +147,7 @@ fn update(
             }
         } else {
             // `timer + cameraID`, between the ticks, for the pulse.
-            let wave = (tick as usize + view) as f32 + fixed.overstep_fraction();
+            let wave = (tick as usize + view) as f32 + between.fraction();
             let sin = (wave * 100.0 / 4096.0 * std::f32::consts::TAU).sin().abs();
             let mut blur = sin * 1024.0 + 1024.0;
             if strength < 0x1000 {

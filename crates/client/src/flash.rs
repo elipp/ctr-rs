@@ -128,7 +128,7 @@ fn brightness(excess: i16) -> f32 {
 pub fn show(
     mut commands: Commands,
     hud: HudViews,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     flashes: Res<Flashes>,
     mut overlays: Query<(&HudView, &mut BackgroundColor), With<Overlay>>,
 ) {
@@ -149,7 +149,7 @@ pub fn show(
             Pickable::IGNORE,
         ));
     }
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (&HudView(view), mut color) in &mut overlays {
         let Some(flash) = flashes.0.get(view) else {
             continue;

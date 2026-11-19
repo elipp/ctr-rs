@@ -156,7 +156,7 @@ fn spawn_part(
 /// Shows each driver's shield round its kart, in the size and transparency the sim has.
 pub fn update(
     sim: Res<crate::props::Sim>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     karts: Query<(&KartSlot, &KartMotion)>,
     mut instances: Query<(
         &mut ShieldPart,
@@ -176,7 +176,7 @@ pub fn update(
     mut materials: ResMut<Assets<TurnedMaterial>>,
     mut subtract_materials: ResMut<Assets<TurnedSubtractMaterial>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
 
     for (mut part, attached, mut transform, mut visibility, children) in &mut instances {
         let Ok((slot, motion)) = karts.get(attached.0) else {

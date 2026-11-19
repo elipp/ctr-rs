@@ -53,7 +53,7 @@ fn show(
     mut commands: Commands,
     sim: Res<crate::props::Sim>,
     race_on: Res<crate::race_on::RaceOn>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
     image: Option<Res<LightsImage>>,
@@ -78,7 +78,7 @@ fn show(
     let counting = race.tick >= race.intro_ticks && race.lights_ms > LIGHTS_FLOOR_MS;
     let ms = race.lights_ms as f32
         - if counting {
-            MS_PER_TICK * fixed.overstep_fraction()
+            MS_PER_TICK * between.fraction()
         } else {
             0.0
         };

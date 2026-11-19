@@ -49,6 +49,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
 use render::font::{Font, Gradient};
+use std::borrow::Cow;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 
@@ -85,6 +86,8 @@ pub struct PauseMenu {
     clicked: Option<usize>,
     /// RESTART was taken: the next tick puts the race back on the grid.
     pub restart: bool,
+    /// The first player's racer menu as a submenu of this one; see [`RacerMenu`].
+    pub racer_menu: RacerMenu,
     /// The way the keyboard slides a volume, -1, 0 or 1: Left or Right is held.
     slide_keys: i32,
     /// The ways the left stick was pushed the last frame (right and up 1), to tap with it.
@@ -121,7 +124,31 @@ pub struct PauseMenu {
     private_lobby: bool,
 }
 
+/// Hands the first player's racer menu (`chooser::input`) back and forth with Character select,
+/// so that leaving it lands back on that item. A racer menu opened by its own key is not this
+/// menu's, and leaves to the drive.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum RacerMenu {
+    #[default]
+    No,
+    /// Taken here: opens next update.
+    Asked,
+    /// Open for this menu. The menu opening (Escape) closes it.
+    Nested,
+    /// Left without a pick: the menu reopens next update.
+    Back,
+    /// Left with a pick (or never opened): the pause ends next update. Not ended by the racer
+    /// menu itself, as ending it cuts the sounds played in it, the pick's included.
+    Done,
+}
+
 impl PauseMenu {
+    /// The pause is on, offline (`loading::hold_clock`, the sounds): the menu or its racer menu
+    /// is up.
+    pub fn holds(&self) -> bool {
+        self.open || self.racer_menu != RacerMenu::No
+    }
+
     /// Systems with their own hotkeys (mute, `/cup pause` key, racer menu) must check this.
     pub fn takes_keys(&self) -> bool {
         self.capturing.is_some() || self.typing.is_some()
@@ -193,6 +220,10 @@ pub(crate) enum Item {
     EndRace,
     PlaySolo,
     Solo(race::solo::Kind),
+    /// `/score top` of this kind on the track we are on.
+    Leaderboard(race::solo::Kind),
+    /// `Config::server_records`, which Left, Right and taking it toggle.
+    ServerRecords,
     /// How many local players share the screen (`/players`), which Left and Right step.
     SplitScreen,
     LeaveLobby,
@@ -217,6 +248,8 @@ pub(crate) enum Item {
     Quit,
     QuitNow,
     TrackSelect,
+    /// Opens the first player's racer menu (`drive::chooser`).
+    CharSelect,
     Track(u32),
     /// A volume, which Left and Right change.
     Volume(Slider),
@@ -244,7 +277,7 @@ pub(crate) struct Entry {
     inline: bool,
     font: Font,
     /// What the row means, in the footer while it is picked.
-    help: Option<&'static str>,
+    help: Option<Cow<'static, str>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -276,8 +309,8 @@ impl Entry {
         }
     }
 
-    pub(crate) fn help(mut self, help: &'static str) -> Entry {
-        self.help = Some(help);
+    pub(crate) fn help(mut self, help: impl Into<Cow<'static, str>>) -> Entry {
+        self.help = Some(help.into());
         self
     }
 
@@ -326,7 +359,22 @@ fn items(
                     .help("Rules:\n- Time crates stop the clock\n- Collect all to get a -10 second bonus\n\nNOTE: you can submit your best times to the online leaderboards!"),
                 entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial")
                     .help("Rules:\n- Drive the fastest possible 3-lap time\n\nNOTE: you can submit your best times to the online leaderboards!"),
-                entry(Item::Back, "Back"),
+                entry(Item::Leaderboard(race::solo::Kind::Relic), "Relic leaderboard")
+                    .starts_section()
+                    .help("The fastest relic races on this track, from the score server."),
+                entry(Item::Leaderboard(race::solo::Kind::TimeTrial), "Time trial leaderboard")
+                    .help("The fastest time trials on this track, from the score server."),
+                Entry::new(
+                    Item::ServerRecords,
+                    SERVER_RECORDS,
+                    Kind::Cycle(ON_OFF[config.server_records as usize].into()),
+                )
+                .inline()
+                .help(
+                    "On: each solo race downloads the leaderboard's #1 run from the score \
+                     server, and its ghost becomes available.",
+                ),
+                entry(Item::Back, "Back").starts_section(),
             ];
             return ("Play solo".into(), items);
         }
@@ -408,6 +456,14 @@ fn items(
         items.push(entry(Item::EndRace, "End race").help("Back to the free drive."));
     }
     items.push(entry(Item::TrackSelect, "Track select"));
+    // (Same lock as the racer menu's own key: the racers are fixed in a race or a cup.)
+    if !race_on.is_on() && !lobby.characters_locked() {
+        let keys = config.controls.describe(Control::RacerMenu);
+        items.push(
+            entry(Item::CharSelect, "Character select")
+                .help(format!("Shortcut: {keys} (pad: Select)")),
+        );
+    }
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
     if !lobby.is_open() && !race_on.is_on() {
         items.push(entry(Item::PlaySolo, "Play solo"));
@@ -631,6 +687,9 @@ const ARROW: usize = 4;
 
 const NEW_LOBBY: &str = "Create lobby";
 const SPLIT_SCREEN: &str = "Split screen";
+const SERVER_RECORDS: &str = "Server record ghost";
+/// Indexed by `Config::server_records`.
+const ON_OFF: [&str; 2] = ["Off", "On"];
 
 fn split_screen_value(players: usize) -> String {
     match players {
@@ -665,8 +724,8 @@ impl Plugin for PausePlugin {
                 input
                     .after(InputSystems)
                     .after(crate::command::capture)
-                    // (Its keys reset must come first, or `]`/`[` switch the level while typing.)
-                    .before(crate::scene::switch_level)
+                    // (Its keys reset must come before `scene::switch_level`, in `LevelChange`,
+                    // or `]`/`[` switch the level while typing.)
                     .run_if(crate::drive::driving),
             )
             .add_systems(Update, show.run_if(crate::drive::driving));
@@ -676,7 +735,7 @@ impl Plugin for PausePlugin {
 /// Opens and closes the menu, moves the pick and takes an item, with the menu's sounds. Offline
 /// it pauses the race's sounds too (`MainFreeze_IfPressStart`, `MainFrame_TogglePauseAudio`).
 #[allow(clippy::too_many_arguments)]
-fn input(
+pub(crate) fn input(
     mut menu: ResMut<PauseMenu>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut key_events: MessageReader<KeyboardInput>,
@@ -740,6 +799,24 @@ fn input(
             sounds.menu(id);
         }
     };
+    let was_holding = menu.holds();
+    // The pause's sounds (`MainFrame_TogglePauseAudio`): its end cuts the sounds played in it, so
+    // a sound of what ended it goes after this.
+    let hold_sounds = |menu: &PauseMenu| {
+        if let Some(sounds) = sounds.as_ref().filter(|_| offline && menu.holds() != was_holding) {
+            if menu.holds() {
+                sounds.pause();
+            } else {
+                sounds.unpause();
+            }
+        }
+    };
+    if menu.racer_menu == RacerMenu::Done {
+        menu.racer_menu = RacerMenu::No;
+        hold_sounds(&menu);
+        sound(MENU_TAKE_SFX);
+        return finish(was_open, &menu, &mut keys, &mut pads);
+    }
     let key = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
     // The left stick of the first pad that has it pushed, as the D-pad: tapped as it is pushed
@@ -816,9 +893,19 @@ fn input(
     }
     // In a submenu Escape is Back (below); P and Start still close the menu from anywhere.
     let in_submenu = menu.open && menu.view != View::Main;
+    // (Backspace and North are Back in a submenu, and the racer menu is one.)
+    let to_racers = !menu.open && matches!(menu.racer_menu, RacerMenu::Nested | RacerMenu::Back);
+    let racers_back = to_racers
+        && (menu.racer_menu == RacerMenu::Back
+            || key(&[KeyCode::Backspace])
+            || pad(GamepadButton::North));
+    if menu.racer_menu == RacerMenu::Back {
+        menu.racer_menu = RacerMenu::No;
+    }
     if (key(&[KeyCode::Escape]) && !in_submenu)
         || key(&[KeyCode::KeyP])
         || pad(GamepadButton::Start)
+        || racers_back
     {
         if menu.open && !leave(&menu, &lobby, &mut actions, &mut toasts) {
             sound(MENU_BACK_SFX);
@@ -832,15 +919,14 @@ fn input(
         menu.capturing = None;
         menu.typing = None;
         menu.grid_cursor = 0;
-        test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
-        if let Some(sounds) = sounds.as_ref().filter(|_| offline) {
-            if menu.open {
-                sounds.pause();
-            } else {
-                sounds.unpause();
-            }
+        if to_racers {
+            let (_, items) = items(&lobby, &race_on, &menu, &public, &config, players.0);
+            menu.selected = items.iter().position(|e| e.item == Item::CharSelect).unwrap_or(0);
+            menu.follow = true;
         }
-        sound(MENU_TAKE_SFX);
+        test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
+        hold_sounds(&menu);
+        sound(if to_racers { MENU_BACK_SFX } else { MENU_TAKE_SFX });
         save(&mut menu, &config, &mut toasts);
         return finish(was_open, &menu, &mut keys, &mut pads);
     } else if menu.open {
@@ -1014,6 +1100,10 @@ fn input(
                 menu.open = false;
                 menu.restart = true;
             }
+            Some(Item::CharSelect) => {
+                menu.open = false;
+                menu.racer_menu = RacerMenu::Asked;
+            }
             Some(Item::EndRace) => {
                 menu.open = false;
                 actions.write(Action::StopRace);
@@ -1021,6 +1111,12 @@ fn input(
             Some(Item::Solo(kind)) => {
                 menu.open = false;
                 actions.write(Action::StartSolo(kind));
+            }
+            Some(Item::ServerRecords) => toggle_server_records(&mut menu, &mut config),
+            // Closed, as the menu hides the table.
+            Some(Item::Leaderboard(kind)) => {
+                menu.open = false;
+                actions.write(Action::ScoreTop { kind, track: None });
             }
             Some(Item::LeaveLobby) => {
                 menu.open = false;
@@ -1151,11 +1247,11 @@ fn input(
             menu.grid_cursor = 0;
         }
         test_sound(&menu, &race_on, &config, &time, sounds.as_deref());
-        // Leaving the pause cuts the sound of what left it (`MainFrame_TogglePauseAudio`).
-        if !menu.open
-            && let Some(sounds) = sounds.as_ref().filter(|_| offline)
-        {
-            sounds.unpause();
+        // Leaving the pause cuts the sound of what left it.
+        hold_sounds(&menu);
+        // A leaderboard goes up over the race: taking it is not a way out of the pause.
+        if offline && !menu.holds() && matches!(taken_item, Some(Item::Leaderboard(_))) {
+            sound(MENU_TAKE_SFX);
         }
     }
     save(&mut menu, &config, &mut toasts);
@@ -1213,8 +1309,17 @@ fn step(
             menu.private_lobby ^= true;
             true
         }
+        Item::ServerRecords => {
+            toggle_server_records(menu, config);
+            true
+        }
         _ => false,
     }
+}
+
+fn toggle_server_records(menu: &mut PauseMenu, config: &mut Config) {
+    config.server_records ^= true;
+    menu.unsaved = true;
 }
 
 /// Whether the view may be left (Back, Backspace, or closing the menu), with what leaving it
@@ -1468,6 +1573,12 @@ fn show(
                 });
                 layout.min_width = privacy.chain(players).max().unwrap_or(0);
             }
+            if menu.view == View::PlaySolo {
+                let widest = ON_OFF
+                    .iter()
+                    .map(|value| inline_cycle_width(&fonts, Font::Middle, SERVER_RECORDS, value));
+                layout.min_width = widest.chain([layout.min_width]).max().unwrap_or(0);
+            }
             spawn(
                 &mut commands,
                 wanted,
@@ -1518,7 +1629,7 @@ fn show(
     if let Ok((mut text, mut node)) = footer.single_mut()
         && let Some((_, shown)) = shown.single().ok()
     {
-        let help = shown.items.get(menu.selected).and_then(|item| item.help);
+        let help = shown.items.get(menu.selected).and_then(|item| item.help.as_deref());
         let display = if help.is_some() { Display::Flex } else { Display::None };
         if node.display != display {
             node.display = display;
@@ -1682,7 +1793,7 @@ fn spawn(
     // Absolute, so the panel is no wider for it (the text wraps to the panel's width instead)
     // and does not change height as the pick moves between rows with and without help.
     if items.iter().any(|item| item.help.is_some()) {
-        let help = items.get(selected).and_then(|item| item.help);
+        let help = items.get(selected).and_then(|item| item.help.as_deref());
         commands.spawn((
             ChildOf(panel),
             Footer,

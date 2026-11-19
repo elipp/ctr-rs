@@ -139,6 +139,8 @@ pub struct SoloEnd {
     pub relic: Option<race::relic::Tier>,
     /// The new best's way to the board (`scores.rs`), when one is offered.
     pub submit: Option<Submit>,
+    /// The player has asked to go on (`solo_end::continue_on_key`): the race ends.
+    pub continued: bool,
 }
 
 /// Where an end screen's submit is at.

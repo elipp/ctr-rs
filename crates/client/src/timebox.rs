@@ -190,7 +190,7 @@ fn show(
     race_on: Res<crate::race_on::RaceOn>,
     hud: HudViews,
     fonts: Res<crate::font::Fonts>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut icons: Query<
         (&TimeboxIcon, &HudView, &mut Transform, &mut Visibility),
@@ -220,7 +220,7 @@ fn show(
     }
     let all = race.time_crates();
     let angle =
-        (race.tick as f32 + fixed.overstep_fraction()) / SPIN_TICKS * std::f32::consts::TAU;
+        (race.tick as f32 + between.fraction()) / SPIN_TICKS * std::f32::consts::TAU;
     for kart in hud.iter() {
         let count = format!("{:02}/{all}", kart.driver.num_time_crates);
         let width = fonts.atlas(Font::Large).layout(&count).width as f32;

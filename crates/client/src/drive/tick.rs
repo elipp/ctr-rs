@@ -57,7 +57,6 @@ pub(super) struct Shown<'w, 's> {
 /// What [`drive_tick`] keeps from one tick to the next.
 #[derive(Default)]
 pub(super) struct Memory {
-    was_paused: bool,
     /// The host's `/cup pause` stopped the race last tick.
     was_host_paused: bool,
     /// The ticks waited for a late player, and the buttons held last tick (a watching client's
@@ -89,7 +88,6 @@ pub(super) fn drive_tick(
         mut sfx,
     } = shown;
     let Memory {
-        was_paused,
         was_host_paused,
         waits,
     } = &mut *memory;
@@ -116,18 +114,7 @@ pub(super) fn drive_tick(
     // The effects panel's freeze stops the race, unless the race is everyone's. (It holds only the
     // race, so that `/debug fx step` can run ticks: the pause menu stops the clock instead,
     // `loading::hold_clock`.)
-    let paused = (hold.fx.holds() && !shared) || host_paused;
-    if paused && !*was_paused {
-        // Nothing moves between ticks now, so the interpolation must not either.
-        for view in &mut drive.views {
-            view.freeze();
-        }
-        for (mut motion, _, _) in &mut motions {
-            motion.freeze();
-        }
-    }
-    *was_paused = paused;
-    if paused {
+    if (hold.fx.holds() && !shared) || host_paused {
         return;
     }
 
@@ -180,7 +167,7 @@ pub(super) fn drive_tick(
             }
             race.best = best;
             race.ghosts.best = crate::pb::ghost(&track.0, &sim, race);
-            race.ghosts.world = world_record.start(&track.0, &sim, race);
+            race.ghosts.world = world_record.start(&track.0, &sim, race, config.server_records);
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.
@@ -642,6 +629,12 @@ pub(super) fn drive_tick(
     let ours_finished = !spectating && finished;
     let ours = &sim.race.karts[sim.own].driver;
     let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
+    // (A menu that has the controls has the camera's buttons too.)
+    let own_camera = if (shared && hold.menu.open) || drive.views[0].chooser.open {
+        Default::default()
+    } else {
+        controller.camera(&drive.views[0].device, &taken)
+    };
     drive.own().follow(
         &track,
         Follow {
@@ -652,6 +645,7 @@ pub(super) fn drive_tick(
             cycle: cycle != 0,
             elsewhere: watching != own,
             confetti: hold.fx.confetti.apply(won),
+            camera: own_camera,
         },
     );
 
@@ -671,6 +665,11 @@ pub(super) fn drive_tick(
     for view in drive.views.iter_mut().skip(1) {
         let kart = &sim.race.karts[view.slot];
         let finished = kart.driver.actions_flag_set & vehicle::actions::RACE_FINISHED != 0;
+        let camera = if view.chooser.open {
+            Default::default()
+        } else {
+            controller.camera(&view.device, &taken)
+        };
         view.follow(
             &track,
             Follow {
@@ -684,6 +683,7 @@ pub(super) fn drive_tick(
                     .fx
                     .confetti
                     .apply(finished && kart.driver.driver_rank == 0),
+                camera,
             },
         );
         view.push();

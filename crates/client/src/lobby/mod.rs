@@ -50,7 +50,7 @@ use crate::console::Log;
 use crate::maps;
 use crate::race_on::{CurrentRace, RaceOn};
 
-use commands::{pause_key, run};
+use commands::{pause_key, run, say};
 use countdown::{COUNTDOWN_SECONDS, Countdown, Then, countdown};
 use cup::{BETWEEN_RACES_SECONDS, Finisher, Series};
 pub use hud::spawn_waiting;
@@ -850,23 +850,30 @@ impl Plugin for LobbyPlugin {
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()
             .init_resource::<lag::FakeLag>()
-            .add_systems(Startup, spawn_waiting)
+            // The talk with the others goes on on the podium: what comes in before the next race
+            // (its start takes the podium away: `podium::from_lobby`), and the chat.
             .add_systems(
                 Update,
                 (
-                    pause_key,
-                    run,
-                    countdown,
-                    report,
-                    crate::remote::build,
-                    finish,
-                    placing,
-                    rollback_toasts,
-                    pace,
-                    waiting,
+                    (
+                        pause_key.run_if(crate::drive::driving),
+                        run.run_if(not(in_state(crate::Mode::Viewer))),
+                        countdown.run_if(crate::drive::driving),
+                    )
+                        .chain(),
+                    (say, report),
+                    (
+                        crate::remote::build,
+                        finish,
+                        placing,
+                        rollback_toasts,
+                        pace,
+                        waiting,
+                    )
+                        .chain()
+                        .distributive_run_if(crate::drive::driving),
                 )
-                    .chain()
-                    .run_if(crate::drive::driving),
+                    .chain(),
             );
     }
 }

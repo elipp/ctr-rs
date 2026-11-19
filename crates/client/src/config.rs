@@ -19,6 +19,8 @@
 //! * `/config set global-voices on|off`: whether the other karts' voice lines are heard from
 //!   anywhere, in the middle at full volume as retail plays them, rather than from where the kart
 //!   is (on at first; see `sound.rs`)
+//! * `/config set server-records on|off`: whether a solo race downloads its board's #1 from the
+//!   score server, to race its ghost (off at first; also the pause menu's Play solo)
 //!
 //! * `/config set render-scale <0.25-1>`: in a browser, the part of the screen's resolution to
 //!   draw at, across and down (`web/play.html`)
@@ -114,6 +116,9 @@ pub struct Config {
     pub ghosts: crate::ghost::GhostPick,
     /// The ghost's key has been pressed once: the race start stops saying what it does.
     pub ghost_hint_done: bool,
+    /// A solo race asks the score server for its board's #1, to race its ghost (the pause menu's
+    /// Play solo). Off until opted into: it reaches out to a server.
+    pub server_records: bool,
 }
 
 /// The most relays that can be added; every one is probed when an endpoint starts.
@@ -145,6 +150,7 @@ impl Default for Config {
             fullscreen: false,
             ghosts: crate::ghost::GhostPick::default(),
             ghost_hint_done: false,
+            server_records: false,
         }
     }
 }
@@ -327,6 +333,7 @@ pub enum Setting {
     VolumeMusic(u8),
     VolumeVoice(u8),
     GlobalVoices(bool),
+    ServerRecords(bool),
     /// 0.25 to 1.
     RenderScale(f32),
     /// 1 to `pixel::MAX_SCALE`.
@@ -354,13 +361,15 @@ const USAGE: &str = "Usage: /config set nick [name, up to 12 characters]\n\
     /config set shader-effects on|off\n\
     /config set pixel-scale <1 to 8>\n\
     /config set volume music|sfx|voice <0-100>\n\
-    /config set global-voices on|off";
+    /config set global-voices on|off\n\
+    /config set server-records on|off";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nick [name, up to 12 characters]\n\
     /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>\n\
-    /config set global-voices on|off";
+    /config set global-voices on|off\n\
+    /config set server-records on|off";
 
 impl Setting {
     /// The setting a line after `/config set` names, or what is wrong with it.
@@ -434,6 +443,11 @@ impl Setting {
                 "on" => Ok(Setting::GlobalVoices(true)),
                 "off" => Ok(Setting::GlobalVoices(false)),
                 _ => Err("Usage: /config set global-voices on|off".into()),
+            },
+            "server-records" => match value {
+                "on" => Ok(Setting::ServerRecords(true)),
+                "off" => Ok(Setting::ServerRecords(false)),
+                _ => Err("Usage: /config set server-records on|off".into()),
             },
             "volume" => {
                 const USAGE: &str = "Usage: /config set volume music|sfx|voice <0-100>";
@@ -717,6 +731,18 @@ fn apply(
                     "Voice lines: heard from anywhere"
                 } else {
                     "Voice lines: heard from where the kart is"
+                };
+                toasts.write(Toast::new(text, 2000));
+            }
+            Setting::ServerRecords(on) => {
+                config.server_records = *on;
+                if let Err(why) = config.save() {
+                    toasts.write(refuse(why));
+                }
+                let text = if *on {
+                    "Server record ghost: on, from the next solo race"
+                } else {
+                    "Server record ghost: off, from the next solo race"
                 };
                 toasts.write(Toast::new(text, 2000));
             }
