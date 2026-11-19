@@ -134,10 +134,10 @@ impl Drive {
     }
 }
 
-/// Whether the race is on, and not the viewer (`/debug viewer`): the systems of the race run
-/// only then.
-pub(crate) fn driving(drive: Option<Res<Drive>>) -> bool {
-    drive.is_some()
+/// Whether the race is on, and not the viewer or the podium: the systems of the race run only
+/// then, and `Drive` exists only then.
+pub(crate) fn driving(mode: Option<Res<State<crate::Mode>>>) -> bool {
+    mode.is_some_and(|mode| *mode.get() == crate::Mode::Drive)
 }
 
 pub struct DrivePlugin;
@@ -152,7 +152,6 @@ impl Plugin for DrivePlugin {
             .init_gizmo_group::<crate::weather::WeatherGizmos>()
             .init_resource::<crate::flash::Flashes>()
             .add_systems(Update, overlay::debug_text_command)
-            .add_systems(Startup, spawn_hud)
             .add_systems(
                 FixedUpdate,
                 (drive_tick, crate::ghost::step, crate::flash::step, crate::projectile::tick)

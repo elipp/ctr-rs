@@ -2,6 +2,7 @@
 
 use crate::controls::Control;
 use crate::subtract::SubtractMaterial;
+use crate::Mode;
 use crate::{
     AnimState, CHARACTERS, FlyCamera, GameTick, LevelData, LevelNumber, MeshOptions, Options,
     Racer, SceneSystems, SceneryState, Textures, Track, WaterState, WheelIcons, command, config,
@@ -114,6 +115,10 @@ pub(crate) fn racer_keys(
         actions.write(command::Action::Character(racer));
     }
 }
+
+/// Where [`switch_level`] runs: between `StateTransition` and `Update` (`main.rs`).
+#[derive(bevy::ecs::schedule::ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct LevelChange;
 
 /// [`Control::NextLevel`] and [`Control::PreviousLevel`] (`]` / Page Up and `[` / Page Down at
 /// first): shows the next or the previous level; and the racer
@@ -240,9 +245,22 @@ pub(crate) fn switch_level(world: &mut World) {
             character.insert(world);
         }
         world.insert_resource(LevelNumber(id));
-        restart_drive(world, options);
         stage("building the scene");
-        run_scene_systems(world, options);
+        match *world.resource::<State<Mode>>().get() {
+            // Another level is not the podium's: the race on it takes over, which `OnEnter`
+            // builds. Right away, as `Update` would run the podium's systems on its figures,
+            // despawned.
+            Mode::Podium => {
+                world.resource_mut::<crate::podium::Podium>().back = None;
+                world.resource_mut::<NextState<Mode>>().set(Mode::Drive);
+                world.run_schedule(StateTransition);
+            }
+            Mode::Drive => {
+                restart_drive(world);
+                run_scene_systems(world, Mode::Drive);
+            }
+            Mode::Viewer => run_scene_systems(world, Mode::Viewer),
+        }
         stage("scene built");
         world.write_message(toast::Toast::new(
             format!("Track: {}", maps::name(id)),
@@ -272,9 +290,9 @@ pub(crate) fn switch_level(world: &mut World) {
     }
 }
 
-/// Builds the scene of the level shown, in the mode of `options`.
-pub(crate) fn run_scene_systems(world: &mut World, options: Options) {
-    let systems = world.resource::<SceneSystems>().of(options.driving);
+/// Builds the scene of the level shown, in `mode`.
+pub(crate) fn run_scene_systems(world: &mut World, mode: Mode) {
+    let systems = world.resource::<SceneSystems>().of(mode);
     let count = systems.len();
     for (n, system) in systems.into_iter().enumerate() {
         stage(format_args!("scene system {} of {count}", n + 1));
@@ -283,28 +301,56 @@ pub(crate) fn run_scene_systems(world: &mut World, options: Options) {
     stage("scene systems done");
 }
 
-/// Builds the scene of the level shown again, in the mode of `options` (the race starts from
-/// the grid).
-pub(crate) fn rebuild_scene(world: &mut World, options: Options) {
+/// Builds the scene of the level shown again, in `mode` (the race starts from the grid).
+pub(crate) fn rebuild_scene(world: &mut World, mode: Mode) {
     let scene = world_scene(world);
     despawn(world, scene);
-    restart_drive(world, options);
-    run_scene_systems(world, options);
+    if mode == Mode::Drive {
+        restart_drive(world);
+    }
+    run_scene_systems(world, mode);
     crate::loading::begin(world);
 }
 
-/// `/debug viewer`: the race becomes the viewer with the probe, or the viewer the race again; and
-/// `/debug level`: how the level is built. The scene is built again, as for another level, and
-/// the systems of the mode that is over stop (`drive::driving`).
+/// `OnEnter` of the race and the viewer, the first `Drive` at startup included (which is how
+/// the first scene is built: before `PreStartup`). The podium's is `podium::enter`.
+pub(crate) fn enter_mode(world: &mut World) {
+    let mode = *world.resource::<State<Mode>>().get();
+    rebuild_scene(world, mode);
+}
+
+pub(crate) fn exit_drive(mut commands: Commands) {
+    commands.remove_resource::<drive::Drive>();
+}
+
+/// The viewer starts where the race's camera was. (Between `OnExit` and `OnEnter`: the chase
+/// camera is still there.)
+pub(crate) fn keep_viewer_start(
+    cameras: Query<&GlobalTransform, With<drive::ChaseCamera>>,
+    mut commands: Commands,
+) {
+    if let Some(at) = cameras.iter().next() {
+        commands.insert_resource(ViewerStart(at.compute_transform()));
+    }
+}
+
+/// `/debug viewer`: the race becomes the viewer with the probe, or the viewer the race again
+/// (`enter_mode`); and `/debug level`: how the level is built, which builds the scene again in
+/// the mode it is in.
 pub(crate) fn switch_mode(
     mut actions: MessageReader<command::Action>,
     lobby: Res<lobby::Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
     mesh_options: Res<MeshOptions>,
+    mode: Res<State<Mode>>,
+    mut next: ResMut<NextState<Mode>>,
     mut toasts: MessageWriter<toast::Toast>,
     mut commands: Commands,
 ) {
     use command::{Action, MeshSetting};
+    let refuse = |toasts: &mut MessageWriter<toast::Toast>, why: &str| {
+        toasts.write(toast::Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+    };
     for action in actions.read() {
         let setting = match action {
             Action::DebugViewer => None,
@@ -327,43 +373,37 @@ pub(crate) fn switch_mode(
         };
         // The scene is rebuilt: the race would start over.
         if lobby.is_open() || race_on.is_on() {
-            toasts.write(
-                toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
-                    .color(Color::srgb(1.0, 0.4, 0.4)),
-            );
+            refuse(&mut toasts, "Not in a lobby or a race (/lobby close)");
             continue;
         }
-        commands.queue(move |world: &mut World| {
-            let mut options = *world.resource::<Options>();
-            let said = match setting {
-                None => {
-                    options.driving = !options.driving;
-                    world.insert_resource(options);
-                    // The viewer starts where the race's camera was.
-                    if !options.driving
-                        && let Some(at) = world
-                            .query_filtered::<&GlobalTransform, With<drive::ChaseCamera>>()
-                            .iter(world)
-                            .next()
-                            .map(|g| g.compute_transform())
-                    {
-                        world.insert_resource(ViewerStart(at));
-                    }
-                    if options.driving { "Race" } else { "Viewer" }
-                }
-                Some(setting) => {
-                    let mut mesh = world.resource_mut::<MeshOptions>();
-                    match setting {
-                        MeshSetting::Hidden(on) => mesh.hidden = on,
-                        MeshSetting::Cull(on) => mesh.cull = on,
-                        MeshSetting::LowColors(low) => mesh.low = low,
-                        MeshSetting::CrateFixup(on) => mesh.crate_fixup = on,
-                    }
-                    "Level rebuilt"
-                }
+        // (The podium's scene is its own, which the common scene systems alone do not build.)
+        if *mode.get() == Mode::Podium {
+            refuse(&mut toasts, "Not on the podium");
+            continue;
+        }
+        let Some(setting) = setting else {
+            let to = match mode.get() {
+                Mode::Drive => Mode::Viewer,
+                _ => Mode::Drive,
             };
-            rebuild_scene(world, options);
-            world.write_message(toast::Toast::new(said, 2000));
+            next.set_if_different(to);
+            toasts.write(toast::Toast::new(
+                if to == Mode::Drive { "Race" } else { "Viewer" },
+                2000,
+            ));
+            continue;
+        };
+        commands.queue(move |world: &mut World| {
+            let mut mesh = world.resource_mut::<MeshOptions>();
+            match setting {
+                MeshSetting::Hidden(on) => mesh.hidden = on,
+                MeshSetting::Cull(on) => mesh.cull = on,
+                MeshSetting::LowColors(low) => mesh.low = low,
+                MeshSetting::CrateFixup(on) => mesh.crate_fixup = on,
+            }
+            let mode = *world.resource::<State<Mode>>().get();
+            rebuild_scene(world, mode);
+            world.write_message(toast::Toast::new("Level rebuilt", 2000));
         });
     }
 }
@@ -388,22 +428,17 @@ pub(crate) fn despawn(world: &mut World, entities: Vec<Entity>) {
     }
 }
 
-/// The kart on the grid of the level shown, and what it is driven with, when driving; in the
-/// viewer there is no `Drive`.
-pub(crate) fn restart_drive(world: &mut World, options: Options) {
+/// The kart on the grid of the level shown, and what it is driven with. `Mode::Drive` only.
+pub(crate) fn restart_drive(world: &mut World) {
     stage("starting the drive");
-    if options.driving {
-        let drive = new_drive(
-            world.resource::<Track>(),
-            &world.resource::<Racer>().0,
-            options.racer as usize,
-        );
-        world.insert_resource(drive);
-        world.insert_resource(exhaust::Particles::new());
-        stage("drive started");
-    } else {
-        world.remove_resource::<drive::Drive>();
-    }
+    let drive = new_drive(
+        world.resource::<Track>(),
+        &world.resource::<Racer>().0,
+        world.resource::<Options>().racer as usize,
+    );
+    world.insert_resource(drive);
+    world.insert_resource(exhaust::Particles::new());
+    stage("drive started");
 }
 
 /// Spawns one entity per non-empty part, with the material its blend mode needs.
@@ -567,8 +602,9 @@ pub(crate) fn setup(
     wheel_icons: Res<WheelIcons>,
     smoke_icon: Res<crate::SmokeIcon>,
     start: Option<Res<ViewerStart>>,
-    podium: Option<Res<crate::podium::Podium>>,
+    mode: Res<State<Mode>>,
 ) {
+    let mode = *mode.get();
     let level = &track.0;
     let data = mesh::level_mesh(
         level,
@@ -728,7 +764,7 @@ pub(crate) fn setup(
         ..default()
     };
     stage("setup: cameras");
-    if driving.is_some() {
+    if mode == Mode::Drive {
         let perspective = game_perspective;
         if let Some(skybox) = &level.skybox {
             sky::spawn(
@@ -793,7 +829,7 @@ pub(crate) fn setup(
             Transform::default(),
             RenderLayers::from_layers(&[crate::wumpa_icon::LAYER, crate::tracker::LAYER]),
         ));
-    } else if podium.is_some() {
+    } else if mode == Mode::Podium {
         if let Some(skybox) = &level.skybox {
             sky::spawn(
                 &mut commands,
@@ -880,7 +916,7 @@ pub(crate) fn spawn_kart_parts(
     sim: Res<props::Sim>,
     racer: Res<Racer>,
     wheel_icons: Res<WheelIcons>,
-    driving: Option<Res<drive::Drive>>,
+    mode: Res<State<Mode>>,
     mut builder: kart::KartBuilder,
 ) {
     let model = &racer.0;
@@ -891,7 +927,7 @@ pub(crate) fn spawn_kart_parts(
     // sim instead.
     let placement = Transform::from_xyz(x, y, z)
         .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
-    let driven = driving.map(|_| (sim.own, sim.kart()));
+    let driven = (*mode.get() == Mode::Drive).then(|| (sim.own, sim.kart()));
     builder.spawn(model, &wheel_icons.0, placement, true, driven);
 }
 

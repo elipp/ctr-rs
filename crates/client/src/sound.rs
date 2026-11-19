@@ -161,7 +161,7 @@ impl Plugin for SoundPlugin {
                 Update,
                 (
                     level_audio.run_if(crate::drive::driving),
-                    stream_xa.run_if(race_or_podium),
+                    stream_xa.run_if(not(in_state(crate::Mode::Viewer))),
                 ),
             )
             .add_systems(Update, (mute, volumes).chain());
@@ -373,13 +373,6 @@ fn volumes(config: Res<crate::config::Config>, mute: Res<Mute>, sounds: Option<R
             unless(false, config.volume_voice),
         );
     }
-}
-
-fn race_or_podium(
-    drive: Option<Res<crate::drive::Drive>>,
-    podium: Option<Res<crate::podium::Podium>>,
-) -> bool {
-    drive.is_some() || podium.is_some()
 }
 
 /// `CDSYS_XAPauseAtEnd`, every frame (a pause's too): the XA that is over is, and the one that

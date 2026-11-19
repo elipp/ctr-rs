@@ -850,16 +850,17 @@ impl Plugin for LobbyPlugin {
             .init_resource::<crate::kart::Smoothing>()
             .init_resource::<RollbackToasts>()
             .init_resource::<lag::FakeLag>()
-            .add_systems(Startup, spawn_waiting)
-            // The talk with the others goes on without a `Drive` (the podium): what comes in
-            // before the next race (its start takes the podium away: `podium::from_lobby`), and
-            // the chat.
+            // The talk with the others goes on on the podium: what comes in before the next race
+            // (its start takes the podium away: `podium::from_lobby`), and the chat.
             .add_systems(
                 Update,
                 (
-                    (pause_key, run, countdown)
-                        .chain()
-                        .distributive_run_if(crate::drive::driving),
+                    (
+                        pause_key.run_if(crate::drive::driving),
+                        run.run_if(not(in_state(crate::Mode::Viewer))),
+                        countdown.run_if(crate::drive::driving),
+                    )
+                        .chain(),
                     (say, report),
                     (
                         crate::remote::build,

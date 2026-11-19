@@ -185,7 +185,7 @@ pub(super) fn run(
     mut actions: MessageReader<Action>,
     mut lobby: ResMut<Lobby>,
     mut race_on: ResMut<RaceOn>,
-    drive: Res<crate::drive::Drive>,
+    (options, mode): (Res<crate::Options>, Res<State<crate::Mode>>),
     chosen: Res<crate::drive::Chosen>,
     track: Res<crate::Track>,
     time: Res<Time<Real>>,
@@ -208,6 +208,21 @@ pub(super) fn run(
             toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
         }
+        // The track shown is the podium's. (`/track` is not refused: it leaves the podium,
+        // `scene::switch_level`.)
+        let needs_track = matches!(
+            action,
+            Action::StartRace
+                | Action::StartSolo(_)
+                | Action::CupStart(_)
+                | Action::CupRandom { .. }
+                | Action::CupDrive { .. }
+        );
+        if needs_track && *mode.get() == crate::Mode::Podium {
+            toasts.write(Toast::new("Not on the podium", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            continue;
+        }
+        let character = options.racer as usize;
         // Whoever watches has no kart of its own: the other players go.
         if matches!(action, Action::SpectateLobby(_)) && players.0 > 1 {
             players.0 = 1;
@@ -217,12 +232,12 @@ pub(super) fn run(
         // in its menu (by default the one that follows the one before). Their menus change it
         // later, through `Lobby::set_extras`.
         let extras: Vec<u8> = (1..players.0)
-            .map(|slot| chosen.character(slot, drive.character) as u8)
+            .map(|slot| chosen.character(slot, character) as u8)
             .collect();
         let now = time.elapsed_secs();
         let say = match action {
             Action::CreateLobby { public } => {
-                lobby.host(drive.character as u8, &extras, &config.nickname, public.as_deref());
+                lobby.host(character as u8, &extras, &config.nickname, public.as_deref());
                 if public.is_some() {
                     "Creating public lobby..."
                 } else {
@@ -230,7 +245,7 @@ pub(super) fn run(
                 }
             }
             Action::JoinLobby(ticket) => {
-                lobby.join(ticket.clone(), drive.character as u8, &extras, &config.nickname);
+                lobby.join(ticket.clone(), character as u8, &extras, &config.nickname);
                 "Joining lobby..."
             }
             Action::SpectateLobby(ticket) => {
@@ -268,7 +283,7 @@ pub(super) fn run(
                 if lobby.is_open() {
                     lobby.start_series(Series::single(track.1.0, race::DEFAULT_LAPS), now);
                 } else {
-                    let characters = std::iter::once(drive.character as u8).chain(extras).collect();
+                    let characters = std::iter::once(character as u8).chain(extras).collect();
                     let rules = super::rules(race::DEFAULT_LAPS, &config, now);
                     let nick = &config.nickname;
                     lobby.race_alone(&mut race_on, characters, nick, track.1.0, rules, None);
@@ -281,7 +296,7 @@ pub(super) fn run(
                     toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
                     continue;
                 }
-                let characters = vec![drive.character as u8];
+                let characters = vec![character as u8];
                 let rules = super::rules(race::DEFAULT_LAPS, &config, now);
                 let solo = Some(*kind);
                 lobby.race_alone(&mut race_on, characters, &config.nickname, track.1.0, rules, solo);

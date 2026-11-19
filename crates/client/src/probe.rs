@@ -51,7 +51,7 @@ impl Plugin for ProbePlugin {
             Update,
             (toggles, run_probe)
                 .chain()
-                .run_if(not(crate::drive::driving)),
+                .run_if(in_state(crate::Mode::Viewer)),
         );
     }
 }

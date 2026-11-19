@@ -278,7 +278,6 @@ impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Console>()
             .add_message::<Log>()
-            .add_systems(Startup, spawn)
             .add_systems(Update, (clear, collect, scroll, fade, rebuild).chain())
             // (Before the layout, for one that appears to take its room right away.)
             .add_systems(PostUpdate, draw_small_portraits.before(UiSystems::Prepare));

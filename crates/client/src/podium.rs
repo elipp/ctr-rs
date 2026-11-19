@@ -9,10 +9,12 @@
 //!
 //! Every client of a lobby shows it when a cup ends: the host's final standings say who is on it
 //! (`lobby::cup::podium`), and each shows it once its own race is over. Any key or button goes
-//! back to the level and the mode it was shown from ("PRESS ANY KEY TO CONTINUE" once the camera
+//! back to the race on the level it was shown from ("PRESS ANY KEY TO CONTINUE" once the camera
 //! stops, where retail has "PRESS X TO CONTINUE"), and so does the start of the next race.
-//! `/debug podium [first] [second] [third]` shows it outside a lobby (us and the next two
-//! characters if none are named), and takes it away anywhere.
+//! `/debug podium [first] [second] [third]` shows it outside a lobby and the viewer (us and the
+//! next two characters if none are named), and takes it away anywhere. It is `Mode::Podium`:
+//! `toggle` and `from_lobby` make it ready (`prepare`) and set the mode, `enter` and `leave` change
+//! the scene.
 //!
 //! The dancers whose scripts set a particle id give off the particles of overlay 233's tables
 //! (`CS_Thread_Particles`): N. Gin's sparks, Joe's and N. Tropy's.
@@ -33,7 +35,7 @@ use render::particles::{DrawMode, Entry, Particle, Rng};
 
 use crate::command::Action;
 use crate::subtract::SubtractMaterial;
-use crate::{LevelData, LevelNumber, Options, Textures, Track, toast};
+use crate::{LevelData, LevelNumber, Mode, Options, Textures, Track, toast};
 
 /// The level the podium stands in.
 const LEVEL: LevelId = LevelId::GEM_STONE_VALLEY;
@@ -99,18 +101,24 @@ pub struct PodiumPlugin;
 
 impl Plugin for PodiumPlugin {
     fn build(&self, app: &mut App) {
-        // The scene changes before `Update`, whose systems were told by their run conditions
-        // that the race (`Drive`) is there (as `scene::switch_level`).
+        // Before `StateTransition`, which goes to the podium or back the same frame.
         app.add_systems(
             PreUpdate,
-            (toggle, continue_on_key, from_lobby)
+            (
+                toggle,
+                continue_on_key.run_if(in_state(Mode::Podium)),
+                from_lobby,
+            )
                 .chain()
-                .after(crate::command::capture)
-                .before(crate::scene::switch_level),
+                .after(crate::command::capture),
         )
+        .add_systems(OnEnter(Mode::Podium), enter)
+        .add_systems(OnExit(Mode::Podium), leave)
         .add_systems(
             Update,
-            (follow_path, dance, prompt, confetti, particles).chain(),
+            (follow_path, dance, prompt, confetti, particles)
+                .chain()
+                .run_if(in_state(Mode::Podium)),
         );
     }
 }
@@ -211,8 +219,18 @@ pub(crate) struct Podium {
     particles: Vec<Particle>,
     particle_rng: Rng,
     confetti: crate::confetti::ConfettiView,
-    /// The level and the mode to go back to.
-    before: (u32, bool),
+    /// The level to go back to (in `Mode::Drive`: the podium is only shown from it), none when
+    /// another has been shown since (`scene::switch_level`), which stays.
+    pub(crate) back: Option<u32>,
+}
+
+/// The podium that `OnEnter(Mode::Podium)` shows, made ready beforehand: what can fail to load
+/// does so before the mode changes.
+#[derive(Resource)]
+struct Coming {
+    podium: Podium,
+    level: LevelData,
+    music: u16,
 }
 
 /// Where the podium is, `PODIUM_SCENE_SPAWN_Y_OFFSET` above its point.
@@ -239,35 +257,44 @@ pub(crate) struct PodiumCamera;
 struct Prompt;
 
 /// `/debug podium`: shows the podium, or goes back from it. It is not shown in a lobby or a race,
-/// whose level and racers are the race's.
+/// whose level and racers are the race's, nor in the viewer, which it would not go back to.
 fn toggle(
     mut actions: MessageReader<Action>,
     lobby: Res<crate::lobby::Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
-    podium: Option<Res<Podium>>,
+    mode: Res<State<Mode>>,
     mut toasts: MessageWriter<toast::Toast>,
     mut commands: Commands,
 ) {
-    let shown = podium.is_some();
+    let refuse = |toasts: &mut MessageWriter<toast::Toast>, why: &str| {
+        toasts.write(toast::Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+    };
     for action in actions.read() {
         let Action::DebugPodium(named) = action else {
             continue;
         };
-        if !shown && (lobby.is_open() || race_on.is_on()) {
-            toasts.write(
-                toast::Toast::new("Not in a lobby or a race (/lobby close)", 2500)
-                    .color(Color::srgb(1.0, 0.4, 0.4)),
-            );
-            continue;
+        match mode.get() {
+            Mode::Drive if lobby.is_open() || race_on.is_on() => {
+                refuse(&mut toasts, "Not in a lobby or a race (/lobby close)");
+                continue;
+            }
+            Mode::Viewer => {
+                refuse(&mut toasts, "Not in the viewer (/debug viewer)");
+                continue;
+            }
+            _ => {}
         }
         let named = named.clone();
         commands.queue(move |world: &mut World| {
-            // A scene that was just built is still settling (`loading.rs`).
-            if world.contains_resource::<crate::loading::Loading>() {
+            // A scene that was just built is still settling (`loading.rs`); and one change of
+            // the mode at a time.
+            if world.contains_resource::<crate::loading::Loading>()
+                || !matches!(*world.resource::<NextState<Mode>>(), NextState::Unchanged)
+            {
                 return;
             }
-            if world.contains_resource::<Podium>() {
-                leave(world);
+            if *world.resource::<State<Mode>>().get() == Mode::Podium {
+                world.resource_mut::<NextState<Mode>>().set(Mode::Drive);
                 return;
             }
             // Us on top and the next two characters, where none are named.
@@ -277,12 +304,7 @@ fn toggle(
             if !named.is_empty() {
                 places = [0, 1, 2].map(|i| named.get(i).copied());
             }
-            if let Err(why) = enter(world, places) {
-                world.write_message(
-                    toast::Toast::new(format!("No podium: {why}"), 3000)
-                        .color(Color::srgb(1.0, 0.4, 0.4)),
-                );
-            }
+            show(world, places);
         });
     }
 }
@@ -290,12 +312,12 @@ fn toggle(
 /// Any key or button, after the first moment, goes back from the podium (`CS_Camera_ThTick_Podium`
 /// takes Start or Cross). Not what the command line is typing: it takes those keys first.
 fn continue_on_key(
-    podium: Option<Res<Podium>>,
+    podium: Res<Podium>,
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
-    mut commands: Commands,
+    mut next: ResMut<NextState<Mode>>,
 ) {
-    if podium.is_none_or(|p| p.elapsed < KEYS_AFTER_SECONDS) {
+    if podium.elapsed < KEYS_AFTER_SECONDS {
         return;
     }
     let key = keys
@@ -305,33 +327,46 @@ fn continue_on_key(
         .iter()
         .any(|pad| pad.get_just_pressed().next().is_some());
     if key || button {
-        commands.queue(leave);
+        next.set_if_different(Mode::Drive);
     }
 }
 
 /// A cup's podium: shown once our race is over and the host's final standings came, and taken
-/// away when the next race starts (before `scene::switch_level` goes to its track).
+/// away when the next race starts (`scene::switch_level` goes to its track after the
+/// transition).
 fn from_lobby(world: &mut World) {
     if world.contains_resource::<crate::loading::Loading>() {
         return;
     }
-    let shown = world.contains_resource::<Podium>();
+    let mode = *world.resource::<State<Mode>>().get();
     if world.resource::<crate::race_on::RaceOn>().is_on() {
-        if shown {
-            leave(world);
+        if mode == Mode::Podium {
+            world.resource_mut::<NextState<Mode>>().set_if_different(Mode::Drive);
         }
         return;
     }
-    if shown {
+    if mode != Mode::Drive {
         return;
     }
     let Some(places) = world.resource_mut::<crate::lobby::Lobby>().podium.take() else {
         return;
     };
-    if let Err(why) = enter(world, places) {
-        world.write_message(
-            toast::Toast::new(format!("No podium: {why}"), 3000).color(Color::srgb(1.0, 0.4, 0.4)),
-        );
+    show(world, places);
+}
+
+/// Makes the podium ready and goes to it, or says why it cannot be shown.
+fn show(world: &mut World, places: [Option<u8>; 3]) {
+    match prepare(world, places) {
+        Ok(coming) => {
+            world.insert_resource(coming);
+            world.resource_mut::<NextState<Mode>>().set(Mode::Podium);
+        }
+        Err(why) => {
+            world.write_message(
+                toast::Toast::new(format!("No podium: {why}"), 3000)
+                    .color(Color::srgb(1.0, 0.4, 0.4)),
+            );
+        }
     }
 }
 
@@ -427,8 +462,8 @@ fn model(source: &Source, need: Need) -> Result<Model, String> {
         .map_err(|e| format!("{}: {e}", need.key()))
 }
 
-/// Shows the podium with `places` on its steps, top first (none for an empty step).
-fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
+/// Loads the podium with `places` on its steps, top first (none for an empty step).
+fn prepare(world: &World, places: [Option<u8>; 3]) -> Result<Coming, String> {
     if crate::maps::get(LEVEL.0).is_none() {
         return Err("Gem Stone Valley has not been made from the disc".into());
     }
@@ -520,11 +555,7 @@ fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
         .map(|id| spawns(&scripts, id))
         .collect();
 
-    let mut options = *world.resource::<Options>();
-    let before = (world.resource::<LevelNumber>().0, options.driving);
-    options.driving = false;
-    world.insert_resource(options);
-    world.insert_resource(Podium {
+    let podium = Podium {
         path,
         stand,
         stand_at,
@@ -537,24 +568,35 @@ fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
         particles: Vec::new(),
         particle_rng: Rng::new(PARTICLE_SEED),
         confetti: crate::confetti::ConfettiView::podium(),
-        before,
-    });
-    show(
-        world,
-        LEVEL.0,
-        LevelData { level, dram, vram },
-        options,
-        true,
-    );
+        back: Some(world.resource::<LevelNumber>().0),
+    };
+    Ok(Coming {
+        podium,
+        level: LevelData { level, dram, vram },
+        music: music_for(first),
+    })
+}
+
+/// `OnEnter(Mode::Podium)`: the podium's scene in place of the race's, which `OnExit(Mode::Drive)`
+/// has taken `Drive` away from.
+fn enter(world: &mut World) {
+    let Coming {
+        podium,
+        level,
+        music,
+    } = world
+        .remove_resource::<Coming>()
+        .expect("the podium is made ready before it is gone to (`show`)");
+    put_level(world, LEVEL.0, level);
+    world.insert_resource(podium);
+    crate::rebuild_scene(world, Mode::Podium);
     world
         .run_system_cached(spawn_stand)
         .expect("the podium's system runs");
     world
         .run_system_cached(spawn_prompt)
         .expect("the podium's system runs");
-    world
-        .resource::<crate::sound::Sounds>()
-        .podium(music_for(first));
+    world.resource::<crate::sound::Sounds>().podium(music);
     // The kart stays where the level put it, hidden (`CS_Podium_FullScene_Init`).
     let kart: Vec<Entity> = world
         .query_filtered::<Entity, With<crate::scene::KartScene>>()
@@ -565,47 +607,37 @@ fn enter(world: &mut World, places: [Option<u8>; 3]) -> Result<(), String> {
             *visibility = Visibility::Hidden;
         }
     }
-    Ok(())
 }
 
+/// `OnExit(Mode::Podium)`: the level to go back to, whose scene `OnEnter(Mode::Drive)` builds.
 fn leave(world: &mut World) {
-    let Some(podium) = world.remove_resource::<Podium>() else {
+    let podium = world
+        .remove_resource::<Podium>()
+        .expect("the podium is there in its mode");
+    world.resource::<crate::sound::Sounds>().podium_over();
+    let Some(level) = podium.back else {
         return;
     };
-    world.resource::<crate::sound::Sounds>().podium_over();
-    let (level, driving) = podium.before;
     // (A custom track can have been purged since.)
     let level = if crate::maps::get(level).is_some() {
         level
     } else {
         LevelId::DINGO_CANYON.0
     };
-    let mut options = *world.resource::<Options>();
-    options.driving = driving;
-    world.insert_resource(options);
-    show(world, level, crate::load_level(level, instance::lev_init::LevMode::Arcade), options, false);
+    put_level(
+        world,
+        level,
+        crate::load_level(level, instance::lev_init::LevMode::Arcade),
+    );
 }
 
-/// Builds the scene of `level` in place of the one shown. The podium's has the scene's common
-/// parts only: not the viewer's text.
-fn show(world: &mut World, id: u32, data: LevelData, options: Options, podium: bool) {
-    let scene = crate::world_scene(world);
-    crate::despawn(world, scene);
+fn put_level(world: &mut World, id: u32, data: LevelData) {
     world.insert_resource(Track(data.level, LevelId(id), instance::lev_init::LevMode::Arcade));
     world.insert_resource(Textures {
         dram: data.dram,
         vram: data.vram,
     });
     world.insert_resource(LevelNumber(id));
-    crate::restart_drive(world, options);
-    if podium {
-        for system in world.resource::<crate::SceneSystems>().common.clone() {
-            world.run_system(system).expect("scene system runs");
-        }
-    } else {
-        crate::run_scene_systems(world, options);
-    }
-    crate::loading::begin(world);
 }
 
 /// The material of a model of the podium, of the atlas its mesh was built with.
@@ -690,10 +722,7 @@ fn spawn_prompt(mut commands: Commands) {
 }
 
 /// Shows the prompt once the camera is at the end of its path (`CS_WAIT_INPUT`).
-fn prompt(podium: Option<Res<Podium>>, mut prompts: Query<&mut Visibility, With<Prompt>>) {
-    let Some(podium) = podium else {
-        return;
-    };
+fn prompt(podium: Res<Podium>, mut prompts: Query<&mut Visibility, With<Prompt>>) {
     let stopped = podium.elapsed * PATH_POINTS_PER_SECOND >= podium.path.num_points() as f32 - 1.0;
     for mut visibility in &mut prompts {
         *visibility = if stopped {
@@ -725,7 +754,7 @@ struct Sparks {
 /// Lays the dancers' particles out as quads that face the view, between their last two ticks.
 #[allow(clippy::too_many_arguments)]
 fn particles(
-    podium: Option<Res<Podium>>,
+    podium: Res<Podium>,
     textures: Res<Textures>,
     smoke: Res<crate::SmokeIcon>,
     mut commands: Commands,
@@ -737,9 +766,6 @@ fn particles(
 ) {
     use crate::billboard::{ATTRIBUTE_CORNER, Billboard, BillboardSubtract};
     use crate::exhaust::{SCREEN_PIXEL_ASPECT, icon_image, icon_image_blended};
-    let Some(podium) = podium else {
-        return;
-    };
     let Some(icon) = &smoke.0 else {
         return;
     };
@@ -859,16 +885,13 @@ fn particles(
 
 /// The confetti between its last two ticks.
 fn confetti(
-    podium: Option<Res<Podium>>,
+    podium: Res<Podium>,
     camera: Query<&Transform, With<PodiumCamera>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut confetti: Query<(&Mesh3d, &mut Visibility), With<crate::confetti::ConfettiMesh>>,
 ) {
-    let Some(podium) = podium else {
-        return;
-    };
     let t = (podium.elapsed * TICKS_PER_SECOND - podium.ticks as f32).clamp(0.0, 1.0);
     crate::confetti::show(
         &podium.confetti,
@@ -882,21 +905,12 @@ fn confetti(
 }
 
 /// Moves the camera along the path, between its points as the frame falls between two ticks, and
-/// holds it at the end. A level shown since (`/track`, `[`) ends the podium.
+/// holds it at the end.
 fn follow_path(
-    mut commands: Commands,
-    podium: Option<ResMut<Podium>>,
-    level: Res<LevelNumber>,
+    mut podium: ResMut<Podium>,
     time: Res<Time>,
     mut cameras: Query<&mut Transform, With<PodiumCamera>>,
 ) {
-    let Some(mut podium) = podium else {
-        return;
-    };
-    if level.0 != LEVEL.0 {
-        commands.remove_resource::<Podium>();
-        return;
-    }
     podium.elapsed += time.delta_secs();
     let Some(transform) = camera_at(&podium.path, podium.elapsed * PATH_POINTS_PER_SECOND) else {
         return;
@@ -928,7 +942,7 @@ impl cutscene::Frames for Frames<'_> {
 /// once its script ended or while the camera passes it (`CS_Thread_UseOpcode`).
 #[allow(clippy::too_many_arguments)]
 fn dance(
-    podium: Option<ResMut<Podium>>,
+    mut podium: ResMut<Podium>,
     textures: Res<Textures>,
     sounds: Res<crate::sound::Sounds>,
     mut commands: Commands,
@@ -938,9 +952,6 @@ fn dance(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     mut roots: Query<(&mut Transform, &mut Visibility)>,
 ) {
-    let Some(mut podium) = podium else {
-        return;
-    };
     let podium = &mut *podium;
     let due = (podium.elapsed * TICKS_PER_SECOND) as u32;
     let mut events = Vec::new();

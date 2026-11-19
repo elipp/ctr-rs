@@ -694,8 +694,8 @@ impl Plugin for PausePlugin {
                 input
                     .after(InputSystems)
                     .after(crate::command::capture)
-                    // (Its keys reset must come first, or `]`/`[` switch the level while typing.)
-                    .before(crate::scene::switch_level)
+                    // (Its keys reset must come before `scene::switch_level`, in `LevelChange`,
+                    // or `]`/`[` switch the level while typing.)
                     .run_if(crate::drive::driving),
             )
             .add_systems(Update, show.run_if(crate::drive::driving));

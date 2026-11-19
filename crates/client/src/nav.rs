@@ -77,7 +77,7 @@ impl Plugin for NavPlugin {
                     toggle_in_race,
                     (toggle, draw_in_viewer)
                         .chain()
-                        .run_if(not(crate::drive::driving)),
+                        .run_if(in_state(crate::Mode::Viewer)),
                     draw_in_race.run_if(crate::drive::driving),
                 )
                     .chain(),

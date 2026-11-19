@@ -118,8 +118,19 @@ pub(crate) const CHARACTER_COLORS: [Color; 16] = [
 pub(crate) struct Options {
     /// The character of the racer on the grid.
     pub(crate) racer: u32,
-    /// The race, or the viewer (`/debug viewer`).
-    pub(crate) driving: bool,
+}
+
+/// What the client is showing: the race (free drive, a race, a lobby), the viewer (`/debug
+/// viewer`) or the podium. The only record of it: `drive::Drive` exists in `Drive` alone (put
+/// in and taken away by `OnEnter`/`OnExit`), and `podium::Podium` in `Podium` alone. Whatever
+/// changes it sets `NextState` and leaves the scene to the `OnEnter` of the new mode (`scene.rs`,
+/// `podium.rs`).
+#[derive(States, Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Mode {
+    #[default]
+    Drive,
+    Viewer,
+    Podium,
 }
 
 /// The level shown, a `LevelId`.
@@ -136,8 +147,13 @@ pub(crate) struct SceneSystems {
 }
 
 impl SceneSystems {
-    pub(crate) fn of(&self, driving: bool) -> Vec<bevy::ecs::system::SystemId> {
-        let mode = if driving { &self.race } else { &self.viewer };
-        self.common.iter().chain(mode).copied().collect()
+    /// The podium has the common ones only: not the viewer's text.
+    pub(crate) fn of(&self, mode: Mode) -> Vec<bevy::ecs::system::SystemId> {
+        let own: &[_] = match mode {
+            Mode::Drive => &self.race,
+            Mode::Viewer => &self.viewer,
+            Mode::Podium => &[],
+        };
+        self.common.iter().chain(own).copied().collect()
     }
 }

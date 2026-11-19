@@ -234,7 +234,7 @@ impl Plugin for NavEditPlugin {
             (sync, keys, mouse, draw)
                 .chain()
                 .before(crate::nav::draw_in_viewer)
-                .run_if(not(crate::drive::driving)),
+                .run_if(in_state(crate::Mode::Viewer)),
         );
     }
 }

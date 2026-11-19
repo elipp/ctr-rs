@@ -165,16 +165,11 @@ impl Plugin for FxPlugin {
             .init_resource::<Picked>()
             .add_systems(
                 Update,
-                (act, online, keys, show).chain().run_if(in_race_or_podium),
+                (act, online, keys, show)
+                    .chain()
+                    .run_if(not(in_state(crate::Mode::Viewer))),
             );
     }
-}
-
-fn in_race_or_podium(
-    drive: Option<Res<crate::drive::Drive>>,
-    podium: Option<Res<crate::podium::Podium>>,
-) -> bool {
-    drive.is_some() || podium.is_some()
 }
 
 /// Does what `/debug fx` and the panel ask, but `finish`, which is `drive.rs`'s.
@@ -322,7 +317,7 @@ fn show(
     size: Res<TexelSize>,
     time: Res<Time<Real>>,
     picked: Res<Picked>,
-    podium: Option<Res<crate::podium::Podium>>,
+    mode: Res<State<crate::Mode>>,
     mut podium_shown: Local<bool>,
     panels: Query<(Entity, &Panel)>,
     mut lines: Query<(&Line, &mut CtrText)>,
@@ -333,7 +328,7 @@ fn show(
     if let Some((entity, _)) = panel.filter(|_| stale || !fx.panel) {
         commands.entity(entity).despawn();
     }
-    let podium = podium.is_some();
+    let podium = *mode.get() == crate::Mode::Podium;
     if fx.panel && (panel.is_none() || stale) {
         *podium_shown = podium;
         spawn(&mut commands, &fx, &size, podium);

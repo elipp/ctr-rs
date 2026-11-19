@@ -571,7 +571,7 @@ fn missing(
     karts: &Query<(), With<KartScene>>,
     chase: &Query<(), With<drive::ChaseCamera>>,
 ) -> Option<&'static str> {
-    // (The viewer has neither.)
+    // (The viewer and the podium have neither.)
     if !driving {
         return None;
     }
@@ -587,13 +587,13 @@ fn missing(
 /// Counts the frames of the load, and lets the game go on when the scene is whole.
 fn finish(
     mut loading: ResMut<Loading>,
-    driving: Option<Res<drive::Drive>>,
+    mode: Res<State<crate::Mode>>,
     karts: Query<(), With<KartScene>>,
     chase: Query<(), With<drive::ChaseCamera>>,
     mut commands: Commands,
 ) {
     loading.frames += 1;
-    let lacks = missing(driving.is_some(), &karts, &chase);
+    let lacks = missing(*mode.get() == crate::Mode::Drive, &karts, &chase);
     if loading.frames < MIN_FRAMES || (lacks.is_some() && loading.frames < GIVE_UP_FRAMES) {
         return;
     }
