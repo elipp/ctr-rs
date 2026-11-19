@@ -27,6 +27,10 @@ pub const RELIC_MODEL: i16 = 0x61;
 /// moments shouldn't skip the ceremony.
 const CONTINUE_AFTER_TICKS: u32 = crate::GAME_TICK_HZ as u32;
 
+/// The prompt goes between yellow and orange this often: slower than the other lines' flash, which
+/// would be too loud for a line that stays up.
+const PROMPT_BLINK_TICKS: u32 = 8;
+
 /// The relic of the racers' pack.
 #[derive(Resource)]
 pub struct RelicModel(pub Model);
@@ -34,6 +38,9 @@ pub struct RelicModel(pub Model);
 /// Where the panel's first line is, and the relic's middle, in lines of retail's screen.
 const TOP: f32 = 40.0;
 const RELIC_Y: f32 = 170.0;
+
+/// Between the panel's lines, in lines of retail's screen.
+const ROW_GAP: f32 = 6.0;
 
 /// How tall the relic is grown, in lines, and the ticks it grows for.
 const RELIC_LINES: f32 = 50.0;
@@ -118,10 +125,19 @@ fn panel(
             } else {
                 Font::Large
             };
+            // (An empty line above the prompt.)
+            let margin = if line == Line::Continue {
+                UiRect::top(hud::y(Font::Large.line_height() as f32 + ROW_GAP))
+            } else {
+                UiRect::ZERO
+            };
             (
                 line,
                 CtrText::new("", font, Gradient::ORANGE).fixed(hud::PIXEL),
-                Node::default(),
+                Node {
+                    margin,
+                    ..default()
+                },
             )
         };
         commands.spawn((
@@ -134,7 +150,7 @@ fn panel(
                 top: hud::y(TOP),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: hud::y(6.0),
+                row_gap: hud::y(ROW_GAP),
                 ..default()
             },
             Visibility::Hidden,
@@ -208,9 +224,13 @@ fn panel(
             Line::Continue => (
                 (sim.race.tick >= end.at + CONTINUE_AFTER_TICKS).then(|| {
                     let keys = if pads.iter().next().is_some() { "X / SPACE" } else { "SPACE" };
-                    format!("{keys}: CONTINUE")
+                    format!("{keys} to CONTINUE")
                 }),
-                Gradient::WHITE,
+                if sim.race.tick / PROMPT_BLINK_TICKS % 2 == 0 {
+                    Gradient::YELLOW
+                } else {
+                    Gradient::ORANGE
+                },
             ),
         };
         let display = if wanted.is_some() {
