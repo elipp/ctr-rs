@@ -4,7 +4,7 @@
 //! screen has one.
 
 use super::follow::{View, view_of};
-use super::input::Device;
+use super::input::{CameraButtons, Device};
 use crate::Track;
 
 /// How long the camera stays at the finish line watching our kart coast away, in played ticks.
@@ -28,6 +28,8 @@ pub(super) struct Follow<'a> {
     pub elsewhere: bool,
     /// Whether the confetti is on: our kart won.
     pub confetti: bool,
+    /// The camera's buttons, held now.
+    pub camera: CameraButtons,
 }
 
 pub(crate) struct LocalView {
@@ -47,6 +49,10 @@ pub(crate) struct LocalView {
     /// The kart had finished last tick, and the played ticks left of the camera's hold at the
     /// finish line.
     finish: (bool, u32),
+    /// L2 picked the far camera (`nearOrFar`). Kept over restarts, as retail's is.
+    far: bool,
+    /// L2 was held last tick, to see it tapped.
+    was_distance: bool,
 }
 
 impl LocalView {
@@ -83,6 +89,8 @@ impl LocalView {
             previous_view: view,
             current_view: view,
             finish: (false, 0),
+            far: false,
+            was_distance: false,
         }
     }
 
@@ -95,9 +103,19 @@ impl LocalView {
 
     /// The camera, the weather and the confetti after a tick.
     pub(super) fn follow(&mut self, track: &Track, f: Follow) {
+        // Retail reads R2 and L2 for a human's camera only, so not past the line (the kart is a
+        // bot's then), and not in the start-line fly-in.
+        let human = f.kart.driver.actions_flag_set & vehicle::actions::BOT == 0;
+        let live = human && !f.intro;
+        let tapped = f.camera.distance && !self.was_distance;
+        self.was_distance = f.camera.distance;
+        if live && tapped {
+            self.far = !self.far;
+        }
         let camera_input = camera::Input {
             elapsed_time_ms: vehicle::Env::default().elapsed_time_ms,
-            ..Default::default()
+            reverse: live && f.camera.look_back,
+            far: self.far,
         };
         // Past the line the camera stays there a while and turns after the kart as it coasts
         // away, until R1 or L1 picks a kart to follow (or a rollback takes the finish back).

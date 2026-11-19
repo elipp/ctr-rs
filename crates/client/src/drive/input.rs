@@ -101,6 +101,18 @@ impl Controller<'_, '_> {
         read_input(&self.keys, controls, &pads, previous_held)
     }
 
+    /// The camera's buttons `device` holds now. They are not in the pad: the camera is the
+    /// player's own, never the sim's nor the others'.
+    pub fn camera(&self, device: &Device, taken: &[Entity]) -> CameraButtons {
+        let (controls, pads) = self.sources(device, taken);
+        let key = |control| controls.is_some_and(|c| c.held(control, &self.keys));
+        let pad = |button| pads.iter().any(|p| p.pressed(button));
+        CameraButtons {
+            look_back: key(Control::LookBack) || pad(GamepadButton::RightTrigger2),
+            distance: key(Control::CameraDistance) || pad(GamepadButton::LeftTrigger2),
+        }
+    }
+
     /// What `device` tapped this frame, to work a menu with: the driving keys and buttons, as
     /// the pause menu's are not for one player. `stick` is which way the left stick was
     /// pushed last frame (-1, 0 or 1 up), which the caller keeps to tap with it.
@@ -129,6 +141,15 @@ impl Controller<'_, '_> {
             toggle: key(Control::RacerMenu) || pad(GamepadButton::Select),
         }
     }
+}
+
+/// R2 and L2 (`CAM_FollowDriver_Normal`, `CAM_ThTick`), held.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CameraButtons {
+    /// R2: looks backwards while held.
+    pub look_back: bool,
+    /// L2: a tap swaps the near and the far camera.
+    pub distance: bool,
 }
 
 /// How far the left stick is pushed to tap a menu: as in the pause menu.
@@ -186,11 +207,11 @@ fn read_input(
     if key_reverse || pad_down(&[GamepadButton::DPadDown]) {
         held |= buttons::DOWN;
     }
-    if down(Control::Hop) || pad_down(&[GamepadButton::RightTrigger, GamepadButton::RightTrigger2])
-    {
+    // (Not R2 and L2: they are the camera's, see `Controller::camera`.)
+    if down(Control::Hop) || pad_down(&[GamepadButton::RightTrigger]) {
         held |= buttons::R1;
     }
-    if down(Control::Hop2) || pad_down(&[GamepadButton::LeftTrigger, GamepadButton::LeftTrigger2]) {
+    if down(Control::Hop2) || pad_down(&[GamepadButton::LeftTrigger]) {
         held |= buttons::L1;
     }
     // Circle fires the item.

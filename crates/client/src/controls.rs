@@ -49,10 +49,14 @@ pub enum Control {
     PauseRace,
     /// Held, shows the lobby's scoreboard (`scoreboard.rs`).
     Scoreboard,
+    /// R2: the camera looks backwards while held.
+    LookBack,
+    /// L2: swaps the near and the far camera.
+    CameraDistance,
 }
 
 impl Control {
-    pub const ALL: [Control; 19] = [
+    pub const ALL: [Control; 21] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -72,6 +76,8 @@ impl Control {
         Control::MuteSound,
         Control::PauseRace,
         Control::Scoreboard,
+        Control::LookBack,
+        Control::CameraDistance,
     ];
 
     /// Its name in the config.
@@ -96,6 +102,8 @@ impl Control {
             Control::MuteSound => "mute-sound",
             Control::PauseRace => "pause-race",
             Control::Scoreboard => "scoreboard",
+            Control::LookBack => "look-back",
+            Control::CameraDistance => "camera-distance",
         }
     }
 
@@ -121,6 +129,8 @@ impl Control {
             Control::MuteSound => "Mute sound",
             Control::PauseRace => "Pause race",
             Control::Scoreboard => "Scoreboard",
+            Control::LookBack => "Look back",
+            Control::CameraDistance => "Camera distance",
         }
     }
 
@@ -145,6 +155,8 @@ impl Control {
             Control::MuteSound => &[KeyCode::KeyS],
             Control::PauseRace => &[KeyCode::KeyG],
             Control::Scoreboard => &[KeyCode::Tab],
+            Control::LookBack => &[KeyCode::KeyR],
+            Control::CameraDistance => &[KeyCode::KeyX],
         }
     }
 
@@ -174,7 +186,7 @@ impl Controls {
     }
 
     /// The keys of the second player on the same keyboard: the I, J, K and L keys steer, with the
-    /// hops and the item beside them. Only what the kart does is bound: the rest (the menu's
+    /// hops, the item and the camera beside them. Only what the kart and its camera do is bound: the rest (the menu's
     /// level and racer keys, the mutes, the pause, the scoreboard) is the one keyboard's, and
     /// stays the first player's.
     pub fn second() -> Controls {
@@ -189,6 +201,8 @@ impl Controls {
                 Control::Item => vec![KeyCode::Semicolon],
                 Control::AimUp => vec![KeyCode::KeyY],
                 Control::RacerMenu => vec![KeyCode::KeyB],
+                Control::LookBack => vec![KeyCode::KeyP],
+                Control::CameraDistance => vec![KeyCode::KeyN],
                 _ => Vec::new(),
             }
         };
