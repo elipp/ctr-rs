@@ -362,6 +362,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     ],
                 ),
                 node(
+                    "server-records",
+                    "Race the leaderboard's #1 in solo races",
+                    &[
+                        leaf("on", "Download it from the score server"),
+                        leaf("off", "Ask nothing of the server"),
+                    ],
+                ),
+                node(
                     "volume",
                     "Music, effects and voices",
                     &[

@@ -167,7 +167,7 @@ pub(super) fn drive_tick(
             }
             race.best = best;
             race.ghosts.best = crate::pb::ghost(&track.0, &sim, race);
-            race.ghosts.world = world_record.start(&track.0, &sim, race);
+            race.ghosts.world = world_record.start(&track.0, &sim, race, config.server_records);
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
         // others as ours do.

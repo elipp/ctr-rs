@@ -80,12 +80,19 @@ fn is_ours(entry: &Entry) -> bool {
 impl WorldRecord {
     /// At each start of a solo race (`drive_tick`, as it builds the best's ghost): the world
     /// record's ghost at tick 0 if one is known, and the board asked again unless it was lately.
+    /// Not `opted` (`Config::server_records`): none at all, the cached one neither, and an ask
+    /// on its way is dropped.
     pub fn start(
         &mut self,
         level: &loader::lev::Level,
         sim: &crate::props::Sim,
         race: &CurrentRace,
+        opted: bool,
     ) -> Option<Ghost> {
+        if !opted {
+            *self = WorldRecord::default();
+            return None;
+        }
         let board = board_of(race)?;
         if self.board != Some(board) {
             let record = cache::load(board);

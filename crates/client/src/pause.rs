@@ -49,6 +49,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use howl::settings::Slider;
 use render::font::{Font, Gradient};
+use std::borrow::Cow;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 
@@ -85,6 +86,8 @@ pub struct PauseMenu {
     clicked: Option<usize>,
     /// RESTART was taken: the next tick puts the race back on the grid.
     pub restart: bool,
+    /// Character select was taken: the first player's racer menu opens (`chooser::input`).
+    pub racer_menu: bool,
     /// The way the keyboard slides a volume, -1, 0 or 1: Left or Right is held.
     slide_keys: i32,
     /// The ways the left stick was pushed the last frame (right and up 1), to tap with it.
@@ -193,6 +196,8 @@ pub(crate) enum Item {
     EndRace,
     PlaySolo,
     Solo(race::solo::Kind),
+    /// `Config::server_records`, which Left, Right and taking it toggle.
+    ServerRecords,
     /// How many local players share the screen (`/players`), which Left and Right step.
     SplitScreen,
     LeaveLobby,
@@ -217,6 +222,8 @@ pub(crate) enum Item {
     Quit,
     QuitNow,
     TrackSelect,
+    /// Opens the first player's racer menu (`drive::chooser`).
+    CharSelect,
     Track(u32),
     /// A volume, which Left and Right change.
     Volume(Slider),
@@ -244,7 +251,7 @@ pub(crate) struct Entry {
     inline: bool,
     font: Font,
     /// What the row means, in the footer while it is picked.
-    help: Option<&'static str>,
+    help: Option<Cow<'static, str>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -276,8 +283,8 @@ impl Entry {
         }
     }
 
-    pub(crate) fn help(mut self, help: &'static str) -> Entry {
-        self.help = Some(help);
+    pub(crate) fn help(mut self, help: impl Into<Cow<'static, str>>) -> Entry {
+        self.help = Some(help.into());
         self
     }
 
@@ -326,6 +333,17 @@ fn items(
                     .help("Rules:\n- Time crates stop the clock\n- Collect all to get a -10 second bonus\n\nNOTE: you can submit your best times to the online leaderboards!"),
                 entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial")
                     .help("Rules:\n- Drive the fastest possible 3-lap time\n\nNOTE: you can submit your best times to the online leaderboards!"),
+                Entry::new(
+                    Item::ServerRecords,
+                    SERVER_RECORDS,
+                    Kind::Cycle(ON_OFF[config.server_records as usize].into()),
+                )
+                .inline()
+                .starts_section()
+                .help(
+                    "On: each solo race downloads the leaderboard's #1 run from the score \
+                     server, and its ghost becomes available.",
+                ),
                 entry(Item::Back, "Back"),
             ];
             return ("Play solo".into(), items);
@@ -408,6 +426,14 @@ fn items(
         items.push(entry(Item::EndRace, "End race").help("Back to the free drive."));
     }
     items.push(entry(Item::TrackSelect, "Track select"));
+    // (Same lock as the racer menu's own key: the racers are fixed in a race or a cup.)
+    if !race_on.is_on() && !lobby.characters_locked() {
+        let keys = config.controls.describe(Control::RacerMenu);
+        items.push(
+            entry(Item::CharSelect, "Character select")
+                .help(format!("Shortcut: {keys} (pad: Select)")),
+        );
+    }
     // (A race on refuses `/race relic|time-trial`: the buttons would only toast why.)
     if !lobby.is_open() && !race_on.is_on() {
         items.push(entry(Item::PlaySolo, "Play solo"));
@@ -631,6 +657,9 @@ const ARROW: usize = 4;
 
 const NEW_LOBBY: &str = "Create lobby";
 const SPLIT_SCREEN: &str = "Split screen";
+const SERVER_RECORDS: &str = "Server record ghost";
+/// Indexed by `Config::server_records`.
+const ON_OFF: [&str; 2] = ["Off", "On"];
 
 fn split_screen_value(players: usize) -> String {
     match players {
@@ -1014,6 +1043,10 @@ fn input(
                 menu.open = false;
                 menu.restart = true;
             }
+            Some(Item::CharSelect) => {
+                menu.open = false;
+                menu.racer_menu = true;
+            }
             Some(Item::EndRace) => {
                 menu.open = false;
                 actions.write(Action::StopRace);
@@ -1022,6 +1055,7 @@ fn input(
                 menu.open = false;
                 actions.write(Action::StartSolo(kind));
             }
+            Some(Item::ServerRecords) => toggle_server_records(&mut menu, &mut config),
             Some(Item::LeaveLobby) => {
                 menu.open = false;
                 actions.write(Action::CloseLobby);
@@ -1213,8 +1247,17 @@ fn step(
             menu.private_lobby ^= true;
             true
         }
+        Item::ServerRecords => {
+            toggle_server_records(menu, config);
+            true
+        }
         _ => false,
     }
+}
+
+fn toggle_server_records(menu: &mut PauseMenu, config: &mut Config) {
+    config.server_records ^= true;
+    menu.unsaved = true;
 }
 
 /// Whether the view may be left (Back, Backspace, or closing the menu), with what leaving it
@@ -1468,6 +1511,12 @@ fn show(
                 });
                 layout.min_width = privacy.chain(players).max().unwrap_or(0);
             }
+            if menu.view == View::PlaySolo {
+                let widest = ON_OFF
+                    .iter()
+                    .map(|value| inline_cycle_width(&fonts, Font::Middle, SERVER_RECORDS, value));
+                layout.min_width = widest.chain([layout.min_width]).max().unwrap_or(0);
+            }
             spawn(
                 &mut commands,
                 wanted,
@@ -1518,7 +1567,7 @@ fn show(
     if let Ok((mut text, mut node)) = footer.single_mut()
         && let Some((_, shown)) = shown.single().ok()
     {
-        let help = shown.items.get(menu.selected).and_then(|item| item.help);
+        let help = shown.items.get(menu.selected).and_then(|item| item.help.as_deref());
         let display = if help.is_some() { Display::Flex } else { Display::None };
         if node.display != display {
             node.display = display;
@@ -1682,7 +1731,7 @@ fn spawn(
     // Absolute, so the panel is no wider for it (the text wraps to the panel's width instead)
     // and does not change height as the pick moves between rows with and without help.
     if items.iter().any(|item| item.help.is_some()) {
-        let help = items.get(selected).and_then(|item| item.help);
+        let help = items.get(selected).and_then(|item| item.help.as_deref());
         commands.spawn((
             ChildOf(panel),
             Footer,

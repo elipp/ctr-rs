@@ -144,7 +144,7 @@ pub(super) fn input(
     mut chosen: ResMut<Chosen>,
     lobby: Res<Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
-    pause: Res<PauseMenu>,
+    mut pause: ResMut<PauseMenu>,
     sounds: Option<Res<Sounds>>,
     mut pointer: ResMut<ChooserPointer>,
     karts: Query<(Entity, &KartSlot), With<Extra>>,
@@ -165,6 +165,8 @@ pub(super) fn input(
     let taken: Vec<Entity> = drive.views.iter().filter_map(|v| v.device.pad()).collect();
     let pointed = pointer.pointed.take();
     let pointer_taken = pointer.taken.take();
+    // (Taken even when it is open already: left set, it would open it again once closed.)
+    let asked = std::mem::take(&mut pause.racer_menu);
     let mut picked = Vec::new();
     for view in 0..drive.views.len() {
         let device = drive.views[view].device.clone();
@@ -179,7 +181,7 @@ pub(super) fn input(
         chooser.stick = stick;
         if !chooser.open {
             // (No menu in a race or a cup: the racers are fixed then.)
-            if !taps.toggle || locked {
+            if !(taps.toggle || (view == 0 && asked)) || locked {
                 continue;
             }
             chooser.open_on(current);
