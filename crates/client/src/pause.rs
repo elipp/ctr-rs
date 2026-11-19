@@ -196,6 +196,8 @@ pub(crate) enum Item {
     EndRace,
     PlaySolo,
     Solo(race::solo::Kind),
+    /// `/score top` of this kind on the track we are on.
+    Leaderboard(race::solo::Kind),
     /// `Config::server_records`, which Left, Right and taking it toggle.
     ServerRecords,
     /// How many local players share the screen (`/players`), which Left and Right step.
@@ -333,18 +335,22 @@ fn items(
                     .help("Rules:\n- Time crates stop the clock\n- Collect all to get a -10 second bonus\n\nNOTE: you can submit your best times to the online leaderboards!"),
                 entry(Item::Solo(race::solo::Kind::TimeTrial), "Time trial")
                     .help("Rules:\n- Drive the fastest possible 3-lap time\n\nNOTE: you can submit your best times to the online leaderboards!"),
+                entry(Item::Leaderboard(race::solo::Kind::Relic), "Relic leaderboard")
+                    .starts_section()
+                    .help("The fastest relic races on this track, from the score server."),
+                entry(Item::Leaderboard(race::solo::Kind::TimeTrial), "Time trial leaderboard")
+                    .help("The fastest time trials on this track, from the score server."),
                 Entry::new(
                     Item::ServerRecords,
                     SERVER_RECORDS,
                     Kind::Cycle(ON_OFF[config.server_records as usize].into()),
                 )
                 .inline()
-                .starts_section()
                 .help(
                     "On: each solo race downloads the leaderboard's #1 run from the score \
                      server, and its ghost becomes available.",
                 ),
-                entry(Item::Back, "Back"),
+                entry(Item::Back, "Back").starts_section(),
             ];
             return ("Play solo".into(), items);
         }
@@ -705,7 +711,7 @@ impl Plugin for PausePlugin {
 /// Opens and closes the menu, moves the pick and takes an item, with the menu's sounds. Offline
 /// it pauses the race's sounds too (`MainFreeze_IfPressStart`, `MainFrame_TogglePauseAudio`).
 #[allow(clippy::too_many_arguments)]
-fn input(
+pub(crate) fn input(
     mut menu: ResMut<PauseMenu>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut key_events: MessageReader<KeyboardInput>,
@@ -1056,6 +1062,11 @@ fn input(
                 actions.write(Action::StartSolo(kind));
             }
             Some(Item::ServerRecords) => toggle_server_records(&mut menu, &mut config),
+            // Closed, as the menu hides the table.
+            Some(Item::Leaderboard(kind)) => {
+                menu.open = false;
+                actions.write(Action::ScoreTop { kind, track: None });
+            }
             Some(Item::LeaveLobby) => {
                 menu.open = false;
                 actions.write(Action::CloseLobby);
@@ -1190,6 +1201,10 @@ fn input(
             && let Some(sounds) = sounds.as_ref().filter(|_| offline)
         {
             sounds.unpause();
+            // A leaderboard goes up over the race: taking it is not a way out of the pause.
+            if matches!(taken_item, Some(Item::Leaderboard(_))) {
+                sound(MENU_TAKE_SFX);
+            }
         }
     }
     save(&mut menu, &config, &mut toasts);
