@@ -201,7 +201,7 @@ impl Controls {
                 Control::Item => vec![KeyCode::Semicolon],
                 Control::AimUp => vec![KeyCode::KeyY],
                 Control::RacerMenu => vec![KeyCode::KeyB],
-                Control::LookBack => vec![KeyCode::KeyP],
+                Control::LookBack => vec![KeyCode::Quote],
                 Control::CameraDistance => vec![KeyCode::KeyN],
                 _ => Vec::new(),
             }
