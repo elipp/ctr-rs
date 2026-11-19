@@ -2,8 +2,8 @@
 //! 223) with the same news but none of its layout or timing, shown for a time trial too (less the
 //! relic's lines). The time, the perfect bonus, the relic the run earned (the pack's spinning
 //! relic in the tier's colour) and the personal best (new or kept), centred on the screen in place
-//! of the TIME block, from the settled finish (`CurrentRace::solo_end`) until the race ends
-//! [`TICKS`] after it.
+//! of the TIME block, from the settled finish (`CurrentRace::solo_end`) until the player goes on
+//! (Cross or Space: not Enter, which opens the command line).
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -23,8 +23,9 @@ use crate::Textures;
 /// `STATIC_RELIC`
 pub const RELIC_MODEL: i16 = 0x61;
 
-/// How long the race goes on after its finish for the ceremony.
-pub const TICKS: u32 = 10 * crate::GAME_TICK_HZ as u32;
+/// How long after the finish before Cross or Space goes on: one pressed for the race's last
+/// moments shouldn't skip the ceremony.
+const CONTINUE_AFTER_TICKS: u32 = crate::GAME_TICK_HZ as u32;
 
 /// The relic of the racers' pack.
 #[derive(Resource)]
@@ -60,6 +61,7 @@ enum Line {
     Best,
     OldBest,
     Submit,
+    Continue,
 }
 
 /// The relic's pivot; its child is the model, its middle on the pivot.
@@ -76,7 +78,7 @@ impl Plugin for SoloEndPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (panel, relic).distributive_run_if(crate::drive::driving),
+            (continue_on_key, panel, relic).distributive_run_if(crate::drive::driving),
         );
     }
 }
@@ -144,7 +146,8 @@ fn panel(
                 line(Line::Relic),
                 line(Line::Best),
                 line(Line::OldBest),
-                line(Line::Submit)
+                line(Line::Submit),
+                line(Line::Continue)
             ],
         ));
     }
@@ -202,6 +205,13 @@ fn panel(
                     _ => Gradient::WHITE,
                 },
             ),
+            Line::Continue => (
+                (sim.race.tick >= end.at + CONTINUE_AFTER_TICKS).then(|| {
+                    let keys = if pads.iter().next().is_some() { "X / SPACE" } else { "SPACE" };
+                    format!("{keys}: CONTINUE")
+                }),
+                Gradient::WHITE,
+            ),
         };
         let display = if wanted.is_some() {
             Display::Flex
@@ -219,6 +229,31 @@ fn panel(
             text.gradient = gradient;
         }
     }
+}
+
+/// Cross or Space, once the ceremony has been up a moment, ends the race.
+fn continue_on_key(
+    sim: Res<crate::props::Sim>,
+    mut race_on: ResMut<RaceOn>,
+    menu: Res<crate::pause::PauseMenu>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut pads: crate::drive::Pads,
+) {
+    let Some(end) = race_on.get_mut().and_then(|race| race.solo_end.as_mut()) else {
+        return;
+    };
+    if menu.open || end.continued || sim.race.tick < end.at + CONTINUE_AFTER_TICKS {
+        return;
+    }
+    let pressed = keys.just_pressed(KeyCode::Space)
+        || pads.iter().any(|p| p.just_pressed(GamepadButton::South));
+    if !pressed {
+        return;
+    }
+    end.continued = true;
+    // (Not a hop in the free drive the race ends into.)
+    keys.clear_just_pressed(KeyCode::Space);
+    pads.consume();
 }
 
 /// (The font has no '#'.)
