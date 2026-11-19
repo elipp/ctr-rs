@@ -200,6 +200,10 @@ pub(super) fn run(
     mut logs: MessageWriter<Log>,
 ) {
     for action in actions.read() {
+        // (`say`'s.)
+        if matches!(action, Action::Say(_)) {
+            continue;
+        }
         if let Some(why) = refusal(action, &lobby, &race_on) {
             toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
             continue;
@@ -534,12 +538,7 @@ pub(super) fn run(
                 ));
                 continue;
             }
-            Action::Say(text) => {
-                if !lobby.say(text) {
-                    logs.write(Log::error("You are talking too fast"));
-                }
-                continue;
-            }
+            Action::Say(_) => continue,
             // (Not the lobby's.)
             Action::DebugRanking => {
                 // The others are told the race stopped; the host scores it like a finished one.
@@ -619,6 +618,27 @@ pub(super) fn run(
             }
         };
         toasts.write(Toast::new(say, 2500));
+    }
+}
+
+/// Chat, apart from [`run`]: it goes on where there is no `Drive` (the podium), which `run` needs
+/// for the rest.
+pub(super) fn say(
+    mut actions: MessageReader<Action>,
+    mut lobby: ResMut<Lobby>,
+    race_on: Res<RaceOn>,
+    mut toasts: MessageWriter<Toast>,
+    mut logs: MessageWriter<Log>,
+) {
+    for action in actions.read() {
+        let Action::Say(text) = action else {
+            continue;
+        };
+        if let Some(why) = refusal(action, &lobby, &race_on) {
+            toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+        } else if !lobby.say(text) {
+            logs.write(Log::error("You are talking too fast"));
+        }
     }
 }
 
