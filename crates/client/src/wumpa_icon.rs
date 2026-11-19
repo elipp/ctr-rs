@@ -208,21 +208,15 @@ fn show(
     sim: Res<crate::props::Sim>,
     race_on: Res<crate::race_on::RaceOn>,
     hud: HudViews,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut icon: Query<(&WumpaIcon, &HudView, &mut Transform, &mut Visibility)>,
-    mut last: Local<(u32, f32)>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    // The spin is the level fruit's: it only depends on the tick, and never goes back.
-    let ticks = sim.race.objects.ticks();
-    let mut turns = ticks as f32 + fixed.overstep_fraction();
-    if ticks >= last.0 {
-        turns = turns.max(last.1);
-    }
-    *last = (ticks, turns);
+    // The spin is the level fruit's.
+    let turns = sim.race.objects.ticks() as f32 + between.fraction();
     let angle = turns / crate::props::FRUIT_SPIN_TICKS * std::f32::consts::TAU;
     let visibility = if race_on.solo().is_some() {
         Visibility::Hidden
@@ -276,7 +270,7 @@ struct Flight {
 fn fly(
     mut commands: Commands,
     hud: HudViews,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     textures: Res<Textures>,
     windows: Query<&Window, With<PrimaryWindow>>,
     screen: Res<crate::pixel::RenderSize>,
@@ -359,7 +353,7 @@ fn fly(
             ICON_MIDDLE_Y * crate::hud::PIXEL.y,
         );
         // The tick's countdown, run on between ticks.
-        let left = (driver.pickup_wumpa_cooldown as f32 - fixed.overstep_fraction()).max(0.0);
+        let left = (driver.pickup_wumpa_cooldown as f32 - between.fraction()).max(0.0);
         let at = end + (flight.start - end) * (left / vehicle::wumpa::FLIGHT_TICKS as f32);
         node.left = Val::Px(at.x - wumpa.size.x / 2.0);
         node.top = Val::Px(at.y - wumpa.size.y / 2.0);

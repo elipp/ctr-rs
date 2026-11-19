@@ -29,6 +29,7 @@ mod accordion;
 mod animation;
 mod assets;
 mod banner;
+mod between;
 mod billboard;
 mod command;
 mod confetti;
@@ -293,6 +294,7 @@ fn main() {
         .add_plugins(drop_map::DropMapPlugin)
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
         .add_plugins(unlit::UnlitPlugin)
+        .add_plugins(between::BetweenPlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(
             FixedUpdate,

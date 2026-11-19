@@ -247,7 +247,7 @@ fn relic(
     model: Res<RelicModel>,
     textures: Res<Textures>,
     sounds: Res<crate::sound::Sounds>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     hud: HudViews,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut relics: Query<(Entity, &Relic, &HudView, &mut Transform)>,
@@ -298,7 +298,7 @@ fn relic(
         }
         return;
     }
-    let ticks = sim.race.tick.saturating_sub(at) as f32 + fixed.overstep_fraction();
+    let ticks = sim.race.tick.saturating_sub(at) as f32 + between.fraction();
     let grown = (ticks / GROW_TICKS).min(1.0);
     let angle = ticks / SPIN_TICKS * std::f32::consts::TAU;
     for (_, relic, view, mut transform) in &mut relics {

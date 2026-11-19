@@ -648,11 +648,11 @@ pub fn tick(
 
 /// Puts the weapons between the last two ticks, and turns the bursts to the camera.
 pub fn place(
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut bodies: Query<(&Body, &mut Transform), Without<Effect>>,
     mut effects: Query<(&Effect, &mut Transform), Without<Body>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (body, mut transform) in &mut bodies {
         let (a, b) = (body.previous, body.current);
         transform.translation = a.translation.lerp(b.translation, t);

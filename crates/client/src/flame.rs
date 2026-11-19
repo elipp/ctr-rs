@@ -102,7 +102,7 @@ pub fn spawn(
 /// fades out.
 pub fn update(
     sim: Res<crate::props::Sim>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     karts: Query<(&KartSlot, &KartMotion)>,
     mut flames: Query<(&Flame, &ChildOf, &mut Transform, &mut Visibility, &Children)>,
     parts: Query<(
@@ -112,7 +112,7 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (flame, parent, mut transform, mut visibility, children) in &mut flames {
         let Ok((slot, motion)) = karts.get(parent.parent()) else {
             continue;

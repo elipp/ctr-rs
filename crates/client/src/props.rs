@@ -245,20 +245,13 @@ const FRUIT_BOB_TICKS: f32 = 55.0;
 const FRUIT_BOB_HEIGHT: f32 = 10.0;
 
 /// Turns the fruit around their own vertical axis and bobs them, by the tick and how far the
-/// render is through it. The angle only depends on the tick, so every peer sees the same spin; it never goes back
-/// when ticks wait (a pause, the network) and the render keeps passing through the same tick.
+/// render is through it. The angle only depends on the tick, so every peer sees the same spin.
 pub fn spin_fruit(
     sim: Res<Sim>,
-    fixed: Res<Time<Fixed>>,
-    mut last: Local<(u32, f32)>,
+    between: crate::between::Between,
     mut fruit: Query<(&FruitBody, &mut Transform)>,
 ) {
-    let ticks = sim.race.objects.ticks();
-    let mut turns = ticks as f32 + fixed.overstep_fraction();
-    if ticks >= last.0 {
-        turns = turns.max(last.1);
-    }
-    *last = (ticks, turns);
+    let turns = sim.race.objects.ticks() as f32 + between.fraction();
     let angle = turns / FRUIT_SPIN_TICKS * std::f32::consts::TAU;
     for (body, mut transform) in &mut fruit {
         transform.rotation = body.rest * Quat::from_rotation_y(angle);
@@ -877,9 +870,9 @@ pub fn pose_hazards(
 pub fn place_hazards(
     mut bodies: Query<(&HazardBody, &mut Transform, &mut Visibility)>,
     hazards: Res<Hazards>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
 ) {
-    let t = fixed.overstep_fraction();
+    let t = between.fraction();
     for (body, mut transform, mut visibility) in &mut bodies {
         let s = &hazards.0[body.0];
         let want = if s.hidden {
@@ -902,9 +895,9 @@ pub fn place_hazards(
 pub fn roll(
     mut rolling: Query<(&Rolling, &mut Transform)>,
     sim: Res<Sim>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
 ) {
-    let fraction = fixed.overstep_fraction();
+    let fraction = between.fraction();
     for (rolling, mut transform) in &mut rolling {
         let objects = &sim.race.objects;
         let frames = match rolling.0 {

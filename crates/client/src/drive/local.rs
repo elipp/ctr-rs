@@ -93,13 +93,6 @@ impl LocalView {
         self.confetti = Default::default();
     }
 
-    /// The race is paused: nothing moves between ticks.
-    pub(super) fn freeze(&mut self) {
-        self.previous_view = self.current_view;
-        self.weather.freeze();
-        self.confetti.freeze();
-    }
-
     /// The camera, the weather and the confetti after a tick.
     pub(super) fn follow(&mut self, track: &Track, f: Follow) {
         let camera_input = camera::Input {

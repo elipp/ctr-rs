@@ -57,7 +57,6 @@ pub(super) struct Shown<'w, 's> {
 /// What [`drive_tick`] keeps from one tick to the next.
 #[derive(Default)]
 pub(super) struct Memory {
-    was_paused: bool,
     /// The host's `/cup pause` stopped the race last tick.
     was_host_paused: bool,
     /// The ticks waited for a late player, and the buttons held last tick (a watching client's
@@ -89,7 +88,6 @@ pub(super) fn drive_tick(
         mut sfx,
     } = shown;
     let Memory {
-        was_paused,
         was_host_paused,
         waits,
     } = &mut *memory;
@@ -116,18 +114,7 @@ pub(super) fn drive_tick(
     // The effects panel's freeze stops the race, unless the race is everyone's. (It holds only the
     // race, so that `/debug fx step` can run ticks: the pause menu stops the clock instead,
     // `loading::hold_clock`.)
-    let paused = (hold.fx.holds() && !shared) || host_paused;
-    if paused && !*was_paused {
-        // Nothing moves between ticks now, so the interpolation must not either.
-        for view in &mut drive.views {
-            view.freeze();
-        }
-        for (mut motion, _, _) in &mut motions {
-            motion.freeze();
-        }
-    }
-    *was_paused = paused;
-    if paused {
+    if (hold.fx.holds() && !shared) || host_paused {
         return;
     }
 

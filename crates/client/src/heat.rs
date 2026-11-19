@@ -158,7 +158,7 @@ fn update(
     sim: Option<Res<Sim>>,
     drive: Option<Res<crate::drive::Drive>>,
     config: Res<crate::config::Config>,
-    fixed: Res<Time<Fixed>>,
+    between: crate::between::Between,
     mut cameras: Query<(&Camera, &Transform, &mut HeatWarp), With<crate::drive::ChaseCamera>>,
     balls: Query<(&crate::projectile::Body, &Transform), Without<HeatWarp>>,
 ) {
@@ -181,7 +181,7 @@ fn update(
     };
     let forward = transform.rotation * Vec3::NEG_Z;
     if let Some(fire) = fire {
-        let t = fixed.overstep_fraction();
+        let t = between.fraction();
         // The newest first, as retail's list is, and it looks at no more than 12 (it counts
         // the ones that are not seen too).
         for spark in fire.heat.iter().rev().take(LENSES) {

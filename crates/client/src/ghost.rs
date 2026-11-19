@@ -290,8 +290,6 @@ pub(crate) fn step(
             motion.reset(ghost.kart());
         } else if now > kart.tick {
             motion.push(ghost.kart());
-        } else {
-            motion.freeze();
         }
         kart.tick = now;
     }
