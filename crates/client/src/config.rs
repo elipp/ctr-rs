@@ -33,7 +33,7 @@
 //! * `/net relay add <url>`: another relay to use besides the public ones (each once, at most
 //!   [`MAX_RELAYS`]; it holds from the next lobby), and `/net relay clear` to drop them all
 //!
-//! A browser has no vsync or fps-max, and no relay-only: it paces the frames to the display
+//! A browser has no vsync, and no relay-only: it shows the frames at the display's refresh
 //! itself, and reaches the others through the relay only. Nor has it msaa: the heat shimmer and
 //! the warpball's glow (`heat.rs`) read the depth buffer, which WebGL2 cannot when it is
 //! multisampled.
@@ -365,6 +365,7 @@ const USAGE: &str = "Usage: /config set nick [name, up to 12 characters]\n\
     /config set server-records on|off";
 #[cfg(target_arch = "wasm32")]
 const USAGE: &str = "Usage: /config set nick [name, up to 12 characters]\n\
+    /config set fps-max <frames a second, 0 for no limit>\n\
     /config set shader-effects on|off\n\
     /config set render-scale <0.25 to 1>\n\
     /config set volume music|sfx|voice <0-100>\n\
@@ -377,8 +378,8 @@ impl Setting {
         let (key, value) = word(line);
         if cfg!(target_arch = "wasm32") {
             match key {
-                "vsync" | "fps-max" => {
-                    return Err("In a browser, the browser sets the frame rate".into());
+                "vsync" => {
+                    return Err("In a browser, the browser waits for the display".into());
                 }
                 "msaa" => {
                     return Err("In a browser, anti-aliasing is off for the heat shimmer".into());

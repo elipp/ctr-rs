@@ -323,7 +323,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "Fill the screen, no value toggles",
                     &[leaf("on", "Fill the screen"), leaf("off", "In a window")],
                 ),
-                #[cfg(not(target_arch = "wasm32"))]
                 takes("fps-max", "Frame limit, 0 for none", "<frames a second>"),
                 #[cfg(not(target_arch = "wasm32"))]
                 takes(
