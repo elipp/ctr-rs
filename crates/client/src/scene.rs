@@ -132,8 +132,7 @@ pub(crate) fn switch_level(world: &mut World) {
     if world.contains_resource::<crate::loading::Loading>() {
         return;
     }
-    // The flag is coming in before the next race of a cup: the level loads once it covers the
-    // window.
+    // The flag is coming in before a race: the level loads once it covers the window.
     if crate::loading::entering(world) {
         return;
     }
@@ -159,12 +158,12 @@ pub(crate) fn switch_level(world: &mut World) {
     let mode = race_track.map_or(LevMode::Arcade, |(_, _, mode)| mode);
     let mode_changed = mode != world.resource::<Track>().2;
     let race_track = race_track.map(|(track, ..)| track);
-    // The next race of a cup has started: the loading screen comes in over the race before first.
+    // A race has started: the loading screen comes in over what was shown first.
     if let Some(track) = race_track
         && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
-        && lobby.cup_next == Some(track)
+        && lobby.race_next == Some(track)
     {
-        lobby.cup_next = None;
+        lobby.race_next = None;
         crate::loading::bring_in(world);
         return;
     }

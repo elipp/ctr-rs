@@ -264,7 +264,7 @@ pub(super) fn report(
         None => {}
     }
     if cup_next.is_some() {
-        lobby.cup_next = cup_next;
+        lobby.race_next = cup_next;
     }
     // A race that is not of a cup, or the first of a new one, leaves the old standings behind.
     if let Some(cup) = started_cup
@@ -281,7 +281,7 @@ pub(super) fn report(
         lobby.standings = Some(standings);
     }
     if stopped {
-        lobby.cup_next = None;
+        lobby.race_next = None;
         lobby.end_race(&mut race_on);
         toasts.write(Toast::new("Race stopped", 3000).color(ANNOUNCE_COLOR));
     }
@@ -290,7 +290,7 @@ pub(super) fn report(
         // Every race's start brings the flag in (a cup's next one has it from its standings
         // already): the players load at their own speeds, and the faster ones would show the
         // scene before the race has put the karts on the grid, until everyone's go.
-        lobby.cup_next = started.as_ref().map(|race| race.track);
+        lobby.race_next = started.as_ref().map(|race| race.track);
         race_on.0 = started;
     }
     // (The session drops the pauses of older races, so one that came with a start is of the new
