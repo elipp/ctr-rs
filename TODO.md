@@ -5,7 +5,10 @@
 - the bombs and missiles look for mines oldest first (`weapon::fly`), but a mine's thread goes to the front of the `MINE` bucket, so `RB_Hazard_CollideWithBucket` finds the newest first, as the hazards do (`race::set_off_mines`)
 - missile exhaust
 - host should be able to spectate
-- relic race leaderboards :3 like a verifiable demo submission system
+
+# Menu
+- the "multiplayer" menu shouldn't be visible during a solo race.
+- maybe we don't need the "Restart" button anymore (in free drive)
 
 ## Sound
 The sound effects and the engines play through the `howl` crate: an SPU as `ctr-native` emulates it (24 voices, ADPCM decoded as they play, the Gaussian interpolation, the ADSR envelopes) under the HOWL channels, so sounds can be changed and stopped as they play and the ones that loop do (`OtherFX_Modify`, `OtherFX_Stop1/2`, `OtherFX_RecycleNew/Mute`, `EngineAudio_*`, `howl_PauseAudio`). Our kart's ground, skid, wall-rub and turbo loops play (`vehicle::emitter_sound`, `turbo`), and the boost, the mask grab's whistle, the voice lines (`howl::voiceline`: a grunt, or a line of XA), the pause menu's, the lap's, the win's and the item roulette's. So do the level's objects (crates, wumpa fruit, armadillos, fireballs, minecarts, barrels: `instance::Tick::sounds` and `loops`) and the weapons (launches, flight loops, explosions, detonations, a TNT on a head), heard from where they are. The sounds that echo (a kart in a tunnel) go through the SPU's reverb (`howl::reverb`), in the level's mode (`Howl::set_level_reverb`). The music is the level's song pack (`howl::music`): its song from the green light on, a mask's while ours is out, quieter for "FINAL LAP!" and 20 faster after it, as the states of the race say (`howl::state`). The XA (`loader::xa`: `XA/ENG.XNF`, the tracks' sectors and their ADPCM; `howl::xa`: the CD's input of the SPU and the native path of `CDSYS`) plays the voice lines and the "FINAL LAP!" and race-end jingles, which the states wait for; the viewer reads the tracks on a thread. `cargo run -p howl --example render` renders sounds to a WAV (`r2` before them for a level's reverb, `m0` for a level's song, `xm6` for an XA). What is left, in order:
@@ -20,9 +23,6 @@ The sound effects and the engines play through the `howl` crate: an SPU as `ctr-
 ## Bots
 - `race::bot::Tracker` misses a short teleport: a kart moved within 16 frames along the path (`MAX_STEPS`) and within `LOST_DISTANCE` (1500) of its old segment stays on the old one, e.g. a mask grab that drops it on the other leg of a hairpin. Possible fix: past about half a track width (~400) from the segment, search the ±`SEARCH_WINDOW` frames and move if one is clearly closer
 - Brain: always room for improvement. Also, should probably train them to handle the mask powerup speedup + rubber banding
-
-## Chores
-- remove any hex constants that aren't used as a bitmask; the particular values serve no purpose in the port
 
 ## Tech debt
 - a kart is many entities: the body (the root, with `KartMotion`), the wheels, shadow, smoke, sparks, tire marks, mask and shield, which sit at the top level (they draw in world or camera space) and are tied to it by `Attached(kart)` (despawn, and `kart::hide_parts` for a kart that is not drawn). The wheels are tied by their own `kart` field, as `reap` despawns whatever is `Attached` to a kart without a slot, which the grid display's is. One parent with an identity transform that holds the body and every part would let Bevy's visibility and despawning do all of it, and give a single thing to spawn and to hide (`kart::KartBuilder::spawn` and the `spawn` of each part)
@@ -71,10 +71,9 @@ Why the fruit and weapon crates (and wumpa fruit) stay in the level's BSP, and w
 
 ## Maybe
 - backing up and turning on N.Gin (some other drivers too?) looks weird (?)
-- The few usf boost pads in the game (probably work)
 
 ## Not a bug?
 - /race restart doesn't include any pending clients. Instead, one must /race stop and /race start
 - `ctr-map import` only reads the one-player level file and its VRAM; the 2/4-player and relic files a patch also changes are ignored
 - hot air skyway mega drop after missing the "main road" from the shortcut from the left side ("levypallo päätien kautta") - CONFIRMED NOT-A-BUG: retail does this too
-- flattening when jumping on top of another player (2026-11-02: couldn't reproduce on retail)
+- flattening when jumping on top of another player (turns out this happens only with the "carrot turbo" :D)

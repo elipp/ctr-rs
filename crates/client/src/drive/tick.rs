@@ -118,10 +118,8 @@ pub(super) fn drive_tick(
         return;
     }
 
-    // The menu's RESTART is the grid: every start puts everything, the objects too, back
-    // as it was at tick 0.
-    let picked = std::mem::take(&mut hold.menu.restart);
-    let mut restart = picked && !race_on.is_on();
+    // Every start puts everything, the objects too, back as it was at tick 0.
+    let mut restart = false;
     // The race is over (won, stopped, the lobby closed or failed): back to the free drive.
     if !race_on.is_on() && (sim.race.mode.is_race() || sim.race.karts.len() != drive.views.len()) {
         restart = true;
