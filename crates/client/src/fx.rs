@@ -140,10 +140,10 @@ impl Effects {
     }
 }
 
-/// What `drive_tick` takes from the pause menu (its restart) and the panel (its freeze).
+/// What `drive_tick` takes from the pause menu (whether it's open) and the panel (its freeze).
 #[derive(SystemParam)]
 pub struct Hold<'w> {
-    pub menu: ResMut<'w, crate::pause::PauseMenu>,
+    pub menu: Res<'w, crate::pause::PauseMenu>,
     pub fx: ResMut<'w, Effects>,
 }
 

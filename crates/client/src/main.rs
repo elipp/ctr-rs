@@ -274,7 +274,7 @@ fn main() {
         // place, and the race's track loads over that, not the other way round.
         .init_schedule(LevelChange)
         .add_systems(LevelChange, switch_level)
-        .add_systems(Last, limit_frame_rate)
+        .add_plugins(frame::PacePlugin)
         // After the cameras and karts have moved this frame, before their transforms propagate.
         .add_systems(
             PostUpdate,

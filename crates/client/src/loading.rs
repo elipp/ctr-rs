@@ -8,19 +8,18 @@
 //! and the chase camera. If that does not come in [`GIVE_UP_FRAMES`] the game goes on anyway
 //! and says what was missing in the log, rather than hold it up for good.
 //!
-//! A load takes no time to speak of, so it is not covered: the screen is only up for the races
-//! of a lobby (the players load at their own speeds, and the faster ones would otherwise show the
-//! scene before the race has set it up), and for `/debug fx loading-screen`. It is retail's (`RaceFlag_DrawSelf`): the grey
-//! checkered flag waving over all of it, and "LOADING..." flying in over it a letter at a time
+//! A load takes no time to speak of, so the screen is not for it: it is up at the start of each
+//! race (in a lobby the players load at their own speeds, and the faster ones would otherwise
+//! show the scene before the race has set it up), and for `/debug fx loading-screen`. It is
+//! retail's (`RaceFlag_DrawSelf`): the grey checkered flag waving over all of it, and "LOADING..." flying in over it a letter at a time
 //! (`RaceFlag_DrawLoadingString`). When it is done the flag speeds off to the left, and the
 //! letters after it, with the game running under them. Retail draws the flag as quads through the GTE; here the wave is retail's, worked
 //! out on the CPU column by column, and the shader (`loading.wgsl`) finds the flag under each
 //! pixel. The flag goes on past retail's edges, for windows wider than its screen.
 //!
-//! Before an online race the flag comes in first, as retail's does
-//! (`RaceFlag_BeginTransition`): the next race's start brings it in over the race before, the
-//! level loads once it covers the window ([`entering`]), and it stays [`CUP_MIN_SECONDS`] at
-//! least, and until everyone is ready to start. We are not ready before that least time is up
+//! The flag comes in first, as retail's does (`RaceFlag_BeginTransition`): the race's start
+//! brings it in over what was shown, the level loads once it covers the window ([`entering`]),
+//! and it stays [`RACE_MIN_SECONDS`] at least, and until everyone is ready to start. We are not ready before that least time is up
 //! ([`tell_ready`]), so the race does not start under the flag.
 //!
 //! `/debug fx loading-screen` puts the screen up for a while on its own, over the game as it goes on.
@@ -89,8 +88,8 @@ const ENTER_SNAP: f32 = 8.0;
 /// column is past the window's left edge.
 const COVERED_AT: f32 = 500.0;
 
-/// The least time the flag stays between the races of a cup once it covers the window.
-const CUP_MIN_SECONDS: f32 = 1.5;
+/// The least time the flag stays before a race once it covers the window.
+const RACE_MIN_SECONDS: f32 = 1.5;
 
 /// How long before its minimum is up the flag lets us say we are ready (and so the race goes, and
 /// flies the camera in): the fly-in is for the eyes, and should be mostly out from under the flag.
@@ -161,8 +160,6 @@ struct LoadingScreen {
     leaving: bool,
     /// What sends it off.
     hold: Hold,
-    /// The game clock stands still until the screen covers the window ([`hold_clock`]).
-    holds_clock: bool,
     /// `RaceFlag_LoadingTextAnimFrame`: the first letter's frame, less than 0 for no text.
     text_frame: f32,
     /// `RaceFlag_Transition`: the text slid to the left, once the scene is whole.
@@ -177,9 +174,10 @@ struct LoadingScreen {
 enum Hold {
     /// `/debug fx loading-screen`: these seconds once it covers the window, whatever loads.
     For(f32),
-    /// Between the races of a cup: these seconds once it covers the window, the load, and the
-    /// next race's go (everyone is ready).
-    Cup(f32),
+    /// Before a race: these seconds once it covers the window, the load, and the race's go
+    /// (everyone is ready). The game clock stands still until it covers the window
+    /// ([`hold_clock`]).
+    Race(f32),
 }
 
 /// The letter of the text at `.0`.
@@ -279,22 +277,21 @@ fn screen(window: &Window, texel: &TexelSize) -> Screen {
 }
 
 impl LoadingScreen {
-    fn new(material: Handle<FlagMaterial>, letters: Vec<f32>, width: f32) -> LoadingScreen {
+    fn new(hold: Hold, letters: Vec<f32>, width: f32) -> LoadingScreen {
         LoadingScreen {
-            material,
+            material: Handle::default(),
             wave: {
                 let mut wave = WAVE;
                 set_levels(&mut wave);
                 wave
             },
             elapsed: 0.0,
-            position: 0.0,
+            position: ENTER_FROM,
             speed: LEAVE_SPEED,
             leaving: false,
-            hold: Hold::For(0.0),
-            holds_clock: false,
-            // (Retail starts the text at the stages of a load that take long.)
-            text_frame: 0.0,
+            hold,
+            // (The text waits for the flag to cover the window.)
+            text_frame: -1.0,
             text_slide: 0.0,
             letters,
             width,
@@ -362,8 +359,8 @@ impl LoadingScreen {
     /// The text on by a frame of `ms` (`RaceFlag_DrawLoadingString`): where each letter is on
     /// retail's screen, if it is on it.
     fn step_text(&mut self, ms: f32) -> Vec<Option<Vec2>> {
-        // A flag that came in starts the text once it covers the window.
-        if self.text_frame < 0.0 && !self.leaving && self.position > 0.0 && self.position <= COVERED_AT {
+        // The text starts once the flag covers the window.
+        if self.text_frame < 0.0 && !self.leaving && self.position <= COVERED_AT {
             self.text_frame = 0.0;
         }
         if self.text_frame < 0.0 {
@@ -395,8 +392,8 @@ impl LoadingScreen {
     }
 }
 
-/// Stops the game clock until the scene that was just built has settled. The flag of a cup, if it
-/// is up, waits for it (see [`Hold::Cup`]).
+/// Stops the game clock until the scene that was just built has settled. The flag of a race, if
+/// it is up, waits for it (see [`Hold::Race`]).
 pub fn begin(world: &mut World) {
     if world.contains_resource::<Loading>() {
         return;
@@ -405,8 +402,7 @@ pub fn begin(world: &mut World) {
     world.insert_resource(Loading { frames: 0 });
 }
 
-/// Whether the flag is coming in before the next race of a cup, and does not cover the window
-/// yet.
+/// Whether the flag is coming in before a race, and does not cover the window yet.
 pub fn entering(world: &mut World) -> bool {
     world
         .query::<&LoadingScreen>()
@@ -414,10 +410,10 @@ pub fn entering(world: &mut World) -> bool {
         .any(|s| !s.leaving && s.position > COVERED_AT)
 }
 
-/// Tells the others we can start once the race is on the grid and the flag of a cup, if it is up, has
+/// Tells the others we can start once the race is on the grid and its flag, if it is up, has
 /// nearly had its least time ([`READY_LEAD_SECONDS`] left): the go waits for every flag, so none
 /// is still up at the green light, and the camera's fly-in is mostly out from under it. Not
-/// before the flag has come up at all (`cup_next`: it is spawned a frame after the race is
+/// before the flag has come up at all (`race_next`: it is spawned a frame after the race is
 /// announced).
 fn tell_ready(
     lobby: Res<crate::lobby::Lobby>,
@@ -427,8 +423,8 @@ fn tell_ready(
 ) {
     let held = screens
         .iter()
-        .any(|s| matches!(s.hold, Hold::Cup(left) if left > READY_LEAD_SECONDS));
-    if loading.is_some() || held || lobby.cup_next.is_some() {
+        .any(|s| matches!(s.hold, Hold::Race(left) if left > READY_LEAD_SECONDS));
+    if loading.is_some() || held || lobby.race_next.is_some() {
         return;
     }
     let Some(race) = race_on
@@ -445,26 +441,20 @@ fn tell_ready(
     }
 }
 
-/// Brings the flag in over the window before the next race of a cup. `same_level`: the race is on
-/// the level already shown, so no load happens under the flag, and the clock waits for the flag
-/// to cover the window instead (otherwise the race starts, with its fly-in, under a flag that is
-/// still on its way in).
-pub fn bring_in(world: &mut World, same_level: bool) {
-    spawn_screen(world, Hold::Cup(CUP_MIN_SECONDS), ENTER_FROM);
+/// Brings the flag in over the window before a race. The clock waits for the flag
+/// to cover the window: the scene freezes whole under it, rather than the race alone (which
+/// `drive_tick` holds until its level is shown), and no race starts its fly-in under a flag still
+/// on its way in.
+pub fn bring_in(world: &mut World) {
+    spawn_screen(world, Hold::Race(RACE_MIN_SECONDS));
     // The music of what was shown stops as the flag comes in; the race's own starts at its go.
     if let Some(sounds) = world.get_resource::<crate::sound::Sounds>() {
         sounds.silence();
     }
-    if same_level {
-        let mut screens = world.query::<&mut LoadingScreen>();
-        for mut screen in screens.iter_mut(world) {
-            screen.holds_clock = true;
-        }
-    }
 }
 
-/// The one place the game clock is stopped: while a scene settles ([`Loading`]), while a flag
-/// that holds it is coming in, and while the pause menu is open over a race that is not shared.
+/// The one place the game clock is stopped: while a scene settles ([`Loading`]), while a race's
+/// flag is coming in, and while the pause menu is open over a race that is not shared.
 /// Stopping the clock rather than the race alone stops `FixedUpdate` (the level's animations
 /// count `GameTick` there) and `Time<Fixed>`, which what is drawn between ticks goes by
 /// (`between::Between`).
@@ -479,7 +469,7 @@ fn hold_clock(
         || (menu.holds() && !race_on.shared())
         || screens
             .iter()
-            .any(|s| s.holds_clock && !s.leaving && s.position > COVERED_AT);
+            .any(|s| matches!(s.hold, Hold::Race(_)) && !s.leaving && s.position > COVERED_AT);
     if hold != time.is_paused() {
         if hold {
             time.pause();
@@ -489,8 +479,8 @@ fn hold_clock(
     }
 }
 
-/// Puts the screen up over the window (from `position`, 0 for on it), until `hold` sends it off.
-fn spawn_screen(world: &mut World, hold: Hold, position: f32) {
+/// Brings the screen in over the window, until `hold` sends it off.
+fn spawn_screen(world: &mut World, hold: Hold) {
     // A screen still up, or sliding off from the scene before, is covered by this one.
     let leaving: Vec<Entity> = world
         .query_filtered::<Entity, With<LoadingScreen>>()
@@ -516,13 +506,7 @@ fn spawn_screen(world: &mut World, hold: Hold, position: f32) {
         .single(world)
         .map(|window| screen(window, &texel))
         .ok();
-    let mut flag = LoadingScreen::new(Handle::default(), letters, width);
-    flag.hold = hold;
-    flag.position = position;
-    if position > 0.0 {
-        // (The text waits for the flag to cover the window.)
-        flag.text_frame = -1.0;
-    }
+    let mut flag = LoadingScreen::new(hold, letters, width);
     let uniform = flag
         .step_flag(
             0.0,
@@ -548,6 +532,7 @@ fn spawn_screen(world: &mut World, hold: Hold, position: f32) {
             },
             GlobalZIndex(i32::MAX - 3),
             Pickable::IGNORE,
+            crate::scene::OutlivesScene,
         ))
         .id();
     // (The glyphs of the line are its letters, one to a character.)
@@ -561,6 +546,7 @@ fn spawn_screen(world: &mut World, hold: Hold, position: f32) {
             },
             Visibility::Hidden,
             ChildOf(screen),
+            crate::scene::OutlivesScene,
         ));
     }
 }
@@ -636,7 +622,7 @@ fn animate(
                     flag.leaving = true;
                 }
             }
-            Hold::Cup(left) => {
+            Hold::Race(left) => {
                 if covers {
                     *left -= real.delta_secs();
                 }
@@ -698,7 +684,7 @@ fn debug_screen(mut actions: MessageReader<crate::command::Action>, mut commands
         if let crate::command::Action::DebugFx(crate::fx::Fx::LoadingScreen(ms)) = action {
             let held = *ms as f32 / 1000.0;
             commands.queue(move |world: &mut World| {
-                spawn_screen(world, Hold::For(held), ENTER_FROM)
+                spawn_screen(world, Hold::For(held))
             });
         }
     }

@@ -570,7 +570,8 @@ pub(super) fn run(
                 lobby.race_over(players, &finishers, now);
                 continue;
             }
-            Action::DebugAddWeapon(_)
+            Action::Practice(_)
+            | Action::DebugAddWeapon(_)
             | Action::DebugSetWumpa(_)
             | Action::DebugStall(_)
             | Action::DebugViewer

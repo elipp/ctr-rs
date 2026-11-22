@@ -119,7 +119,7 @@ pub struct Lobby {
     /// The track of the race that is about to start, as the standings of the race before told it
     /// (a cup's next), or as its start did: its start brings the loading screen's flag in over
     /// what is shown (`scene::switch_level`).
-    pub(crate) cup_next: Option<u32>,
+    pub(crate) race_next: Option<u32>,
     /// The cup's latest standings (or its final ones), for the scoreboard.
     pub(crate) standings: Option<net::Standings>,
     /// Who stands on the podium of the cup that just ended (`podium.rs`), until it is shown: once
@@ -823,7 +823,7 @@ impl Lobby {
     ) {
         debug_assert!(self.session.is_none());
         // As a lobby's start does (`report`): the flag comes in over what is shown.
-        self.cup_next = Some(track);
+        self.race_next = Some(track);
         race_on.0 = Some(CurrentRace::alone(characters, nick, track, rules, solo));
     }
 }

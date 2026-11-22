@@ -84,8 +84,6 @@ pub struct PauseMenu {
     selected: usize,
     /// The item that was clicked, to take in the next update.
     clicked: Option<usize>,
-    /// RESTART was taken: the next tick puts the race back on the grid.
-    pub restart: bool,
     /// The first player's racer menu as a submenu of this one; see [`RacerMenu`].
     pub racer_menu: RacerMenu,
     /// The way the keyboard slides a volume, -1, 0 or 1: Left or Right is held.
@@ -448,11 +446,9 @@ fn items(
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
-    if !race_on.shared() {
-        items.push(entry(Item::Restart, "Restart"));
-    }
-    // (Not a lobby's: the host ends it for everyone, which is `/race stop`'s to do.)
+    // (Not a lobby's: the host restarts and ends it for everyone, as `/race restart|stop`.)
     if race_on.is_on() && !race_on.shared() {
+        items.push(entry(Item::Restart, "Restart"));
         items.push(entry(Item::EndRace, "End race").help("Back to the free drive."));
     }
     items.push(entry(Item::TrackSelect, "Track select"));
@@ -473,9 +469,10 @@ fn items(
         items.push(entry(Item::CupWizard, "Cup wizard"));
         items.push(entry(Item::BotsMenu, "Bots"));
     }
+    // (Out of a lobby, a race on is one alone: it ends before any lobby begins.)
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
-    } else {
+    } else if !race_on.is_on() {
         items.push(entry(Item::Multiplayer, "Multiplayer"));
     }
     items.push(entry(Item::Options, "Options"));
@@ -1090,15 +1087,10 @@ pub(crate) fn input(
         }
         match taken_item {
             Some(Item::Resume) => menu.open = false,
-            // A race alone starts over as a race, with its lights (the lobby's); a free drive
-            // only puts the kart back on the grid (`drive_tick`).
-            Some(Item::Restart) if race_on.is_on() => {
-                menu.open = false;
-                actions.write(Action::RestartRace);
-            }
+            // A race alone starts over as a race, with its lights (the lobby's).
             Some(Item::Restart) => {
                 menu.open = false;
-                menu.restart = true;
+                actions.write(Action::RestartRace);
             }
             Some(Item::CharSelect) => {
                 menu.open = false;

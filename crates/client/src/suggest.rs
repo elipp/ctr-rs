@@ -273,6 +273,14 @@ pub(crate) const COMMANDS: &[Spec] = &[
         arg: Some("[1 to 4]"),
     },
     node(
+        "practice",
+        "Practice a shortcut, in a free drive alone",
+        &[
+            leaf("set", "Mark where the kart is"),
+            leaf("run-up", "Drive the last 2 s up to the mark again"),
+        ],
+    ),
+    node(
         "cup",
         "A series of races with points",
         &[
@@ -323,7 +331,6 @@ pub(crate) const COMMANDS: &[Spec] = &[
                     "Fill the screen, no value toggles",
                     &[leaf("on", "Fill the screen"), leaf("off", "In a window")],
                 ),
-                #[cfg(not(target_arch = "wasm32"))]
                 takes("fps-max", "Frame limit, 0 for none", "<frames a second>"),
                 #[cfg(not(target_arch = "wasm32"))]
                 takes(
@@ -676,6 +683,7 @@ mod tests {
                 "bots",
                 "autopilot",
                 "players",
+                "practice",
                 "cup",
                 "promote",
                 "track",

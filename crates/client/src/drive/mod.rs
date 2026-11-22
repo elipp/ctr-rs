@@ -31,6 +31,7 @@ mod input;
 mod local;
 mod overlay;
 mod pose;
+mod practice;
 mod split;
 mod tick;
 
@@ -46,6 +47,8 @@ use tick::{debug_actions, drive_tick};
 pub use follow::{ChaseCamera, MainView, ViewOf};
 pub(crate) use follow::push_buffer_view;
 pub use chooser::Chosen;
+pub use practice::PracticeAsk;
+pub(crate) use practice::{Practice, RunUpKart};
 pub(crate) use input::Pads;
 pub(crate) use local::LocalView;
 pub(crate) use split::{HudCamera, UnderCamera, window_rect};
@@ -146,6 +149,8 @@ impl Plugin for DrivePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LocalPlayers(1))
             .init_resource::<Chosen>()
+            .init_resource::<practice::Practice>()
+            .add_systems(Update, (practice::input, practice::build).run_if(driving))
             .init_resource::<chooser::ChooserPointer>()
             .add_systems(Update, (chooser::input, chooser::sync, chooser::show).chain().run_if(driving))
             .insert_resource(crate::exhaust::Particles::new())
@@ -154,7 +159,13 @@ impl Plugin for DrivePlugin {
             .add_systems(Update, overlay::debug_text_command)
             .add_systems(
                 FixedUpdate,
-                (drive_tick, crate::ghost::step, crate::flash::step, crate::projectile::tick)
+                (
+                    drive_tick,
+                    practice::step,
+                    crate::ghost::step,
+                    crate::flash::step,
+                    crate::projectile::tick,
+                )
                     .chain()
                     .run_if(driving),
             )

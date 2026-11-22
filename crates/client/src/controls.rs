@@ -53,10 +53,13 @@ pub enum Control {
     LookBack,
     /// L2: swaps the near and the far camera.
     CameraDistance,
+    /// L3 and R3: shortcut practice (`drive/practice.rs`).
+    SetPoint,
+    RunUp,
 }
 
 impl Control {
-    pub const ALL: [Control; 21] = [
+    pub const ALL: [Control; 23] = [
         Control::Gas,
         Control::Brake,
         Control::Left,
@@ -78,6 +81,8 @@ impl Control {
         Control::Scoreboard,
         Control::LookBack,
         Control::CameraDistance,
+        Control::SetPoint,
+        Control::RunUp,
     ];
 
     /// Its name in the config.
@@ -104,6 +109,8 @@ impl Control {
             Control::Scoreboard => "scoreboard",
             Control::LookBack => "look-back",
             Control::CameraDistance => "camera-distance",
+            Control::SetPoint => "set-point",
+            Control::RunUp => "run-up",
         }
     }
 
@@ -131,6 +138,8 @@ impl Control {
             Control::Scoreboard => "Scoreboard",
             Control::LookBack => "Look back",
             Control::CameraDistance => "Camera distance",
+            Control::SetPoint => "Set point",
+            Control::RunUp => "Run up",
         }
     }
 
@@ -157,6 +166,8 @@ impl Control {
             Control::Scoreboard => &[KeyCode::Tab],
             Control::LookBack => &[KeyCode::KeyR],
             Control::CameraDistance => &[KeyCode::KeyX],
+            Control::SetPoint => &[KeyCode::KeyF],
+            Control::RunUp => &[KeyCode::KeyT],
         }
     }
 

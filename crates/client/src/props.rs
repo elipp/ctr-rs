@@ -139,6 +139,15 @@ impl Sim {
         self.own = own;
     }
 
+    /// Goes on from `race`, a state of a free drive of one player offline (`drive/practice.rs`).
+    /// The rollback starts over at its tick 0, as a restart's does: what is drawn and heard
+    /// already copes with that, and `race.tick` is the race's own.
+    pub fn resume(&mut self, race: Race) {
+        debug_assert_eq!(race.karts.len(), 1);
+        self.race = Rollback::new(race, 1, Some(0), ROLLBACK_WINDOW);
+        self.own = 0;
+    }
+
     /// The objects at tick 0.
     pub fn start(&self) -> &Objects {
         &self.start
