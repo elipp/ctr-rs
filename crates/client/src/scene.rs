@@ -165,8 +165,7 @@ pub(crate) fn switch_level(world: &mut World) {
         && lobby.cup_next == Some(track)
     {
         lobby.cup_next = None;
-        let same_level = track == world.resource::<LevelNumber>().0 && !mode_changed;
-        crate::loading::bring_in(world, same_level);
+        crate::loading::bring_in(world);
         return;
     }
     // The level shown before the race took the viewer to its own: back to it when the race is

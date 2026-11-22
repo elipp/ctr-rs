@@ -469,9 +469,10 @@ fn items(
         items.push(entry(Item::CupWizard, "Cup wizard"));
         items.push(entry(Item::BotsMenu, "Bots"));
     }
+    // (Out of a lobby, a race on is one alone: it ends before any lobby begins.)
     if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
-    } else {
+    } else if !race_on.is_on() {
         items.push(entry(Item::Multiplayer, "Multiplayer"));
     }
     items.push(entry(Item::Options, "Options"));

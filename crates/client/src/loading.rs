@@ -161,8 +161,6 @@ struct LoadingScreen {
     leaving: bool,
     /// What sends it off.
     hold: Hold,
-    /// The game clock stands still until the screen covers the window ([`hold_clock`]).
-    holds_clock: bool,
     /// `RaceFlag_LoadingTextAnimFrame`: the first letter's frame, less than 0 for no text.
     text_frame: f32,
     /// `RaceFlag_Transition`: the text slid to the left, once the scene is whole.
@@ -178,7 +176,8 @@ enum Hold {
     /// `/debug fx loading-screen`: these seconds once it covers the window, whatever loads.
     For(f32),
     /// Between the races of a cup: these seconds once it covers the window, the load, and the
-    /// next race's go (everyone is ready).
+    /// next race's go (everyone is ready). The game clock stands still until it covers the window
+    /// ([`hold_clock`]).
     Cup(f32),
 }
 
@@ -292,7 +291,6 @@ impl LoadingScreen {
             speed: LEAVE_SPEED,
             leaving: false,
             hold: Hold::For(0.0),
-            holds_clock: false,
             // (Retail starts the text at the stages of a load that take long.)
             text_frame: 0.0,
             text_slide: 0.0,
@@ -445,26 +443,20 @@ fn tell_ready(
     }
 }
 
-/// Brings the flag in over the window before the next race of a cup. `same_level`: the race is on
-/// the level already shown, so no load happens under the flag, and the clock waits for the flag
-/// to cover the window instead (otherwise the race starts, with its fly-in, under a flag that is
-/// still on its way in).
-pub fn bring_in(world: &mut World, same_level: bool) {
+/// Brings the flag in over the window before the next race of a cup. The clock waits for the flag
+/// to cover the window: the scene freezes whole under it, rather than the race alone (which
+/// `drive_tick` holds until its level is shown), and no race starts its fly-in under a flag still
+/// on its way in.
+pub fn bring_in(world: &mut World) {
     spawn_screen(world, Hold::Cup(CUP_MIN_SECONDS), ENTER_FROM);
     // The music of what was shown stops as the flag comes in; the race's own starts at its go.
     if let Some(sounds) = world.get_resource::<crate::sound::Sounds>() {
         sounds.silence();
     }
-    if same_level {
-        let mut screens = world.query::<&mut LoadingScreen>();
-        for mut screen in screens.iter_mut(world) {
-            screen.holds_clock = true;
-        }
-    }
 }
 
-/// The one place the game clock is stopped: while a scene settles ([`Loading`]), while a flag
-/// that holds it is coming in, and while the pause menu is open over a race that is not shared.
+/// The one place the game clock is stopped: while a scene settles ([`Loading`]), while a cup's
+/// flag is coming in, and while the pause menu is open over a race that is not shared.
 /// Stopping the clock rather than the race alone stops `FixedUpdate` (the level's animations
 /// count `GameTick` there) and `Time<Fixed>`, which what is drawn between ticks goes by
 /// (`between::Between`).
@@ -479,7 +471,7 @@ fn hold_clock(
         || (menu.holds() && !race_on.shared())
         || screens
             .iter()
-            .any(|s| s.holds_clock && !s.leaving && s.position > COVERED_AT);
+            .any(|s| matches!(s.hold, Hold::Cup(_)) && !s.leaving && s.position > COVERED_AT);
     if hold != time.is_paused() {
         if hold {
             time.pause();
