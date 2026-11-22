@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 use bevy::winit::{EventLoopProxy, UpdateMode, WinitSettings, WinitUserEvent};
 
 use crate::config::Config;
@@ -78,21 +79,17 @@ impl Waker {
         std::thread::Builder::new()
             .name("frame pacer".into())
             .spawn(move || {
-                let mut sent: Option<Instant> = None;
+                // Every update asks for one wakeup, so every request is answered: one left out
+                // leaves the loop waiting for good.
                 while let Ok(mut next) = at.recv() {
                     while let Ok(later) = at.try_recv() {
                         next = later;
-                    }
-                    // A stray update asks for the wakeup already given again.
-                    if sent.is_some_and(|sent| next <= sent) {
-                        continue;
                     }
                     // A sleep, not a timed `recv`: on Windows only the sleep has the fine timer.
                     std::thread::sleep(next.saturating_duration_since(Instant::now()));
                     if proxy.send_event(WinitUserEvent::WakeUp).is_err() {
                         break;
                     }
-                    sent = Some(next);
                 }
             })
             .expect("the frame pacer thread starts");
@@ -107,7 +104,7 @@ impl Waker {
 #[cfg(target_arch = "wasm32")]
 struct Waker {
     proxy: EventLoopProxy<WinitUserEvent>,
-    set: Option<Instant>,
+    pending: Option<f64>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -118,36 +115,49 @@ mod js {
     extern "C" {
         #[wasm_bindgen(js_name = setTimeout)]
         pub fn set_timeout(handler: &JsValue, ms: f64) -> f64;
+        #[wasm_bindgen(js_name = clearTimeout)]
+        pub fn clear_timeout(id: f64);
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 impl Waker {
     fn start(proxy: EventLoopProxy<WinitUserEvent>) -> Self {
-        Self { proxy, set: None }
+        Self {
+            proxy,
+            pending: None,
+        }
     }
 
     fn wake_at(&mut self, at: Instant) {
-        // A stray update asks for the wakeup already set again.
-        if self.set.is_some_and(|set| at <= set) {
-            return;
+        // The latest request stands, so that there is always exactly one wakeup to come: one
+        // left out leaves the loop waiting for good.
+        if let Some(id) = self.pending.take() {
+            js::clear_timeout(id);
         }
-        self.set = Some(at);
         let proxy = self.proxy.clone();
         let wake = wasm_bindgen::closure::Closure::once_into_js(move || {
             let _ = proxy.send_event(WinitUserEvent::WakeUp);
         });
         let ms = at.saturating_duration_since(Instant::now()).as_secs_f64() * 1000.0;
-        js::set_timeout(&wake, ms);
+        self.pending = Some(js::set_timeout(&wake, ms));
     }
 }
 
-fn spin(pacer: Res<Pacer>) {
-    let Some(target) = pacer.target else { return };
+/// Gives the frame the instant the spin ends at: by itself `time_system` takes the one the render
+/// world sends when it is done with the frame before, and the grid would go by that.
+fn spin(pacer: Res<Pacer>, mut strategy: ResMut<TimeUpdateStrategy>) {
+    let Some(target) = pacer.target else {
+        if !matches!(*strategy, TimeUpdateStrategy::Automatic) {
+            *strategy = TimeUpdateStrategy::Automatic;
+        }
+        return;
+    };
     let until = target.min(Instant::now() + SPIN_MOST);
     while Instant::now() < until {
         std::hint::spin_loop();
     }
+    *strategy = TimeUpdateStrategy::ManualInstant(Instant::now());
 }
 
 /// From where this frame started on the clocks, so how long it takes is no matter.
