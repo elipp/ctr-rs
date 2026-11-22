@@ -709,22 +709,26 @@ pub fn show(
     between: crate::between::Between,
     race_on: Res<crate::race_on::RaceOn>,
     config: Res<crate::config::Config>,
+    practice: Res<crate::drive::Practice>,
     mut karts: Query<(
         &mut Transform,
         &mut Visibility,
         &KartMotion,
         Has<Kart>,
         Option<&crate::ghost::GhostKart>,
+        Has<crate::drive::RunUpKart>,
     )>,
 ) {
     let t = between.fraction();
     // A spectator has no kart of its own: the others' are all drawn, and ours is not.
     let spectating = race_on.get().is_some_and(|race| race.spectating());
     let ghosts = race_on.get().map(|race| race.ghosts.shown(config.ghosts));
-    for (mut transform, mut visibility, motion, ours, ghost) in &mut karts {
+    let running_up = practice.running_up();
+    for (mut transform, mut visibility, motion, ours, ghost, stand_in) in &mut karts {
         let hidden_ghost =
             ghost.is_some_and(|g| ghosts.is_none_or(|shown| !shown.has(g.source)));
-        let want = if motion.hidden || (ours && spectating) || hidden_ghost {
+        let swapped = if running_up { ours } else { stand_in };
+        let want = if motion.hidden || (ours && spectating) || hidden_ghost || swapped {
             Visibility::Hidden
         } else {
             Visibility::Inherited
@@ -750,8 +754,12 @@ pub struct HiddenWithKart;
 /// would (each decides that again on its next update).
 pub fn hide_parts(
     mut commands: Commands,
+    practice: Res<crate::drive::Practice>,
     // (Not a part's: the parts' visibilities are written below.)
-    karts: Query<(&KartMotion, &Visibility), (Without<Attached>, Without<crate::wheels::Wheels>)>,
+    karts: Query<
+        (&KartMotion, &Visibility, Has<Kart>),
+        (Without<Attached>, Without<crate::wheels::Wheels>),
+    >,
     mut attached: Query<
         (Entity, &Attached, &mut Visibility, Has<HiddenWithKart>),
         Without<crate::wheels::Wheels>,
@@ -763,13 +771,17 @@ pub fn hide_parts(
         Has<HiddenWithKart>,
     )>,
 ) {
-    let mut hide = |entity: Entity, kart: Entity, visibility: &mut Visibility, hidden: bool| {
-        let Ok((motion, shown)) = karts.get(kart) else {
+    let running_up = practice.running_up();
+    let mut hide = |entity: Entity, kart: Entity, visibility: &mut Visibility, hidden: bool, wheels: bool| {
+        let Ok((motion, shown, ours)) = karts.get(kart) else {
             return;
         };
+        // A run-up swaps only our body and its wheels for the stand-in's (`drive/practice.rs`),
+        // which has no effects of its own.
+        let body_only = ours && running_up && !wheels;
         // Hidden as `show` hides the body: eaten, or a spectator's own kart, which follows the
         // kart it watches and would draw its wheels over that kart's (in `KART_LAYER`).
-        if motion.is_hidden() || *shown == Visibility::Hidden {
+        if motion.is_hidden() || (*shown == Visibility::Hidden && !body_only) {
             *visibility = Visibility::Hidden;
             if !hidden {
                 commands.entity(entity).insert(HiddenWithKart);
@@ -780,12 +792,12 @@ pub fn hide_parts(
         }
     };
     for (entity, Attached(kart), mut visibility, hidden) in &mut attached {
-        hide(entity, *kart, &mut visibility, hidden);
+        hide(entity, *kart, &mut visibility, hidden, false);
     }
     // (The wheels belong to a kart that need not be a driven one, so they are not `Attached`,
     // which the despawning goes by.)
     for (entity, wheels, mut visibility, hidden) in &mut wheels {
-        hide(entity, wheels.kart(), &mut visibility, hidden);
+        hide(entity, wheels.kart(), &mut visibility, hidden, true);
     }
 }
 

@@ -78,6 +78,7 @@ pub(super) fn drive_tick(
     mut memory: Local<Memory>,
     mut brains: ResMut<crate::learned::Brains>,
     mut world_record: ResMut<crate::world_record::WorldRecord>,
+    mut practice: ResMut<super::practice::Practice>,
 ) {
     let Shown {
         mut particles,
@@ -92,6 +93,10 @@ pub(super) fn drive_tick(
         waits,
     } = &mut *memory;
     let drive = &mut *drive;
+    // (Before any early return: `is_added` is as of this system's last run.)
+    if sim.is_added() {
+        practice.forget();
+    }
     // In a lobby's race the sim is everyone's: no pause of our own, no restarts. (A race alone
     // restarts through the lobby, as `/race restart`: see `pause.rs`.)
     let shared = race_on.shared();
@@ -192,12 +197,8 @@ pub(super) fn drive_tick(
                 race.retail.difficulty as i16
             }),
         );
-        particles.list.clear();
-        for view in &mut drive.views {
-            view.reset(&track);
-        }
         drive.own().slot = own;
-        each_motion(&sim, &mut motions, |motion, kart| motion.reset(kart));
+        jumped(&track, &sim, drive, &mut particles, &mut motions);
     }
 
     // Tick 0 has to come first: the others must be ready as well. (And our local players' views
@@ -213,6 +214,14 @@ pub(super) fn drive_tick(
                 .unwrap_or_default();
         }
         return;
+    }
+
+    let practicing = !shared
+        && matches!(sim.race.mode, race::Mode::FreeDrive)
+        && drive.views.len() == 1
+        && !brains.autopilot;
+    if practice.step(&mut sim, practicing, &config.controls, &mut toasts) {
+        jumped(&track, &sim, drive, &mut particles, &mut motions);
     }
 
     let tick = sim.race.tick();
@@ -466,6 +475,8 @@ pub(super) fn drive_tick(
         let held = sim.kart().held;
         let pad = if watches {
             Pad::default()
+        } else if let Some(pad) = practice.pad() {
+            pad
         } else if (shared && hold.menu.open) || drive.views[0].chooser.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
@@ -486,6 +497,9 @@ pub(super) fn drive_tick(
             cycle = (taps & buttons::R1 != 0) as i32 - (taps & buttons::L1 != 0) as i32;
             // (So that an R1 held over the line is not taken for a tap once we watch.)
             waits.1 = buttons_held;
+        }
+        if practicing {
+            practice.record(sim.race.state(), pad);
         }
         sim.race
             .confirm(own, tick, pad)
@@ -759,6 +773,22 @@ pub(super) fn debug_actions(
         };
         toasts.write(Toast::new(said, 2000));
     }
+}
+
+/// The race jumped (a restart, a run-up): what is drawn of it starts over rather than easing or
+/// trailing from where it was.
+fn jumped(
+    track: &Track,
+    sim: &crate::props::Sim,
+    drive: &mut Drive,
+    particles: &mut crate::exhaust::Particles,
+    motions: &mut Query<(&mut KartMotion, &mut KartSlot, Has<Kart>)>,
+) {
+    particles.list.clear();
+    for view in &mut drive.views {
+        view.reset(track);
+    }
+    each_motion(sim, motions, |motion, kart| motion.reset(kart));
 }
 
 /// Runs `f` on the motion of each kart's drawing, with the kart of the sim that it follows.

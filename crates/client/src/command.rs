@@ -94,6 +94,8 @@ pub enum Action {
     /// How many players share the screen (`/players`, 1 to [`crate::drive::MAX_PLAYERS`]), or
     /// say how many there are with none given. Not in a lobby yet.
     Players(Option<u8>),
+    /// Shortcut practice (`drive/practice.rs`), as its keys do.
+    Practice(crate::drive::PracticeAsk),
     RestartRace,
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
     CupCreate {
@@ -263,6 +265,7 @@ const RACE_USAGE: &str = "Usage: /race start | relic | time-trial | restart | st
 const BOTS_USAGE: &str = "Usage: /bots [0 to 7] [easy | medium | hard] [brain | retail] [ordered | random], or /bots off, or /bots pool all | <mask> | <character,character,...>, or /bots policy [<file> | default]";
 const AUTOPILOT_USAGE: &str = "Usage: /autopilot [on | off]";
 const PLAYERS_USAGE: &str = "Usage: /players [1 to 4]";
+const PRACTICE_USAGE: &str = "Usage: /practice set | run-up (keys F and T, or L3 and R3, at first)";
 const CUP_USAGE: &str = "Usage: /cup create <name> <track,track,...> <laps> | start <name> | random <tracks> [laps] | pause | resume | next | previous | stop | delete <name>\nA track is its name, its short name (dingo_canyon), or its number (/track list)";
 const DEBUG_USAGE: &str = "Usage: /debug wumpa <0 to 10> | weapon <0 to 4 or 6 to 11> | stall <duration, like 3s> | lag <delay> [jitter] | lag off | viewer | podium [first] [second] [third] | ranking | hud [on|off] | toast <text> | level hidden|cull|colors|crate-fixup | crate bias <number> | fx [...] | navpaths";
 const NET_USAGE: &str =
@@ -311,6 +314,11 @@ impl Action {
                     }
                     _ => Err(PLAYERS_USAGE.into()),
                 },
+            },
+            "practice" => match rest {
+                "set" => Ok(Action::Practice(crate::drive::PracticeAsk::SetPoint)),
+                "run-up" => Ok(Action::Practice(crate::drive::PracticeAsk::RunUp)),
+                _ => Err(PRACTICE_USAGE.into()),
             },
             "cup" => Action::cup(rest),
             "promote" if rest.is_empty() => Err(PROMOTE_USAGE.into()),
@@ -1977,6 +1985,19 @@ mod tests {
         assert_eq!(parsed("players 0"), None);
         assert_eq!(parsed("players 5"), None);
         assert_eq!(parsed("players two"), None);
+    }
+
+    #[test]
+    fn practice_sets_a_point_or_runs_up_to_it() {
+        use crate::drive::PracticeAsk;
+        let parsed = |line| match Action::parse(line) {
+            Ok(Action::Practice(ask)) => Some(ask),
+            _ => None,
+        };
+        assert_eq!(parsed("practice set"), Some(PracticeAsk::SetPoint));
+        assert_eq!(parsed("practice run-up"), Some(PracticeAsk::RunUp));
+        assert_eq!(parsed("practice"), None);
+        assert_eq!(parsed("practice go"), None);
     }
 
     #[test]
