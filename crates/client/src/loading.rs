@@ -540,6 +540,7 @@ fn spawn_screen(world: &mut World, hold: Hold, position: f32) {
             },
             GlobalZIndex(i32::MAX - 3),
             Pickable::IGNORE,
+            crate::scene::OutlivesScene,
         ))
         .id();
     // (The glyphs of the line are its letters, one to a character.)
@@ -553,6 +554,7 @@ fn spawn_screen(world: &mut World, hold: Hold, position: f32) {
             },
             Visibility::Hidden,
             ChildOf(screen),
+            crate::scene::OutlivesScene,
         ));
     }
 }

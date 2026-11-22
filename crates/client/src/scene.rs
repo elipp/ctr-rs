@@ -414,10 +414,16 @@ pub(crate) fn world_scene(world: &mut World) -> Vec<Entity> {
         .query_filtered::<Entity, (
             Or<(With<Transform>, With<Node>)>,
             Without<crate::pixel::Present>,
+            Without<OutlivesScene>,
         )>()
         .iter(world)
         .collect()
 }
+
+/// Not of the scene, so a level change leaves it be: the loading screen, which a load happens
+/// under.
+#[derive(Component)]
+pub(crate) struct OutlivesScene;
 
 pub(crate) fn despawn(world: &mut World, entities: Vec<Entity>) {
     for entity in entities {
