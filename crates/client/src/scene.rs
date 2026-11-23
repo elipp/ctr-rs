@@ -145,6 +145,23 @@ pub(crate) fn switch_level(world: &mut World) {
     {
         level_step += crate::web::take_level_step();
     }
+    // A race has started: the loading screen comes in over what was shown first, and the race is
+    // on once it covers the window (`RaceOn::start`).
+    let started = world
+        .get_resource::<crate::race_on::RaceOn>()
+        .and_then(|race_on| race_on.newest())
+        .map(|race| race.track);
+    if let Some(track) = started
+        && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
+        && lobby.race_next == Some(track)
+    {
+        lobby.race_next = None;
+        crate::loading::bring_in(world);
+        return;
+    }
+    if let Some(mut race_on) = world.get_resource_mut::<crate::race_on::RaceOn>() {
+        race_on.take_over();
+    }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)
@@ -158,15 +175,6 @@ pub(crate) fn switch_level(world: &mut World) {
     let mode = race_track.map_or(LevMode::Arcade, |(_, _, mode)| mode);
     let mode_changed = mode != world.resource::<Track>().2;
     let race_track = race_track.map(|(track, ..)| track);
-    // A race has started: the loading screen comes in over what was shown first.
-    if let Some(track) = race_track
-        && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
-        && lobby.race_next == Some(track)
-    {
-        lobby.race_next = None;
-        crate::loading::bring_in(world);
-        return;
-    }
     // The level shown before the race took the viewer to its own: back to it when the race is
     // over (the lobby closed, or failed).
     let mut before = world

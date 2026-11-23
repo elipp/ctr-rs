@@ -517,7 +517,7 @@ impl Lobby {
     /// The race is over, won or stopped: back to a free drive, in the lobby. (The session is told,
     /// so that players who join now do not hear of a race in progress.)
     fn end_race(&mut self, race_on: &mut RaceOn) {
-        race_on.0 = None;
+        race_on.end();
         if let Some(session) = &self.session {
             session.over();
         }
@@ -525,7 +525,7 @@ impl Lobby {
 
     /// Leaves the lobby, ours or another's, and the race in it.
     pub fn close(&mut self, race_on: &mut RaceOn) {
-        race_on.0 = None;
+        race_on.end();
         let bots = self.bots;
         *self = Lobby::default();
         self.bots = bots;
@@ -674,7 +674,7 @@ impl Lobby {
     /// Names the slots of a lobby's race after the nicknames known now, and the bots after
     /// their characters.
     fn refresh_labels(&self, race_on: &mut RaceOn) {
-        let Some(race) = race_on.get_mut() else {
+        let Some(race) = race_on.newest_mut() else {
             return;
         };
         let Some(ids) = race.net.as_ref().map(|net| &net.ids) else {
@@ -824,7 +824,7 @@ impl Lobby {
         debug_assert!(self.session.is_none());
         // As a lobby's start does (`report`): the flag comes in over what is shown.
         self.race_next = Some(track);
-        race_on.0 = Some(CurrentRace::alone(characters, nick, track, rules, solo));
+        race_on.start(CurrentRace::alone(characters, nick, track, rules, solo));
     }
 }
 

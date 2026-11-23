@@ -290,13 +290,15 @@ pub(super) fn report(
         // Every race's start brings the flag in (a cup's next one has it from its standings
         // already): the players load at their own speeds, and the faster ones would show the
         // scene before the race has put the karts on the grid, until everyone's go.
-        lobby.race_next = started.as_ref().map(|race| race.track);
-        race_on.0 = started;
+        if let Some(race) = started {
+            lobby.race_next = Some(race.track);
+            race_on.start(race);
+        }
     }
     // (The session drops the pauses of older races, so one that came with a start is of the new
     // race.)
     if let Some(at) = paused
-        && let Some(net) = race_on.get_mut().and_then(|race| race.net.as_mut())
+        && let Some(net) = race_on.newest_mut().and_then(|race| race.net.as_mut())
     {
         net.pause_at = at;
         let text = if at.is_some() {
@@ -410,7 +412,7 @@ pub(super) fn report(
         logs.write(lobby.chat_line(from, &text));
     }
     let mut answers = Vec::new();
-    if let Some(race) = race_on.get_mut()
+    if let Some(race) = race_on.newest_mut()
         && let Some(net) = race.net.as_mut()
     {
         race.go |= go;
