@@ -46,8 +46,6 @@ pub struct WorldRecord {
     record: Option<Record>,
     asking: Option<net::score::RecordAnswer>,
     asked: Option<Instant>,
-    /// `record` is another run than the last one told (or than none), and not yet told.
-    untold: bool,
 }
 
 /// `/score top`s on their way: the track's name, the board.
@@ -60,7 +58,7 @@ impl Plugin for WorldRecordPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldRecord>()
             .init_resource::<Tops>()
-            .add_systems(Update, (answer, tell, top, listed));
+            .add_systems(Update, (answer, top, listed));
     }
 }
 
@@ -98,7 +96,6 @@ impl WorldRecord {
             let record = cache::load(board);
             *self = WorldRecord {
                 board: Some(board),
-                untold: record.is_some(),
                 record,
                 asking: None,
                 asked: None,
@@ -168,8 +165,6 @@ impl WorldRecord {
             Some(record) => cache::save(board, record),
             None => cache::remove(board),
         }
-        let was = self.record.as_ref().map(|r| r.entry.run_id);
-        self.untold = record.is_some() && record.as_ref().map(|r| r.entry.run_id) != was;
         self.record = record;
     }
 }
@@ -250,40 +245,19 @@ fn answer(
     }
 }
 
-/// Says who holds the world record, once its ghost is in the race (ours has none: once the race
-/// is on the grid, as a ghost would be).
-fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: MessageWriter<Toast>) {
-    if !world.untold {
-        return;
-    }
-    let Some(race) = (race_on.get())
-        .filter(|race| race.attempt().is_some() && board_of(race) == world.board)
-    else {
-        return;
-    };
-    let Some(record) = world.record.as_ref() else {
-        return;
-    };
-    let entry = &record.entry;
-    let ours = is_ours(entry);
-    if !(race.ghosts.world.is_some() || ours && race.phase >= Phase::OnGrid) {
-        return;
-    }
-    let time = race::clock::time(entry.final_ms);
-    let text = if ours {
-        format!("You hold the server record\n{time}\n{}", date(entry.at))
-    } else {
-        format!("Server record {time}\nby {}\n{}", short_name(entry), date(entry.at))
-    };
-    toasts.write(Toast::new(text, 4000));
-    world.untold = false;
-}
-
 /// A board's player in short: the nick, or the key's fingerprint without one.
 pub(crate) fn short_name(entry: &Entry) -> String {
     match entry.nick.as_str() {
         "" => who(entry),
         nick => nick.to_string(),
+    }
+}
+
+/// Us as shown with our runs: our nick and "(you)", which tells us from another of the same nick.
+pub(crate) fn our_name(nick: &str) -> String {
+    match nick {
+        "" => "You".to_string(),
+        nick => format!("{nick} (you)"),
     }
 }
 

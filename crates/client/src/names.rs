@@ -74,9 +74,9 @@ const WORLD_COLOR: Color = Color::srgb(1.0, 0.85, 0.45);
 
 /// The outline of a name's letters, so that it reads over any track: how thick, in the window's pixels whatever the name's size, and
 /// its colour. It is made of copies of the name moved that far each way.
-const OUTLINE_WIDTH: f32 = 2.0;
-const OUTLINE_COLOR: Color = Color::BLACK;
-const OUTLINE_DIRECTIONS: [Vec2; 8] = {
+pub(crate) const OUTLINE_WIDTH: f32 = 2.0;
+pub(crate) const OUTLINE_COLOR: Color = Color::BLACK;
+pub(crate) const OUTLINE_DIRECTIONS: [Vec2; 8] = {
     let d = std::f32::consts::FRAC_1_SQRT_2;
     [
         Vec2::new(1.0, 0.0),
@@ -99,6 +99,7 @@ pub(crate) fn overhead(
     mut commands: Commands,
     race_on: Res<crate::race_on::RaceOn>,
     world_record: Res<crate::world_record::WorldRecord>,
+    config: Res<crate::config::Config>,
     drive: Option<Res<crate::drive::Drive>>,
     screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &Transform), With<ChaseCamera>>,
@@ -259,15 +260,15 @@ pub(crate) fn overhead(
                     .find(|(kart, _)| kart.0 == slot)
                     .map(|(_, transform)| transform.translation),
             ),
-            // "You", not our nick: the record's holder can have the same one. (Our record has no
-            // ghost of its own: `WorldRecord::ghost`.)
+            // (Our record has no ghost of its own: `WorldRecord::ghost`.)
             Plate::Ghost(Source::Best) => {
                 let what = if world_record.is_best(race) { "SR" } else { "PB" };
-                (format!("You ({what})"), ghost_at(Source::Best))
+                let who = crate::world_record::our_name(&config.nickname);
+                (format!("{what} - {who}"), ghost_at(Source::Best))
             }
             Plate::Ghost(Source::World) => (
                 world_record.of(race).map_or_else(String::new, |(entry, ..)| {
-                    format!("{} (SR)", crate::world_record::short_name(entry))
+                    format!("SR - {}", crate::world_record::short_name(entry))
                 }),
                 ghost_at(Source::World),
             ),

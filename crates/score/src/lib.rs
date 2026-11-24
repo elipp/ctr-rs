@@ -116,25 +116,9 @@ pub fn secret_from_text(text: &str) -> Option<SecretKey> {
 /// The most characters of a nickname.
 pub const NICK_MAX: usize = 12;
 
-/// The letters a nickname may have besides printable ASCII: the Latin script of Europe's
-/// languages. Other scripts are left out: Greek and Cyrillic have letters that look like Latin
-/// ones, which would let a nick pass for another.
-pub const NICK_EXTRA: &str = concat!(
-    // French, Spanish, Portuguese, Italian, Catalan, German, Dutch
-    "áÁàÀâÂäÄãÃåÅæÆçÇéÉèÈêÊëËíÍìÌîÎïÏñÑóÓòÒôÔöÖõÕúÚùÙûÛüÜýÝÿŸœŒß",
-    // Nordic, Icelandic, Welsh
-    "øØðÐþÞŵŴŷŶ",
-    // Polish, Czech, Slovak, Hungarian, Croatian, Slovene
-    "ąĄćĆęĘłŁńŃśŚźŹżŻčČďĎěĚňŇřŘšŠťŤůŮžŽĺĹľĽŕŔőŐűŰđĐ",
-    // Latvian, Lithuanian (Estonian's are above)
-    "āĀēĒīĪōŌūŪģĢķĶļĻņŅėĖįĮųŲ",
-    // Romanian, Turkish, Maltese
-    "ăĂșȘțȚşŞğĞıİċĊġĠħĦ",
-);
-
-pub fn nick_char(c: char) -> bool {
-    c.is_ascii_graphic() || c == ' ' || NICK_EXTRA.contains(c)
-}
+/// A nickname's chars are a lobby name's: the ones the discs' fonts have, so that a nick shows in
+/// the game's own font wherever it is (a name plate, a board).
+pub use realm_proto::is_name_char as nick_char;
 
 /// A nickname as it is kept and sent: only [`nick_char`]s, trimmed, and at most [`NICK_MAX`]
 /// characters. Empty means none.
@@ -204,12 +188,13 @@ mod tests {
 
     #[test]
     fn nick_keeps_only_its_letters() {
-        assert_eq!(clean_nick(" Ñandú\tŒuvre "), "ÑandúŒuvre");
+        assert_eq!(clean_nick(" Crash_99 "), "Crash_99");
+        assert_eq!(clean_nick("n.tropy!?"), "n.tropy!?");
         assert_eq!(clean_nick("a€b✨c\u{7}d"), "abcd");
         assert_eq!(clean_nick("日本"), "");
-        assert_eq!(clean_nick("Straße Łódź"), "Straße Łódź");
-        assert_eq!(clean_nick("Āžuoliņš"), "Āžuoliņš");
-        assert_eq!(clean_nick("ªƒºΑ"), "");
+        // Not in the discs' fonts: accents, and the glyphs the middle font was given since.
+        assert_eq!(clean_nick("Ñandú Łódź"), "and d");
+        assert_eq!(clean_nick("[#tag]"), "tag");
     }
 
     #[test]

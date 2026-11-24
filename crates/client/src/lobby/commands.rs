@@ -301,15 +301,31 @@ pub(super) fn run(
             }
             Action::Watch(source) => {
                 let Some(race) = race_on.get() else { continue };
+                use crate::world_record::{date, is_ours, our_name, short_name};
+                // (A best from before they were dated has the record's date, if it is the record.)
                 let watched = match source {
-                    Source::Best => crate::pb::run(race).map(|run| (run, "You".to_string())),
+                    Source::Best => crate::pb::run(race).map(|run| {
+                        let date = crate::pb::set_at(race)
+                            .map(|at| date(at.as_second()))
+                            .or_else(|| {
+                                (world_record.of(race))
+                                    .filter(|_| world_record.is_best(race))
+                                    .map(|(entry, ..)| date(entry.at))
+                            });
+                        (run, our_name(&config.nickname), date)
+                    }),
                     Source::World => world_record.of(race).zip(world_record.run(race)).map(
                         |((entry, ..), run)| {
-                            (run.clone(), crate::world_record::short_name(entry))
+                            let who = if is_ours(entry) {
+                                our_name(&entry.nick)
+                            } else {
+                                short_name(entry)
+                            };
+                            (run.clone(), who, Some(date(entry.at)))
                         },
                     ),
                 };
-                let Some((run, who)) = watched else {
+                let Some((run, who, date)) = watched else {
                     toasts.write(Toast::new("No run to watch", 2000));
                     continue;
                 };
@@ -321,9 +337,8 @@ pub(super) fn run(
                     rules,
                     race.solo,
                 );
-                replay.replay = Some(crate::replay::Replay::new(run));
+                replay.replay = Some(crate::replay::Replay::new(run, *source, who, date));
                 lobby.start_alone(&mut race_on, replay);
-                toasts.write(Toast::new(crate::replay::hint(&who, &config.controls), 4000));
                 continue;
             }
             Action::StartSolo(kind) => {

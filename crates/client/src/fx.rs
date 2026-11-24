@@ -96,8 +96,12 @@ impl Force {
 /// The slowest and fastest the clock can be set to.
 pub const SPEED_RANGE: (f32, f32) = (0.05, 4.0);
 
-/// The speeds a click on the panel goes through.
-const SPEEDS: [f32; 6] = [1.0, 0.5, 0.25, 0.1, 4.0, 2.0];
+/// The game clock's speeds, slowest first: a click on the panel goes down them (and from the
+/// slowest round to the fastest), a replay's Up and Down step through them (`replay.rs`).
+pub const SPEEDS: [f32; 7] = [0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0];
+/// The game's own speed, in [`SPEEDS`].
+pub const NORMAL: usize = 3;
+const _: () = assert!(SPEEDS[NORMAL] == 1.0);
 
 /// What the effects are set to.
 #[derive(Resource)]
@@ -280,7 +284,12 @@ impl Item {
             Item::Finish => Fx::Finish,
             Item::Speed => {
                 let at = SPEEDS.iter().position(|&s| s == fx.speed);
-                Fx::Speed(SPEEDS[at.map_or(0, |i| (i + 1) % SPEEDS.len())])
+                let next = match at {
+                    None => NORMAL,
+                    Some(0) => SPEEDS.len() - 1,
+                    Some(i) => i - 1,
+                };
+                Fx::Speed(SPEEDS[next])
             }
             Item::Freeze => Fx::Freeze(!fx.frozen),
             Item::Step => Fx::Step,

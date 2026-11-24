@@ -58,6 +58,7 @@ mod heat;
 mod hud;
 mod hud_view;
 mod icon_grid;
+mod icons;
 mod kart;
 mod laps;
 mod learned;
@@ -246,6 +247,7 @@ fn main() {
         )
         .expect("the default font can be replaced");
     font::register_bold(&mut app.world_mut().resource_mut());
+    icons::register(&mut app.world_mut().resource_mut());
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
     app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))

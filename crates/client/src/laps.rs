@@ -20,7 +20,6 @@ use crate::font::CtrText;
 use crate::ghost::Source;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews, ViewKart};
-use crate::replay::Watchable;
 use crate::subtract::SubtractMaterial;
 
 /// Where the blocks are: both from the top, TIME from the left and LAP from the right, in lines
@@ -106,6 +105,11 @@ struct BestName;
 
 #[derive(Component)]
 struct BestTime;
+
+/// A run's time and the button that watches it (`replay.rs`), on one line: out of the layout
+/// together.
+#[derive(Component)]
+struct TimeRow(Source);
 
 /// The world record's label, and its time.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +200,17 @@ impl Plugin for LapsPlugin {
 }
 
 /// A line of the game's text at the HUD's size.
+fn time_row() -> (Node, Pickable) {
+    (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        Pickable::IGNORE,
+    )
+}
+
 fn text(text: &str, font: Font, gradient: Gradient) -> CtrText {
     CtrText::new(text, font, gradient).fixed(hud::PIXEL)
 }
@@ -226,14 +241,18 @@ fn show(
         Without<World>,
     >,
     mut relic_nodes: Query<
-        (&mut Node, Has<BestName>, Has<BestTime>),
+        (&mut Node, Has<BestName>),
         (
-            Or<(
-                With<TargetName>,
-                With<TargetTime>,
-                With<BestName>,
-                With<BestTime>,
-            )>,
+            Or<(With<TargetName>, With<TargetTime>, With<BestName>)>,
+            Without<World>,
+        ),
+    >,
+    mut time_rows: Query<
+        (&TimeRow, &mut Node),
+        (
+            Without<TargetName>,
+            Without<TargetTime>,
+            Without<BestName>,
             Without<World>,
         ),
     >,
@@ -277,11 +296,20 @@ fn show(
     // (Out of the layout without one, or the block's gaps would push the lap rows down; the best
     // goes up in the target's place.)
     let display = |on: bool| if on { Display::Flex } else { Display::None };
-    for (mut node, best_name, best_time) in &mut relic_nodes {
-        let display = display(if best_name || best_time {
+    for (mut node, best_name) in &mut relic_nodes {
+        let display = display(if best_name {
             best.is_some()
         } else {
             target.is_some()
+        });
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for (row, mut node) in &mut time_rows {
+        let display = display(match row.0 {
+            Source::Best => best.is_some(),
+            Source::World => world.is_some() && !world_is_best,
         });
         if node.display != display {
             node.display = display;
@@ -390,7 +418,7 @@ fn show(
                 target.map_or_else(String::new, |(_, _, ms)| race::clock::time(ms))
             } else if is_best_name {
                 if world_is_best {
-                    "Personal Best (Server Record)"
+                    "Best (Server #1)"
                 } else {
                     "Personal Best"
                 }
@@ -604,26 +632,24 @@ fn spawn(commands: &mut Commands, view: usize) {
             (
                 view,
                 BestName,
-                Watchable(Source::Best),
                 text("Personal Best", Font::Middle, Gradient::WHITE)
             ),
             (
-                view,
-                BestTime,
-                Watchable(Source::Best),
-                text("", Font::Large, Gradient::WHITE)
+                TimeRow(Source::Best),
+                time_row(),
+                children![
+                    (view, BestTime, text("", Font::Large, Gradient::WHITE)),
+                    crate::replay::button(Source::Best),
+                ],
             ),
+            (view, World::Name, text("", Font::Middle, Gradient::YELLOW)),
             (
-                view,
-                World::Name,
-                Watchable(Source::World),
-                text("", Font::Middle, Gradient::YELLOW)
-            ),
-            (
-                view,
-                World::Time,
-                Watchable(Source::World),
-                text("", Font::Large, Gradient::YELLOW)
+                TimeRow(Source::World),
+                time_row(),
+                children![
+                    (view, World::Time, text("", Font::Large, Gradient::YELLOW)),
+                    crate::replay::button(Source::World),
+                ],
             ),
             (
                 view,

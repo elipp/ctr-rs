@@ -2,7 +2,7 @@
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has an "H" on its portrait's corner. The other players at a machine (split screen) follow
+//! has a crown on its portrait's corner. The other players at a machine (split screen) follow
 //! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
 //! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
 //! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),

@@ -59,7 +59,8 @@ mod tests {
         assert_eq!(clean_nick("  Penta \n"), "Penta");
         assert_eq!(clean_nick("Dingodile the Great"), "Dingodile th");
         assert_eq!(clean_nick("a\u{7}b"), "ab");
-        assert_eq!(clean_nick("ääääääääääääää").chars().count(), NICK_MAX);
+        assert_eq!(clean_nick("aaaaaaaaaaaaaa").chars().count(), NICK_MAX);
+        assert_eq!(clean_nick("äöå"), "");
         assert_eq!(clean_nick("   "), "");
     }
 

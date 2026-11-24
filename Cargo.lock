@@ -7539,6 +7539,7 @@ dependencies = [
  "data-encoding",
  "iroh-base",
  "race",
+ "realm-proto",
  "sha2",
 ]
 
