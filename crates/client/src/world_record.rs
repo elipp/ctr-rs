@@ -147,6 +147,14 @@ impl WorldRecord {
         ))
     }
 
+    /// The record's run, of `race`'s board.
+    pub fn run(&self, race: &CurrentRace) -> Option<&Run> {
+        if self.board.is_none() || board_of(race) != self.board {
+            return None;
+        }
+        Some(&self.record.as_ref()?.run)
+    }
+
     /// The record is ours and is the personal best: no faster best of ours since (one not sent,
     /// or not taken yet).
     pub fn is_best(&self, race: &CurrentRace) -> bool {
@@ -232,7 +240,7 @@ fn answer(
     world.set(board, record);
     let Some(race) = race_on
         .get_mut()
-        .filter(|race| board_of(race) == Some(board))
+        .filter(|race| race.attempt().is_some() && board_of(race) == Some(board))
     else {
         return;
     };
@@ -248,7 +256,9 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
     if !world.untold {
         return;
     }
-    let Some(race) = race_on.get().filter(|race| board_of(race) == world.board) else {
+    let Some(race) = (race_on.get())
+        .filter(|race| race.attempt().is_some() && board_of(race) == world.board)
+    else {
         return;
     };
     let Some(record) = world.record.as_ref() else {

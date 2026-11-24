@@ -65,6 +65,7 @@ impl PluginGroup for HudPlugins {
             .add(crate::player::PlayerPlugin)
             .add(crate::scores::ScoresPlugin)
             .add(crate::world_record::WorldRecordPlugin)
+            .add(crate::replay::ReplayPlugin)
     }
 }
 

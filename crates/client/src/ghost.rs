@@ -305,7 +305,7 @@ fn toggle(
     race_on: Res<RaceOn>,
     mut toasts: MessageWriter<Toast>,
 ) {
-    let Some(race) = race_on.get().filter(|race| race.solo.is_some()) else {
+    let Some(race) = race_on.get().filter(|race| race.attempt().is_some()) else {
         return;
     };
     // An end screen that offers a submit has Select for it.
@@ -341,7 +341,7 @@ fn hint(
     mut toasts: MessageWriter<Toast>,
 ) {
     let ghosts = (race_on.get())
-        .filter(|race| race.solo.is_some())
+        .filter(|race| race.attempt().is_some())
         .map(|race| &race.ghosts);
     if config.ghost_hint_done || ghosts.is_none_or(|g| g.have().none()) {
         *last_tick = None;

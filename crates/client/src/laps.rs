@@ -6,8 +6,8 @@
 //! A relic race has no lap rows: under TIME is the next relic to earn and its time instead, and
 //! under that the personal best. A time trial has the best between TIME TRIAL and the lap rows.
 //! Under the best, a solo run has the board's world record if there is one ("(You)" and white if
-//! it is ours), and how far ahead of it or behind we were at the last checkpoint passed. A record
-//! that is our best is not shown twice: the best's label says so instead.
+//! it is ours). A record that is our best is not shown twice: the best's label says so instead.
+//! (The splits against it are toasts, as a race's are: `drive/overlay.rs`.)
 //!
 //! A free drive has neither: it has no laps to count and no end. In TIME's place it has the
 //! track's personal bests, if any, the relic best's time followed by the relic it earned, spinning
@@ -17,8 +17,10 @@ use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
+use crate::ghost::Source;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews, ViewKart};
+use crate::replay::Watchable;
 use crate::subtract::SubtractMaterial;
 
 /// Where the blocks are: both from the top, TIME from the left and LAP from the right, in lines
@@ -105,19 +107,12 @@ struct BestName;
 #[derive(Component)]
 struct BestTime;
 
-/// The world record's label, its time, and our split against it.
+/// The world record's label, and its time.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum World {
     Name,
     Time,
-    Split,
 }
-
-/// Ahead of the world record at a checkpoint (behind is `Gradient::RED`).
-const AHEAD: Gradient = Gradient {
-    top: [0x80, 0xff, 0x60],
-    bottom: [0x10, 0xa0, 0x10],
-};
 
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
@@ -311,12 +306,6 @@ fn show(
         } else if !finished {
             times.push(race.event_ms - driver.lap_time);
         }
-        // How far ahead (-) or behind (+) the record we were at the last checkpoint we passed.
-        let split = world.and_then(|(_, splits, _)| {
-            let ours = &race.splits[slot];
-            let at = ours.len().checked_sub(1)?;
-            Some(ours[at] - splits?.get(at)?)
-        });
         for (v, &part, mut text, mut node) in &mut world_texts {
             if v.0 != view {
                 continue;
@@ -332,11 +321,8 @@ fn show(
                     .into()
                 }),
                 World::Time => world.map(|(entry, _, _)| race::clock::time(entry.final_ms)),
-                World::Split => split.map(race::clock::delta),
             };
-            if part != World::Split
-                && let Some((_, _, ours)) = world
-            {
+            if let Some((_, _, ours)) = world {
                 let gradient = if ours {
                     Gradient::WHITE
                 } else {
@@ -349,20 +335,6 @@ fn show(
             let display = display(wanted.is_some());
             if node.display != display {
                 node.display = display;
-            }
-            if part == World::Split
-                && let Some(split) = split
-            {
-                let gradient = if split < 0 {
-                    AHEAD
-                } else if split > 0 {
-                    Gradient::RED
-                } else {
-                    Gradient::WHITE
-                };
-                if text.gradient != gradient {
-                    text.gradient = gradient;
-                }
             }
             if let Some(wanted) = wanted
                 && text.text != wanted
@@ -632,12 +604,27 @@ fn spawn(commands: &mut Commands, view: usize) {
             (
                 view,
                 BestName,
+                Watchable(Source::Best),
                 text("Personal Best", Font::Middle, Gradient::WHITE)
             ),
-            (view, BestTime, text("", Font::Large, Gradient::WHITE)),
-            (view, World::Name, text("", Font::Middle, Gradient::YELLOW)),
-            (view, World::Time, text("", Font::Large, Gradient::YELLOW)),
-            (view, World::Split, text("", Font::Middle, Gradient::WHITE)),
+            (
+                view,
+                BestTime,
+                Watchable(Source::Best),
+                text("", Font::Large, Gradient::WHITE)
+            ),
+            (
+                view,
+                World::Name,
+                Watchable(Source::World),
+                text("", Font::Middle, Gradient::YELLOW)
+            ),
+            (
+                view,
+                World::Time,
+                Watchable(Source::World),
+                text("", Font::Large, Gradient::YELLOW)
+            ),
             (
                 view,
                 LapRows(0),

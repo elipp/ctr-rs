@@ -821,10 +821,15 @@ impl Lobby {
         rules: net::Rules,
         solo: Option<race::solo::Kind>,
     ) {
+        self.start_alone(race_on, CurrentRace::alone(characters, nick, track, rules, solo));
+    }
+
+    /// Starts `race`, one of [`CurrentRace::alone`].
+    fn start_alone(&mut self, race_on: &mut RaceOn, race: CurrentRace) {
         debug_assert!(self.session.is_none());
         // As a lobby's start does (`report`): the flag comes in over what is shown.
-        self.race_next = Some(track);
-        race_on.start(CurrentRace::alone(characters, nick, track, rules, solo));
+        self.race_next = Some(race.track);
+        race_on.start(race);
     }
 }
 

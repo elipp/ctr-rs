@@ -150,6 +150,7 @@ impl Plugin for DrivePlugin {
         app.insert_resource(LocalPlayers(1))
             .init_resource::<Chosen>()
             .init_resource::<practice::Practice>()
+            .init_resource::<crate::pb::BestSplits>()
             .add_systems(Update, (practice::input, practice::build).run_if(driving))
             .init_resource::<chooser::ChooserPointer>()
             .add_systems(Update, (chooser::input, chooser::sync, chooser::show).chain().run_if(driving))

@@ -87,6 +87,7 @@ mod pb;
 mod player;
 mod props;
 mod race_on;
+mod replay;
 mod public_lobbies;
 mod rain;
 mod rect_menu;

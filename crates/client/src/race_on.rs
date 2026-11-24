@@ -122,6 +122,8 @@ pub struct CurrentRace {
     /// The relic to beat and its time (`race::relic::target`), from the personal best as it
     /// was when the race went on the grid.
     pub relic_target: Option<(race::relic::Tier, i32)>,
+    /// A stored solo run being watched (`replay.rs`): the race is `solo`'s, but no attempt.
+    pub replay: Option<crate::replay::Replay>,
     /// A solo run's personal best's time, as it was when the race went on the grid.
     pub best: Option<i32>,
     /// A solo run's ghosts, driving next to ours (`ghost.rs`): they keep pace with the race's
@@ -306,6 +308,7 @@ impl CurrentRace {
             hash,
             rules,
             solo: None,
+            replay: None,
             relic_target: None,
             best: None,
             ghosts: Default::default(),
@@ -367,6 +370,12 @@ impl CurrentRace {
     pub fn mode(&self) -> race::Mode {
         let laps = self.rules.laps;
         self.solo.map_or(race::Mode::Race { laps }, |kind| kind.mode(laps))
+    }
+
+    /// The kind of a solo run that is being driven: what the best, the ghosts, the submit and
+    /// the ceremony are of. Not a replay's.
+    pub fn attempt(&self) -> Option<race::solo::Kind> {
+        self.solo.filter(|_| self.replay.is_none())
     }
 
     /// How the race's level has its instances (`lev_init`).

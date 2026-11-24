@@ -4,7 +4,8 @@ use super::countdown::Then;
 use super::cup::{CupDef, Finisher, Series};
 use super::progress::RollbackToasts;
 use super::{ANNOUNCE_COLOR, BotKind, Lobby};
-use crate::race_on::RaceOn;
+use crate::ghost::Source;
+use crate::race_on::{CurrentRace, RaceOn};
 use crate::command::{Action, PolicyChoice};
 use crate::console::{Log, console};
 use crate::controls::Control;
@@ -86,6 +87,10 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         Action::StartRace | Action::StartSolo(_) if racing => "The race has started (/race restart)",
         Action::StartSolo(_) if lobby.is_open() => "A solo run is alone: close the lobby first (/lobby close)",
         Action::RestartRace if !racing => "No race to restart (/race start)",
+        Action::Watch(_) if lobby.is_open() => "A replay is alone: close the lobby first (/lobby close)",
+        Action::Watch(_) if race_on.get().is_none_or(|race| race.solo.is_none()) => {
+            "Only in a solo race"
+        }
         Action::DebugRanking if !lobby.is_open() || lobby.joined || !racing => {
             "Only the host of a lobby can do that, in a race"
         }
@@ -185,7 +190,11 @@ pub(super) fn run(
     mut actions: MessageReader<Action>,
     mut lobby: ResMut<Lobby>,
     mut race_on: ResMut<RaceOn>,
-    (options, mode): (Res<crate::Options>, Res<State<crate::Mode>>),
+    (options, mode, world_record): (
+        Res<crate::Options>,
+        Res<State<crate::Mode>>,
+        Res<crate::world_record::WorldRecord>,
+    ),
     chosen: Res<crate::drive::Chosen>,
     track: Res<crate::Track>,
     time: Res<Time<Real>>,
@@ -288,6 +297,33 @@ pub(super) fn run(
                     let nick = &config.nickname;
                     lobby.race_alone(&mut race_on, characters, nick, track.1.0, rules, None);
                 }
+                continue;
+            }
+            Action::Watch(source) => {
+                let Some(race) = race_on.get() else { continue };
+                let watched = match source {
+                    Source::Best => crate::pb::run(race).map(|run| (run, "You".to_string())),
+                    Source::World => world_record.of(race).zip(world_record.run(race)).map(
+                        |((entry, ..), run)| {
+                            (run.clone(), crate::world_record::short_name(entry))
+                        },
+                    ),
+                };
+                let Some((run, who)) = watched else {
+                    toasts.write(Toast::new("No run to watch", 2000));
+                    continue;
+                };
+                let rules = super::rules(run.laps, &config, now);
+                let mut replay = CurrentRace::alone(
+                    vec![run.demo.character as u8],
+                    &who,
+                    race.track,
+                    rules,
+                    race.solo,
+                );
+                replay.replay = Some(crate::replay::Replay::new(run));
+                lobby.start_alone(&mut race_on, replay);
+                toasts.write(Toast::new(crate::replay::hint(&who, &config.controls), 4000));
                 continue;
             }
             Action::StartSolo(kind) => {
@@ -616,7 +652,12 @@ pub(super) fn run(
             }
             Action::RestartRace if !lobby.is_open() => {
                 if let Some(race) = race_on.get() {
-                    let (characters, track, solo) = (race.characters.clone(), race.track, race.solo);
+                    // Out of a replay, back to an attempt: with our racer, not the run's.
+                    let characters = match race.replay {
+                        Some(_) => vec![character as u8],
+                        None => race.characters.clone(),
+                    };
+                    let (track, solo) = (race.track, race.solo);
                     let rules = super::rules(race.rules.laps, &config, now);
                     lobby.race_alone(&mut race_on, characters, &config.nickname, track, rules, solo);
                 }

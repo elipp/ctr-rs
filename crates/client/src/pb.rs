@@ -312,8 +312,41 @@ fn load(kind: Kind, map_hash: u64, laps: u8) -> Option<(Run, Vec<u8>)> {
 /// None if there is none. A best that no longer finishes still drives (it's the run as it was
 /// played), so `race.best` is not asked.
 pub fn ghost(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Ghost> {
-    let (run, _) = load(race.solo?, race.hash, race.rules.laps)?;
-    ghost_of(level, sim, race, &run)
+    ghost_of(level, sim, race, &run(race)?)
+}
+
+/// The best's time at each checkpoint, for the split toasts (`drive/overlay.rs`) when there is
+/// no server record to be against. Kept across restarts: working them out plays the run through.
+#[derive(Resource, Default)]
+pub struct BestSplits(Option<(BestKey, Vec<i32>)>);
+
+/// A best, by its board and its time: a new best is always faster.
+type BestKey = (Kind, u64, u8, i32);
+
+fn best_key(race: &CurrentRace) -> Option<BestKey> {
+    Some((race.attempt()?, race.hash, race.rules.laps, race.best?))
+}
+
+impl BestSplits {
+    /// At each start of a solo attempt, once its best's ghost is built.
+    pub fn start(&mut self, level: &loader::lev::Level, race: &CurrentRace) {
+        let (Some(key), Some(ghost)) = (best_key(race), race.ghosts.best.as_ref()) else {
+            return;
+        };
+        if self.0.as_ref().is_none_or(|(had, _)| *had != key) {
+            self.0 = Some((key, ghost.splits(level)));
+        }
+    }
+
+    pub fn of(&self, race: &CurrentRace) -> Option<&[i32]> {
+        let (had, splits) = self.0.as_ref()?;
+        (best_key(race)? == *had).then_some(splits.as_slice())
+    }
+}
+
+/// The stored best of the solo race; None if there is none.
+pub fn run(race: &CurrentRace) -> Option<Run> {
+    Some(load(race.solo?, race.hash, race.rules.laps)?.0)
 }
 
 /// `run` as a ghost of the race, at tick 0 on the level loaded (the race's): only once
