@@ -259,11 +259,11 @@ pub(crate) fn overhead(
                     .find(|(kart, _)| kart.0 == slot)
                     .map(|(_, transform)| transform.translation),
             ),
-            // (Our record has no ghost of its own: `WorldRecord::ghost`.)
+            // "You", not our nick: the record's holder can have the same one. (Our record has no
+            // ghost of its own: `WorldRecord::ghost`.)
             Plate::Ghost(Source::Best) => {
                 let what = if world_record.is_best(race) { "SR" } else { "PB" };
-                let name = format!("{} ({what})", race.kart_label(race.slot));
-                (name, ghost_at(Source::Best))
+                (format!("You ({what})"), ghost_at(Source::Best))
             }
             Plate::Ghost(Source::World) => (
                 world_record.of(race).map_or_else(String::new, |(entry, ..)| {
