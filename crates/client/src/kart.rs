@@ -4,8 +4,10 @@
 //! effects that go with it (flames, shadow, tire marks, exhaust, sparks, masks). Those are
 //! entities of their own that follow the kart they are [`Attached`] to, and every system that
 //! draws one reads the kart's slot from there. Where a kart differs is only its render layer.
+//! What of it is its racer's own (the [`Body`]) is its sim driver's racer: [`follow_racer`].
 
 use bevy::ecs::system::SystemParam;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bevy::camera::visibility::RenderLayers;
@@ -16,6 +18,7 @@ use loader::vram::Vram;
 use render::mesh::{self, PARTS, SCALE};
 use vehicle::shadow::{GroundShadow, ground_shadow};
 
+use crate::assets::Kit;
 use crate::drive::{Kart, Pose, animation_pose, pose_of};
 use crate::subtract::SubtractMaterial;
 
@@ -420,6 +423,16 @@ pub struct KartRig {
     fade: Option<crate::ghost::Fade>,
 }
 
+/// What of a kart is its racer's own (the model's parts, the wheels), which [`rebody`] puts
+/// another racer's in place of, and the layer they are in.
+///
+/// [`rebody`]: KartBuilder::rebody
+#[derive(Component)]
+pub(crate) struct Body {
+    pub(crate) character: usize,
+    layer: usize,
+}
+
 /// The model of a kart at `placement`, in render layer `layer`, and its wheels. With a `motion`
 /// the sim moves it. The model faces along +Z, like a driver's heading.
 #[allow(clippy::too_many_arguments)]
@@ -438,6 +451,46 @@ fn spawn_body(
     subtract_materials: &mut Assets<SubtractMaterial>,
     wheel_materials: &mut Assets<crate::wheels::WheelMaterial>,
 ) -> (Entity, [Option<Handle<Mesh>>; PARTS], StandardMaterial) {
+    let root = commands.spawn((placement, Visibility::default())).id();
+    let rigged = motion.is_some();
+    if let Some(motion) = motion {
+        commands.entity(root).insert(motion);
+    }
+    let (parts, base) = spawn_body_on(
+        root,
+        model,
+        wheel_icons,
+        vram,
+        layer,
+        rigged,
+        fade,
+        commands,
+        images,
+        meshes,
+        materials,
+        subtract_materials,
+        wheel_materials,
+    );
+    (root, parts, base)
+}
+
+/// [`spawn_body`]'s parts and wheels, on `root`; `rigged`, the [`KartRig`] that poses them.
+#[allow(clippy::too_many_arguments)]
+fn spawn_body_on(
+    root: Entity,
+    model: &Model,
+    wheel_icons: &[Icon],
+    vram: &Vram,
+    layer: usize,
+    rigged: bool,
+    fade: Option<crate::ghost::Fade>,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    subtract_materials: &mut Assets<SubtractMaterial>,
+    wheel_materials: &mut Assets<crate::wheels::WheelMaterial>,
+) -> ([Option<Handle<Mesh>>; PARTS], StandardMaterial) {
     let header = &model.headers[0];
     let frame = header
         .animations
@@ -459,7 +512,6 @@ fn spawn_body(
     }
     let base = crate::kart_material(data.atlas, images);
 
-    let root = commands.spawn((placement, Visibility::default())).id();
     if !wheel_icons.is_empty() {
         crate::wheels::spawn(
             commands,
@@ -485,19 +537,16 @@ fn spawn_body(
         layer,
         fade.map(|f| f.alpha),
     );
-    if let Some(motion) = motion {
-        commands.entity(root).insert((
-            motion,
-            KartRig {
-                header: header.clone(),
-                parts: parts.clone(),
-                shown: None,
-                burnt: false,
-                fade,
-            },
-        ));
+    if rigged {
+        commands.entity(root).insert(KartRig {
+            header: header.clone(),
+            parts: parts.clone(),
+            shown: None,
+            burnt: false,
+            fade,
+        });
     }
-    (root, parts, base)
+    (parts, base)
 }
 
 /// Everything that makes a kart: the assets of its pieces and the means to spawn them.
@@ -516,30 +565,37 @@ pub struct KartBuilder<'w, 's> {
     billboard_materials: ResMut<'w, Assets<crate::billboard::BillboardMaterial>>,
     billboard_subtract_materials: ResMut<'w, Assets<crate::billboard::BillboardSubtractMaterial>>,
     textures: Res<'w, crate::Textures>,
-    shadow_icons: Res<'w, crate::ShadowIcons>,
-    smoke_icon: Res<'w, crate::SmokeIcon>,
-    tiremark_icon: Res<'w, crate::TiremarkIcon>,
-    flame_models: Res<'w, crate::FlameModels>,
+    parts: Res<'w, crate::KartParts>,
+    kits: ResMut<'w, crate::Kits>,
     masks: Res<'w, crate::mask::MaskModels>,
     shields: Res<'w, crate::shield::ShieldModels>,
 }
 
 impl KartBuilder<'_, '_> {
-    /// A kart of `model` at `placement`. With a `sim` (the slot it draws and that slot's kart) it
+    /// The kit of `character`'s karts.
+    pub fn kit(&mut self, character: usize) -> Arc<Kit> {
+        self.kits.get(character)
+    }
+
+    /// `kit`'s wheel sprites: the shared ones, if it has wheels.
+    fn wheels<'a>(parts: &'a crate::KartParts, kit: &Kit) -> &'a [Icon] {
+        if kit.wheels { &parts.wheels } else { &[] }
+    }
+
+    /// A kart of `kit` at `placement`. With a `sim` (the slot it draws and that slot's kart) it
     /// is driven, and has its effects; without, it is the model alone. Ours and the others' go
     /// through here alike. `ours` is the one difference: our kart is the [`Kart`], and so it
     /// is drawn over the track (in [`crate::KART_LAYER`]), while the others' are in the world's
     /// layer, where the walls hide them.
     pub fn spawn(
         &mut self,
-        model: &Model,
-        wheel_icons: &[Icon],
+        kit: &Kit,
         placement: Transform,
         ours: bool,
         sim: Option<(usize, &race::Kart)>,
     ) -> Entity {
         let layer = if ours { crate::KART_LAYER } else { 0 };
-        self.spawn_in(model, wheel_icons, placement, ours, layer, sim)
+        self.spawn_in(kit, placement, ours, layer, sim)
     }
 
     /// [`spawn`](Self::spawn) with the kart (and what goes with it) in `layer`: the kart of a
@@ -547,8 +603,7 @@ impl KartBuilder<'_, '_> {
     /// the camera over that player's picture draws, and the other players' main cameras as well.
     pub fn spawn_in(
         &mut self,
-        model: &Model,
-        wheel_icons: &[Icon],
+        kit: &Kit,
         placement: Transform,
         ours: bool,
         layer: usize,
@@ -556,8 +611,8 @@ impl KartBuilder<'_, '_> {
     ) -> Entity {
         let vram = &self.textures.vram;
         let (kart, ..) = spawn_body(
-            model,
-            wheel_icons,
+            &kit.model,
+            Self::wheels(&self.parts, kit),
             vram,
             placement,
             layer,
@@ -570,6 +625,10 @@ impl KartBuilder<'_, '_> {
             &mut self.subtract_materials,
             &mut self.wheel_materials,
         );
+        self.commands.entity(kart).insert(Body {
+            character: kit.character,
+            layer,
+        });
         if ours {
             self.commands.entity(kart).insert(Kart);
         }
@@ -583,12 +642,12 @@ impl KartBuilder<'_, '_> {
             &mut self.meshes,
             &mut self.materials,
             &mut self.subtract_materials,
-            &self.flame_models.0,
+            &self.parts.flames,
             vram,
             kart,
             layer,
         );
-        if let Some(icons) = &self.shadow_icons.0 {
+        if let Some(icons) = &self.parts.shadow {
             crate::shadow::spawn(
                 &mut self.commands,
                 &mut self.images,
@@ -599,7 +658,7 @@ impl KartBuilder<'_, '_> {
                 kart,
             );
         }
-        if let Some(icon) = &self.tiremark_icon.0 {
+        if let Some(icon) = &self.parts.tiremark {
             crate::skid::spawn(
                 &mut self.commands,
                 &mut self.images,
@@ -611,7 +670,7 @@ impl KartBuilder<'_, '_> {
                 kart,
             );
         }
-        if let Some(icon) = &self.smoke_icon.0 {
+        if let Some(icon) = &self.parts.smoke {
             let water = crate::exhaust::water_icons(&self.textures.dram);
             crate::exhaust::spawn(
                 &mut self.commands,
@@ -661,14 +720,13 @@ impl KartBuilder<'_, '_> {
     /// the effects (they all go by the slot).
     pub fn spawn_ghost(
         &mut self,
-        model: &Model,
-        wheel_icons: &[Icon],
+        kit: &Kit,
         kart: &race::Kart,
         fade: crate::ghost::Fade,
     ) -> Entity {
         let (root, parts, base) = spawn_body(
-            model,
-            wheel_icons,
+            &kit.model,
+            Self::wheels(&self.parts, kit),
             &self.textures.vram,
             Transform::default(),
             0,
@@ -701,6 +759,66 @@ impl KartBuilder<'_, '_> {
             }
         }
         root
+    }
+
+    /// Puts `kit`'s body on the kart `root` in place of its own, `old` (the model's parts and
+    /// the wheels): its slot, its markers and its effects stay.
+    fn rebody(&mut self, root: Entity, layer: usize, kit: &Kit, old: Vec<Entity>) {
+        for entity in old {
+            self.commands.entity(entity).try_despawn();
+        }
+        spawn_body_on(
+            root,
+            &kit.model,
+            Self::wheels(&self.parts, kit),
+            &self.textures.vram,
+            layer,
+            true,
+            None,
+            &mut self.commands,
+            &mut self.images,
+            &mut self.meshes,
+            &mut self.materials,
+            &mut self.subtract_materials,
+            &mut self.wheel_materials,
+        );
+        self.commands.entity(root).insert(Body {
+            character: kit.character,
+            layer,
+        });
+    }
+}
+
+/// A kart's body is its sim driver's racer: the sim is the truth (`/character`, the racer menu,
+/// a race's or a replay's racers all change it there), and the body follows it here, a frame
+/// later at most.
+pub fn follow_racer(
+    sim: Res<crate::props::Sim>,
+    karts: Query<(Entity, &KartSlot, &Body, &KartRig, &Children)>,
+    meshes: Query<&Mesh3d>,
+    wheels: Query<(Entity, &crate::wheels::Wheels)>,
+    mut builder: KartBuilder,
+) {
+    for (root, slot, body, rig, children) in &karts {
+        let Some(kart) = sim.race.karts.get(slot.0) else {
+            continue;
+        };
+        let character = kart.driver.character as usize;
+        if character == body.character {
+            continue;
+        }
+        let is_part = |entity: Entity| {
+            meshes.get(entity).is_ok_and(|mesh| {
+                rig.parts.iter().flatten().any(|part| part.id() == mesh.0.id())
+            })
+        };
+        let parts = children.iter().filter(|&child| is_part(child));
+        let old_wheels = (wheels.iter())
+            .filter(|(_, wheels)| wheels.kart == root)
+            .map(|(entity, _)| entity);
+        let old = parts.chain(old_wheels).collect();
+        let kit = builder.kit(character);
+        builder.rebody(root, body.layer, &kit, old);
     }
 }
 

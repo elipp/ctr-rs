@@ -19,17 +19,16 @@ use render::font::{Font, Gradient};
 use vehicle::stats::{CHARACTER_ENGINES, Stats};
 
 use super::input::Controller;
-use super::{Drive, Extra, HudCamera};
+use super::{Drive, HudCamera};
 use crate::command::Action;
 use crate::font::{CtrText, Fonts, TexelSize};
 use crate::hud_view::HudView;
 use crate::icon_grid::{self, HasIconGrid, Icons, Mode, SheetId, Steered};
-use crate::kart::{KartBuilder, KartSlot};
 use crate::lobby::Lobby;
 use crate::pause::{BORDER, PANEL, PauseMenu, RacerMenu};
 use crate::props::Sim;
 use crate::sound::{MENU_BACK_SFX, MENU_MOVE_SFX, MENU_TAKE_SFX, Sounds};
-use crate::{CHARACTERS, player_layer};
+use crate::CHARACTERS;
 
 /// The panel's padding, in texels.
 const PADDING: usize = 6;
@@ -147,8 +146,7 @@ pub(super) fn input(
     mut pause: ResMut<PauseMenu>,
     sounds: Option<Res<Sounds>>,
     mut pointer: ResMut<ChooserPointer>,
-    karts: Query<(Entity, &KartSlot), With<Extra>>,
-    mut builder: KartBuilder,
+    mut kits: ResMut<crate::Kits>,
     mut actions: MessageWriter<Action>,
 ) {
     // The pause menu has the controls (and the pads' buttons are its own then). Opened over
@@ -268,7 +266,7 @@ pub(super) fn input(
             lobby.set_extras(&extras);
         } else {
             chosen.set(view, character);
-            swap(view, character, &mut drive, &mut sim, &karts, &mut builder);
+            swap(view, character, &mut drive, &mut sim, &mut kits);
         }
     }
 }
@@ -281,8 +279,7 @@ pub(super) fn sync(
     mut chosen: ResMut<Chosen>,
     lobby: Res<Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
-    karts: Query<(Entity, &KartSlot), With<Extra>>,
-    mut builder: KartBuilder,
+    mut kits: ResMut<crate::Kits>,
 ) {
     if !lobby.is_open() || lobby.characters_locked() {
         // (A pick that never came back is dropped.)
@@ -306,60 +303,27 @@ pub(super) fn sync(
         }
         if drive.views[view].spec.is_some_and(|s| s.character != character) {
             chosen.set(view, character);
-            swap(view, character, &mut drive, &mut sim, &karts, &mut builder);
+            swap(view, character, &mut drive, &mut sim, &mut kits);
         }
     }
 }
 
 /// The kart of `view` is `character` from now on.
-fn swap(
-    view: usize,
-    character: usize,
-    drive: &mut Drive,
-    sim: &mut Sim,
-    karts: &Query<(Entity, &KartSlot), With<Extra>>,
-    builder: &mut KartBuilder,
-) {
+fn swap(view: usize, character: usize, drive: &mut Drive, sim: &mut Sim, kits: &mut crate::Kits) {
+    let slot = drive.views[view].slot;
+    if drive.views[view].spec.is_some_and(|s| s.character == character)
+        || slot >= sim.race.karts.len()
     {
-        let slot = drive.views[view].slot;
-        if drive.views[view].spec.is_some_and(|s| s.character == character)
-            || slot >= sim.race.karts.len()
-        {
-            return;
-        }
-        // The kart of the race is the new racer from where it is, as `scene::swap_character` does
-        // for ours (and so offline only: the change is not in the rollback's snapshots).
-        let (model, wheel_icons) = crate::load_racer(character);
-        let frames = crate::scene::anim_num_frames(&model);
-        let driver = &mut sim.race.state_mut().karts[slot].driver;
-        driver.character = character as u8;
-        driver.stats =
-            vehicle::stats::Stats::for_class(vehicle::stats::CHARACTER_ENGINES[character]);
-        driver.anim_num_frames = frames;
-        // The new model's animation may be shorter than the frame the old one was on.
-        let last = (vehicle::frame::num_anim_frames(driver, driver.anim_index) - 1).max(0);
-        driver.anim_frame = driver.anim_frame.clamp(0, last as i16);
-        drive.views[view].spec = Some(KartSpec {
-            character,
-            anim_num_frames: frames,
-            bot: false,
-            line: None,
-        });
-        for (entity, kart) in karts {
-            if kart.0 == slot {
-                builder.commands.entity(entity).try_despawn();
-            }
-        }
-        let kart = builder.spawn_in(
-            &model,
-            &wheel_icons,
-            Transform::default(),
-            false,
-            player_layer(view),
-            Some((slot, &sim.race.karts[slot])),
-        );
-        builder.commands.entity(kart).insert(Extra);
+        return;
     }
+    let kit = kits.get(character);
+    sim.set_racer(slot, &kit);
+    drive.views[view].spec = Some(KartSpec {
+        character,
+        anim_num_frames: kit.anim_num_frames(),
+        bot: false,
+        line: None,
+    });
 }
 
 

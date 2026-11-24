@@ -197,10 +197,10 @@ pub(super) fn build(
     let Some(character) = wanted.filter(|_| !have) else {
         return;
     };
-    let (model, wheel_icons) = crate::load_racer(character as usize);
+    let kit = builder.kit(character as usize);
     let kart = sim.kart();
     let fade = crate::ghost::Source::Best.fade();
-    let entity = builder.spawn_ghost(&model, &wheel_icons, kart, fade);
+    let entity = builder.spawn_ghost(&kit, kart, fade);
     builder.commands.entity(entity).insert(RunUpKart {
         character,
         tick: sim.race.tick(),

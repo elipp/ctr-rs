@@ -253,8 +253,8 @@ fn build(race_on: Res<RaceOn>, karts: Query<(Entity, &GhostKart)>, mut builder: 
         };
         let kart = ghost.kart();
         let character = kart.driver.character as usize;
-        let (model, wheel_icons) = crate::load_racer(character);
-        let entity = builder.spawn_ghost(&model, &wheel_icons, kart, source.fade());
+        let kit = builder.kit(character);
+        let entity = builder.spawn_ghost(&kit, kart, source.fade());
         builder.commands.entity(entity).insert(GhostKart {
             source,
             character,

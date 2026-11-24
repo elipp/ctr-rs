@@ -19,24 +19,22 @@ pub(crate) struct Textures {
     pub(crate) vram: Vram,
 }
 
-/// The racer model shown on the grid.
+/// What a kart has of its racer's pack. Every retail pack has the same of these (`ctr-query
+/// packs`), so they are character 0's, loaded once (`assets::load_shared`); what is a racer's
+/// own is in its [`Kit`](crate::assets::Kit).
 #[derive(Resource)]
-pub(crate) struct Racer(pub(crate) Model);
-
-#[derive(Resource)]
-pub(crate) struct WheelIcons(pub(crate) Vec<Icon>);
-
-#[derive(Resource)]
-pub(crate) struct ShadowIcons(pub(crate) Option<[Icon; 2]>);
-
-#[derive(Resource)]
-pub(crate) struct SmokeIcon(pub(crate) Option<Icon>);
-
-#[derive(Resource)]
-pub(crate) struct TiremarkIcon(pub(crate) Option<Icon>);
-
-#[derive(Resource)]
-pub(crate) struct FlameModels(pub(crate) Vec<Model>);
+pub(crate) struct KartParts {
+    /// The wheel sprites (`tireAnim`). The level's fire takes its pictures from them too.
+    pub(crate) wheels: Vec<Icon>,
+    /// Global icons 0 and 1 (`shadow1`, `shadow2`).
+    pub(crate) shadow: Option<[Icon; 2]>,
+    /// The first picture of the `dustpuff` icon group: the exhaust smoke.
+    pub(crate) smoke: Option<Icon>,
+    /// Global icon `tiremark`: the skid marks.
+    pub(crate) tiremark: Option<Icon>,
+    /// `turbo` .. `turbo7`: the frames of the exhaust fire.
+    pub(crate) flames: Vec<Model>,
+}
 
 /// How the level's mesh is built (`/debug level`).
 #[derive(Resource, Clone, Copy)]
@@ -116,7 +114,7 @@ pub(crate) const CHARACTER_COLORS: [Color; 16] = [
 /// What to load the next level with.
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct Options {
-    /// The character of the racer on the grid.
+    /// Our pick: the free drive's racer. A race's racer for us is the race's (its sim has it).
     pub(crate) racer: u32,
 }
 

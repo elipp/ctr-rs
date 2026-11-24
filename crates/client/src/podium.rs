@@ -597,12 +597,18 @@ fn enter(world: &mut World) {
         .run_system_cached(spawn_prompt)
         .expect("the podium's system runs");
     world.resource::<crate::sound::Sounds>().podium(music);
-    // The kart stays where the level put it, hidden (`CS_Podium_FullScene_Init`).
-    let kart: Vec<Entity> = world
-        .query_filtered::<Entity, With<crate::scene::KartScene>>()
+    // The kart stays where the level put it, hidden (`CS_Podium_FullScene_Init`), and its
+    // wheels, which are not its children.
+    let karts: Vec<Entity> = world
+        .query_filtered::<Entity, With<crate::drive::Kart>>()
         .iter(world)
         .collect();
-    for entity in kart {
+    let wheels: Vec<Entity> = (world.query::<(Entity, &crate::wheels::Wheels)>())
+        .iter(world)
+        .filter(|(_, wheels)| karts.contains(&wheels.kart))
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in karts.into_iter().chain(wheels) {
         if let Some(mut visibility) = world.get_mut::<Visibility>(entity) {
             *visibility = Visibility::Hidden;
         }
@@ -756,7 +762,7 @@ struct Sparks {
 fn particles(
     podium: Res<Podium>,
     textures: Res<Textures>,
-    smoke: Res<crate::SmokeIcon>,
+    kart_parts: Res<crate::KartParts>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -766,7 +772,7 @@ fn particles(
 ) {
     use crate::billboard::{ATTRIBUTE_CORNER, Billboard, BillboardSubtract};
     use crate::exhaust::{SCREEN_PIXEL_ASPECT, icon_image, icon_image_blended};
-    let Some(icon) = &smoke.0 else {
+    let Some(icon) = &kart_parts.smoke else {
         return;
     };
     if sparks.is_empty() {

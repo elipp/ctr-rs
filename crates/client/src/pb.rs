@@ -284,10 +284,10 @@ fn spec_for(run: &Run, spec: race::KartSpec) -> race::KartSpec {
 }
 
 fn racer_spec(character: usize) -> race::KartSpec {
-    let (model, _) = crate::assets::load_racer(character);
+    // (Off the scene, with no `Kits` to hand: the sim needs only the model's animations.)
     race::KartSpec {
         character,
-        anim_num_frames: crate::scene::anim_num_frames(&model),
+        anim_num_frames: crate::assets::load_kit(character).anim_num_frames(),
         bot: false,
         line: None,
     }

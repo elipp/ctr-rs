@@ -178,8 +178,8 @@ fn main() {
         .unwrap_or(0);
     let options = Options { racer };
     let LevelData { level, dram, vram } = load_level(track_id, instance::lev_init::LevMode::Arcade);
-    let character_data = load_character(racer);
     let Shared {
+        kart_parts,
         crate_explosion,
         masks,
         shields,
@@ -332,7 +332,7 @@ fn main() {
             )
                 .chain(),
         );
-    character_data.insert(app.world_mut());
+    app.insert_resource(kart_parts).init_resource::<Kits>();
     app.insert_resource(config);
     let world = app.world_mut();
     let scene_systems = SceneSystems {

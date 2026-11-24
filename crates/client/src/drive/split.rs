@@ -134,10 +134,10 @@ pub(super) fn sync(
     }
     for view in 1..n {
         let (slot, character) = (slots[view], characters[view]);
-        let (model, wheel_icons) = crate::load_racer(character);
+        let kit = builder.kit(character);
         let spec = KartSpec {
             character,
-            anim_num_frames: crate::scene::anim_num_frames(&model),
+            anim_num_frames: kit.anim_num_frames(),
             bot: false,
             line: None,
         };
@@ -154,8 +154,7 @@ pub(super) fn sync(
             }
         };
         let kart = builder.spawn_in(
-            &model,
-            &wheel_icons,
+            &kit,
             Transform::default(),
             false,
             player_layer(view),

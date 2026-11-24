@@ -2,11 +2,8 @@
 //! from the pads the others send, so every sim ends up seeing the same race. They are drawn like
 //! our own kart (`kart.rs`), only in the world's layer: the walls hide them.
 
-use std::collections::HashMap;
 
 use bevy::prelude::*;
-use loader::icons::Icon;
-use loader::model::Model;
 use race::KartSpec;
 
 use crate::Track;
@@ -64,7 +61,6 @@ pub fn build(
         ));
     }
     let players = race.characters.len();
-    let mut models: HashMap<usize, (Model, Vec<Icon>)> = HashMap::new();
     let bots = race.retail.characters.iter().enumerate();
     let karts = race
         .characters
@@ -75,12 +71,10 @@ pub fn build(
         // Every kart, ours too, is what the host said it drives: a character of ours that
         // differs would be a sim of its own.
         let character = character as usize;
-        let (model, wheel_icons) = models
-            .entry(character)
-            .or_insert_with(|| crate::load_racer(character));
+        let kit = builder.kit(character);
         let spec = KartSpec {
             character,
-            anim_num_frames: crate::scene::anim_num_frames(model),
+            anim_num_frames: kit.anim_num_frames(),
             bot: false,
             line: None,
         };
@@ -90,7 +84,8 @@ pub fn build(
             race.retail_specs.push(spec);
         }
         // (Ours is on the grid already, and our other local players' are put there with their
-        // views, `drive::split::sync`. A spectator's slot is past the players', where the bots'
+        // views, `drive::split::sync`: their bodies take the race's racers from the sim
+        // (`kart::follow_racer`). A spectator's slot is past the players', where the bots'
         // karts are.)
         if race.local(slot) && !race.spectating() {
             continue;
@@ -98,8 +93,7 @@ pub fn build(
         let birth = race::Kart::birth(&track.0, slot, &spec);
         // The first `show` puts it where the sim has it.
         builder.spawn(
-            model,
-            wheel_icons,
+            &kit,
             Transform::default(),
             false,
             Some((slot, &birth)),

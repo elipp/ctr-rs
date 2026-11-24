@@ -172,6 +172,12 @@ impl Plugin for DrivePlugin {
             )
             .add_systems(
                 Update,
+                crate::kart::follow_racer
+                    .before(crate::kart::reap)
+                    .run_if(driving),
+            )
+            .add_systems(
+                Update,
                 (
                     crate::kart::reap,
                     crate::kart::animate,
