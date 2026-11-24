@@ -62,7 +62,7 @@ impl Device {
 
 /// The keyboard, the pads, and the keys the config binds.
 #[derive(SystemParam)]
-pub(super) struct Controller<'w, 's> {
+pub(crate) struct Controller<'w, 's> {
     pub keys: Res<'w, ButtonInput<KeyCode>>,
     pads: Pads<'w, 's>,
     config: Res<'w, Config>,
@@ -103,7 +103,7 @@ impl Controller<'_, '_> {
 
     /// The camera's buttons `device` holds now. They are not in the pad: the camera is the
     /// player's own, never the sim's nor the others'.
-    pub fn camera(&self, device: &Device, taken: &[Entity]) -> CameraButtons {
+    pub(super) fn camera(&self, device: &Device, taken: &[Entity]) -> CameraButtons {
         let (controls, pads) = self.sources(device, taken);
         let key = |control| controls.is_some_and(|c| c.held(control, &self.keys));
         let pad = |button| pads.iter().any(|p| p.pressed(button));
@@ -157,7 +157,7 @@ const MENU_STICK: f32 = 0x60 as f32 / 127.0;
 
 /// The taps of a device in a menu of its player's own.
 #[derive(Clone, Copy, Default)]
-pub(super) struct MenuTaps {
+pub(crate) struct MenuTaps {
     pub up: bool,
     pub down: bool,
     pub left: bool,

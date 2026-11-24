@@ -48,6 +48,10 @@ commands:
                                       with each icon's name and texture layout
   models [ENTRY]                      the models of a pack (default the racer pack): id, name,
                                       and per LOD the faces, animations and frames
+  packs                               each racer's pack (arcade 1P) against character 0's: whether
+                                      the bytes are the same, and which icons, icon groups and
+                                      models differ; then, of what a kart takes from its racer's
+                                      pack (the client's `load_character`), which are the same
   font middle|large [CHARS | --index N]...
                                       the font's glyphs as grids of texels: two hex digits of
                                       the grey (`..` is transparent, a trailing `'` marks a
@@ -955,6 +959,114 @@ fn pack_models(entry: Option<usize>) -> Result<(), String> {
     Ok(())
 }
 
+/// What a kart takes from its racer's pack (the client's `assets::load_character`): the wheels
+/// (icon group 0), the shadow (global icons 0 and 1), the exhaust smoke (group 1's first icon),
+/// the skid mark (`skid::TIREMARK_ICON`) and the turbo fire (`flame::FIRST_MODEL_ID`, and
+/// `vehicle::turbo::ANIM_FRAMES` of them).
+const KART_PARTS: [&str; 5] = ["wheels", "shadow", "smoke", "skid mark", "turbo fire"];
+const TIREMARK_ICON: i32 = 0x2f;
+const TURBO_MODELS: std::ops::Range<i16> = 44..44 + 8;
+
+/// Compared by their `Debug`: what the client parses, so a difference in it is one the client
+/// would see (and pointers resolved, unlike the bytes).
+fn shown<T: std::fmt::Debug>(value: &T) -> String {
+    format!("{value:?}")
+}
+
+struct Pack {
+    bytes: Vec<u8>,
+    icons: BTreeMap<i32, String>,
+    groups: BTreeMap<i16, String>,
+    group_names: BTreeMap<i16, String>,
+    models: BTreeMap<i16, String>,
+    model_names: BTreeMap<i16, String>,
+    parts: [String; 5],
+}
+
+impl Pack {
+    fn read(disc: &mut loader::disc::Disc, big: &loader::bigfile::BigFile, character: u32) -> Result<Pack, String> {
+        let entry = BigIndex::ARCADE_1P_PACK.nth(character).get();
+        let bytes = big.read(disc, entry).map_err(|e| format!("entry {entry}: {e}"))?;
+        let dram = DramFile::parse(&bytes).map_err(|e| format!("entry {entry}: {e}"))?;
+        let icons = loader::icons::parse_icons(&dram).map_err(|e| e.to_string())?;
+        let groups = loader::icons::parse_groups(&dram).map_err(|e| e.to_string())?;
+        let models = loader::model::parse_pack_models(&dram).map_err(|e| e.to_string())?;
+        let global = |index| icons.iter().find(|i| i.global_index == index).map(shown);
+        let group = |id| groups.iter().find(|g| g.group_id == id);
+        let parts = [
+            shown(&group(0).map(|g| &g.icons)),
+            shown(&(global(0), global(1))),
+            shown(&group(1).and_then(|g| g.icons.first())),
+            shown(&global(TIREMARK_ICON)),
+            shown(&models.iter().filter(|m| TURBO_MODELS.contains(&m.id)).collect::<Vec<_>>()),
+        ];
+        Ok(Pack {
+            icons: icons.iter().map(|i| (i.global_index, shown(i))).collect(),
+            groups: groups.iter().map(|g| (g.group_id, shown(g))).collect(),
+            group_names: groups.iter().map(|g| (g.group_id, g.name.clone())).collect(),
+            models: models.iter().map(|m| (m.id, shown(m))).collect(),
+            model_names: models.iter().map(|m| (m.id, m.name.clone())).collect(),
+            parts,
+            bytes,
+        })
+    }
+}
+
+/// The keys whose values differ between `a` and `b`, or are in only one of them.
+fn differing<K: Ord + Copy>(a: &BTreeMap<K, String>, b: &BTreeMap<K, String>) -> Vec<K> {
+    let keys: std::collections::BTreeSet<K> = a.keys().chain(b.keys()).copied().collect();
+    keys.into_iter().filter(|k| a.get(k) != b.get(k)).collect()
+}
+
+fn packs() -> Result<(), String> {
+    let path = disc_path();
+    let (mut disc, big) = open_bigfile(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let packs = (0..loader::source::CHARACTERS)
+        .map(|c| Pack::read(&mut disc, &big, c))
+        .collect::<Result<Vec<_>, _>>()?;
+    let first = &packs[0];
+    let name = |names: &BTreeMap<i16, String>, other: &BTreeMap<i16, String>, id: i16| {
+        let name = names.get(&id).or(other.get(&id)).map_or("", String::as_str);
+        format!("{id} {name:?}")
+    };
+    println!(
+        "character 0: {} bytes, {} icons, {} groups, {} models",
+        first.bytes.len(),
+        first.icons.len(),
+        first.groups.len(),
+        first.models.len()
+    );
+    for (c, pack) in packs.iter().enumerate().skip(1) {
+        if pack.bytes == first.bytes {
+            println!("character {c}: the same bytes");
+            continue;
+        }
+        println!("character {c}: {} bytes", pack.bytes.len());
+        let icons = differing(&first.icons, &pack.icons);
+        let groups = differing(&first.groups, &pack.groups);
+        let models = differing(&first.models, &pack.models);
+        let groups: Vec<String> =
+            groups.iter().map(|&id| name(&pack.group_names, &first.group_names, id)).collect();
+        let models: Vec<String> =
+            models.iter().map(|&id| name(&pack.model_names, &first.model_names, id)).collect();
+        println!("    icons differing: {icons:?}");
+        println!("    groups differing: {groups:?}");
+        println!("    models differing: {models:?}");
+    }
+    println!("what a kart takes from its racer's pack, against character 0's:");
+    for (i, part) in KART_PARTS.iter().enumerate() {
+        let differ: Vec<usize> = (packs.iter().enumerate())
+            .filter(|(_, pack)| pack.parts[i] != first.parts[i])
+            .map(|(c, _)| c)
+            .collect();
+        match differ.as_slice() {
+            [] => println!("    {part}: the same in every pack"),
+            differ => println!("    {part}: differs for characters {differ:?}"),
+        }
+    }
+    Ok(())
+}
+
 fn strings(mut args: Args) -> Result<(), String> {
     let lang = args.option_number("--lang")?.unwrap_or(loader::lng::ENGLISH as i32);
     let tracks = args.switch("--tracks");
@@ -1003,6 +1115,10 @@ fn run() -> Result<(), String> {
     }
     if command == "groups" {
         return icon_groups(args.first().map(|a| level_id(a)).transpose()?);
+    }
+    if command == "packs" {
+        Args(args).finish()?;
+        return packs();
     }
     if command == "models" {
         return pack_models(args.first().and_then(|a| a.parse().ok()));

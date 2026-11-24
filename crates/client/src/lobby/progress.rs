@@ -96,8 +96,12 @@ pub(super) fn finish(
         let Some(slot) = sim.race.karts.iter().position(finished) else {
             continue;
         };
+        // A replay's finish is nobody's news.
+        if race.replay.is_some() {
+            continue;
+        }
         // A solo run's finish is told by its ceremony (`solo_end.rs`).
-        if let Some(kind) = race.solo
+        if let Some(kind) = race.attempt()
             && let Some(ms) = sim.race.final_ms(slot)
         {
             use crate::pb::Verdict;
@@ -171,7 +175,8 @@ pub(super) fn finish(
             .get(waited_for.saturating_sub(1))
             .copied()
     };
-    // A solo run goes on through its ceremony until the player asks to go on.
+    // A solo run goes on through its ceremony until the player asks to go on; a replay, until
+    // the player leaves it.
     let aftermath = match (race.solo, race.solo_end) {
         (None, _) => AFTERMATH_SECONDS * crate::GAME_TICK_HZ as u32,
         (Some(_), Some(end)) if end.continued => 0,
@@ -237,7 +242,9 @@ pub(super) fn pace(
             })
             .fold(0.0_f32, |most, (_, &a)| most.max(a))
     });
+    let replay = race_on.get().and_then(|race| race.replay.as_ref());
     let speed = match &fx {
+        _ if let Some(replay) = replay => replay.speed(),
         Some(fx) if !race_on.shared() => fx.speed,
         _ if let Some((_, net)) = running.filter(|(race, _)| race.watches()) => (1.0
             + SPECTATE_GAIN * (net.buffered - SPECTATE_BUFFER))

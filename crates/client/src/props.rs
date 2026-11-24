@@ -162,6 +162,22 @@ impl Sim {
     pub fn driver(&self) -> &vehicle::Driver {
         &self.kart().driver
     }
+
+    /// The kart of `slot` is `kit`'s racer from where it is, as it goes: its engine class (the
+    /// stats and the engine's sound), its voice and its animations. Its body follows
+    /// (`kart::follow_racer`). Only offline: the change is not in the rollback's snapshots.
+    pub(crate) fn set_racer(&mut self, slot: usize, kit: &crate::assets::Kit) {
+        let character = kit.character;
+        let frames = kit.anim_num_frames();
+        let driver = &mut self.race.state_mut().karts[slot].driver;
+        driver.character = character as u8;
+        driver.stats =
+            vehicle::stats::Stats::for_class(vehicle::stats::CHARACTER_ENGINES[character]);
+        driver.anim_num_frames = frames;
+        // The new model's animation may be shorter than the frame the old one was on.
+        let last = (vehicle::frame::num_anim_frames(driver, driver.anim_index) - 1).max(0);
+        driver.anim_frame = driver.anim_frame.clamp(0, last as i16);
+    }
 }
 
 /// One game tick of the objects, in a viewer that has no karts.

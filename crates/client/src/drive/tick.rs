@@ -79,6 +79,7 @@ pub(super) fn drive_tick(
     mut brains: ResMut<crate::learned::Brains>,
     mut world_record: ResMut<crate::world_record::WorldRecord>,
     mut practice: ResMut<super::practice::Practice>,
+    mut best_splits: ResMut<crate::pb::BestSplits>,
 ) {
     let Shown {
         mut particles,
@@ -163,13 +164,14 @@ pub(super) fn drive_tick(
             bots,
             band,
         );
-        if let Some(race) = race_on.get_mut().filter(|race| race.solo.is_some()) {
+        if let Some(race) = race_on.get_mut().filter(|race| race.attempt().is_some()) {
             let best = crate::pb::best(&track.0, &sim, race).map(|o| o.final_ms);
             if race.solo == Some(race::solo::Kind::Relic) {
                 race.relic_target = race::relic::target(race.track, race.rules.laps, best);
             }
             race.best = best;
             race.ghosts.best = crate::pb::ghost(&track.0, &sim, race);
+            best_splits.start(&track.0, race);
             race.ghosts.world = world_record.start(&track.0, &sim, race, config.server_records);
         }
         // Online, the host's bots are the policy's too: their pads are made here, and go to the
@@ -473,8 +475,11 @@ pub(super) fn drive_tick(
     // host does not take us for gone), and predict it right.
     if !spectating && sim.race.confirmed_until(own) <= tick {
         let held = sim.kart().held;
+        let replay = race_on.get().and_then(|race| race.replay.as_ref());
         let pad = if watches {
             Pad::default()
+        } else if let Some(replay) = replay {
+            replay.pad(tick)
         } else if let Some(pad) = practice.pad() {
             pad
         } else if (shared && hold.menu.open) || drive.views[0].chooser.open {

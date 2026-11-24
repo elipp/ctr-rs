@@ -34,7 +34,7 @@ use bevy::window::PrimaryWindow;
 use render::font::{Font, Gradient};
 
 use crate::font::{CtrText, Fonts, TexelSize};
-use crate::{drive, scene::KartScene};
+use crate::drive::{self, Kart};
 
 /// The frames the scene always gets to settle, whatever else is there.
 const MIN_FRAMES: u32 = 3;
@@ -554,7 +554,7 @@ fn spawn_screen(world: &mut World, hold: Hold) {
 /// What the scene lacks before it is whole, if anything.
 fn missing(
     driving: bool,
-    karts: &Query<(), With<KartScene>>,
+    karts: &Query<(), With<Kart>>,
     chase: &Query<(), With<drive::ChaseCamera>>,
 ) -> Option<&'static str> {
     // (The viewer and the podium have neither.)
@@ -574,7 +574,7 @@ fn missing(
 fn finish(
     mut loading: ResMut<Loading>,
     mode: Res<State<crate::Mode>>,
-    karts: Query<(), With<KartScene>>,
+    karts: Query<(), With<Kart>>,
     chase: Query<(), With<drive::ChaseCamera>>,
     mut commands: Commands,
 ) {

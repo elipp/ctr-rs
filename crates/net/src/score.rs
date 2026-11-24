@@ -136,7 +136,8 @@ fn signed(server: EndpointId, signed_at: impl Fn(u64) -> Request + Send + 'stati
     })
 }
 
-fn unix_now() -> u64 {
+/// The wall clock's seconds since 1970, which a browser has too (unlike `std`'s).
+pub fn unix_now() -> u64 {
     n0_future::time::SystemTime::now()
         .duration_since(n0_future::time::SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

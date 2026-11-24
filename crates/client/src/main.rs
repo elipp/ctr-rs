@@ -58,6 +58,7 @@ mod heat;
 mod hud;
 mod hud_view;
 mod icon_grid;
+mod icons;
 mod kart;
 mod laps;
 mod learned;
@@ -87,6 +88,7 @@ mod pb;
 mod player;
 mod props;
 mod race_on;
+mod replay;
 mod public_lobbies;
 mod rain;
 mod rect_menu;
@@ -176,8 +178,8 @@ fn main() {
         .unwrap_or(0);
     let options = Options { racer };
     let LevelData { level, dram, vram } = load_level(track_id, instance::lev_init::LevMode::Arcade);
-    let character_data = load_character(racer);
     let Shared {
+        kart_parts,
         crate_explosion,
         masks,
         shields,
@@ -245,6 +247,7 @@ fn main() {
         )
         .expect("the default font can be replaced");
     font::register_bold(&mut app.world_mut().resource_mut());
+    icons::register(&mut app.world_mut().resource_mut());
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
     app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
@@ -329,7 +332,7 @@ fn main() {
             )
                 .chain(),
         );
-    character_data.insert(app.world_mut());
+    app.insert_resource(kart_parts).init_resource::<Kits>();
     app.insert_resource(config);
     let world = app.world_mut();
     let scene_systems = SceneSystems {

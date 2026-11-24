@@ -191,17 +191,21 @@ pub(super) fn wumpa_hud(
 
 /// Toasts the time of each checkpoint we pass (see `race::Race::last_split`) against the first
 /// kart to pass it: green if we were the first there, else red and how far behind the first.
+/// A solo attempt has no other kart: it is against the server record's run there, or the
+/// personal best's without one, green and how far ahead or red and how far behind. (A replay
+/// has none: it would be against itself, or the record would be against our own best.)
 /// `announced` is the number of the last checkpoint toasted, so that a rollback that takes a
 /// pass back and plays it again does not toast it twice.
 pub(super) fn split_toast(
     sim: Res<crate::props::Sim>,
     race_on: Res<crate::race_on::RaceOn>,
+    world_record: Res<crate::world_record::WorldRecord>,
+    best_splits: Res<crate::pb::BestSplits>,
     mut announced: Local<usize>,
     mut toasts: MessageWriter<crate::toast::Toast>,
 ) {
-    // (Alone in a solo run, there is no first kart to be behind.)
-    let racing = race_on.get().filter(|race| race.solo.is_none());
-    let Some((number, time, behind)) = racing.and(sim.race.last_split(sim.own)) else {
+    let race = race_on.get();
+    let Some((race, (number, time, behind))) = race.zip(sim.race.last_split(sim.own)) else {
         *announced = 0;
         return;
     };
@@ -209,11 +213,27 @@ pub(super) fn split_toast(
         return;
     }
     *announced = number;
-    let toast = if behind == 0 {
-        crate::toast::Toast::new(race::clock::time(time), SPLIT_SHOW_MS).color(Color::srgb(0.4, 1.0, 0.4))
+    let green = Color::srgb(0.4, 1.0, 0.4);
+    let red = Color::srgb(1.0, 0.3, 0.3);
+    let toast = if race.solo.is_none() {
+        if behind == 0 {
+            crate::toast::Toast::new(race::clock::time(time), SPLIT_SHOW_MS).color(green)
+        } else {
+            crate::toast::Toast::new(race::clock::delta(behind), SPLIT_SHOW_MS).color(red)
+        }
     } else {
-        crate::toast::Toast::new(race::clock::delta(behind), SPLIT_SHOW_MS)
-            .color(Color::srgb(1.0, 0.3, 0.3))
+        if race.attempt().is_none() {
+            return;
+        }
+        let against = (world_record.of(race))
+            .and_then(|(_, splits, _)| splits)
+            .or_else(|| best_splits.of(race));
+        let Some(&then) = against.and_then(|splits| splits.get(number - 1)) else {
+            return;
+        };
+        let split = time - then;
+        let color = if split <= 0 { green } else { red };
+        crate::toast::Toast::new(race::clock::delta(split), SPLIT_SHOW_MS).color(color)
     };
     toasts.write(toast);
 }

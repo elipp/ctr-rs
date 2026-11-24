@@ -36,7 +36,7 @@ pub(crate) struct LocalView {
     /// The kart of the race this view follows and drives.
     pub(super) slot: usize,
     /// What makes its pads.
-    pub(super) device: Device,
+    pub(crate) device: Device,
     /// Its racer menu (`chooser.rs`).
     pub(crate) chooser: super::chooser::Chooser,
     /// The kart it drives, if it is not ours (`Drive` has ours).

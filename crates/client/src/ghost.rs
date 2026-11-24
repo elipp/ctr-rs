@@ -253,8 +253,8 @@ fn build(race_on: Res<RaceOn>, karts: Query<(Entity, &GhostKart)>, mut builder: 
         };
         let kart = ghost.kart();
         let character = kart.driver.character as usize;
-        let (model, wheel_icons) = crate::load_racer(character);
-        let entity = builder.spawn_ghost(&model, &wheel_icons, kart, source.fade());
+        let kit = builder.kit(character);
+        let entity = builder.spawn_ghost(&kit, kart, source.fade());
         builder.commands.entity(entity).insert(GhostKart {
             source,
             character,
@@ -305,7 +305,7 @@ fn toggle(
     race_on: Res<RaceOn>,
     mut toasts: MessageWriter<Toast>,
 ) {
-    let Some(race) = race_on.get().filter(|race| race.solo.is_some()) else {
+    let Some(race) = race_on.get().filter(|race| race.attempt().is_some()) else {
         return;
     };
     // An end screen that offers a submit has Select for it.
@@ -341,7 +341,7 @@ fn hint(
     mut toasts: MessageWriter<Toast>,
 ) {
     let ghosts = (race_on.get())
-        .filter(|race| race.solo.is_some())
+        .filter(|race| race.attempt().is_some())
         .map(|race| &race.ghosts);
     if config.ghost_hint_done || ghosts.is_none_or(|g| g.have().none()) {
         *last_tick = None;

@@ -97,6 +97,8 @@ pub enum Action {
     /// Shortcut practice (`drive/practice.rs`), as its keys do.
     Practice(crate::drive::PracticeAsk),
     RestartRace,
+    /// Watch a stored run of the solo race on (`replay.rs`).
+    Watch(crate::ghost::Source),
     /// Define a cup: the tracks it goes through and the laps of each race (`lobby/cup.rs`).
     CupCreate {
         name: String,

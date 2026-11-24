@@ -49,7 +49,7 @@ pub(crate) use follow::push_buffer_view;
 pub use chooser::Chosen;
 pub use practice::PracticeAsk;
 pub(crate) use practice::{Practice, RunUpKart};
-pub(crate) use input::Pads;
+pub(crate) use input::{Controller, Pads};
 pub(crate) use local::LocalView;
 pub(crate) use split::{HudCamera, UnderCamera, window_rect};
 pub(crate) use overlay::spawn_hud;
@@ -150,6 +150,7 @@ impl Plugin for DrivePlugin {
         app.insert_resource(LocalPlayers(1))
             .init_resource::<Chosen>()
             .init_resource::<practice::Practice>()
+            .init_resource::<crate::pb::BestSplits>()
             .add_systems(Update, (practice::input, practice::build).run_if(driving))
             .init_resource::<chooser::ChooserPointer>()
             .add_systems(Update, (chooser::input, chooser::sync, chooser::show).chain().run_if(driving))
@@ -167,6 +168,12 @@ impl Plugin for DrivePlugin {
                     crate::projectile::tick,
                 )
                     .chain()
+                    .run_if(driving),
+            )
+            .add_systems(
+                Update,
+                crate::kart::follow_racer
+                    .before(crate::kart::reap)
                     .run_if(driving),
             )
             .add_systems(

@@ -5,9 +5,8 @@ use crate::subtract::SubtractMaterial;
 use crate::Mode;
 use crate::{
     AnimState, CHARACTERS, FlyCamera, GameTick, LevelData, LevelNumber, MeshOptions, Options,
-    Racer, SceneSystems, SceneryState, Textures, Track, WaterState, WheelIcons, command, config,
-    drive, exhaust, fire, kart, load_character, load_level, lobby, maps, props, sky, subtract,
-    toast,
+    SceneSystems, SceneryState, Textures, Track, WaterState, command, config, drive, exhaust,
+    fire, kart, load_level, lobby, maps, props, sky, subtract, toast,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -17,7 +16,6 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use instance::lev_init::LevMode;
 use loader::level::LevelId;
-use loader::model::Model;
 pub(crate) use race::track::anim_num_frames;
 use render::mesh::{self, PARTS, Part};
 
@@ -30,9 +28,9 @@ pub(crate) fn stage(what: impl std::fmt::Display) {
     let _ = what;
 }
 
-/// A drive-mode state for `track`: the kart on its first starting slot.
-pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive::Drive {
-    let anim_num_frames = anim_num_frames(model);
+/// A drive-mode state for `track`: `kit`'s kart on its first starting slot.
+pub(crate) fn new_drive(track: &Track, kit: &crate::Kit) -> drive::Drive {
+    let (character, anim_num_frames) = (kit.character, kit.anim_num_frames());
     let spec = race::KartSpec {
         character,
         anim_num_frames,
@@ -43,23 +41,16 @@ pub(crate) fn new_drive(track: &Track, model: &Model, character: usize) -> drive
     drive::Drive::new(track, &kart.driver, character, anim_num_frames)
 }
 
-/// Makes our kart in the race of `character`, where it is and as it goes: its engine class
-/// (the stats and the engine's sound), its voice and its model's animations. The race and the
-/// music go on. Only offline: the change is not in the rollback's snapshots.
+/// Makes our kart in the race `character`'s, where it is and as it goes (`Sim::set_racer`), and
+/// the free drive's to come.
 fn swap_character(world: &mut World, character: usize) {
-    let frames = anim_num_frames(&world.resource::<Racer>().0);
+    let kit = world.resource_mut::<crate::Kits>().get(character);
     world
         .resource_mut::<drive::Drive>()
-        .set_character(character, frames);
+        .set_character(character, kit.anim_num_frames());
     let mut sim = world.resource_mut::<props::Sim>();
     let own = sim.own;
-    let driver = &mut sim.race.state_mut().karts[own].driver;
-    driver.character = character as u8;
-    driver.stats = vehicle::stats::Stats::for_class(vehicle::stats::CHARACTER_ENGINES[character]);
-    driver.anim_num_frames = frames;
-    // The new model's animation may be shorter than the frame the old one was on.
-    let last = (vehicle::frame::num_anim_frames(driver, driver.anim_index) - 1).max(0);
-    driver.anim_frame = driver.anim_frame.clamp(0, last as i16);
+    sim.set_racer(own, &kit);
 }
 
 /// The level that was shown when an online race moved the viewer to its own.
@@ -145,6 +136,23 @@ pub(crate) fn switch_level(world: &mut World) {
     {
         level_step += crate::web::take_level_step();
     }
+    // A race has started: the loading screen comes in over what was shown first, and the race is
+    // on once it covers the window (`RaceOn::start`).
+    let started = world
+        .get_resource::<crate::race_on::RaceOn>()
+        .and_then(|race_on| race_on.newest())
+        .map(|race| race.track);
+    if let Some(track) = started
+        && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
+        && lobby.race_next == Some(track)
+    {
+        lobby.race_next = None;
+        crate::loading::bring_in(world);
+        return;
+    }
+    if let Some(mut race_on) = world.get_resource_mut::<crate::race_on::RaceOn>() {
+        race_on.take_over();
+    }
     // An online race is on its level and with its racers: the lobby's start sets the level, and
     // the keys do nothing.
     // (A map we lack is waited for, see `lobby.rs`.)
@@ -158,15 +166,6 @@ pub(crate) fn switch_level(world: &mut World) {
     let mode = race_track.map_or(LevMode::Arcade, |(_, _, mode)| mode);
     let mode_changed = mode != world.resource::<Track>().2;
     let race_track = race_track.map(|(track, ..)| track);
-    // A race has started: the loading screen comes in over what was shown first.
-    if let Some(track) = race_track
-        && let Some(mut lobby) = world.get_resource_mut::<lobby::Lobby>()
-        && lobby.race_next == Some(track)
-    {
-        lobby.race_next = None;
-        crate::loading::bring_in(world);
-        return;
-    }
     // The level shown before the race took the viewer to its own: back to it when the race is
     // over (the lobby closed, or failed).
     let mut before = world
@@ -229,7 +228,6 @@ pub(crate) fn switch_level(world: &mut World) {
             config.set_character(options.racer);
         }
     }
-    let character = (racer_step != 0).then(|| load_character(options.racer));
 
     if id != current || mode_changed {
         stage(format_args!("loading level {id:#x}"));
@@ -239,9 +237,6 @@ pub(crate) fn switch_level(world: &mut World) {
         despawn(world, scene);
         world.insert_resource(Track(level, LevelId(id), mode));
         world.insert_resource(Textures { dram, vram });
-        if let Some(character) = character {
-            character.insert(world);
-        }
         world.insert_resource(LevelNumber(id));
         stage("building the scene");
         match *world.resource::<State<Mode>>().get() {
@@ -264,21 +259,21 @@ pub(crate) fn switch_level(world: &mut World) {
             format!("Track: {}", maps::name(id)),
             2500,
         ));
-    } else if let Some(character) = character {
-        // Only the kart goes: the level and the race stay, and the new racer drives on from
-        // where the old one was. (Online the racers are the race's, and do not change here.)
-        let kart = world
-            .query_filtered::<Entity, With<KartScene>>()
-            .iter(world)
-            .collect();
-        despawn(world, kart);
-        character.insert(world);
+        crate::loading::begin(world);
+    } else if racer_step != 0 {
+        // The level and the race stay, and the new racer drives on from where the old one was.
+        // (Online the racers are the race's, and do not change here.)
         if world.contains_resource::<drive::Drive>() {
             swap_character(world, options.racer as usize);
+        } else {
+            // The viewer's kart is no sim's, for its body to follow: it is the pick's.
+            let karts: Vec<Entity> = (world.query_filtered::<Entity, With<drive::Kart>>())
+                .iter(world)
+                .collect();
+            despawn(world, karts);
+            world.run_system_cached(spawn_kart).expect("kart system runs");
         }
-        spawn_kart(world);
     }
-    crate::loading::begin(world);
     for mut window in world.query::<&mut Window>().iter_mut(world) {
         window.title = format!(
             "ctr-rs: {}, {}",
@@ -435,11 +430,9 @@ pub(crate) fn despawn(world: &mut World, entities: Vec<Entity>) {
 /// The kart on the grid of the level shown, and what it is driven with. `Mode::Drive` only.
 pub(crate) fn restart_drive(world: &mut World) {
     stage("starting the drive");
-    let drive = new_drive(
-        world.resource::<Track>(),
-        &world.resource::<Racer>().0,
-        world.resource::<Options>().racer as usize,
-    );
+    let racer = world.resource::<Options>().racer as usize;
+    let kit = world.resource_mut::<crate::Kits>().get(racer);
+    let drive = new_drive(world.resource::<Track>(), &kit);
     world.insert_resource(drive);
     world.insert_resource(exhaust::Particles::new());
     stage("drive started");
@@ -603,8 +596,7 @@ pub(crate) fn setup(
     mut subtract_materials: ResMut<Assets<SubtractMaterial>>,
     mut billboard_materials: ResMut<Assets<crate::billboard::BillboardMaterial>>,
     driving: Option<Res<drive::Drive>>,
-    wheel_icons: Res<WheelIcons>,
-    smoke_icon: Res<crate::SmokeIcon>,
+    kart_parts: Res<crate::KartParts>,
     start: Option<Res<ViewerStart>>,
     mode: Res<State<Mode>>,
 ) {
@@ -738,8 +730,8 @@ pub(crate) fn setup(
             emitters: objects.fireballs.len() + objects.flame_jets.len(),
             plants: objects.plants.len(),
         },
-        &wheel_icons.0,
-        smoke_icon.0.as_ref(),
+        &kart_parts.wheels,
+        kart_parts.smoke.as_ref(),
         &textures.dram,
         &textures.vram,
         &mut commands,
@@ -895,35 +887,15 @@ pub(crate) fn setup(
 #[derive(Resource)]
 pub(crate) struct ViewerStart(Transform);
 
-/// Marks what belongs to the kart on the grid, to despawn it for another racer (and not the level).
-#[derive(Component)]
-pub(crate) struct KartScene;
-
-/// Spawns the kart and what goes with it (its flames, shadow, skid marks and exhaust), and marks
-/// it all as [`KartScene`]. Those spawn each into their own entities, so the scene entities
-/// that are new after they ran are the kart's.
-pub(crate) fn spawn_kart(world: &mut World) {
-    let before: std::collections::HashSet<Entity> = world_scene(world).into_iter().collect();
-    world
-        .run_system_cached(spawn_kart_parts)
-        .expect("kart system runs");
-    // (Only the scene: resources and registered systems are entities too, and must stay.)
-    for entity in world_scene(world) {
-        if !before.contains(&entity) {
-            world.entity_mut(entity).insert(KartScene);
-        }
-    }
-}
-
-pub(crate) fn spawn_kart_parts(
+/// Spawns our kart, and what goes with it (its flames, shadow, skid marks and exhaust). Driven,
+/// it is its sim's racer (a race's may not be our pick); else the pick.
+pub(crate) fn spawn_kart(
     track: Res<Track>,
     sim: Res<props::Sim>,
-    racer: Res<Racer>,
-    wheel_icons: Res<WheelIcons>,
+    options: Res<Options>,
     mode: Res<State<Mode>>,
     mut builder: kart::KartBuilder,
 ) {
-    let model = &racer.0;
     let spawn = track.0.driver_spawns[0];
     let [x, y, z] = mesh::to_world(spawn.pos);
     let yaw = spawn.rot.y as f32 / 4096.0 * std::f32::consts::TAU;
@@ -932,7 +904,11 @@ pub(crate) fn spawn_kart_parts(
     let placement = Transform::from_xyz(x, y, z)
         .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_y(MODEL_FORWARD_YAW));
     let driven = (*mode.get() == Mode::Drive).then(|| (sim.own, sim.kart()));
-    builder.spawn(model, &wheel_icons.0, placement, true, driven);
+    let character = driven.map_or(options.racer as usize, |(_, kart)| {
+        kart.driver.character as usize
+    });
+    let kit = builder.kit(character);
+    builder.spawn(&kit, placement, true, driven);
 }
 
 /// The images made so far, by what is in them: the id of one that still lives.

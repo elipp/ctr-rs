@@ -84,7 +84,7 @@ pub struct Wheels {
     /// Which wheel (`wheelLocal[wheel]`): front left, front right, rear left, rear right.
     wheel: usize,
     /// The kart entity, whose pose and [`KartMotion`] the wheels follow.
-    kart: Entity,
+    pub(crate) kart: Entity,
     wheel_size: i32,
     /// The mesh of a wheel that is under water (`DrawTires`' secondary range): in the world's
     /// layer, behind the surface. The other one has it when it is not.

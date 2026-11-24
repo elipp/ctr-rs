@@ -32,7 +32,7 @@ fn stem(kind: Kind, map_hash: u64, laps: u8) -> String {
 /// only believed for the run bytes it was made of (`run_digest`) and our `SIM_VERSION`; anything
 /// else replays the run and writes it anew, so the times-are-the-sim's rule above still holds as
 /// long as sim changes bump `SIM_VERSION`.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Timed {
     kind: Kind,
     map_hash: u64,
@@ -45,11 +45,15 @@ struct Timed {
     /// exactly as long as the time does: a new best is other bytes, and a new `SIM_VERSION` is
     /// another board.
     run_id: Option<i64>,
+    /// When the run was driven; None for a best from before this was kept (`OLD_LEN`'s).
+    set_at: Option<jiff::Timestamp>,
 }
 
 impl Timed {
     const MAGIC: &[u8; 4] = b"CTRT";
-    const LEN: usize = 45;
+    const LEN: usize = 54;
+    /// Without `set_at`.
+    const OLD_LEN: usize = 45;
 
     fn to_bytes(&self) -> Vec<u8> {
         let mut b = Self::MAGIC.to_vec();
@@ -68,12 +72,15 @@ impl Timed {
         b.extend(o.map_or(0, |o| o.finish_tick).to_le_bytes());
         b.push(self.run_id.is_some() as u8);
         b.extend(self.run_id.unwrap_or(0).to_le_bytes());
+        b.push(self.set_at.is_some() as u8);
+        b.extend(self.set_at.map_or(0, |at| at.as_second()).to_le_bytes());
         debug_assert_eq!(b.len(), Self::LEN);
         b
     }
 
     fn from_bytes(bytes: &[u8]) -> Option<Timed> {
-        let rest = bytes.strip_prefix(Self::MAGIC).filter(|_| bytes.len() == Self::LEN)?;
+        let rest = (bytes.strip_prefix(Self::MAGIC))
+            .filter(|_| [Self::LEN, Self::OLD_LEN].contains(&bytes.len()))?;
         let u32_at = |at: usize| u32::from_le_bytes(rest[at..at + 4].try_into().unwrap());
         let u64_at = |at: usize| u64::from_le_bytes(rest[at..at + 8].try_into().unwrap());
         let kind = match rest[0] {
@@ -87,6 +94,9 @@ impl Timed {
             finish_tick: u32_at(28),
         });
         let run_id = (rest[32] != 0).then(|| i64::from_le_bytes(rest[33..41].try_into().unwrap()));
+        let set_at = (rest.get(41).is_some_and(|&b| b != 0))
+            .then(|| i64::from_le_bytes(rest[42..50].try_into().unwrap()))
+            .and_then(|at| jiff::Timestamp::from_second(at).ok());
         Some(Timed {
             kind,
             map_hash: u64_at(1),
@@ -95,6 +105,7 @@ impl Timed {
             run_digest: u64_at(14),
             outcome,
             run_id,
+            set_at,
         })
     }
 
@@ -107,6 +118,7 @@ impl Timed {
             run_digest: map::fnv1a(run_bytes),
             outcome,
             run_id: None,
+            set_at: None,
         }
     }
 
@@ -272,10 +284,10 @@ fn spec_for(run: &Run, spec: race::KartSpec) -> race::KartSpec {
 }
 
 fn racer_spec(character: usize) -> race::KartSpec {
-    let (model, _) = crate::assets::load_racer(character);
+    // (Off the scene, with no `Kits` to hand: the sim needs only the model's animations.)
     race::KartSpec {
         character,
-        anim_num_frames: crate::scene::anim_num_frames(&model),
+        anim_num_frames: crate::assets::load_kit(character).anim_num_frames(),
         bot: false,
         line: None,
     }
@@ -312,8 +324,47 @@ fn load(kind: Kind, map_hash: u64, laps: u8) -> Option<(Run, Vec<u8>)> {
 /// None if there is none. A best that no longer finishes still drives (it's the run as it was
 /// played), so `race.best` is not asked.
 pub fn ghost(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Ghost> {
-    let (run, _) = load(race.solo?, race.hash, race.rules.laps)?;
-    ghost_of(level, sim, race, &run)
+    ghost_of(level, sim, race, &run(race)?)
+}
+
+/// The best's time at each checkpoint, for the split toasts (`drive/overlay.rs`) when there is
+/// no server record to be against. Kept across restarts: working them out plays the run through.
+#[derive(Resource, Default)]
+pub struct BestSplits(Option<(BestKey, Vec<i32>)>);
+
+/// A best, by its board and its time: a new best is always faster.
+type BestKey = (Kind, u64, u8, i32);
+
+fn best_key(race: &CurrentRace) -> Option<BestKey> {
+    Some((race.attempt()?, race.hash, race.rules.laps, race.best?))
+}
+
+impl BestSplits {
+    /// At each start of a solo attempt, once its best's ghost is built.
+    pub fn start(&mut self, level: &loader::lev::Level, race: &CurrentRace) {
+        let (Some(key), Some(ghost)) = (best_key(race), race.ghosts.best.as_ref()) else {
+            return;
+        };
+        if self.0.as_ref().is_none_or(|(had, _)| *had != key) {
+            self.0 = Some((key, ghost.splits(level)));
+        }
+    }
+
+    pub fn of(&self, race: &CurrentRace) -> Option<&[i32]> {
+        let (had, splits) = self.0.as_ref()?;
+        (best_key(race)? == *had).then_some(splits.as_slice())
+    }
+}
+
+/// When the stored best of the solo race was driven, if that is known.
+pub fn set_at(race: &CurrentRace) -> Option<jiff::Timestamp> {
+    let name = format!("{}.time", stem(race.solo?, race.hash, race.rules.laps));
+    Timed::from_bytes(&store::load(&name).ok()??)?.set_at
+}
+
+/// The stored best of the solo race; None if there is none.
+pub fn run(race: &CurrentRace) -> Option<Run> {
+    Some(load(race.solo?, race.hash, race.rules.laps)?.0)
 }
 
 /// `run` as a ghost of the race, at tick 0 on the level loaded (the race's): only once
@@ -355,11 +406,17 @@ fn stored(
     let (run, bytes) = load(kind, map_hash, laps)?;
     let fresh = Timed::of(&run, &bytes, None);
     let timed = store::load(&format!("{stem}.time")).ok().flatten();
-    if let Some(timed) = timed.as_deref().and_then(Timed::from_bytes)
-        && timed == (Timed { outcome: timed.outcome, run_id: timed.run_id, ..fresh })
+    let timed = timed.as_deref().and_then(Timed::from_bytes);
+    if let Some(timed) = timed
+        .as_ref()
+        .filter(|t| **t == (Timed { outcome: t.outcome, run_id: t.run_id, set_at: t.set_at, ..fresh }))
     {
-        return Some((bytes, timed));
+        return Some((bytes, *timed));
     }
+    // (Re-timed, the run is still the one driven then.)
+    let set_at = timed
+        .filter(|t| t.run_digest == fresh.run_digest)
+        .and_then(|t| t.set_at);
     let outcome = replay(&run);
     if outcome.is_none() {
         warn!(
@@ -368,7 +425,7 @@ fn stored(
             race::SIM_VERSION
         );
     }
-    let timed = Timed { outcome, ..fresh };
+    let timed = Timed { outcome, set_at, ..fresh };
     timed.save();
     Some((bytes, timed))
 }
@@ -404,7 +461,8 @@ pub fn finished(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Op
     match store::save(&name, &bytes) {
         Ok(()) => {
             info!("personal best {name}: {} ms", new.final_ms);
-            Timed::of(&run, &bytes, Some(new)).save();
+            let set_at = jiff::Timestamp::from_second(net::score::unix_now() as i64).ok();
+            Timed { set_at, ..Timed::of(&run, &bytes, Some(new)) }.save();
         }
         Err(e) => error!("personal best {name}: {e}"),
     }
@@ -433,8 +491,25 @@ mod tests {
                 run_digest: 0xfedc_ba98_7654_3210,
                 outcome,
                 run_id: outcome.map(|_| 42),
+                set_at: outcome.map(|_| jiff::Timestamp::from_second(1_790_000_000).unwrap()),
             };
             assert_eq!(Timed::from_bytes(&timed.to_bytes()), Some(timed));
         }
+    }
+
+    #[test]
+    fn a_time_from_before_set_at_reads_without_one() {
+        let timed = Timed {
+            kind: Kind::Relic,
+            map_hash: 7,
+            laps: 3,
+            sim_version: 12,
+            run_digest: 9,
+            outcome: None,
+            run_id: Some(5),
+            set_at: Some(jiff::Timestamp::from_second(1_790_000_000).unwrap()),
+        };
+        let old = &timed.to_bytes()[..Timed::OLD_LEN];
+        assert_eq!(Timed::from_bytes(old), Some(Timed { set_at: None, ..timed }));
     }
 }

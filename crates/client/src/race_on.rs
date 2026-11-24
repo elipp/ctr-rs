@@ -3,7 +3,9 @@
 //!
 //! Invariants others rely on:
 //! - a race is on exactly while [`RaceOn`] holds one; a lobby's start (`lobby::report`) or
-//!   `/race start` alone (`Lobby::race_alone`) puts it there, the end of the race takes it away;
+//!   `/race start` alone (`Lobby::race_alone`) starts it ([`RaceOn::start`]), and it is on once
+//!   the loading flag covers the window (`scene::switch_level`): until then everything shows
+//!   what was on before, which the flag comes in over. The end of the race takes it away;
 //! - [`CurrentRace::net`] is there exactly when the race is a lobby's: everyone's sim is the
 //!   same, so no pause, restart or debug change of our own. A race alone has none.
 
@@ -15,7 +17,7 @@ use crate::lobby::cup::{Finisher, Who};
 /// The race on, if any. (No `Deref` to the `Option`: `Res` has `as_ref`/`as_mut` of its own,
 /// which would shadow the `Option`'s.)
 #[derive(Resource, Default)]
-pub struct RaceOn(pub Option<CurrentRace>);
+pub struct RaceOn(pub Option<CurrentRace>, Option<CurrentRace>);
 
 impl RaceOn {
     pub fn get(&self) -> Option<&CurrentRace> {
@@ -28,6 +30,34 @@ impl RaceOn {
 
     pub fn is_on(&self) -> bool {
         self.0.is_some()
+    }
+
+    /// A race has started: it is on once the flag covers the window ([`RaceOn::take_over`]).
+    pub fn start(&mut self, race: CurrentRace) {
+        self.1 = Some(race);
+    }
+
+    /// The race that has started under the flag, if any, is the one on now.
+    pub fn take_over(&mut self) {
+        if let Some(race) = self.1.take() {
+            self.0 = Some(race);
+        }
+    }
+
+    /// The race that started last, on or not yet: the lobby's news of it (pauses, pads, who
+    /// left) is of that one.
+    pub fn newest(&self) -> Option<&CurrentRace> {
+        self.1.as_ref().or(self.0.as_ref())
+    }
+
+    pub fn newest_mut(&mut self) -> Option<&mut CurrentRace> {
+        self.1.as_mut().or(self.0.as_mut())
+    }
+
+    /// No race, on or started.
+    pub fn end(&mut self) {
+        self.0 = None;
+        self.1 = None;
     }
 
     /// The race on's kind, if it is a solo run against the clock: one kart, no ranks, no fruit.
@@ -92,6 +122,8 @@ pub struct CurrentRace {
     /// The relic to beat and its time (`race::relic::target`), from the personal best as it
     /// was when the race went on the grid.
     pub relic_target: Option<(race::relic::Tier, i32)>,
+    /// A stored solo run being watched (`replay.rs`): the race is `solo`'s, but no attempt.
+    pub replay: Option<crate::replay::Replay>,
     /// A solo run's personal best's time, as it was when the race went on the grid.
     pub best: Option<i32>,
     /// A solo run's ghosts, driving next to ours (`ghost.rs`): they keep pace with the race's
@@ -276,6 +308,7 @@ impl CurrentRace {
             hash,
             rules,
             solo: None,
+            replay: None,
             relic_target: None,
             best: None,
             ghosts: Default::default(),
@@ -337,6 +370,12 @@ impl CurrentRace {
     pub fn mode(&self) -> race::Mode {
         let laps = self.rules.laps;
         self.solo.map_or(race::Mode::Race { laps }, |kind| kind.mode(laps))
+    }
+
+    /// The kind of a solo run that is being driven: what the best, the ghosts, the submit and
+    /// the ceremony are of. Not a replay's.
+    pub fn attempt(&self) -> Option<race::solo::Kind> {
+        self.solo.filter(|_| self.replay.is_none())
     }
 
     /// How the race's level has its instances (`lev_init`).

@@ -1,14 +1,12 @@
 //! What the race's leaderboard (`leaderboard`) and the lobby's list (`lobby_list`) both draw: a
 //! column of portraits (`render::portraits`), each with the player's name under it, the ping on
-//! its right (which [`pings`] keeps up), and the host's "H" on a corner. Our name is in
+//! its right (which [`pings`] keeps up), and the host's crown on a corner. Our name is in
 //! [`HIGHLIGHT`]: with every character open to everyone, the same face can be in the column more
 //! than once (which retail never allows), and this tells which one is ours. (Not retail.)
 
 use bevy::prelude::*;
-use render::font::{Font, Gradient};
 use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
 
-use crate::font::CtrText;
 use crate::hud;
 use crate::hud::{atlas_image, pack_icons};
 use crate::leaderboard::ICON_X;
@@ -35,11 +33,10 @@ pub(crate) const HIGHLIGHT: Color = Color::srgb(1.0, 0.9, 0.2);
 /// The colour of the "D" of a direct way: the green of the toasts of who joined.
 const DIRECT: Color = Color::srgb(0.4, 1.0, 0.4);
 
-/// The host's badge: a friendly yellow, pale at the top and golden at the bottom.
-const HOST_GRADIENT: Gradient = Gradient {
-    top: [0xff, 0xf4, 0x90],
-    bottom: [0xf0, 0xc0, 0x30],
-};
+/// The host's crown, golden, and its size in pixels. Outlined as the names over the karts are,
+/// which reads over any portrait without a box.
+const HOST_COLOR: Color = Color::srgb_u8(0xf8, 0xd0, 0x40);
+const HOST_SIZE: f32 = 18.0;
 
 /// The ping of the player with a short key.
 #[derive(Component)]
@@ -121,13 +118,13 @@ pub(crate) fn spawn_portrait(
         .id()
 }
 
-/// Puts the host's "H" on a corner of its portrait: the top right, or the top left where the
+/// Puts the host's crown on a corner of its portrait: the top right, or the top left where the
 /// race's leaderboard has its place there.
 pub(crate) fn spawn_host_badge(commands: &mut Commands, portrait: Entity, right: bool) {
     let mut node = Node {
         position_type: PositionType::Absolute,
         top: Val::ZERO,
-        padding: UiRect::all(Val::Px(2.0)),
+        margin: UiRect::all(Val::Px(2.0)),
         ..default()
     };
     if right {
@@ -136,9 +133,7 @@ pub(crate) fn spawn_host_badge(commands: &mut Commands, portrait: Entity, right:
         node.left = Val::ZERO;
     }
     commands.spawn((
-        CtrText::new("H", Font::Middle, HOST_GRADIENT).fixed(hud::PIXEL / 2.0),
-        BackgroundColor(BACKGROUND),
-        node,
+        crate::icons::outlined(crate::icons::CROWN_SIMPLE, HOST_SIZE, HOST_COLOR, node),
         Pickable::IGNORE,
         ChildOf(portrait),
     ));

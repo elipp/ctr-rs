@@ -61,7 +61,7 @@ impl Practice {
             self.recent.clear();
             self.playing = None;
             if want.is_some() {
-                toasts.write(Toast::new("Shortcut practice is for a free drive alone", 2000));
+                toasts.write(Toast::new(net::NOT_NOW, 2000));
             }
             return false;
         }
@@ -80,7 +80,10 @@ impl Practice {
             Some(PracticeAsk::RunUp) => {
                 let Some(mark) = &self.mark else {
                     let key = controls.describe(Control::SetPoint);
-                    toasts.write(Toast::new(format!("No point yet: {key} sets one"), 2000));
+                    toasts.write(Toast::new(
+                        format!("No point yet: press '{key}' to set"),
+                        2000,
+                    ));
                     return false;
                 };
                 if !mark.pads.is_empty() {
@@ -104,14 +107,22 @@ impl Practice {
     /// The run-up's pad for this tick, while one plays.
     pub(super) fn pad(&mut self) -> Option<Pad> {
         let at = self.playing?;
-        let pad = self.mark.as_ref().and_then(|mark| mark.pads.get(at)).copied();
+        let pad = self
+            .mark
+            .as_ref()
+            .and_then(|mark| mark.pads.get(at))
+            .copied();
         self.playing = pad.map(|_| at + 1);
         pad
     }
 
     /// `race` is the state before a tick, played with `pad`.
     pub(super) fn record(&mut self, race: &Race, pad: Pad) {
-        if self.recent.back().is_some_and(|(last, _)| character(last) != character(race)) {
+        if self
+            .recent
+            .back()
+            .is_some_and(|(last, _)| character(last) != character(race))
+        {
             self.recent.clear();
         }
         if self.recent.len() == RUN_UP {
@@ -186,10 +197,10 @@ pub(super) fn build(
     let Some(character) = wanted.filter(|_| !have) else {
         return;
     };
-    let (model, wheel_icons) = crate::load_racer(character as usize);
+    let kit = builder.kit(character as usize);
     let kart = sim.kart();
     let fade = crate::ghost::Source::Best.fade();
-    let entity = builder.spawn_ghost(&model, &wheel_icons, kart, fade);
+    let entity = builder.spawn_ghost(&kit, kart, fade);
     builder.commands.entity(entity).insert(RunUpKart {
         character,
         tick: sim.race.tick(),

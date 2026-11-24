@@ -6,7 +6,8 @@
 //! A relic race has no lap rows: under TIME is the next relic to earn and its time instead, and
 //! under that the personal best. A time trial has the best between TIME TRIAL and the lap rows.
 //! Under the best, a solo run has the board's world record if there is one ("(You)" and white if
-//! it is ours), and how far ahead of it or behind we were at the last checkpoint passed.
+//! it is ours). A record that is our best is not shown twice: the best's label says so instead.
+//! (The splits against it are toasts, as a race's are: `drive/overlay.rs`.)
 //!
 //! A free drive has neither: it has no laps to count and no end. In TIME's place it has the
 //! track's personal bests, if any, the relic best's time followed by the relic it earned, spinning
@@ -16,6 +17,7 @@ use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
+use crate::ghost::Source;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews, ViewKart};
 use crate::subtract::SubtractMaterial;
@@ -104,19 +106,17 @@ struct BestName;
 #[derive(Component)]
 struct BestTime;
 
-/// The world record's label, its time, and our split against it.
+/// A run's time and the button that watches it (`replay.rs`), on one line: out of the layout
+/// together.
+#[derive(Component)]
+struct TimeRow(Source);
+
+/// The world record's label, and its time.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum World {
     Name,
     Time,
-    Split,
 }
-
-/// Ahead of the world record at a checkpoint (behind is `Gradient::RED`).
-const AHEAD: Gradient = Gradient {
-    top: [0x80, 0xff, 0x60],
-    bottom: [0x10, 0xa0, 0x10],
-};
 
 /// The column of lap rows, and how many it has.
 #[derive(Component)]
@@ -200,6 +200,17 @@ impl Plugin for LapsPlugin {
 }
 
 /// A line of the game's text at the HUD's size.
+fn time_row() -> (Node, Pickable) {
+    (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        Pickable::IGNORE,
+    )
+}
+
 fn text(text: &str, font: Font, gradient: Gradient) -> CtrText {
     CtrText::new(text, font, gradient).fixed(hud::PIXEL)
 }
@@ -223,20 +234,25 @@ fn show(
             Option<&RowTime>,
             Has<TargetName>,
             Has<TargetTime>,
+            Has<BestName>,
             Has<BestTime>,
             Has<TimeLabel>,
         ),
         Without<World>,
     >,
     mut relic_nodes: Query<
-        (&mut Node, Has<BestName>, Has<BestTime>),
+        (&mut Node, Has<BestName>),
         (
-            Or<(
-                With<TargetName>,
-                With<TargetTime>,
-                With<BestName>,
-                With<BestTime>,
-            )>,
+            Or<(With<TargetName>, With<TargetTime>, With<BestName>)>,
+            Without<World>,
+        ),
+    >,
+    mut time_rows: Query<
+        (&TimeRow, &mut Node),
+        (
+            Without<TargetName>,
+            Without<TargetTime>,
+            Without<BestName>,
             Without<World>,
         ),
     >,
@@ -276,14 +292,24 @@ fn show(
     });
     let best = solo.and_then(|race| race.best);
     let world = solo.and_then(|race| world_record.of(race));
+    let world_is_best = solo.is_some_and(|race| world_record.is_best(race));
     // (Out of the layout without one, or the block's gaps would push the lap rows down; the best
     // goes up in the target's place.)
     let display = |on: bool| if on { Display::Flex } else { Display::None };
-    for (mut node, best_name, best_time) in &mut relic_nodes {
-        let display = display(if best_name || best_time {
+    for (mut node, best_name) in &mut relic_nodes {
+        let display = display(if best_name {
             best.is_some()
         } else {
             target.is_some()
+        });
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for (row, mut node) in &mut time_rows {
+        let display = display(match row.0 {
+            Source::Best => best.is_some(),
+            Source::World => world.is_some() && !world_is_best,
         });
         if node.display != display {
             node.display = display;
@@ -308,17 +334,12 @@ fn show(
         } else if !finished {
             times.push(race.event_ms - driver.lap_time);
         }
-        // How far ahead (-) or behind (+) the record we were at the last checkpoint we passed.
-        let split = world.and_then(|(_, splits, _)| {
-            let ours = &race.splits[slot];
-            let at = ours.len().checked_sub(1)?;
-            Some(ours[at] - splits?.get(at)?)
-        });
         for (v, &part, mut text, mut node) in &mut world_texts {
             if v.0 != view {
                 continue;
             }
             let wanted = match part {
+                World::Name | World::Time if world_is_best => None,
                 World::Name => world.map(|(_, _, ours)| {
                     if ours {
                         "Server Record (You)"
@@ -328,11 +349,8 @@ fn show(
                     .into()
                 }),
                 World::Time => world.map(|(entry, _, _)| race::clock::time(entry.final_ms)),
-                World::Split => split.map(race::clock::delta),
             };
-            if part != World::Split
-                && let Some((_, _, ours)) = world
-            {
+            if let Some((_, _, ours)) = world {
                 let gradient = if ours {
                     Gradient::WHITE
                 } else {
@@ -345,20 +363,6 @@ fn show(
             let display = display(wanted.is_some());
             if node.display != display {
                 node.display = display;
-            }
-            if part == World::Split
-                && let Some(split) = split
-            {
-                let gradient = if split < 0 {
-                    AHEAD
-                } else if split > 0 {
-                    Gradient::RED
-                } else {
-                    Gradient::WHITE
-                };
-                if text.gradient != gradient {
-                    text.gradient = gradient;
-                }
             }
             if let Some(wanted) = wanted
                 && text.text != wanted
@@ -375,8 +379,19 @@ fn show(
                 spawn_row(&mut commands, entity, view, i, &race::clock::time(ms));
             }
         }
-        for (v, mut text, is_total, is_count, label, time, is_name, is_target, is_best, is_label) in
-            &mut texts
+        for (
+            v,
+            mut text,
+            is_total,
+            is_count,
+            label,
+            time,
+            is_name,
+            is_target,
+            is_best_name,
+            is_best,
+            is_label,
+        ) in &mut texts
         {
             if v.0 != view {
                 continue;
@@ -401,6 +416,13 @@ fn show(
                 target.map_or_else(String::new, |(name, _, _)| name.to_string())
             } else if is_target {
                 target.map_or_else(String::new, |(_, _, ms)| race::clock::time(ms))
+            } else if is_best_name {
+                if world_is_best {
+                    "Best (Server #1)"
+                } else {
+                    "Personal Best"
+                }
+                .to_string()
             } else if is_best {
                 best.map_or_else(String::new, race::clock::time)
             } else {
@@ -607,11 +629,28 @@ fn spawn(commands: &mut Commands, view: usize) {
             (view, Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
             (view, TargetName, text("", Font::Middle, SAPPHIRE)),
             (view, TargetTime, text("", Font::Large, SAPPHIRE)),
-            (BestName, text("Best", Font::Middle, Gradient::WHITE)),
-            (view, BestTime, text("", Font::Large, Gradient::WHITE)),
+            (
+                view,
+                BestName,
+                text("Personal Best", Font::Middle, Gradient::WHITE)
+            ),
+            (
+                TimeRow(Source::Best),
+                time_row(),
+                children![
+                    (view, BestTime, text("", Font::Large, Gradient::WHITE)),
+                    crate::replay::button(Source::Best),
+                ],
+            ),
             (view, World::Name, text("", Font::Middle, Gradient::YELLOW)),
-            (view, World::Time, text("", Font::Large, Gradient::YELLOW)),
-            (view, World::Split, text("", Font::Middle, Gradient::WHITE)),
+            (
+                TimeRow(Source::World),
+                time_row(),
+                children![
+                    (view, World::Time, text("", Font::Large, Gradient::YELLOW)),
+                    crate::replay::button(Source::World),
+                ],
+            ),
             (
                 view,
                 LapRows(0),
