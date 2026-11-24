@@ -1,5 +1,5 @@
-//! The names over the other players' karts (OnlineCTR's `DrawOverheadNames`), and the label of
-//! the kart the camera follows when it is not ours.
+//! The names over the other players' karts (OnlineCTR's `DrawOverheadNames`) and over a solo
+//! run's ghosts, and the label of the kart the camera follows when it is not ours.
 
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
@@ -7,12 +7,30 @@ use render::mesh::SCALE;
 
 use crate::drive::ChaseCamera;
 use crate::font::CtrText;
+use crate::ghost::{GhostKart, Source};
 use crate::kart::KartSlot;
 
-/// The box of the name over the kart in a slot. Its children are the name's text: the
-/// [`NameOutline`]s first, under the [`NameText`].
+/// Whose kart a name is over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Plate {
+    Slot(usize),
+    Ghost(Source),
+}
+
+impl Plate {
+    fn color(self) -> Color {
+        match self {
+            Plate::Slot(_) => COLOR,
+            Plate::Ghost(Source::Best) => BEST_COLOR,
+            Plate::Ghost(Source::World) => WORLD_COLOR,
+        }
+    }
+}
+
+/// The box of the name over a kart. Its children are the name's text: the [`NameOutline`]s
+/// first, under the [`NameText`].
 #[derive(Component)]
-pub(crate) struct OverheadName(usize);
+pub(crate) struct OverheadName(Plate);
 
 /// The name itself, in its green.
 #[derive(Component)]
@@ -50,6 +68,10 @@ const PADDING: Vec2 = Vec2::new(9.0, 0.0);
 /// The green of a name.
 const COLOR: Color = Color::srgb(0.45, 1.0, 0.35);
 
+/// A ghost's name, in the tint of its kart (`ghost::Fade`).
+const BEST_COLOR: Color = Color::srgb(0.85, 0.85, 0.85);
+const WORLD_COLOR: Color = Color::srgb(1.0, 0.85, 0.45);
+
 /// The outline of a name's letters, so that it reads over any track: how thick, in the window's pixels whatever the name's size, and
 /// its colour. It is made of copies of the name moved that far each way.
 const OUTLINE_WIDTH: f32 = 2.0;
@@ -76,10 +98,15 @@ const TOO_FAR: f32 = 3200.0;
 pub(crate) fn overhead(
     mut commands: Commands,
     race_on: Res<crate::race_on::RaceOn>,
+    world_record: Res<crate::world_record::WorldRecord>,
     drive: Option<Res<crate::drive::Drive>>,
     screen: Res<crate::pixel::RenderSize>,
     cameras: Query<(&Camera, &Transform), With<ChaseCamera>>,
     karts: Query<(&KartSlot, &Transform), Without<ChaseCamera>>,
+    ghosts: Query<
+        (&GhostKart, &Transform, &Visibility),
+        (Without<ChaseCamera>, Without<OverheadName>, Without<WatchingLabel>),
+    >,
     mut labels: Query<
         (
             Entity,
@@ -109,13 +136,16 @@ pub(crate) fn overhead(
         }
         return;
     };
-    // A label for each kart, and the one for the kart we watch.
-    for slot in 0..race.karts() {
-        if labels.iter().all(|(_, label, ..)| label.0 != slot) {
+    // A label for each kart and each ghost, and the one for the kart we watch.
+    let plates = (0..race.karts()).map(Plate::Slot).chain(
+        (race.ghosts.iter()).map(|(source, _)| Plate::Ghost(source)),
+    );
+    for plate in plates {
+        if labels.iter().all(|(_, label, ..)| label.0 != plate) {
             let font = crate::font::bold(TextFont::from_font_size(MAX_SIZE));
             commands
                 .spawn((
-                    OverheadName(slot),
+                    OverheadName(plate),
                     // Centered over the point, with its bottom edge on it.
                     UiTransform::from_translation(Val2::percent(-50.0, -100.0)),
                     Visibility::Hidden,
@@ -146,7 +176,7 @@ pub(crate) fn overhead(
                         NameText,
                         Text::new(""),
                         font,
-                        TextColor(COLOR),
+                        TextColor(plate.color()),
                         Pickable::IGNORE,
                     ));
                 });
@@ -212,17 +242,39 @@ pub(crate) fn overhead(
             .ok()
             .map(|at| screen.to_window(at))
     };
-    for (_, label, children, mut transform, mut node, mut visibility) in &mut labels {
-        let slot = label.0;
-        let name = race.kart_label(slot);
-        let at = karts
+    // (A ghost is drawn only if it is picked, `kart::show`, which runs before this.)
+    let ghost_at = |source: Source| {
+        ghosts
             .iter()
-            .find(|(kart, _)| kart.0 == slot)
-            .map(|(_, transform)| transform.translation + Vec3::Y * LIFT * SCALE);
-        let drawn = (|| {
-            if slot == race.watching || race.gone(slot) {
-                return None;
+            .find(|(kart, _, visibility)| kart.source == source && **visibility != Visibility::Hidden)
+            .map(|(_, transform, _)| transform.translation)
+    };
+    for (_, label, children, mut transform, mut node, mut visibility) in &mut labels {
+        let (name, at) = match label.0 {
+            Plate::Slot(slot) if slot == race.watching || race.gone(slot) => (String::new(), None),
+            Plate::Slot(slot) => (
+                race.kart_label(slot).to_string(),
+                karts
+                    .iter()
+                    .find(|(kart, _)| kart.0 == slot)
+                    .map(|(_, transform)| transform.translation),
+            ),
+            // (Our record has no ghost of its own: `WorldRecord::ghost`.)
+            Plate::Ghost(Source::Best) => {
+                let what = if world_record.is_best(race) { "SR" } else { "PB" };
+                let name = format!("{} ({what})", race.kart_label(race.slot));
+                (name, ghost_at(Source::Best))
             }
+            Plate::Ghost(Source::World) => (
+                world_record.of(race).map_or_else(String::new, |(entry, ..)| {
+                    format!("{} (SR)", crate::world_record::short_name(entry))
+                }),
+                ghost_at(Source::World),
+            ),
+        };
+        let name = name.as_str();
+        let at = at.map(|at| at + Vec3::Y * LIFT * SCALE);
+        let drawn = (|| {
             let at = at?;
             let depth = forward.dot(at - camera_transform.translation) / SCALE;
             if name.is_empty() || !(TOO_CLOSE..TOO_FAR).contains(&depth) {

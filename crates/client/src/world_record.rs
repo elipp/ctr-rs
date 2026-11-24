@@ -147,6 +147,13 @@ impl WorldRecord {
         ))
     }
 
+    /// The record is ours and is the personal best: no faster best of ours since (one not sent,
+    /// or not taken yet).
+    pub fn is_best(&self, race: &CurrentRace) -> bool {
+        self.of(race)
+            .is_some_and(|(entry, _, ours)| ours && race.best == Some(entry.final_ms))
+    }
+
     /// The board's #1 is `record` now (None: there is none).
     fn set(&mut self, board: BoardId, record: Option<Record>) {
         match &record {
@@ -256,14 +263,18 @@ fn tell(mut world: ResMut<WorldRecord>, race_on: Res<RaceOn>, mut toasts: Messag
     let text = if ours {
         format!("You hold the server record\n{time}\n{}", date(entry.at))
     } else {
-        let by = match entry.nick.as_str() {
-            "" => who(entry),
-            nick => nick.to_string(),
-        };
-        format!("Server record {time}\nby {by}\n{}", date(entry.at))
+        format!("Server record {time}\nby {}\n{}", short_name(entry), date(entry.at))
     };
     toasts.write(Toast::new(text, 4000));
     world.untold = false;
+}
+
+/// A board's player in short: the nick, or the key's fingerprint without one.
+pub(crate) fn short_name(entry: &Entry) -> String {
+    match entry.nick.as_str() {
+        "" => who(entry),
+        nick => nick.to_string(),
+    }
 }
 
 /// A board's player as shown: the nick and the key's fingerprint, which tells apart two of the

@@ -6,7 +6,8 @@
 //! A relic race has no lap rows: under TIME is the next relic to earn and its time instead, and
 //! under that the personal best. A time trial has the best between TIME TRIAL and the lap rows.
 //! Under the best, a solo run has the board's world record if there is one ("(You)" and white if
-//! it is ours), and how far ahead of it or behind we were at the last checkpoint passed.
+//! it is ours), and how far ahead of it or behind we were at the last checkpoint passed. A record
+//! that is our best is not shown twice: the best's label says so instead.
 //!
 //! A free drive has neither: it has no laps to count and no end. In TIME's place it has the
 //! track's personal bests, if any, the relic best's time followed by the relic it earned, spinning
@@ -223,6 +224,7 @@ fn show(
             Option<&RowTime>,
             Has<TargetName>,
             Has<TargetTime>,
+            Has<BestName>,
             Has<BestTime>,
             Has<TimeLabel>,
         ),
@@ -276,6 +278,7 @@ fn show(
     });
     let best = solo.and_then(|race| race.best);
     let world = solo.and_then(|race| world_record.of(race));
+    let world_is_best = solo.is_some_and(|race| world_record.is_best(race));
     // (Out of the layout without one, or the block's gaps would push the lap rows down; the best
     // goes up in the target's place.)
     let display = |on: bool| if on { Display::Flex } else { Display::None };
@@ -319,6 +322,7 @@ fn show(
                 continue;
             }
             let wanted = match part {
+                World::Name | World::Time if world_is_best => None,
                 World::Name => world.map(|(_, _, ours)| {
                     if ours {
                         "Server Record (You)"
@@ -375,8 +379,19 @@ fn show(
                 spawn_row(&mut commands, entity, view, i, &race::clock::time(ms));
             }
         }
-        for (v, mut text, is_total, is_count, label, time, is_name, is_target, is_best, is_label) in
-            &mut texts
+        for (
+            v,
+            mut text,
+            is_total,
+            is_count,
+            label,
+            time,
+            is_name,
+            is_target,
+            is_best_name,
+            is_best,
+            is_label,
+        ) in &mut texts
         {
             if v.0 != view {
                 continue;
@@ -401,6 +416,13 @@ fn show(
                 target.map_or_else(String::new, |(name, _, _)| name.to_string())
             } else if is_target {
                 target.map_or_else(String::new, |(_, _, ms)| race::clock::time(ms))
+            } else if is_best_name {
+                if world_is_best {
+                    "Personal Best (Server Record)"
+                } else {
+                    "Personal Best"
+                }
+                .to_string()
             } else if is_best {
                 best.map_or_else(String::new, race::clock::time)
             } else {
@@ -607,7 +629,11 @@ fn spawn(commands: &mut Commands, view: usize) {
             (view, Total, text("0:00:00", Font::Large, Gradient::ORANGE)),
             (view, TargetName, text("", Font::Middle, SAPPHIRE)),
             (view, TargetTime, text("", Font::Large, SAPPHIRE)),
-            (BestName, text("Best", Font::Middle, Gradient::WHITE)),
+            (
+                view,
+                BestName,
+                text("Personal Best", Font::Middle, Gradient::WHITE)
+            ),
             (view, BestTime, text("", Font::Large, Gradient::WHITE)),
             (view, World::Name, text("", Font::Middle, Gradient::YELLOW)),
             (view, World::Time, text("", Font::Large, Gradient::YELLOW)),
