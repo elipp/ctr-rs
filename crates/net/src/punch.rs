@@ -1,0 +1,284 @@
+//! Keeping at iroh to find a direct path to each peer, rather than leave it on the relay.
+//!
+//! iroh holepunches to a peer when a connection to it comes up, when an address of either side
+//! changes, and otherwise once a minute; and only from the side that has a client connection to
+//! the peer. A round probes for some 4 seconds: one that comes too early (the other side's NAT
+//! has not been opened yet) or loses its probes leaves the pair on the relay for up to a minute,
+//! and the side that only accepted connections never tries at all.
+//!
+//! So we hold a connection of our own (with [`PUNCH_ALPN`]) to every peer we race with, or will:
+//! opening it starts a round, from our side, whichever way the other connections go. While the
+//! peer is still reached through the relay, it is opened again every few seconds. A direct path
+//! found on any connection to a peer is taken by all of them, so the lobby connection and the
+//! links of the race get it too; and a link dialed later goes the direct way from the start.
+
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use iroh::endpoint::Connection;
+use iroh::{Endpoint, EndpointAddr, EndpointId};
+use n0_future::task::AbortOnDropHandle;
+use n0_future::time::{sleep, timeout};
+use tracing::debug;
+
+use crate::PUNCH_ALPN;
+
+/// How long a connection is given to come up.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often we look at the way a peer is reached.
+const CHECK: Duration = Duration::from_secs(1);
+
+/// How long the `attempt`th try (from 0) waits for a direct path before it opens a new
+/// connection, which starts a new round. iroh starts no more than one round in 5 seconds unless
+/// an address changed, so the tries are a bit further apart than that; after a minute of them,
+/// they are let down to twice a minute (iroh's own is once a minute).
+fn patience(attempt: u32) -> Duration {
+    if attempt < 10 {
+        Duration::from_secs(6)
+    } else {
+        Duration::from_secs(30)
+    }
+}
+
+/// How long the side that accepted a connection keeps it, at most: the side that opened it
+/// closes it as soon as it is done with it.
+pub(crate) const ACCEPTED_FOR: Duration = Duration::from_secs(5 * 60);
+
+/// Whether the data on `connection` goes straight to the peer: false while it goes through a
+/// relay, or there is no path yet.
+pub(crate) fn is_direct(connection: &Connection) -> bool {
+    connection
+        .paths()
+        .iter()
+        .any(|path| path.is_selected() && !path.is_relay())
+}
+
+/// The path our data to the peer of `connection` takes, for the log: an `ip:port`, a relay's URL,
+/// or `none`.
+fn selected_path(connection: &Connection) -> String {
+    connection
+        .paths()
+        .iter()
+        .find(|path| path.is_selected())
+        .map_or("none".into(), |path| path.remote_addr().to_string())
+}
+
+/// The peers being punched through to, each with its task.
+pub(crate) struct Puncher {
+    endpoint: Endpoint,
+    /// Without sockets of our own (the relay only, or a browser) there is nothing to punch.
+    enabled: bool,
+    tasks: HashMap<EndpointId, AbortOnDropHandle<()>>,
+}
+
+impl Puncher {
+    pub(crate) fn new(endpoint: Endpoint) -> Puncher {
+        #[cfg(not(target_arch = "wasm32"))]
+        let enabled = !endpoint.bound_sockets().is_empty();
+        #[cfg(target_arch = "wasm32")]
+        let enabled = false;
+        if !enabled {
+            debug!("no sockets of our own (the relay only, or a browser): not holepunching");
+        }
+        Puncher {
+            endpoint,
+            enabled,
+            tasks: HashMap::new(),
+        }
+    }
+
+    /// Punches through to `peers` (us left out) and to no others: the tasks of new ones start,
+    /// those of the ones not in it stop.
+    pub(crate) fn set(&mut self, peers: impl IntoIterator<Item = EndpointId>) {
+        if !self.enabled {
+            return;
+        }
+        let me = self.endpoint.id();
+        let wanted: HashSet<EndpointId> = peers.into_iter().filter(|&id| id != me).collect();
+        self.tasks.retain(|id, _| {
+            let keep = wanted.contains(id);
+            if !keep {
+                debug!(peer = %id.fmt_short(), "no longer holepunching");
+            }
+            keep
+        });
+        for id in wanted {
+            self.tasks.entry(id).or_insert_with(|| {
+                debug!(peer = %id.fmt_short(), "holepunching");
+                let endpoint = self.endpoint.clone();
+                AbortOnDropHandle::new(n0_future::task::spawn(punch(endpoint, id)))
+            });
+        }
+    }
+}
+
+/// Keeps a connection to `id` and starts rounds of holepunching on it until the path is direct;
+/// and again if it goes back to the relay.
+async fn punch(endpoint: Endpoint, id: EndpointId) {
+    let peer = id.fmt_short();
+    let mut attempt = 0;
+    loop {
+        let connection = timeout(
+            CONNECT_TIMEOUT,
+            endpoint.connect(EndpointAddr::new(id), PUNCH_ALPN),
+        )
+        .await;
+        let connection = match connection {
+            Ok(Ok(connection)) => connection,
+            failed => {
+                // Not reachable for now (or an older build, which does not take these): no round.
+                let why = match failed {
+                    Ok(Err(e)) => e.to_string(),
+                    _ => format!("no connection in {CONNECT_TIMEOUT:?}"),
+                };
+                debug!(%peer, attempt, "punch connection failed, trying again in {:?}: {why}", patience(attempt));
+                sleep(patience(attempt)).await;
+                attempt += 1;
+                continue;
+            }
+        };
+        // The new connection started a round: give it the time to find a path.
+        let mut waited = Duration::ZERO;
+        while waited < patience(attempt)
+            && !is_direct(&connection)
+            && connection.close_reason().is_none()
+        {
+            sleep(CHECK).await;
+            waited += CHECK;
+        }
+        if is_direct(&connection) {
+            debug!(%peer, attempt, path = %selected_path(&connection), "direct after {waited:?}");
+            // Held as long as it is direct; if it falls back, we try from the start.
+            while is_direct(&connection) && connection.close_reason().is_none() {
+                sleep(CHECK).await;
+            }
+            match connection.close_reason() {
+                Some(why) => debug!(%peer, "punch connection closed ({why}), opening another"),
+                None => debug!(%peer, path = %selected_path(&connection), "no longer direct: holepunching again"),
+            }
+            attempt = 0;
+        } else {
+            debug!(
+                %peer,
+                attempt,
+                path = %selected_path(&connection),
+                closed = ?connection.close_reason(),
+                "still not direct after {waited:?}: starting another round"
+            );
+            attempt += 1;
+        }
+        connection.close(0u32.into(), b"punched");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroh::{RelayMode, SecretKey};
+    use n0_future::time::Instant;
+    use iroh::address_lookup::MemoryLookup;
+    use iroh::endpoint::presets;
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+    use super::*;
+
+    #[test]
+    fn the_tries_are_further_apart_than_iroh_starts_rounds() {
+        for attempt in 0..20 {
+            assert!(patience(attempt) > Duration::from_secs(5));
+        }
+        assert!(patience(0) < patience(100));
+    }
+
+    /// An endpoint on this machine only: no relay, and the others found in `lookup`.
+    async fn local(lookup: &MemoryLookup) -> Endpoint {
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .address_lookup(lookup.clone())
+            .alpns(vec![PUNCH_ALPN.to_vec()])
+            .bind()
+            .await
+            .expect("a local endpoint");
+        lookup.add_endpoint_info(endpoint.addr());
+        endpoint
+    }
+
+    /// The punch connections that `endpoint` accepts, as they come.
+    fn accepted(endpoint: Endpoint) -> UnboundedReceiver<Connection> {
+        let (tx, rx) = unbounded_channel();
+        n0_future::task::spawn(async move {
+            while let Some(incoming) = endpoint.accept().await {
+                if let Ok(connection) = incoming.await
+                    && tx.send(connection).is_err()
+                {
+                    return;
+                }
+            }
+        });
+        rx
+    }
+
+    #[tokio::test]
+    async fn a_direct_peer_is_held_on_one_connection() {
+        let lookup = MemoryLookup::new();
+        let (ours, theirs) = (local(&lookup).await, local(&lookup).await);
+        let mut incoming = accepted(theirs.clone());
+        let mut puncher = Puncher::new(ours.clone());
+        assert!(puncher.enabled);
+        // Us, and the same peer twice: one task.
+        puncher.set([ours.id(), theirs.id(), theirs.id()]);
+        assert_eq!(puncher.tasks.len(), 1);
+
+        let connection = timeout(Duration::from_secs(5), incoming.recv())
+            .await
+            .expect("the punch connection in time")
+            .unwrap();
+        assert_eq!(connection.alpn(), PUNCH_ALPN);
+        // Past the first try's patience: being direct, it is kept, and no new one is opened,
+        // though the set is given again (the session does that on every turn of its loop).
+        let until = Instant::now() + patience(0) + Duration::from_secs(2);
+        while Instant::now() < until {
+            puncher.set([theirs.id()]);
+            sleep(Duration::from_millis(100)).await;
+        }
+        assert!(is_direct(&connection));
+        assert!(connection.close_reason().is_none());
+        assert!(incoming.try_recv().is_err(), "a second connection was opened");
+    }
+
+    #[tokio::test]
+    async fn a_peer_left_out_of_the_set_is_let_go() {
+        let lookup = MemoryLookup::new();
+        let (ours, theirs) = (local(&lookup).await, local(&lookup).await);
+        let mut incoming = accepted(theirs.clone());
+        let mut puncher = Puncher::new(ours);
+        puncher.set([theirs.id()]);
+        let connection = timeout(Duration::from_secs(5), incoming.recv())
+            .await
+            .expect("the punch connection in time")
+            .unwrap();
+
+        puncher.set([]);
+        assert!(puncher.tasks.is_empty());
+        timeout(Duration::from_secs(5), connection.closed())
+            .await
+            .expect("the connection closed when its task stopped");
+    }
+
+    #[tokio::test]
+    async fn without_sockets_of_our_own_nothing_is_punched() {
+        // The relay only, as `set_relay_only` makes it (a relay that is never reached: binding
+        // does not wait for it).
+        let relay: iroh::RelayUrl = "https://relay.invalid".parse().unwrap();
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Custom(relay.into()))
+            .clear_ip_transports()
+            .bind()
+            .await
+            .expect("an endpoint without sockets");
+        let mut puncher = Puncher::new(endpoint);
+        assert!(!puncher.enabled);
+        puncher.set([SecretKey::generate().public()]);
+        assert!(puncher.tasks.is_empty());
+    }
+}

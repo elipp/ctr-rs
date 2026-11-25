@@ -12,3 +12,4 @@ n0-future = "0.3.2"
 realm-proto = { path = "../realm-proto" }
 score = { path = "../score" }
 tokio = { version = "1.54", features = ["rt", "sync", "macros", "time"] }
+tracing = "0.1"
