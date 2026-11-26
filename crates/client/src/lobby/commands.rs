@@ -62,7 +62,9 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         }
         Action::ToggleSpectator if racing => net::NOT_NOW,
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
-        Action::AnswerMatch(_) if lobby.found.is_none() => "No match to answer",
+        Action::AnswerMatch(_) if lobby.unanswered().is_none() => "No match to answer",
+        Action::PlayAgain if !lobby.between_matched_races(race_on) => "Only after a quick play race",
+        Action::PlayAgain if lobby.again => "You race again already: waiting for the others",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -272,11 +274,18 @@ pub(super) fn run(
                     }
                 }
             }
+            Action::PlayAgain => {
+                lobby.play_again();
+                "Racing again: waiting for the others..."
+            }
             Action::AnswerMatch(accept) => {
                 lobby.answer_match(*accept);
                 // (Whoever of the match hosts is the session's business: to the game every
                 // player of it is a guest, with none of a host's say.)
-                if lobby.found.take().is_some() && *accept {
+                if *accept {
+                    if let Some(super::Queue::Found { accepted, .. }) = &mut lobby.queue {
+                        *accepted = true;
+                    }
                     "Accepted: waiting for the others..."
                 } else {
                     "Declined"

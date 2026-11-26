@@ -1,7 +1,7 @@
 //! What the session reports (`net::Event`), taken in once a frame.
 
 use super::commands::{copy_to_clipboard, net_info_text};
-use super::{ANNOUNCE_COLOR, Lobby, Member};
+use super::{ANNOUNCE_COLOR, Lobby, Member, Queue};
 use crate::console::{Log, console};
 use crate::maps;
 use crate::race_on::{CurrentRace, NetRace, RaceOn};
@@ -67,20 +67,19 @@ pub(super) fn report(
             }
             Event::Promoted { ticket, public } => promoted = Some((ticket, public)),
             Event::Searching { players, waited } => {
-                debug!("quick play: {players} searching, {} s", waited.as_secs());
+                let waited = waited.as_secs() as u32;
+                lobby.queue = Some(Queue::Searching { players, waited });
             }
-            // TODO(matchmaking step 3): the searching screen and a ready check of its own, not a
-            // debug line and a toast that asks for a command.
             Event::Found(found) => {
-                let text = format!(
-                    "Match found: {}\n/quick accept or /quick decline",
-                    found.nicks.join(", ")
-                );
-                toasts.write(Toast::new(text, 10_000).color(ANNOUNCE_COLOR));
-                lobby.found = Some(found);
+                lobby.queue = Some(Queue::Found {
+                    found,
+                    at: time.elapsed_secs(),
+                    left: score::matching::ACCEPT_SECONDS,
+                    accepted: false,
+                });
             }
             Event::Requeued => {
-                lobby.found = None;
+                lobby.queue = Some(Queue::Searching { players: 0, waited: 0 });
                 toasts.write(Toast::new("Someone declined: back in the queue", 3000));
             }
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
@@ -90,7 +89,11 @@ pub(super) fn report(
                 you,
                 locked,
                 bots,
-            } => roster = Some((players, spectators, you, locked, bots)),
+            } => {
+                // The match's lobby is up: the queue is behind us.
+                lobby.queue = None;
+                roster = Some((players, spectators, you, locked, bots));
+            }
             Event::Announce(text) => announce(&mut toasts, text),
             // (The scoreboard shows them: `scoreboard.rs`.)
             Event::Standings(standings) => {
@@ -155,6 +158,8 @@ pub(super) fn report(
                 retail.characters.iter_mut().for_each(on_roster);
                 stopped = false;
                 started_cup = Some(retail.cup);
+                lobby.raced = true;
+                lobby.again = false;
                 let net = NetRace::new(players, slot);
                 started = Some(CurrentRace::new(
                     slot, locals, characters, bots, track, hash, rules, retail, Some(net),
@@ -218,6 +223,10 @@ pub(super) fn report(
                 failed = Some(why);
             }
         }
+    }
+    if let Some(Queue::Found { at, left, .. }) = &mut lobby.queue {
+        let gone = (time.elapsed_secs() - *at).max(0.0) as u32;
+        *left = score::matching::ACCEPT_SECONDS.saturating_sub(gone);
     }
     // We handed the lobby over, and are a guest of the new host: what only the host has is theirs.
     if handed_over {

@@ -63,7 +63,7 @@ use crate::controls::{self, Control};
 use crate::cup_wizard::{self, CupItem, Draft, Go};
 use crate::font::{CtrText, Fonts, TexelSize};
 use crate::icon_grid::{self, HasIconGrid, Icons, Steered};
-use crate::lobby::Lobby;
+use crate::lobby::{Lobby, Queue};
 use crate::maps;
 use crate::public_lobbies::{self, PublicLobbies, Status};
 use crate::race_on::RaceOn;
@@ -120,6 +120,9 @@ pub struct PauseMenu {
     /// which can't type, can still create with Create.
     lobby_name: String,
     private_lobby: bool,
+    /// The match found (by when it came) that the ready check was opened for: it opens once for
+    /// each, so that Back can leave it.
+    ready_check: Option<f32>,
 }
 
 /// Hands the first player's racer menu (`chooser::input`) back and forth with Character select,
@@ -194,6 +197,8 @@ pub(crate) enum View {
     Tracks,
     /// "Quit the game?": Quit is too easy to take by mistake.
     ConfirmQuit,
+    /// Quick play's ready check: it opens itself when a match is found (`Lobby::queue`).
+    MatchFound,
 }
 
 impl View {
@@ -226,6 +231,14 @@ pub(crate) enum Item {
     SplitScreen,
     LeaveLobby,
     Multiplayer,
+    /// `/quick`.
+    QuickPlay,
+    /// Back to the ready check, from the main view.
+    MatchFound,
+    /// `/quick accept`, `/quick decline`.
+    Answer(bool),
+    /// `/quick again`.
+    PlayAgain,
     /// Shows the realm's list.
     PublicLobbies,
     /// Creates a lobby, public or private as `PauseMenu::private_lobby`, which Left and Right
@@ -378,6 +391,10 @@ fn items(
         }
         View::Multiplayer => {
             let mut items = vec![
+                entry(Item::QuickPlay, "Quick play").help(
+                    "Race whoever else is looking for a race: 3 laps on a random track. You \
+                     can drive around while it searches.",
+                ),
                 entry(Item::PublicLobbies, "Public lobbies")
                     .help(
                         "Lobbies that others have listed for anyone to join. Others see you by \
@@ -439,6 +456,7 @@ fn items(
             );
         }
         View::Tracks => return ("Track select".into(), track_items()),
+        View::MatchFound => return ("Match found".into(), match_found_items(lobby)),
         View::ConfirmQuit => {
             let items = vec![entry(Item::QuitNow, "Quit"), entry(Item::Back, "Cancel")];
             return ("Quit the game?".into(), items);
@@ -446,6 +464,18 @@ fn items(
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
+    if lobby.unanswered().is_some() {
+        items.insert(0, entry(Item::MatchFound, "Match found"));
+    }
+    if lobby.between_matched_races(race_on) && !lobby.again {
+        items.insert(
+            0,
+            entry(Item::PlayAgain, "Play again").help(
+                "Race the same players again, with whoever else does. Leave lobby takes you \
+                 out of the match.",
+            ),
+        );
+    }
     // (Not a lobby's: the host restarts and ends it for everyone, as `/race restart|stop`.)
     if race_on.is_on() && !race_on.shared() {
         items.push(entry(Item::Restart, "Restart"));
@@ -470,7 +500,9 @@ fn items(
         items.push(entry(Item::BotsMenu, "Bots"));
     }
     // (Out of a lobby, a race on is one alone: it ends before any lobby begins.)
-    if lobby.is_open() {
+    if lobby.queue.is_some() {
+        items.push(entry(Item::LeaveLobby, "Cancel search"));
+    } else if lobby.is_open() {
         items.push(entry(Item::LeaveLobby, "Leave lobby"));
     } else if !race_on.is_on() {
         items.push(entry(Item::Multiplayer, "Multiplayer"));
@@ -485,6 +517,27 @@ fn items(
     // A lobby's race goes on.
     let title = if !race_on.shared() { "Paused" } else { "Menu" };
     (title.into(), items)
+}
+
+/// The ready check: the answers first, then what the match is.
+fn match_found_items(lobby: &Lobby) -> Vec<Entry> {
+    let Some(Queue::Found { found, left, .. }) = &lobby.queue else {
+        return vec![entry(Item::Back, "Back")];
+    };
+    let nicks: Vec<&str> = found
+        .nicks
+        .iter()
+        .map(|n| if n.is_empty() { "?" } else { n.as_str() })
+        .collect();
+    vec![
+        entry(Item::Answer(true), "Accept"),
+        entry(Item::Answer(false), "Decline")
+            .help("Declining keeps you out of the queue for a while."),
+        entry(Item::Info, maps::name(found.track)).starts_section(),
+        entry(Item::Info, format!("{} laps, {} players", found.rules.laps, nicks.len())),
+        entry(Item::Info, nicks.join(", ")),
+        entry(Item::Info, format!("{left} s to answer")),
+    ]
 }
 
 /// Item builders don't know about typing; the live text is overlaid here so they stay pure.
@@ -814,6 +867,27 @@ pub(crate) fn input(
         sound(MENU_TAKE_SFX);
         return finish(was_open, &menu, &mut keys, &mut pads);
     }
+    // The ready check opens itself once for each match found, and goes once it is answered.
+    let found_at = match &lobby.queue {
+        Some(Queue::Found { at, accepted: false, .. }) => Some(*at),
+        _ => None,
+    };
+    if let Some(at) = found_at
+        && menu.ready_check != Some(at)
+    {
+        menu.ready_check = Some(at);
+        menu.open = true;
+        go_to(&mut menu, View::MatchFound);
+        hold_sounds(&menu);
+        sound(MENU_TAKE_SFX);
+        return finish(was_open, &menu, &mut keys, &mut pads);
+    }
+    if found_at.is_none() && menu.view == View::MatchFound {
+        menu.open = false;
+        go_to(&mut menu, View::Main);
+        hold_sounds(&menu);
+        return finish(was_open, &menu, &mut keys, &mut pads);
+    }
     let key = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
     // The left stick of the first pad that has it pushed, as the D-pad: tapped as it is pushed
@@ -1122,6 +1196,23 @@ pub(crate) fn input(
                 menu.view = View::Multiplayer;
                 menu.selected = 0;
             }
+            Some(Item::QuickPlay) => {
+                menu.open = false;
+                actions.write(Action::QuickPlay);
+            }
+            Some(Item::MatchFound) => {
+                menu.view = View::MatchFound;
+                menu.selected = 0;
+            }
+            Some(Item::PlayAgain) => {
+                menu.open = false;
+                actions.write(Action::PlayAgain);
+            }
+            Some(Item::Answer(accept)) => {
+                menu.open = false;
+                menu.view = View::Main;
+                actions.write(Action::AnswerMatch(accept));
+            }
             Some(Item::NewLobby) if menu.private_lobby => {
                 menu.open = false;
                 actions.write(Action::CreateLobby { public: None });
@@ -1336,6 +1427,17 @@ fn leave(
             false
         }
     }
+}
+
+/// Shows `view` from its top, with nothing of the one before going on.
+fn go_to(menu: &mut PauseMenu, view: View) {
+    menu.view = view;
+    menu.selected = 0;
+    menu.scroll = 0.0;
+    menu.clicked = None;
+    menu.capturing = None;
+    menu.typing = None;
+    menu.grid_cursor = 0;
 }
 
 fn write(actions: &mut MessageWriter<Action>, action: Option<Action>) -> bool {

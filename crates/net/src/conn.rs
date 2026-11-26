@@ -11,7 +11,7 @@ use n0_future::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::wire::Message;
-use crate::{Error, KICKED, MAX_BLOB, MESH_ALPN};
+use crate::{Error, MAX_BLOB, MESH_ALPN};
 
 pub(crate) async fn send_reliably(connection: &Connection, message: &Message) -> Result<(), Error> {
     let mut stream = connection.open_uni().await?;
@@ -47,11 +47,11 @@ pub(crate) enum Heard {
         rtt: Duration,
         relay: Option<bool>,
     },
-    /// The connection closed: the number it has (see `Connection::stable_id`), and whether the
-    /// host removed us ([`KICKED`]).
+    /// The connection closed: the number it has (see `Connection::stable_id`), and the code the
+    /// other side closed it with, if it did ([`KICKED`](crate::KICKED), [`LEFT_BEHIND`](crate::LEFT_BEHIND); 0 for a plain close).
     Closed {
         id: usize,
-        kicked: bool,
+        code: Option<u32>,
     },
 }
 
@@ -124,13 +124,14 @@ pub(crate) fn listen(
                 // Not ours to understand: a stranger's, or a newer build's.
                 Some(Err(_)) => {}
                 None => {
-                    let kicked = matches!(
-                        connection.close_reason(),
-                        Some(ConnectionError::ApplicationClosed(close))
-                            if close.error_code.into_inner() == u64::from(KICKED)
-                    );
+                    let code = match connection.close_reason() {
+                        Some(ConnectionError::ApplicationClosed(close)) => {
+                            u32::try_from(close.error_code.into_inner()).ok()
+                        }
+                        _ => None,
+                    };
                     let id = connection.stable_id();
-                    let _ = heard.send((from, Heard::Closed { id, kicked }));
+                    let _ = heard.send((from, Heard::Closed { id, code }));
                     return;
                 }
             }

@@ -163,12 +163,32 @@ fn dialer_builder() -> Builder {
     builder
 }
 
+/// How long a session's connection may hear nothing before it is taken for dead (iroh's default
+/// is 30 s). A crash sends no close: a lobby only learns that its host is gone (and its heir takes
+/// over, `session.rs` `Heard::Closed`) once this is up.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What keeps an idle connection alive within [`IDLE_TIMEOUT`] (iroh's default is 5 s). A
+/// background browser tab's timers fire once a second at worst, until Chrome's 5-minute heavy
+/// throttling, which drops it from its lobby anyway.
+const KEEP_ALIVE: Duration = Duration::from_secs(2);
+
+/// iroh's QUIC defaults (tuned for its hole punching, `QuicTransportConfig`), with a dead peer
+/// found sooner.
+fn session_transport() -> iroh::endpoint::QuicTransportConfig {
+    let idle = iroh::endpoint::IdleTimeout::try_from(IDLE_TIMEOUT).expect("fits a VarInt");
+    iroh::endpoint::QuicTransportConfig::builder()
+        .max_idle_timeout(Some(idle))
+        .keep_alive_interval(KEEP_ALIVE)
+        .build()
+}
+
 /// What a player is told of a request that cannot be taken at this moment (the lobby is in a
 /// race, a promotion is under way, ...), when the reason is plain to see.
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/19";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/20";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -193,6 +213,10 @@ pub const KICK_AFTER: Duration = Duration::from_secs(8);
 
 /// The code that the host closes the connection of a player it removes with.
 const KICKED: u32 = 1;
+
+/// The code that a match's host closes the connection of a player with that did not say it races
+/// again (`Command::Again`) before the next race started.
+const LEFT_BEHIND: u32 = 2;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -446,6 +470,8 @@ enum Command {
     Promote(EndpointId),
     /// Quick play's answer to the match found.
     Answer(bool),
+    /// Quick play, between races: race again with whoever else does.
+    Again,
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -462,6 +488,13 @@ impl Session {
     /// us out of the queue for a while).
     pub fn answer(&self, accept: bool) {
         let _ = self.commands.send(Command::Answer(accept));
+    }
+
+    /// Quick play, after a race: race the next one. It starts once everyone in the lobby has said
+    /// so, or `AGAIN_WAIT` after the first did, with those who did; the others are dropped
+    /// ([`Event::Failed`]).
+    pub fn again(&self) {
+        let _ = self.commands.send(Command::Again);
     }
 
     /// What happened since the last call.
@@ -734,7 +767,11 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     // Made where it runs: the session is not `Send`.
     let session = move || async move {
         let result: Result<(), Error> = async {
-            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()]).bind().await?;
+            let endpoint = endpoint_builder()
+                .alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()])
+                .transport_config(session_transport())
+                .bind()
+                .await?;
             let io = Io {
                 events: events_tx.clone(),
                 commands: commands_rx,

@@ -4,6 +4,7 @@
 //! it by; like a realm listing, the server sees only that random key and the relay it comes
 //! through. The player key only signs the queue entry.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
@@ -22,6 +23,10 @@ const REPORT_WAIT: Duration = Duration::from_secs(3);
 /// How long after the match goes its coordinator waits for everyone to come in, before it
 /// starts with whoever did (two at least).
 const JOIN_DEADLINE: Duration = Duration::from_secs(30);
+
+/// How long after the first player of a match's lobby says it races again the next race goes
+/// with whoever else did by then (everyone saying so starts it at once).
+pub(crate) const AGAIN_WAIT: Duration = Duration::from_secs(10);
 
 /// The seconds counted down before a match's race, as a manual host's (`client` `countdown.rs`).
 pub(crate) const COUNTDOWN_SECONDS: u64 = 5;
@@ -65,9 +70,12 @@ pub(crate) struct Matchmade {
     pub(crate) deadline: Instant,
     /// The host counts down to the start: when it is, and the seconds it last said were left.
     pub(crate) countdown: Option<(Instant, u64)>,
-    /// The match's race has been started (a lobby of a match races once: what comes after it is
-    /// step 3's, MATCHMAKING.md).
+    /// A race of the match has been started: the next one waits for [`Matchmade::again`].
     pub(crate) started: bool,
+    /// The host: who races again (`Message::Again`, ours `Command::Again`), and since when the
+    /// first did. Cleared at each start.
+    pub(crate) again: HashSet<EndpointId>,
+    pub(crate) again_since: Option<Instant>,
 }
 
 impl Matchmade {
@@ -84,16 +92,25 @@ impl Matchmade {
             deadline: Instant::now() + JOIN_DEADLINE,
             countdown: None,
             started: false,
+            again: HashSet::new(),
+            again_since: None,
         })
     }
 
-    /// When the host has to look at the start again: the deadline, or the countdown's next second.
+    /// When the host has to look at the start again: the countdown's next second, the first
+    /// race's deadline, or the wait for the players that race again.
     pub(crate) fn wake(&self) -> Option<Instant> {
         match self.countdown {
-            _ if self.started => None,
             Some((at, said)) => Some(at - Duration::from_secs(said.saturating_sub(1))),
-            None => Some(self.deadline),
+            None if !self.started => Some(self.deadline),
+            None => self.again_since.map(|since| since + AGAIN_WAIT),
         }
+    }
+
+    /// `id` races again (the first one starts [`AGAIN_WAIT`]). Whether it is news.
+    pub(crate) fn wants_again(&mut self, id: EndpointId) -> bool {
+        self.again_since.get_or_insert_with(Instant::now);
+        self.again.insert(id)
     }
 
     /// Where `id` is in the match's order; none for a player not in it, who is let in nowhere.

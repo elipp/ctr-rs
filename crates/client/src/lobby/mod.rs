@@ -125,10 +125,30 @@ pub struct Lobby {
     /// Who stands on the podium of the cup that just ended (`podium.rs`), until it is shown: once
     /// our race is over.
     pub(crate) podium: Option<[Option<u8>; 3]>,
-    /// Quick play: the match found and not yet gone (`/quick accept`), while the session queues.
-    pub(crate) found: Option<net::Found>,
+    /// Quick play: where we are in the queue, until the match's lobby is up.
+    pub(crate) queue: Option<Queue>,
     /// The session is quick play's: its lobby has a host only the session knows of.
-    quick_play: bool,
+    pub(crate) quick_play: bool,
+    /// Quick play: the match's lobby has started a race, so the next one waits for Play again.
+    raced: bool,
+    /// Quick play: we said we race the next one (`/quick again`), since the last started.
+    pub(crate) again: bool,
+}
+
+/// Where a quick play session is before its match's lobby: the searching label
+/// (`hud::searching`) and the ready check (`pause.rs`'s `View::MatchFound`) show it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Queue {
+    /// `waited` seconds, as the matchmaker last said.
+    Searching { players: u16, waited: u32 },
+    Found {
+        found: net::Found,
+        /// When it came (`Time<Real>`), and the whole seconds left to answer, which `report`
+        /// keeps up.
+        at: f32,
+        left: u32,
+        accepted: bool,
+    },
 }
 
 /// How many bots the host's races have, of which kind, and how hard they race (`/bots`).
@@ -543,8 +563,29 @@ impl Lobby {
         self.spectator = false;
         self.roster.clear();
         self.roster_seen = false;
-        self.found = None;
+        self.queue = Some(Queue::Searching { players: 0, waited: 0 });
         self.quick_play = true;
+    }
+
+    /// Quick play: a race of the match is behind us and none is on (Play again's time).
+    pub(crate) fn between_matched_races(&self, race: &RaceOn) -> bool {
+        self.quick_play && self.queue.is_none() && self.raced && !race.is_on()
+    }
+
+    /// Race the match's next race with whoever else does.
+    fn play_again(&mut self) {
+        if let Some(session) = &self.session {
+            session.again();
+        }
+        self.again = true;
+    }
+
+    /// The match found, if it waits for our answer.
+    pub(crate) fn unanswered(&self) -> Option<&net::Found> {
+        match &self.queue {
+            Some(Queue::Found { found, accepted: false, .. }) => Some(found),
+            _ => None,
+        }
     }
 
     /// Accepts or declines the match found.
@@ -903,6 +944,7 @@ impl Plugin for LobbyPlugin {
                         rollback_toasts,
                         pace,
                         waiting,
+                        hud::searching,
                     )
                         .chain()
                         .distributive_run_if(crate::drive::driving),

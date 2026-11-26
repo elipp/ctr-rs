@@ -53,11 +53,11 @@ pub enum Action {
     },
     JoinLobby(Ticket),
     /// Queue for quick play (`/quick`), until a match is found and goes.
-    // TODO(matchmaking step 3): `/quick` and `/quick accept|decline` are a stand-in for testing;
-    // the menu's Quick play entry, the searching screen and an accept button replace them.
     QuickPlay,
     /// Accept the match found, or decline it.
     AnswerMatch(bool),
+    /// Race the quick play lobby's next race (`/quick again`), after one.
+    PlayAgain,
     /// Join a lobby to watch its races, not to drive in them.
     SpectateLobby(Ticket),
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
@@ -310,7 +310,8 @@ impl Action {
                 "" => Ok(Action::QuickPlay),
                 "accept" => Ok(Action::AnswerMatch(true)),
                 "decline" => Ok(Action::AnswerMatch(false)),
-                _ => Err("Usage: /quick [accept | decline] (leave with /lobby close)".into()),
+                "again" => Ok(Action::PlayAgain),
+                _ => Err("Usage: /quick [accept | decline | again] (leave with /lobby close)".into()),
             },
             "race" => Action::race(rest),
             "bots" => Action::bots(rest),

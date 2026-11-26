@@ -303,6 +303,9 @@ pub enum Message {
     /// Reliable, host to each client: the race of `epoch` pauses at tick `at` (a client already
     /// past it pauses where it is), or resumes with `None`.
     Pause { epoch: u32, at: Option<Tick> },
+    /// Reliable, client to host, in a match's lobby (quick play) between its races: we race again
+    /// (`Command::Again`). Sent again to each new host.
+    Again,
 }
 
 /// How often a player pings the ones it is connected to.
@@ -558,6 +561,7 @@ mod tests {
             }),
             Message::Pause { epoch: 2, at: Some(900) },
             Message::Pause { epoch: 2, at: None },
+            Message::Again,
             Message::Say { text: "gg".into() },
             Message::Chat {
                 from: [5; 32],
