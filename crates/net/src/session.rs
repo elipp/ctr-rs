@@ -10,7 +10,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId};
 use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, timeout};
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::matchmake::{AGAIN_WAIT, COUNTDOWN_SECONDS, Matchmade, Registration, listed, register};
+use crate::matchmake::{COUNTDOWN_SECONDS, Matchmade, Registration, listed, register};
 use crate::conn::{
     Heard, RACE_IN_PROGRESS, listen, one_per_peer, send_datagram, send_delivered, send_reliably,
     stamp,
@@ -22,7 +22,7 @@ use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, RetailBots, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, LEFT_BEHIND, MAX_BLOB, MAX_PLAYERS, MESH_ALPN, PeerInfo, Player,
+    ALPN, Command, RetailBots, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MAX_PLAYERS, MESH_ALPN, PeerInfo, Player,
     Public, RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
 
@@ -88,6 +88,36 @@ async fn offer_handoff(host: &mut HostState, to: EndpointId, io: &Io) {
     } else {
         io.event(Event::Announce("The player could not be reached".into()));
     }
+}
+
+/// Us and the guests in the lobby that said what they drive and did not leave.
+fn present(host: &HostState, me: EndpointId) -> Vec<EndpointId> {
+    let here = host.guests.iter().filter(|g| g.hello.is_some() && !host.gone.contains(&g.id));
+    std::iter::once(me).chain(here.map(|g| g.id)).collect()
+}
+
+/// Tells everyone in a match's lobby, and us, when its next race starts and on which track, by
+/// the votes of the players `present` so far, and which of them are ready. (Nothing outside a
+/// wait for one.)
+async fn tell_next(host: &HostState, m: &mut Matchmade, present: &[EndpointId], io: &Io) {
+    let Some(next) = m.next else {
+        return;
+    };
+    let votes = m.pick(present);
+    let left = next.saturating_duration_since(Instant::now());
+    let ready: Vec<EndpointId> = present.iter().copied().filter(|id| m.ready.contains(id)).collect();
+    let message = Message::Next {
+        track: m.track,
+        rolled: m.rolled,
+        seed: m.rules.seed,
+        ms: left.as_millis().min(u128::from(u32::MAX)) as u32,
+        votes: votes.clone(),
+        ready: ready.iter().map(|id| *id.as_bytes()).collect(),
+    };
+    for guest in &host.guests {
+        let _ = send_reliably(&guest.connection, &message).await;
+    }
+    io.event(Event::Next { track: m.track, left, votes, ready });
 }
 
 /// Tells everyone in the lobby, and us.
@@ -243,8 +273,10 @@ pub(crate) async fn run(
 
     // A guest: what it would carry the lobby on with if the host left, and whether a race is on
     // (which it cannot yet: see `Heard::Closed`). A match has its heirs before any lobby does.
-    // We race the match's next race (`Command::Again`): every host we come to is told.
+    // We are ready for the match's next race (`Command::Again`) and vote for its track
+    // (`Command::Vote`): every host we come to is told.
     let mut want_again = false;
+    let mut my_vote: Option<u32> = None;
     // Hosting a match's lobby: its registration at the matchmaker, and what it was last told.
     let mut registration: Option<Registration> = None;
     let mut told_open: Option<(u8, Vec<(EndpointId, String)>)> = None;
@@ -398,7 +430,7 @@ pub(crate) async fn run(
                 for player in &players {
                     if let Ok(id) = EndpointId::from_bytes(&player.endpoint) {
                         m.admit(id);
-                        m.wants_again(id);
+                        m.ready(id);
                     }
                 }
                 let _ = r.tell.send(score::matching::ToServer::Admitted { id });
@@ -438,6 +470,9 @@ pub(crate) async fn run(
                             let _ = send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await;
                             if want_again {
                                 let _ = send_reliably(&connection, &Message::Again).await;
+                            }
+                            if let Some(track) = my_vote {
+                                let _ = send_reliably(&connection, &Message::Vote { track }).await;
                             }
                             hellos += 1;
                         }
@@ -671,11 +706,25 @@ pub(crate) async fn run(
                     Some(m) if m.started => {
                         want_again = true;
                         if let Some(host) = &host {
-                            if m.wants_again(me) {
-                                announce(host, &io, format!("{} races again", name_of(me, &nick))).await;
+                            if m.ready(me) {
+                                announce(host, &io, format!("{} is ready", name_of(me, &nick))).await;
+                                tell_next(host, m, &present(host, me), &io).await;
                             }
                         } else if let Some(connection) = &host_connection {
                             send_reliably(connection, &Message::Again).await?;
+                        }
+                    }
+                    _ => io.event(Event::Announce(NOT_NOW.into())),
+                },
+                Command::Vote(track) => match &mut matchmade {
+                    Some(m) if m.started && m.countdown.is_none() && track < race::RACING_TRACKS => {
+                        my_vote = Some(track);
+                        if let Some(host) = &host {
+                            if m.vote(me, track) {
+                                tell_next(host, m, &present(host, me), &io).await;
+                            }
+                        } else if let Some(connection) = &host_connection {
+                            send_reliably(connection, &Message::Vote { track }).await?;
                         }
                     }
                     _ => io.event(Event::Announce(NOT_NOW.into())),
@@ -698,7 +747,7 @@ pub(crate) async fn run(
                     // have found out that the host left yet). Kept for then. (Not the host's own:
                         // it is no player of ours, unless it handed the lobby over, and joins the
                         // one it handed it to.)
-                    message @ (Message::Hello { .. } | Message::Nick { .. } | Message::Nat { .. } | Message::Again) if host.is_none() => {
+                    message @ (Message::Hello { .. } | Message::Nick { .. } | Message::Nat { .. } | Message::Again | Message::Vote { .. }) if host.is_none() => {
                         if (from != host_id || heirs.handed_over) && heirs.heard.len() < 64 {
                             heirs.heard.push((from, message));
                         }
@@ -753,15 +802,41 @@ pub(crate) async fn run(
                                 guest.nick = (seq, clean_nick(&theirs_nick));
                             }
                             tell_lobby(me, character, &nick, host, &io).await;
+                            // (Someone let in between races learns when the next is; the votes may
+                            // count one more now.)
+                            if let Some(m) = &mut matchmade {
+                                tell_next(host, m, &present(host, me), &io).await;
+                            }
                         }
                     }
                     Message::Again => if let Some(host) = &host
                         && let Some(m) = &mut matchmade
                         && m.started
                         && let Some(guest) = host.guests.iter().find(|g| g.id == from)
-                        && m.wants_again(from)
+                        && m.ready(from)
                     {
-                        announce(host, &io, format!("{} races again", name_of(from, &guest.nick.1))).await;
+                        announce(host, &io, format!("{} is ready", name_of(from, &guest.nick.1))).await;
+                        tell_next(host, m, &present(host, me), &io).await;
+                    },
+                    // (One during a race counts for the wait after it.)
+                    Message::Vote { track } => if let Some(host) = &host
+                        && let Some(m) = &mut matchmade
+                        && m.started
+                        && m.countdown.is_none()
+                        && host.guests.iter().any(|g| g.id == from)
+                        && m.vote(from, track)
+                    {
+                        tell_next(host, m, &present(host, me), &io).await;
+                    },
+                    Message::Next { track, rolled, seed, ms, votes, ready } => if from == host_id
+                        && host.is_none()
+                        && let Some(m) = &mut matchmade
+                    {
+                        let left = Duration::from_millis(u64::from(ms));
+                        (m.track, m.rolled, m.rules.seed) = (track, rolled, seed);
+                        m.next = Some(Instant::now() + left);
+                        let ready = ready.iter().filter_map(|id| EndpointId::from_bytes(id).ok()).collect();
+                        io.event(Event::Next { track, left, votes, ready });
                     },
                     Message::Nat { hard } => if let Some(host) = &mut host
                         && let Some(guest) = host.guests.iter_mut().find(|g| g.id == from)
@@ -879,9 +954,11 @@ pub(crate) async fn run(
                         let slot = slot as usize;
                         let bots = (bots as usize).min(characters.len().saturating_sub(1));
                         if let Some(m) = &mut matchmade {
-                            m.started = true;
+                            m.starts();
+                            (m.track, m.rules) = (track, rules);
                         }
                         want_again = false;
+                        my_vote = None;
                         epoch = new;
                         race_on = true;
                         departed.clear();
@@ -1118,9 +1195,6 @@ pub(crate) async fn run(
                         && host.is_none()
                         && host_connection.as_ref().is_some_and(|c| c.stable_id() == closed)
                     {
-                        if code == Some(LEFT_BEHIND) {
-                            return Err("The others raced again without you".into());
-                        }
                         if code == Some(KICKED) {
                             return Err(format!(
                                 "the host removed you: nothing came from you for {} seconds. \
@@ -1302,8 +1376,13 @@ pub(crate) async fn run(
                         });
                     }
                     in_match_order(&mut state, &matchmade);
-                    if want_again && let Some(m) = &mut matchmade {
-                        m.wants_again(me);
+                    if let Some(m) = &mut matchmade {
+                        if want_again {
+                            m.ready(me);
+                        }
+                        if let Some(track) = my_vote {
+                            m.vote(me, track);
+                        }
                     }
                     if let Some(public) = &state.public {
                         // (A lobby that was handed over has its listing waiting for us.)
@@ -1438,8 +1517,8 @@ pub(crate) async fn run(
         }
 
         // A match's race is counted down once its players are in: for its first race all of them
-        // (or at the deadline whoever came), for the next ones whoever races again
-        // (`Matchmade::again`). When the count is up it starts with whoever is there.
+        // (or at the deadline whoever came), for the next ones at `Matchmade::next`. When the
+        // count is up it starts with whoever is there.
         if let Some(host) = &mut host
             && let Some(m) = &mut matchmade
             && !host.racing
@@ -1447,20 +1526,13 @@ pub(crate) async fn run(
             && host.handoff.is_none()
         {
             let now = Instant::now();
-            let present: Vec<EndpointId> = std::iter::once(me)
-                .chain(
-                    host.guests
-                        .iter()
-                        .filter(|g| g.hello.is_some() && !host.gone.contains(&g.id))
-                        .map(|g| g.id),
-                )
-                .collect();
-            let mut count_down = false;
+            let present = present(host, me);
+            let mut count_to: Option<Instant> = None;
             match m.countdown {
                 None if !m.started => {
                     let late = now >= m.deadline;
                     if present.len() == m.players.len() || (late && present.len() >= 2) {
-                        count_down = true;
+                        count_to = Some(now + Duration::from_secs(COUNTDOWN_SECONDS));
                     } else if late {
                         return Err("nobody else of the match came".into());
                     }
@@ -1469,34 +1541,23 @@ pub(crate) async fn run(
                     if present.len() < 2 {
                         return Err("Everyone else left the match".into());
                     }
-                    let ready: Vec<EndpointId> = present.iter().copied().filter(|id| m.again.contains(id)).collect();
-                    let waited = m.again_since.is_some_and(|since| now >= since + AGAIN_WAIT);
-                    if ready.len() == present.len() || (waited && ready.len() >= 2) {
-                        if m.again.contains(&me) {
-                            count_down = true;
-                        } else if let Some(&to) = ready.iter().find(|&&id| handoff_problem(host, me, id).is_none()) {
-                            // Our player doesn't race again (it may be away): one who does hosts
-                            // in our place, and we are left behind as any other.
-                            offer_handoff(host, to, &io).await;
-                        }
+                    let waits = m.wait_next(now);
+                    let hurried = m.hurry(&present, now);
+                    if hurried {
+                        announce(host, &io, "Everyone is ready".into()).await;
+                    }
+                    if let Some(next) = m.next
+                        && now + Duration::from_secs(COUNTDOWN_SECONDS) >= next
+                    {
+                        count_to = Some(next);
+                    } else if waits || hurried {
+                        tell_next(host, m, &present, &io).await;
                     }
                 }
                 Some((at, _)) if now >= at => {
-                    if m.started {
-                        let behind: Vec<EndpointId> = host.guests.iter().map(|g| g.id).filter(|id| !m.again.contains(id)).collect();
-                        for guest in host.guests.iter().filter(|g| behind.contains(&g.id)) {
-                            guest.connection.close(LEFT_BEHIND.into(), b"did not race again");
-                        }
-                        host.guests.retain(|g| !behind.contains(&g.id));
-                        if !behind.is_empty() {
-                            tell_lobby(me, character, &nick, host, &io).await;
-                        }
-                    }
-                    m.started = true;
-                    m.countdown = None;
-                    m.again.clear();
-                    m.again_since = None;
+                    m.starts();
                     want_again = false;
+                    my_vote = None;
                     host.start_wanted = Some((m.track, 0, m.rules, RetailBots::default()));
                 }
                 Some((at, said)) => {
@@ -1507,9 +1568,13 @@ pub(crate) async fn run(
                     }
                 }
             }
-            if count_down {
-                m.countdown = Some((now + Duration::from_secs(COUNTDOWN_SECONDS), COUNTDOWN_SECONDS));
-                announce(host, &io, format!("Race starts in {COUNTDOWN_SECONDS}")).await;
+            if let Some(at) = count_to {
+                // (The votes close: the track told now is the one raced.)
+                tell_next(host, m, &present, &io).await;
+                let left = at.saturating_duration_since(now).as_secs_f32().ceil() as u64;
+                m.countdown = Some((at, left));
+                let on = map::builtin::display_name(m.track).unwrap_or("a disc track");
+                announce(host, &io, format!("Race starts in {left} on {on}")).await;
             }
         }
 

@@ -131,8 +131,11 @@ pub struct Lobby {
     pub(crate) quick_play: bool,
     /// Quick play: the match's lobby has started a race, so the next one waits for Play again.
     raced: bool,
-    /// Quick play: we said we race the next one (`/quick again`), since the last started.
+    /// Quick play: we said we are ready for the next race (`/quick ready`), since the last
+    /// started.
     pub(crate) again: bool,
+    /// Quick play, between races: the next race, as the last `Event::Next` said.
+    pub(crate) next: Option<NextRace>,
     /// Quick play: the lobby of the last match we were in (`net::Found::lobby`), to rejoin it by
     /// (`/quick rejoin`). Kept when the lobby closes, which is when it is wanted.
     pub(crate) last_match: Option<u64>,
@@ -234,6 +237,17 @@ pub fn difficulty_name(difficulty: u16) -> &'static str {
     }
 }
 
+/// Quick play's next race of the match, between races.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NextRace {
+    pub(crate) track: u32,
+    /// When it starts, in `Time<Real>` seconds.
+    pub(crate) at: f32,
+    /// The votes for tracks, the most first.
+    pub(crate) votes: Vec<(u32, u8)>,
+    pub(crate) ready: Vec<EndpointId>,
+}
+
 /// A kart of the lobby's next race, as [`Lobby::rows`] gives it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Row {
@@ -250,6 +264,8 @@ pub struct Row {
     pub host: bool,
     /// Whether it is at our machine.
     pub you: bool,
+    /// Quick play, between races: its machine is ready for the next race.
+    pub ready: bool,
 }
 
 /// A player in the lobby, as the last [`Event::Lobby`] said.
@@ -294,6 +310,11 @@ impl Lobby {
     /// as the grid has room for. (The race gives the room to the host's extras first, then
     /// each guest's, in this order.)
     pub fn rows(&self) -> Vec<Row> {
+        // (Ours at once: the host's word on it comes a round trip later.)
+        let ready = |member: &Member| {
+            (member.you && self.again)
+                || self.next.as_ref().is_some_and(|next| next.ready.contains(&member.id))
+        };
         let mut rows = Vec::new();
         for (n, member) in self.roster.iter().enumerate() {
             rows.push(Row {
@@ -304,6 +325,7 @@ impl Lobby {
                 seat: 0,
                 host: n == 0 && self.shows_host(),
                 you: member.you,
+                ready: ready(member),
             });
         }
         // (The extras come after all the players, as they do in the race.)
@@ -317,6 +339,7 @@ impl Lobby {
                     seat: n as u8 + 1,
                     host: false,
                     you: member.you,
+                    ready: ready(member),
                 });
             }
         }
@@ -576,7 +599,7 @@ impl Lobby {
         self.quick_play && self.queue.is_none() && self.raced && !race.is_on()
     }
 
-    /// Race the match's next race with whoever else does.
+    /// Ready for the match's next race.
     fn play_again(&mut self) {
         if let Some(session) = &self.session {
             session.again();

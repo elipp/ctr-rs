@@ -303,9 +303,23 @@ pub enum Message {
     /// Reliable, host to each client: the race of `epoch` pauses at tick `at` (a client already
     /// past it pauses where it is), or resumes with `None`.
     Pause { epoch: u32, at: Option<Tick> },
-    /// Reliable, client to host, in a match's lobby (quick play) between its races: we race again
-    /// (`Command::Again`). Sent again to each new host.
+    /// Reliable, client to host, in a match's lobby (quick play): we are ready for the next race
+    /// (`Command::Again`), or vote for its track (`Command::Vote`, a disc track). Sent again to
+    /// each new host.
     Again,
+    Vote { track: u32 },
+    /// Reliable, host to each client, in a match's lobby between its races: the next race starts
+    /// in `ms`, on `track` (by the votes so far, which are `votes`: track and count, the most
+    /// first), or on `rolled` with no votes. `seed` is its `Rules::seed`. `ready` are the
+    /// players that said they are.
+    Next {
+        track: u32,
+        rolled: u32,
+        seed: u16,
+        ms: u32,
+        votes: Vec<(u32, u8)>,
+        ready: Vec<[u8; 32]>,
+    },
 }
 
 /// How often a player pings the ones it is connected to.
@@ -562,6 +576,15 @@ mod tests {
             Message::Pause { epoch: 2, at: Some(900) },
             Message::Pause { epoch: 2, at: None },
             Message::Again,
+            Message::Vote { track: 14 },
+            Message::Next {
+                track: 14,
+                rolled: 3,
+                seed: 0xbeef,
+                ms: 80_000,
+                votes: vec![(14, 2), (5, 1)],
+                ready: vec![[2; 32]],
+            },
             Message::Say { text: "gg".into() },
             Message::Chat {
                 from: [5; 32],

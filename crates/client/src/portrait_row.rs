@@ -38,6 +38,11 @@ const DIRECT: Color = Color::srgb(0.4, 1.0, 0.4);
 const HOST_COLOR: Color = Color::srgb_u8(0xf8, 0xd0, 0x40);
 const HOST_SIZE: f32 = 18.0;
 
+/// The tick on the portrait of a quick play player who is ready for the next race: the green
+/// of [`DIRECT`], the crown's size.
+const READY_COLOR: Color = DIRECT;
+const READY_SIZE: f32 = HOST_SIZE;
+
 /// The ping of the player with a short key.
 #[derive(Component)]
 struct PingLabel(String);
@@ -134,6 +139,23 @@ pub(crate) fn spawn_host_badge(commands: &mut Commands, portrait: Entity, right:
     }
     commands.spawn((
         crate::icons::outlined(crate::icons::CROWN_SIMPLE, HOST_SIZE, HOST_COLOR, node),
+        Pickable::IGNORE,
+        ChildOf(portrait),
+    ));
+}
+
+/// Puts the ready tick on the top left corner of a portrait, clear of the host's crown (which
+/// a quick play lobby doesn't show anyway).
+pub(crate) fn spawn_ready_badge(commands: &mut Commands, portrait: Entity) {
+    let node = Node {
+        position_type: PositionType::Absolute,
+        top: Val::ZERO,
+        left: Val::ZERO,
+        margin: UiRect::all(Val::Px(2.0)),
+        ..default()
+    };
+    commands.spawn((
+        crate::icons::outlined(crate::icons::CHECK_CIRCLE, READY_SIZE, READY_COLOR, node),
         Pickable::IGNORE,
         ChildOf(portrait),
     ));

@@ -4,7 +4,9 @@
 //! it by; like a realm listing, the server sees only that random key and the relay it comes
 //! through. The player key only signs the queue entry.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
@@ -24,9 +26,12 @@ const REPORT_WAIT: Duration = Duration::from_secs(3);
 /// starts with whoever did (two at least).
 const JOIN_DEADLINE: Duration = Duration::from_secs(30);
 
-/// How long after the first player of a match's lobby says it races again the next race goes
-/// with whoever else did by then (everyone saying so starts it at once).
-pub(crate) const AGAIN_WAIT: Duration = Duration::from_secs(10);
+/// How long after a match's race its next one starts: everyone still in the lobby races it.
+pub(crate) const NEXT_WAIT: Duration = Duration::from_secs(80);
+
+/// How soon the next race starts once everyone in the lobby is ready (unless it is sooner
+/// anyway). Not at once: players let in from the queue may still be connecting.
+pub(crate) const READY_WAIT: Duration = Duration::from_secs(10);
 
 /// The seconds counted down before a match's race, as a manual host's (`client` `countdown.rs`).
 pub(crate) const COUNTDOWN_SECONDS: u64 = 5;
@@ -72,18 +77,27 @@ pub(crate) struct Matchmade {
     /// lobby's id there.
     pub(crate) server: EndpointId,
     pub(crate) lobby: u64,
+    /// The next race's (the Match's for the first): whoever hosts picks them between races
+    /// (`pick`), the others keep the last `Message::Next`/`Start` they heard.
     pub(crate) track: u32,
     pub(crate) rules: Rules,
+    /// Between races, everyone (`Message::Next`, so an heir goes on with them): when the next
+    /// race starts, and its track unless the votes say otherwise.
+    pub(crate) next: Option<Instant>,
+    pub(crate) rolled: u32,
+    /// The host: what breaks a tie between votes that `rolled` is not in. Fixed for a whole
+    /// wait, so the track shown doesn't flicker as votes come.
+    tie: u64,
     /// When whoever hosts starts with the players that came.
     pub(crate) deadline: Instant,
     /// The host counts down to the start: when it is, and the seconds it last said were left.
     pub(crate) countdown: Option<(Instant, u64)>,
-    /// A race of the match has been started: the next one waits for [`Matchmade::again`].
+    /// A race of the match has been started: the next ones go by [`Matchmade::next`].
     pub(crate) started: bool,
-    /// The host: who races again (`Message::Again`, ours `Command::Again`), and since when the
-    /// first did. Cleared at each start.
-    pub(crate) again: HashSet<EndpointId>,
-    pub(crate) again_since: Option<Instant>,
+    /// The host: who is ready (`Message::Again`, ours `Command::Again`) and what each voted for
+    /// (`Message::Vote`). Cleared at each start; guests send theirs again to each new host.
+    pub(crate) ready: HashSet<EndpointId>,
+    votes: HashMap<EndpointId, u32>,
 }
 
 impl Matchmade {
@@ -99,30 +113,99 @@ impl Matchmade {
             lobby: found.lobby,
             track: found.track,
             rules: rules_of(found),
+            next: None,
+            rolled: found.track,
+            tie: 0,
             deadline: Instant::now() + JOIN_DEADLINE,
             countdown: None,
             // (Sent into a lobby that is on: its races have begun, and the host counts us in
             // for the next, `ToClient::Admit`.)
             started: found.lobby != found.id,
-            again: HashSet::new(),
-            again_since: None,
+            ready: HashSet::new(),
+            votes: HashMap::new(),
         })
     }
 
     /// When the host has to look at the start again: the countdown's next second, the first
-    /// race's deadline, or the wait for the players that race again.
+    /// race's deadline, or when the next race's countdown begins.
     pub(crate) fn wake(&self) -> Option<Instant> {
         match self.countdown {
             Some((at, said)) => Some(at - Duration::from_secs(said.saturating_sub(1))),
             None if !self.started => Some(self.deadline),
-            None => self.again_since.map(|since| since + AGAIN_WAIT),
+            None => self.next.map(|next| next - Duration::from_secs(COUNTDOWN_SECONDS)),
         }
     }
 
-    /// `id` races again (the first one starts [`AGAIN_WAIT`]). Whether it is news.
-    pub(crate) fn wants_again(&mut self, id: EndpointId) -> bool {
-        self.again_since.get_or_insert_with(Instant::now);
-        self.again.insert(id)
+    /// The host, once a race is over: the wait for the next begins, on a new random disc track
+    /// (another than the last one's) with a new item seed. Whether it did (a wait that an heir
+    /// took over goes on).
+    pub(crate) fn wait_next(&mut self, now: Instant) -> bool {
+        if self.next.is_some() {
+            return false;
+        }
+        // The time is mixed in for the web, whose `RandomState` is not random.
+        let random = RandomState::new().hash_one(self.deadline.elapsed().as_nanos());
+        let other = (random % u64::from(race::RACING_TRACKS - 1)) as u32;
+        self.rolled = if other >= self.track { other + 1 } else { other };
+        self.track = self.rolled;
+        self.rules.seed = (random >> 32) as u16;
+        self.tie = random.rotate_left(16);
+        self.next = Some(now + NEXT_WAIT);
+        true
+    }
+
+    /// The host: everyone `present` is ready, so the next race is brought to [`READY_WAIT`]
+    /// from `now`. Whether it was.
+    pub(crate) fn hurry(&mut self, present: &[EndpointId], now: Instant) -> bool {
+        let all = present.iter().all(|id| self.ready.contains(id));
+        match &mut self.next {
+            Some(next) if all && *next > now + READY_WAIT => {
+                *next = now + READY_WAIT;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `id` is ready for the next race. Whether it is news.
+    pub(crate) fn ready(&mut self, id: EndpointId) -> bool {
+        self.ready.insert(id)
+    }
+
+    /// `id` votes for a disc track to race next. Whether it is news.
+    pub(crate) fn vote(&mut self, id: EndpointId, track: u32) -> bool {
+        track < race::RACING_TRACKS && self.votes.insert(id, track) != Some(track)
+    }
+
+    /// The votes of the players `present`, the most voted track first, and the track they make
+    /// the next race's: the most voted, a tie broken by `rolled` (if it is in it) or by `tie`;
+    /// `rolled` when nobody voted.
+    pub(crate) fn pick(&mut self, present: &[EndpointId]) -> Vec<(u32, u8)> {
+        let mut tally: Vec<(u32, u8)> = Vec::new();
+        for (_, &track) in self.votes.iter().filter(|(id, _)| present.contains(id)) {
+            match tally.iter_mut().find(|(t, _)| *t == track) {
+                Some((_, n)) => *n = n.saturating_add(1),
+                None => tally.push((track, 1)),
+            }
+        }
+        tally.sort_by_key(|&(track, n)| (std::cmp::Reverse(n), track));
+        let most = tally.first().map_or(0, |&(_, n)| n);
+        let tied: Vec<u32> = tally.iter().filter(|&&(_, n)| n == most).map(|&(t, _)| t).collect();
+        self.track = match tied.len() {
+            0 => self.rolled,
+            _ if tied.contains(&self.rolled) => self.rolled,
+            len => tied[(self.tie % len as u64) as usize],
+        };
+        tally
+    }
+
+    /// A race of the match starts: the wait, the ready and the votes are of the one before.
+    pub(crate) fn starts(&mut self) {
+        self.started = true;
+        self.countdown = None;
+        self.next = None;
+        self.ready.clear();
+        self.votes.clear();
     }
 
     /// `id` is let in, behind the players there are.

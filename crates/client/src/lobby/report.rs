@@ -78,6 +78,10 @@ pub(super) fn report(
                     accepted: false,
                 });
             }
+            Event::Next { track, left, votes, ready } => {
+                let at = time.elapsed_secs() + left.as_secs_f32();
+                lobby.next = Some(super::NextRace { track, at, votes, ready });
+            }
             Event::Requeued => {
                 lobby.queue = Some(Queue::Searching { players: 0, waited: 0 });
                 toasts.write(Toast::new("Someone declined: back in the queue", 3000));
@@ -162,6 +166,7 @@ pub(super) fn report(
                 started_cup = Some(retail.cup);
                 lobby.raced = true;
                 lobby.again = false;
+                lobby.next = None;
                 let net = NetRace::new(players, slot);
                 started = Some(CurrentRace::new(
                     slot, locals, characters, bots, track, hash, rules, retail, Some(net),

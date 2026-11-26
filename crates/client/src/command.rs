@@ -57,8 +57,11 @@ pub enum Action {
     QuickPlay { rejoin: bool },
     /// Accept the match found, or decline it.
     AnswerMatch(bool),
-    /// Race the quick play lobby's next race (`/quick again`), after one.
-    PlayAgain,
+    /// Quick play, after a race: ready for the next one (`/quick ready`), which starts sooner
+    /// once everyone is.
+    QuickReady,
+    /// Quick play, after a race: vote for the next race's track (`/quick vote <track>`).
+    VoteTrack(u32),
     /// Join a lobby to watch its races, not to drive in them.
     SpectateLobby(Ticket),
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
@@ -312,8 +315,11 @@ impl Action {
                 "rejoin" => Ok(Action::QuickPlay { rejoin: true }),
                 "accept" => Ok(Action::AnswerMatch(true)),
                 "decline" => Ok(Action::AnswerMatch(false)),
-                "again" => Ok(Action::PlayAgain),
-                _ => Err("Usage: /quick [accept | decline | again | rejoin] (leave with /lobby close)".into()),
+                "ready" => Ok(Action::QuickReady),
+                _ => match word(rest) {
+                    ("vote", track) if !track.is_empty() => Ok(Action::VoteTrack(crate::maps::resolve(track)?)),
+                    _ => Err("Usage: /quick [accept | decline | ready | vote <track> | rejoin] (leave with /lobby close)".into()),
+                },
             },
             "race" => Action::race(rest),
             "bots" => Action::bots(rest),

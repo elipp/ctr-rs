@@ -64,8 +64,11 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::AnswerMatch(_) if lobby.unanswered().is_none() => "No match to answer",
         Action::QuickPlay { rejoin: true } if lobby.last_match.is_none() => "No match to rejoin",
-        Action::PlayAgain if !lobby.between_matched_races(race_on) => "Only after a quick play race",
-        Action::PlayAgain if lobby.again => "You race again already: waiting for the others",
+        Action::QuickReady | Action::VoteTrack(_) if !lobby.between_matched_races(race_on) => {
+            "Only after a quick play race"
+        }
+        Action::QuickReady if lobby.again => "You are ready already: waiting for the others",
+        Action::VoteTrack(track) if *track >= race::RACING_TRACKS => "Vote for one of the game's tracks",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -277,9 +280,15 @@ pub(super) fn run(
                     }
                 }
             }
-            Action::PlayAgain => {
+            Action::QuickReady => {
                 lobby.play_again();
-                "Racing again: waiting for the others..."
+                "Ready: waiting for the others..."
+            }
+            Action::VoteTrack(track) => {
+                if let Some(session) = &lobby.session {
+                    session.vote(*track);
+                }
+                "Vote taken"
             }
             Action::AnswerMatch(accept) => {
                 lobby.answer_match(*accept);

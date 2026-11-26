@@ -9,6 +9,7 @@ pub const FONT: Handle<Font> = bevy::asset::uuid_handle!("1aaf8033-bdaa-4c68-885
 
 pub const VIDEO_CAMERA: char = '\u{E4DA}';
 pub const CROWN_SIMPLE: char = '\u{E616}';
+pub const CHECK_CIRCLE: char = '\u{E184}';
 
 /// Puts [`FONT`] in the font assets.
 pub fn register(fonts: &mut Assets<Font>) {

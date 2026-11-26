@@ -2,7 +2,7 @@
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has a crown on its portrait's corner. The other players at a machine (split screen) follow
+//! has a crown on its portrait's corner; in quick play, a player ready for the next race a tick on the other. The other players at a machine (split screen) follow
 //! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
 //! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
 //! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),
@@ -17,7 +17,7 @@ use crate::leaderboard::ICON_X;
 use crate::lobby::{Lobby, Row};
 use crate::portrait_row::{
     BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_host_badge,
-    spawn_portrait, spawn_tags,
+    spawn_portrait, spawn_ready_badge, spawn_tags,
 };
 
 /// The column of rows, with the players it was built for, and which of them is us, and the bots
@@ -130,6 +130,9 @@ fn build(
         let portrait = spawn_portrait(&mut commands, column, &image, row.character, y);
         if row.host {
             spawn_host_badge(&mut commands, portrait, true);
+        }
+        if row.ready {
+            spawn_ready_badge(&mut commands, portrait);
         }
         let tag = spawn_tags(&mut commands, portrait, &row.name, &row.key);
         if row.you {

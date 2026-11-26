@@ -80,14 +80,27 @@ pub(super) fn waiting(
 pub(super) fn searching(
     lobby: Res<Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
+    time: Res<Time<Real>>,
     mut label: Query<(&mut Visibility, &Children), With<SearchingHud>>,
     mut texts: Query<&mut CtrText>,
 ) {
+    let between = lobby.between_matched_races(&race_on);
+    let ready = if lobby.again { "READY" } else { "OPEN THE MENU TO GET READY" };
+    let next = lobby.next.as_ref().filter(|_| between).map(|next| {
+        let track = next.track;
+        let name = map::builtin::display_name(track).unwrap_or("A DISC TRACK").to_uppercase();
+        let left = (next.at - time.elapsed_secs()).max(0.0).ceil() as u32;
+        let votes = match next.votes.iter().find(|&&(t, _)| t == track).map_or(0, |&(_, n)| n) {
+            0 => String::new(),
+            1 => " (1 VOTE)".into(),
+            n => format!(" ({n} VOTES)"),
+        };
+        format!("NEXT: {name}{votes} IN {left}  {ready}")
+    });
     let text = match &lobby.queue {
         None if !lobby.quick_play || race_on.is_on() => None,
-        None if lobby.between_matched_races(&race_on) && !lobby.again => {
-            Some("OPEN THE MENU TO PLAY AGAIN".into())
-        }
+        None if next.is_some() => next,
+        None if between && !lobby.again => Some(ready.into()),
         None => Some("WAITING FOR THE OTHERS".into()),
         Some(Queue::Searching { players, waited }) => {
             let clock = format!("{}:{:02}", waited / 60, waited % 60);

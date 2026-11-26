@@ -48,7 +48,7 @@ pub(crate) enum Heard {
         relay: Option<bool>,
     },
     /// The connection closed: the number it has (see `Connection::stable_id`), and the code the
-    /// other side closed it with, if it did ([`KICKED`](crate::KICKED), [`LEFT_BEHIND`](crate::LEFT_BEHIND); 0 for a plain close).
+    /// other side closed it with, if it did ([`KICKED`](crate::KICKED); 0 for a plain close).
     Closed {
         id: usize,
         code: Option<u32>,

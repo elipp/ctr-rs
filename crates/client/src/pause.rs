@@ -240,7 +240,7 @@ pub(crate) enum Item {
     /// `/quick accept`, `/quick decline`.
     Answer(bool),
     /// `/quick again`.
-    PlayAgain,
+    QuickReady,
     /// Shows the realm's list.
     PublicLobbies,
     /// Creates a lobby, public or private as `PauseMenu::private_lobby`, which Left and Right
@@ -481,9 +481,9 @@ fn items(
     if lobby.between_matched_races(race_on) && !lobby.again {
         items.insert(
             0,
-            entry(Item::PlayAgain, "Play again").help(
-                "Race the same players again, with whoever else does. Leave lobby takes you \
-                 out of the match.",
+            entry(Item::QuickReady, "Ready").help(
+                "Everyone in the lobby races the next race: once all are ready it starts \
+                 sooner. Leave lobby takes you out of the match.",
             ),
         );
     }
@@ -1219,9 +1219,9 @@ pub(crate) fn input(
                 menu.view = View::MatchFound;
                 menu.selected = 0;
             }
-            Some(Item::PlayAgain) => {
+            Some(Item::QuickReady) => {
                 menu.open = false;
-                actions.write(Action::PlayAgain);
+                actions.write(Action::QuickReady);
             }
             Some(Item::Answer(accept)) => {
                 menu.open = false;

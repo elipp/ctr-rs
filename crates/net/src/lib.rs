@@ -188,7 +188,7 @@ fn session_transport() -> iroh::endpoint::QuicTransportConfig {
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/20";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/21";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -213,10 +213,6 @@ pub const KICK_AFTER: Duration = Duration::from_secs(8);
 
 /// The code that the host closes the connection of a player it removes with.
 const KICKED: u32 = 1;
-
-/// The code that a match's host closes the connection of a player with that did not say it races
-/// again (`Command::Again`) before the next race started.
-const LEFT_BEHIND: u32 = 2;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -361,6 +357,15 @@ pub enum Event {
     Found(Found),
     /// Quick play: someone else declined the match found, and we are back in the queue.
     Requeued,
+    /// Quick play, between races: the next race starts in `left`, on `track`, which are the
+    /// `votes` so far (track and count, the most first) decided; the players `ready` said they
+    /// are. Comes again on each change.
+    Next {
+        track: u32,
+        left: Duration,
+        votes: Vec<(u32, u8)>,
+        ready: Vec<EndpointId>,
+    },
 }
 
 /// A player in the lobby.
@@ -470,8 +475,9 @@ enum Command {
     Promote(EndpointId),
     /// Quick play's answer to the match found.
     Answer(bool),
-    /// Quick play, between races: race again with whoever else does.
+    /// Quick play, between races: ready for the next one, or a vote for its track.
     Again,
+    Vote(u32),
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -490,11 +496,16 @@ impl Session {
         let _ = self.commands.send(Command::Answer(accept));
     }
 
-    /// Quick play, after a race: race the next one. It starts once everyone in the lobby has said
-    /// so, or `AGAIN_WAIT` after the first did, with those who did; the others are dropped
-    /// ([`Event::Failed`]).
+    /// Quick play, after a race: we are ready for the next one, which everyone in the lobby
+    /// races anyway; when all are, it starts sooner ([`Event::Next`]).
     pub fn again(&self) {
         let _ = self.commands.send(Command::Again);
+    }
+
+    /// Quick play, after a race: our vote for the next race's track (a disc track's `LevelId`;
+    /// a later vote replaces it). The most voted wins when the countdown begins.
+    pub fn vote(&self, track: u32) {
+        let _ = self.commands.send(Command::Vote(track));
     }
 
     /// What happened since the last call.
