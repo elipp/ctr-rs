@@ -10,7 +10,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId};
 use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, timeout};
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::matchmake::{AGAIN_WAIT, COUNTDOWN_SECONDS, Matchmade};
+use crate::matchmake::{AGAIN_WAIT, COUNTDOWN_SECONDS, Matchmade, Registration, listed, register};
 use crate::conn::{
     Heard, RACE_IN_PROGRESS, listen, one_per_peer, send_datagram, send_delivered, send_reliably,
     stamp,
@@ -245,6 +245,9 @@ pub(crate) async fn run(
     // (which it cannot yet: see `Heard::Closed`). A match has its heirs before any lobby does.
     // We race the match's next race (`Command::Again`): every host we come to is told.
     let mut want_again = false;
+    // Hosting a match's lobby: its registration at the matchmaker, and what it was last told.
+    let mut registration: Option<Registration> = None;
+    let mut told_open: Option<(u8, Vec<(EndpointId, String)>)> = None;
     let mut heirs = Heirs {
         order: matchmade.as_ref().map(|m| m.players.clone()).unwrap_or_default(),
         ..Heirs::default()
@@ -382,6 +385,24 @@ pub(crate) async fn run(
                     }
                 }
             }
+            Some(message) = async {
+                match &mut registration {
+                    Some(r) => r.heard.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => if let score::matching::ToClient::Admit { id, players } = message
+                && let Some(m) = &mut matchmade
+                && let Some(r) = &registration
+            {
+                // They are counted in for the next race: they came to race.
+                for player in &players {
+                    if let Ok(id) = EndpointId::from_bytes(&player.endpoint) {
+                        m.admit(id);
+                        m.wants_again(id);
+                    }
+                }
+                let _ = r.tell.send(score::matching::ToServer::Admitted { id });
+            },
             // (Wakes the loop for the start below.)
             _ = sleep(matchmade.as_ref().and_then(Matchmade::wake).map_or(Duration::ZERO, |w| w.saturating_duration_since(Instant::now()))),
                 if host.is_some() && matchmade.as_ref().and_then(Matchmade::wake).is_some_and(|w| Instant::now() < w) => {}
@@ -830,6 +851,12 @@ pub(crate) async fn run(
                             })
                             .collect::<Result<_, _>>()?;
                         let you = players.iter().position(|p| p.id == me);
+                        // (Whoever the host let in may come to us too, should we host.)
+                        if let Some(m) = &mut matchmade {
+                            for p in &players {
+                                m.admit(p.id);
+                            }
+                        }
                         // The lobby is in the hands of a host that is there: what we kept of the
                         // ones before it, and what players told us in its place, is over.
                         heirs.order = players.iter().map(|p| p.id).collect();
@@ -1373,6 +1400,40 @@ pub(crate) async fn run(
                     first: d.first,
                     pads: d.pads,
                 });
+            }
+        }
+
+        // A match's host keeps the matchmaker told how its lobby stands, for it to send players
+        // into its free places between races (MATCHMAKING.md, backfill). Not hosting ends it.
+        match (&host, &matchmade) {
+            (Some(host), Some(m)) => {
+                let registration = registration.get_or_insert_with(|| register(&endpoint, m.server, m.lobby));
+                let here: Vec<&Guest> = host
+                    .guests
+                    .iter()
+                    .filter(|g| g.hello.is_some() && !host.gone.contains(&g.id))
+                    .collect();
+                let karts = 1 + host.extras.len() + here.iter().map(|g| 1 + g.extras.len()).sum::<usize>();
+                let between = m.started
+                    && !host.racing
+                    && m.countdown.is_none()
+                    && host.start_wanted.is_none()
+                    && host.handoff.is_none();
+                let open = if between { MAX_PLAYERS.saturating_sub(karts) as u8 } else { 0 };
+                let players: Vec<(EndpointId, String)> = std::iter::once((me, nick.clone()))
+                    .chain(here.iter().map(|g| (g.id, g.nick.1.clone())))
+                    .collect();
+                let state = (open, players);
+                if told_open.as_ref() != Some(&state) {
+                    let relay = endpoint.addr().relay_urls().next().map(|r| r.to_string());
+                    let players = listed(&state.1, relay);
+                    let _ = registration.tell.send(score::matching::ToServer::Open { open, players });
+                    told_open = Some(state);
+                }
+            }
+            _ => {
+                registration = None;
+                told_open = None;
             }
         }
 

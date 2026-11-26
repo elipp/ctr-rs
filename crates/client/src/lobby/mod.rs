@@ -133,6 +133,9 @@ pub struct Lobby {
     raced: bool,
     /// Quick play: we said we race the next one (`/quick again`), since the last started.
     pub(crate) again: bool,
+    /// Quick play: the lobby of the last match we were in (`net::Found::lobby`), to rejoin it by
+    /// (`/quick rejoin`). Kept when the lobby closes, which is when it is wanted.
+    pub(crate) last_match: Option<u64>,
 }
 
 /// Where a quick play session is before its match's lobby: the searching label
@@ -550,14 +553,15 @@ impl Lobby {
     /// Leaves the lobby, ours or another's, and the race in it.
     pub fn close(&mut self, race_on: &mut RaceOn) {
         race_on.end();
-        let bots = self.bots;
+        let (bots, last_match) = (self.bots, self.last_match);
         *self = Lobby::default();
         self.bots = bots;
+        self.last_match = last_match;
     }
 
     /// Queues for quick play at the score server: the session hosts or joins the match it finds.
-    pub fn quick_play(&mut self, key: net::SecretKey, server: net::EndpointId, character: u8, extras: &[u8], nick: &str) {
-        self.session = Some(net::quick_play(server, key, character, extras, nick, race::SIM_VERSION));
+    pub fn quick_play(&mut self, key: net::SecretKey, server: net::EndpointId, character: u8, extras: &[u8], nick: &str, rejoin: Option<u64>) {
+        self.session = Some(net::quick_play(server, key, character, extras, nick, race::SIM_VERSION, rejoin));
         // (A guest throughout, the match's coordinator too: the session hosts a match unseen.)
         self.joined = true;
         self.spectator = false;

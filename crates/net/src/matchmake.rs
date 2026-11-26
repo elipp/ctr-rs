@@ -10,9 +10,9 @@ use std::time::Duration;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey, Watcher};
 use n0_future::time::{Instant, timeout};
-use score::matching::{MATCH_ALPN, Match, Net, QueueEntry, Refused, ToClient, ToServer, frame, frame_length};
+use score::matching::{MATCH_ALPN, Match, MatchPlayer, Net, QueueEntry, Refused, ToClient, ToServer, frame, frame_length};
 use score::{Action, Auth};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::peers::Role;
 use crate::{Command, Error, Event, Io, Rules, Ticket};
@@ -38,6 +38,8 @@ pub struct Found {
     pub nicks: Vec<String>,
     pub track: u32,
     pub rules: Rules,
+    /// The lobby it is of, to rejoin it by ([`quick_play`]'s `rejoin`).
+    pub lobby: u64,
 }
 
 impl Found {
@@ -46,6 +48,7 @@ impl Found {
             nicks: found.players.iter().map(|p| p.nick.clone()).collect(),
             track: found.track,
             rules: rules_of(found),
+            lobby: found.lobby,
         }
     }
 }
@@ -62,8 +65,13 @@ fn rules_of(found: &Match) -> Rules {
 /// The lobby of a match, as every one of its players keeps it (any of them may come to host it).
 /// The session holds to it, not the game: whoever hosts has none of a host's say.
 pub(crate) struct Matchmade {
-    /// The match's players, its coordinator first, then the heirs in order.
+    /// The match's players, its coordinator first, then the heirs in order; and the players let
+    /// in since (`ToClient::Admit`, or a host's `Message::Lobby` that names them).
     pub(crate) players: Vec<EndpointId>,
+    /// The matchmaker, which whoever hosts registers the lobby with (`register`), and the
+    /// lobby's id there.
+    pub(crate) server: EndpointId,
+    pub(crate) lobby: u64,
     pub(crate) track: u32,
     pub(crate) rules: Rules,
     /// When whoever hosts starts with the players that came.
@@ -79,7 +87,7 @@ pub(crate) struct Matchmade {
 }
 
 impl Matchmade {
-    fn of(found: &Match) -> Result<Matchmade, Error> {
+    fn of(found: &Match, server: EndpointId) -> Result<Matchmade, Error> {
         let players = found
             .players
             .iter()
@@ -87,11 +95,15 @@ impl Matchmade {
             .collect::<Result<_, _>>()?;
         Ok(Matchmade {
             players,
+            server,
+            lobby: found.lobby,
             track: found.track,
             rules: rules_of(found),
             deadline: Instant::now() + JOIN_DEADLINE,
             countdown: None,
-            started: false,
+            // (Sent into a lobby that is on: its races have begun, and the host counts us in
+            // for the next, `ToClient::Admit`.)
+            started: found.lobby != found.id,
             again: HashSet::new(),
             again_since: None,
         })
@@ -111,6 +123,13 @@ impl Matchmade {
     pub(crate) fn wants_again(&mut self, id: EndpointId) -> bool {
         self.again_since.get_or_insert_with(Instant::now);
         self.again.insert(id)
+    }
+
+    /// `id` is let in, behind the players there are.
+    pub(crate) fn admit(&mut self, id: EndpointId) {
+        if self.rank(id).is_none() {
+            self.players.push(id);
+        }
     }
 
     /// Where `id` is in the match's order; none for a player not in it, who is let in nowhere.
@@ -165,13 +184,16 @@ enum Queued {
 /// the rest is as [`crate::host`]/[`crate::join`]. [`Event::Searching`] comes every second or so
 /// while queued, [`Event::Found`] when a group forms, to be answered with
 /// [`crate::Session::answer`] within `score::matching::ACCEPT_SECONDS`.
-pub fn quick_play(server: EndpointId, key: SecretKey, character: u8, extras: &[u8], nick: &str, build: u32) -> crate::Session {
+///
+/// `rejoin` is a [`Found::lobby`] we were in and want back: the matchmaker sends us there if it
+/// is still on, else it queues us as anyone.
+pub fn quick_play(server: EndpointId, key: SecretKey, character: u8, extras: &[u8], nick: &str, build: u32, rejoin: Option<u64>) -> crate::Session {
     let nick = crate::clean_nick(nick);
     let extras = crate::clean_extras(extras);
     crate::spawn(move |endpoint, mut io| {
         Box::pin(async move {
             let (mut character, mut extras, mut nick) = (character, extras, nick);
-            let queued = queue(&endpoint, &mut io, server, &key, build, &mut character, &mut extras, &mut nick).await?;
+            let queued = queue(&endpoint, &mut io, server, &key, build, rejoin, &mut character, &mut extras, &mut nick).await?;
             let Queued::Go(found) = queued else {
                 return Ok(());
             };
@@ -184,7 +206,7 @@ pub fn quick_play(server: EndpointId, key: SecretKey, character: u8, extras: &[u
                     relay: coordinator.relay.as_deref().and_then(|r| r.parse::<RelayUrl>().ok()),
                 })
             };
-            let matchmade = Matchmade::of(&found)?;
+            let matchmade = Matchmade::of(&found, server)?;
             crate::session::run(endpoint, io, role, character, extras, nick, build, false, Some(matchmade)).await
         })
     })
@@ -197,6 +219,7 @@ async fn queue(
     server: EndpointId,
     key: &SecretKey,
     build: u32,
+    rejoin: Option<u64>,
     character: &mut u8,
     extras: &mut Vec<u8>,
     nick: &mut String,
@@ -213,6 +236,7 @@ async fn queue(
         relay: endpoint.addr().relay_urls().next().map(|r| r.to_string()),
         net,
         nick: nick.clone(),
+        rejoin,
     };
     let entry = bitcode::encode(&entry);
     // A second try only for a clock that was off, with the server's.
@@ -280,6 +304,7 @@ async fn queue(
                     }
                     Some(Ok(ToClient::Unauthorized { why, .. })) => break Err(format!("the matchmaker refused the queue: {why}").into()),
                     Some(Ok(ToClient::Refused(refused))) => break Err(refusal(&refused).into()),
+                    Some(Ok(ToClient::Admit { .. })) => {}
                     Some(Err(e)) => break Err(format!("the matchmaker: {e}").into()),
                     None => break Err("the matchmaker went away".into()),
                 },
@@ -315,4 +340,67 @@ fn refusal(refused: &Refused) -> String {
         Refused::Declined => "The match was declined".into(),
         other => format!("The matchmaker refused: {other}"),
     }
+}
+
+/// A lobby host's registration at the matchmaker (`ToServer::Host`), as long as this is kept:
+/// what the session tells it, and what it says. A registration that fails ends quietly: the lobby
+/// only goes without backfill.
+pub(crate) struct Registration {
+    pub(crate) tell: UnboundedSender<ToServer>,
+    pub(crate) heard: UnboundedReceiver<ToClient>,
+}
+
+pub(crate) fn register(endpoint: &Endpoint, server: EndpointId, lobby: u64) -> Registration {
+    let (tell, mut told) = unbounded_channel::<ToServer>();
+    let (heard_tx, heard) = unbounded_channel::<ToClient>();
+    let endpoint = endpoint.clone();
+    n0_future::task::spawn(async move {
+        let Ok(connection) = endpoint.connect(EndpointAddr::new(server), MATCH_ALPN).await else {
+            return;
+        };
+        let Ok((mut send, mut recv)) = connection.open_bi().await else {
+            return;
+        };
+        if write(&mut send, &ToServer::Host { lobby }).await.is_err() {
+            return;
+        }
+        // (A read of its own, as in `queue`.)
+        let (frames_tx, mut frames) = unbounded_channel();
+        n0_future::task::spawn(async move {
+            while let Ok(message) = read_frame(&mut recv).await {
+                if frames_tx.send(message).is_err() {
+                    break;
+                }
+            }
+        });
+        loop {
+            tokio::select! {
+                message = told.recv() => match message {
+                    Some(message) => if write(&mut send, &message).await.is_err() {
+                        break;
+                    },
+                    None => break,
+                },
+                message = frames.recv() => match message {
+                    Some(message) => if heard_tx.send(message).is_err() {
+                        break;
+                    },
+                    None => break,
+                },
+            }
+        }
+        connection.close(0u32.into(), b"bye");
+    });
+    Registration { tell, heard }
+}
+
+/// What a match's host tells the matchmaker of its lobby (`ToServer::Open`): `players` with
+/// itself first, its home relay with it. (The others' are left out: only the host is dialed by
+/// ticket, the heirs by id.)
+pub(crate) fn listed(players: &[(EndpointId, String)], relay: Option<String>) -> Vec<MatchPlayer> {
+    let mut relay = relay;
+    players
+        .iter()
+        .map(|(id, nick)| MatchPlayer { endpoint: *id.as_bytes(), relay: relay.take(), nick: nick.clone() })
+        .collect()
 }

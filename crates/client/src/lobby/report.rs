@@ -91,7 +91,9 @@ pub(super) fn report(
                 bots,
             } => {
                 // The match's lobby is up: the queue is behind us.
-                lobby.queue = None;
+                if let Some(Queue::Found { found, .. }) = lobby.queue.take() {
+                    lobby.last_match = Some(found.lobby);
+                }
                 roster = Some((players, spectators, you, locked, bots));
             }
             Event::Announce(text) => announce(&mut toasts, text),

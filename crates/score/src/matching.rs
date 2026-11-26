@@ -9,7 +9,7 @@
 
 use bitcode::{Decode, Encode};
 
-pub const MATCH_ALPN: &[u8] = b"ctr-rust/match/1";
+pub const MATCH_ALPN: &[u8] = b"ctr-rust/match/2";
 
 /// The most bytes of a frame either way: a [`Match`] of 8 is well under 2 KB.
 pub const MAX_FRAME: usize = 16 << 10;
@@ -54,6 +54,9 @@ pub struct QueueEntry {
     pub net: Net,
     /// `clean_nick`ed by the server.
     pub nick: String,
+    /// The [`Match::lobby`] we were in and want back: held for it while its host is registered
+    /// ([`ToServer::Host`]), an ordinary entry once it isn't.
+    pub rejoin: Option<u64>,
 }
 
 /// Client to server.
@@ -67,6 +70,16 @@ pub enum ToServer {
     },
     Accept { id: u64 },
     Decline { id: u64 },
+    /// The first frame, instead of a `Queue`, of whoever hosts the lobby of match `lobby`. Not
+    /// signed: the connection's endpoint id, which must be one of the lobby's players, is the
+    /// proof. A later registration of the same lobby replaces this one (an heir's, after a
+    /// crash the server hasn't seen yet).
+    Host { lobby: u64 },
+    /// The host: how many more players the lobby takes now (0 in a race or a countdown), and
+    /// who is in it, the host first and then the heirs.
+    Open { open: u8, players: Vec<MatchPlayer> },
+    /// The host: the players of [`ToClient::Admit`] `id` are let in, and may come.
+    Admitted { id: u64 },
 }
 
 /// Server to client.
@@ -84,6 +97,9 @@ pub enum ToClient {
     Unauthorized { why: String, now: u64 },
     /// Not queued, and why; the stream ends.
     Refused(Refused),
+    /// To a lobby's host: let these in (they accepted a [`Match`] of the lobby), then answer
+    /// [`ToServer::Admitted`].
+    Admit { id: u64, players: Vec<MatchPlayer> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
@@ -105,6 +121,8 @@ pub enum Refused {
     BadFormat { why: String },
     /// The client declined, or didn't answer in time.
     Declined,
+    /// A [`ToServer::Host`] for a lobby the server doesn't know, or not from one of its players.
+    NoSuchLobby,
 }
 
 impl std::fmt::Display for Refused {
@@ -116,6 +134,7 @@ impl std::fmt::Display for Refused {
             Refused::Banned => f.write_str("this key is banned"),
             Refused::BadFormat { why } => write!(f, "bad request: {why}"),
             Refused::Declined => f.write_str("the match was declined"),
+            Refused::NoSuchLobby => f.write_str("no such lobby"),
         }
     }
 }
@@ -123,7 +142,11 @@ impl std::fmt::Display for Refused {
 /// A group to race, as the server formed it.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Match {
+    /// Of the ready check.
     pub id: u64,
+    /// The lobby it is the players of: `id` for a new group; another's for players sent into
+    /// a lobby that is on (backfill, a rejoin), whose players come first.
+    pub lobby: u64,
     pub mode: Mode,
     /// The coordinator (the lobby's host) first, then its heirs in handoff order.
     pub players: Vec<MatchPlayer>,

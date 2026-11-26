@@ -233,6 +233,8 @@ pub(crate) enum Item {
     Multiplayer,
     /// `/quick`.
     QuickPlay,
+    /// `/quick rejoin`.
+    Rejoin,
     /// Back to the ready check, from the main view.
     MatchFound,
     /// `/quick accept`, `/quick decline`.
@@ -412,6 +414,15 @@ fn items(
                     "Public: listed under Public lobbies for anyone to join."
                 }),
             ];
+            if lobby.last_match.is_some() {
+                items.insert(
+                    1,
+                    entry(Item::Rejoin, "Rejoin match").help(
+                        "Back into the last quick play match's lobby, if it is still on; \
+                         else this is Quick play.",
+                    ),
+                );
+            }
             // (`/players` is refused in a race; the view is only offered out of a lobby.)
             if !race_on.is_on() {
                 items.push(
@@ -1198,7 +1209,11 @@ pub(crate) fn input(
             }
             Some(Item::QuickPlay) => {
                 menu.open = false;
-                actions.write(Action::QuickPlay);
+                actions.write(Action::QuickPlay { rejoin: false });
+            }
+            Some(Item::Rejoin) => {
+                menu.open = false;
+                actions.write(Action::QuickPlay { rejoin: true });
             }
             Some(Item::MatchFound) => {
                 menu.view = View::MatchFound;

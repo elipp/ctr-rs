@@ -3,8 +3,14 @@
 //! connection tasks and a 1 s tick; time is unix seconds, which is as fine as the tick.
 //!
 //! Quick play only for now: rating is ignored, and a group is whoever has waited longest.
+//!
+//! A match's lobby outlives its ready check: whoever hosts it registers ([`Matchmaker::host`])
+//! and says how many places it has free between races, and the queue fills those first
+//! (backfill), with the players that want that lobby back (`QueueEntry::rejoin`) before anyone.
+//! The host lets them in ([`ToClient::Admit`]) before they are told to go, so that none of them
+//! dials a lobby that would turn it away.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use score::matching::{Match, MatchPlayer, Mode, Net, Refused, Searching, ToClient};
@@ -32,6 +38,13 @@ const UNREACHED_MS: u32 = 2000;
 /// The fixed quick-play rules (MATCHMAKING.md, decided 2026-11-26).
 const QUICK_LAPS: u8 = 3;
 
+/// How long a lobby is remembered with nobody registered as its host: an heir takes a while to
+/// find out that the host is gone (the session's idle timeout) and to register.
+const LOBBY_GONE_S: u64 = 120;
+
+/// How long a lobby's host has to answer an [`ToClient::Admit`].
+const ADMIT_S: u64 = 10;
+
 /// A player in the queue, or in a ready check.
 pub struct Waiting {
     /// Of this queueing, given by [`Matchmaker::join`].
@@ -43,6 +56,8 @@ pub struct Waiting {
     pub relay: Option<String>,
     pub net: Net,
     pub nick: String,
+    /// The lobby it wants back (`QueueEntry::rejoin`).
+    pub rejoin: Option<u64>,
     pub joined: u64,
     pub to: UnboundedSender<ToClient>,
 }
@@ -58,6 +73,37 @@ struct Check {
     players: Vec<Waiting>,
     accepted: Vec<bool>,
     deadline: u64,
+    /// The lobby they go into, if it is one that is on (backfill).
+    lobby: Option<u64>,
+}
+
+/// Players that accepted a match of a lobby that is on, until its host has let them in.
+struct Admitting {
+    lobby: u64,
+    players: Vec<Waiting>,
+    deadline: u64,
+}
+
+/// The connection of a lobby's host: a registration of [`Matchmaker::host`].
+pub struct Host {
+    /// Given by [`Matchmaker::host`].
+    pub id: u64,
+    pub to: UnboundedSender<ToClient>,
+}
+
+/// A match's lobby, from its go until it has had no host for [`LOBBY_GONE_S`].
+struct Lobby {
+    /// What its matches are: mode, track and rules (`id`, `lobby` and `players` aside).
+    template: Match,
+    version: String,
+    /// Every endpoint that was let in: the ones that may host it.
+    members: HashSet<[u8; 32]>,
+    host: Option<Host>,
+    /// As its host last said (0 without one).
+    open: u8,
+    players: Vec<MatchPlayer>,
+    /// When it last had a host.
+    hosted: u64,
 }
 
 struct Strikes {
@@ -70,6 +116,8 @@ struct Strikes {
 pub struct Matchmaker {
     queued: Vec<Waiting>,
     checks: HashMap<u64, Check>,
+    admitting: HashMap<u64, Admitting>,
+    lobbies: HashMap<u64, Lobby>,
     strikes: HashMap<[u8; 32], Strikes>,
     next_id: u64,
 }
@@ -90,7 +138,8 @@ impl Matchmaker {
             return Err(Refused::Cooldown { until: s.until });
         }
         let in_check = self.checks.values().flat_map(|c| &c.players);
-        if self.queued.iter().chain(in_check).any(|w| w.key == waiting.key) {
+        let admitting = self.admitting.values().flat_map(|a| &a.players);
+        if self.queued.iter().chain(in_check).chain(admitting).any(|w| w.key == waiting.key) {
             return Err(Refused::AlreadyQueued);
         }
         self.next_id += 1;
@@ -103,6 +152,10 @@ impl Matchmaker {
     /// The connection of queueing `id` ended. Leaving a ready check is declining it.
     pub fn leave(&mut self, id: u64, now: u64) {
         self.queued.retain(|w| w.id != id);
+        // (Its host may let it in all the same: an endpoint that never comes is harmless.)
+        for a in self.admitting.values_mut() {
+            a.players.retain(|w| w.id != id);
+        }
         let check = self.checks.iter().find(|(_, c)| c.players.iter().any(|w| w.id == id));
         if let Some((&match_id, _)) = check {
             self.fail(match_id, |w| w.id == id, now);
@@ -122,11 +175,94 @@ impl Matchmaker {
             return;
         }
         check.accepted[i] = true;
-        if check.accepted.iter().all(|&a| a) {
-            let check = self.checks.remove(&match_id).expect("just found");
-            for w in &check.players {
-                w.send(ToClient::Go { id: match_id });
+        if !check.accepted.iter().all(|&a| a) {
+            return;
+        }
+        let check = self.checks.remove(&match_id).expect("just found");
+        match check.lobby {
+            None => {
+                let players: Vec<MatchPlayer> = check.players.iter().map(player).collect();
+                let first = &check.players[0];
+                let lobby = Lobby {
+                    template: self.template(first.mode, &players, match_id),
+                    version: first.version.clone(),
+                    members: check.players.iter().map(|w| w.endpoint).collect(),
+                    host: None,
+                    open: 0,
+                    players,
+                    hosted: now,
+                };
+                self.lobbies.insert(match_id, lobby);
+                for w in &check.players {
+                    w.send(ToClient::Go { id: match_id });
+                }
             }
+            Some(lobby_id) => match self.lobbies.get(&lobby_id).and_then(|l| l.host.as_ref()) {
+                Some(host) => {
+                    let players = check.players.iter().map(player).collect();
+                    let _ = host.to.send(ToClient::Admit { id: match_id, players });
+                    let admitting = Admitting { lobby: lobby_id, players: check.players, deadline: now + ADMIT_S };
+                    self.admitting.insert(match_id, admitting);
+                }
+                None => self.requeue(check.players),
+            },
+        }
+    }
+
+    /// Whoever hosts lobby `lobby` (one of its players: `endpoint`) registers, in the place of
+    /// whoever did before.
+    pub fn host(&mut self, lobby: u64, endpoint: [u8; 32], to: UnboundedSender<ToClient>, now: u64) -> Result<u64, Refused> {
+        let Some(l) = self.lobbies.get_mut(&lobby).filter(|l| l.members.contains(&endpoint)) else {
+            return Err(Refused::NoSuchLobby);
+        };
+        self.next_id += 1;
+        l.host = Some(Host { id: self.next_id, to });
+        l.open = 0;
+        l.hosted = now;
+        Ok(self.next_id)
+    }
+
+    /// Host registration `host` of `lobby` says how it stands.
+    pub fn open(&mut self, host: u64, lobby: u64, open: u8, players: Vec<MatchPlayer>) {
+        if let Some(l) = self.lobby_of(host, lobby) {
+            let max = score::matching::MAX_MATCH as u8;
+            l.players = players.into_iter().filter(|p| l.members.contains(&p.endpoint)).collect();
+            l.open = open.min(max.saturating_sub(l.players.len() as u8));
+        }
+    }
+
+    /// Host registration `host` of `lobby` has let the players of admission `id` in: they go.
+    pub fn admitted(&mut self, host: u64, lobby: u64, id: u64) {
+        if self.admitting.get(&id).is_none_or(|a| a.lobby != lobby) || self.lobby_of(host, lobby).is_none() {
+            return;
+        }
+        let a = self.admitting.remove(&id).expect("just found");
+        let l = self.lobbies.get_mut(&lobby).expect("just found");
+        l.open = l.open.saturating_sub(a.players.len() as u8);
+        for w in &a.players {
+            l.members.insert(w.endpoint);
+            w.send(ToClient::Go { id });
+        }
+    }
+
+    /// Host registration `host` of `lobby` ended.
+    pub fn unhost(&mut self, host: u64, lobby: u64, now: u64) {
+        if let Some(l) = self.lobby_of(host, lobby) {
+            l.host = None;
+            l.open = 0;
+            l.hosted = now;
+        }
+    }
+
+    fn lobby_of(&mut self, host: u64, lobby: u64) -> Option<&mut Lobby> {
+        self.lobbies.get_mut(&lobby).filter(|l| l.host.as_ref().is_some_and(|h| h.id == host))
+    }
+
+    /// Back in the queue, their wait kept.
+    fn requeue(&mut self, players: Vec<Waiting>) {
+        for w in players {
+            w.send(ToClient::Requeued);
+            self.queued.push(w);
         }
     }
 
@@ -141,8 +277,7 @@ impl Matchmaker {
                 self.strike(w.key, now);
                 w.send(ToClient::Refused(Refused::Declined));
             } else {
-                w.send(ToClient::Requeued);
-                self.queued.push(w);
+                self.requeue(vec![w]);
             }
         }
     }
@@ -172,9 +307,22 @@ impl Matchmaker {
             self.fail(id, |w| late.contains(&w.id), now);
         }
         self.strikes.retain(|_, s| now.saturating_sub(s.last) <= STRIKES_FORGOTTEN_S);
+        let late: Vec<u64> = (self.admitting.iter())
+            .filter(|(_, a)| a.deadline <= now)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in late {
+            let a = self.admitting.remove(&id).expect("just found");
+            self.requeue(a.players);
+        }
+        self.lobbies.retain(|_, l| l.host.is_some() || now.saturating_sub(l.hosted) <= LOBBY_GONE_S);
 
         self.queued.sort_by_key(|w| (w.joined, w.id));
-        while let Some(group) = form(&self.queued, now) {
+        self.backfill(now);
+        // (A player held for a lobby it wants back is not grouped elsewhere while that lobby is.)
+        let lobbies: HashSet<u64> = self.lobbies.keys().copied().collect();
+        let held = |w: &Waiting| w.rejoin.is_some_and(|id| lobbies.contains(&id));
+        while let Some(group) = form(&self.queued, now, held) {
             let mut players = Vec::new();
             // (From the back, so that the indices before stay put.)
             for &i in group.iter().rev() {
@@ -195,63 +343,122 @@ impl Matchmaker {
         }
     }
 
-    fn found(&mut self, players: Vec<Waiting>, now: u64) {
-        let order = coordinator_order(&players);
-        let mut players: Vec<Option<Waiting>> = players.into_iter().map(Some).collect();
-        let players: Vec<Waiting> = order.iter().map(|&i| players[i].take().expect("a permutation")).collect();
-        self.next_id += 1;
-        let id = self.next_id;
+    /// Fills the lobbies that have places free, one ready check each: the players that want the
+    /// lobby back first, then whoever has waited longest (`queued` is in that order).
+    fn backfill(&mut self, now: u64) {
+        let busy: HashSet<u64> = (self.checks.values().filter_map(|c| c.lobby))
+            .chain(self.admitting.values().map(|a| a.lobby))
+            .collect();
+        let open: Vec<u64> = (self.lobbies.iter())
+            .filter(|(id, l)| l.host.is_some() && l.open > 0 && !busy.contains(id))
+            .map(|(&id, _)| id)
+            .collect();
+        for lobby_id in open {
+            let l = &self.lobbies[&lobby_id];
+            let fits = |w: &Waiting| w.mode == l.template.mode && w.version == l.version;
+            let theirs = (self.queued.iter().enumerate()).filter(|(_, w)| fits(w) && w.rejoin == Some(lobby_id));
+            let anyone = (self.queued.iter().enumerate())
+                .filter(|(_, w)| fits(w) && w.rejoin.is_none_or(|id| !self.lobbies.contains_key(&id)));
+            let mut picks: Vec<usize> = theirs.chain(anyone).map(|(i, _)| i).take(l.open as usize).collect();
+            if picks.is_empty() {
+                continue;
+            }
+            picks.sort();
+            let mut players = Vec::new();
+            for &i in picks.iter().rev() {
+                players.push(self.queued.remove(i));
+            }
+            players.reverse();
+            self.found_for(lobby_id, players, now);
+        }
+    }
+
+    /// The rules of a new lobby's matches.
+    fn template(&self, mode: Mode, players: &[MatchPlayer], id: u64) -> Match {
         let random = random();
-        let found = Match {
+        Match {
             id,
-            mode: players[0].mode,
-            players: (players.iter())
-                .map(|w| MatchPlayer {
-                    endpoint: w.endpoint,
-                    relay: w.relay.clone(),
-                    nick: w.nick.clone(),
-                })
-                .collect(),
+            lobby: id,
+            mode,
+            players: players.to_vec(),
             track: (random % u64::from(race::RACING_TRACKS)) as u32,
             laps: QUICK_LAPS,
             masked_weapons: 0,
             even_odds: false,
             seed: (random >> 32) as u16,
             bots: 0,
+        }
+    }
+
+    /// A ready check for `players` to go into `lobby`, behind the players in it.
+    fn found_for(&mut self, lobby: u64, players: Vec<Waiting>, now: u64) {
+        self.next_id += 1;
+        let id = self.next_id;
+        let l = &self.lobbies[&lobby];
+        let found = Match {
+            id,
+            lobby,
+            players: l.players.iter().cloned().chain(players.iter().map(player)).collect(),
+            ..l.template.clone()
         };
+        tracing::info!("match {id}: {} players into lobby {lobby}", players.len());
+        self.check(found, players, Some(lobby), now);
+    }
+
+    fn found(&mut self, players: Vec<Waiting>, now: u64) {
+        let order = coordinator_order(&players);
+        let mut players: Vec<Option<Waiting>> = players.into_iter().map(Some).collect();
+        let players: Vec<Waiting> = order.iter().map(|&i| players[i].take().expect("a permutation")).collect();
+        self.next_id += 1;
+        let id = self.next_id;
+        let listed: Vec<MatchPlayer> = players.iter().map(player).collect();
+        let found = self.template(players[0].mode, &listed, id);
         tracing::info!(
             "match {id}: {} players on track {}, coordinator {}",
             players.len(),
             found.track,
             data_encoding::HEXLOWER.encode(&players[0].key[..4]),
         );
+        self.check(found, players, None, now);
+    }
+
+    fn check(&mut self, found: Match, players: Vec<Waiting>, lobby: Option<u64>, now: u64) {
         for w in &players {
             w.send(ToClient::Found(found.clone()));
         }
         self.checks.insert(
-            id,
+            found.id,
             Check {
                 accepted: vec![false; players.len()],
                 players,
                 deadline: now + u64::from(score::matching::ACCEPT_SECONDS),
+                lobby,
             },
         );
     }
 }
 
+fn player(w: &Waiting) -> MatchPlayer {
+    MatchPlayer {
+        endpoint: w.endpoint,
+        relay: w.relay.clone(),
+        nick: w.nick.clone(),
+    }
+}
+
 /// The indices of a group to form from `queued` (oldest first), if one is due: the first
 /// [`MAX_MATCH`](score::matching::MAX_MATCH) of the oldest player's mode and version.
-fn form(queued: &[Waiting], now: u64) -> Option<Vec<usize>> {
+fn form(queued: &[Waiting], now: u64, held: impl Fn(&Waiting) -> bool) -> Option<Vec<usize>> {
     // Each mode and version, by its oldest player.
     let mut seen: Vec<(Mode, &str)> = Vec::new();
-    for oldest in queued {
+    for oldest in queued.iter().filter(|w| !held(w)) {
         let kind = (oldest.mode, oldest.version.as_str());
         if seen.contains(&kind) {
             continue;
         }
         seen.push(kind);
         let group: Vec<usize> = (queued.iter().enumerate())
-            .filter(|(_, w)| (w.mode, w.version.as_str()) == kind)
+            .filter(|(_, w)| (w.mode, w.version.as_str()) == kind && !held(w))
             .map(|(i, _)| i)
             .take(score::matching::MAX_MATCH)
             .collect();
@@ -312,6 +519,7 @@ mod tests {
             relay: None,
             net,
             nick: format!("p{n}"),
+            rejoin: None,
             joined: 0,
             to,
         };
@@ -418,6 +626,77 @@ mod tests {
         .map(|(n, net)| waiting(n as u8, net).0)
         .collect();
         assert_eq!(coordinator_order(&players), [4, 3, 2, 1, 0]);
+    }
+
+    /// A pair's match gone, and its coordinator registered as the lobby's host.
+    fn hosted_lobby(mm: &mut Matchmaker) -> (Match, u64, UnboundedReceiver<ToClient>) {
+        let (a, mut ra) = waiting(1, Net::default());
+        let (b, mut rb) = waiting(2, Net::default());
+        let ia = mm.join(a, 0).unwrap();
+        let ib = mm.join(b, 0).unwrap();
+        mm.tick(SMALL_AFTER_S);
+        let m = found(&drain(&mut ra)).unwrap().clone();
+        mm.answer(ia, m.id, true, 2);
+        mm.answer(ib, m.id, true, 2);
+        assert!(drain(&mut rb).contains(&ToClient::Go { id: m.id }));
+        assert_eq!(m.lobby, m.id);
+        let (to, rh) = unbounded_channel();
+        let host = mm.host(m.lobby, m.players[0].endpoint, to, 3).unwrap();
+        (m, host, rh)
+    }
+
+    #[test]
+    fn a_lobby_with_room_is_filled_once_its_host_lets_them_in() {
+        let mut mm = Matchmaker::default();
+        let (m, host, mut rh) = hosted_lobby(&mut mm);
+        assert_eq!(mm.host(m.lobby, [9; 32], unbounded_channel().0, 3), Err(Refused::NoSuchLobby));
+        mm.open(host, m.lobby, 6, m.players.clone());
+        let (c, mut rc) = waiting(3, Net::default());
+        let ic = mm.join(c, 4).unwrap();
+        mm.tick(4);
+        let f = found(&drain(&mut rc)).unwrap().clone();
+        assert_eq!(f.lobby, m.lobby);
+        assert_eq!(f.players[..2], m.players[..], "the lobby's players first");
+        assert_eq!(f.players[2].endpoint, [3; 32]);
+        mm.answer(ic, f.id, true, 5);
+        assert!(drain(&mut rc).is_empty(), "no go before the host lets it in");
+        assert!(matches!(drain(&mut rh)[..], [ToClient::Admit { id, .. }] if id == f.id));
+        mm.admitted(host, m.lobby, f.id);
+        assert_eq!(drain(&mut rc), [ToClient::Go { id: f.id }]);
+        assert!(mm.host(m.lobby, [3; 32], unbounded_channel().0, 6).is_ok(), "a member now");
+    }
+
+    #[test]
+    fn a_rejoiner_waits_for_its_lobby_and_goes_first() {
+        let mut mm = Matchmaker::default();
+        let (m, host, _rh) = hosted_lobby(&mut mm);
+        let (mut c, mut rc) = waiting(3, Net::default());
+        c.rejoin = Some(m.lobby);
+        mm.join(c, 4).unwrap();
+        let (d, mut rd) = waiting(4, Net::default());
+        mm.join(d, 3).unwrap();
+        mm.tick(10);
+        assert!(found(&drain(&mut rc)).is_none(), "held while the lobby races");
+        assert!(found(&drain(&mut rd)).is_none(), "and not grouped with d");
+        mm.open(host, m.lobby, 1, m.players.clone());
+        mm.tick(11);
+        assert_eq!(found(&drain(&mut rc)).map(|f| f.lobby), Some(m.lobby));
+        assert!(found(&drain(&mut rd)).is_none(), "the one place was c's, though d waited longer");
+    }
+
+    #[test]
+    fn a_lobby_without_a_host_is_forgotten_and_its_rejoiners_released() {
+        let mut mm = Matchmaker::default();
+        let (m, host, _rh) = hosted_lobby(&mut mm);
+        mm.unhost(host, m.lobby, 5);
+        let (mut c, mut rc) = waiting(3, Net::default());
+        c.rejoin = Some(m.lobby);
+        mm.join(c, 5).unwrap();
+        mm.join(waiting(4, Net::default()).0, 5).unwrap();
+        mm.tick(6);
+        assert!(found(&drain(&mut rc)).is_none());
+        mm.tick(6 + LOBBY_GONE_S);
+        assert!(found(&drain(&mut rc)).is_some_and(|f| f.lobby != m.lobby));
     }
 
     #[test]

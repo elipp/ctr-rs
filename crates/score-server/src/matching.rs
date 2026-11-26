@@ -1,6 +1,7 @@
 //! A queueing client's connection (`score::matching`): the signed queue frame, then the
 //! matchmaker's news one way and the ready check's answers the other, until the match goes or
-//! the client leaves. The queueing lasts as long as the stream.
+//! the client leaves. The queueing lasts as long as the stream. A lobby's host's instead starts
+//! with `Host`, and its registration lasts as long.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,10 +53,14 @@ pub async fn serve(app: Arc<App>, connection: Connection) {
         return;
     };
     let first = tokio::time::timeout(READ_TIMEOUT, read_frame::<ToServer>(&mut recv)).await;
-    let Ok(Ok(ToServer::Queue { auth, entry })) = first else {
-        warn!(peer = %peer.fmt_short(), "sent no queue frame");
-        connection.close(1u32.into(), b"no queue");
-        return;
+    let (auth, entry) = match first {
+        Ok(Ok(ToServer::Queue { auth, entry })) => (auth, entry),
+        Ok(Ok(ToServer::Host { lobby })) => return host(app, connection, send, recv, lobby).await,
+        _ => {
+            warn!(peer = %peer.fmt_short(), "sent no queue frame");
+            connection.close(1u32.into(), b"no queue");
+            return;
+        }
     };
     let now = unix_now();
     let key = match app.seen.check(&auth, Action::Queue, &entry, now) {
@@ -99,6 +104,7 @@ pub async fn serve(app: Arc<App>, connection: Connection) {
         relay: entry.relay.as_deref().and_then(clean_url),
         net,
         nick: score::clean_nick(&entry.nick),
+        rejoin: entry.rejoin,
         joined: 0,
         to,
     };
@@ -147,4 +153,53 @@ pub async fn serve(app: Arc<App>, connection: Connection) {
     reader.abort();
     app.matchmaker.lock().unwrap().leave(id, unix_now());
     debug!("{who} left the queue ({id})");
+}
+
+/// A lobby's host's registration: its `Open`s and `Admitted`s one way, the `Admit`s the other.
+async fn host(app: Arc<App>, connection: Connection, mut send: SendStream, mut recv: RecvStream, lobby: u64) {
+    let peer = connection.remote_id();
+    let (to, mut news) = unbounded_channel();
+    let registered = app.matchmaker.lock().unwrap().host(lobby, *peer.as_bytes(), to, unix_now());
+    let id = match registered {
+        Ok(id) => id,
+        Err(refused) => return last(&connection, &mut send, &ToClient::Refused(refused)).await,
+    };
+    debug!("{} hosts lobby {lobby} ({id})", peer.fmt_short());
+    let (said_tx, mut said) = unbounded_channel();
+    let reader = tokio::spawn(async move {
+        loop {
+            let frame = read_frame::<ToServer>(&mut recv).await;
+            let end = frame.is_err();
+            if said_tx.send(frame).is_err() || end {
+                break;
+            }
+        }
+    });
+    loop {
+        tokio::select! {
+            message = news.recv() => {
+                let Some(message) = message else { break };
+                if !write(&mut send, &message).await {
+                    break;
+                }
+            }
+            frame = said.recv() => match frame {
+                Some(Ok(ToServer::Open { open, mut players })) => {
+                    players.truncate(score::matching::MAX_MATCH);
+                    for p in &mut players {
+                        p.relay = p.relay.as_deref().and_then(clean_url);
+                        p.nick = score::clean_nick(&p.nick);
+                    }
+                    app.matchmaker.lock().unwrap().open(id, lobby, open, players);
+                }
+                Some(Ok(ToServer::Admitted { id: admitted })) => {
+                    app.matchmaker.lock().unwrap().admitted(id, lobby, admitted);
+                }
+                _ => break,
+            },
+        }
+    }
+    reader.abort();
+    app.matchmaker.lock().unwrap().unhost(id, lobby, unix_now());
+    debug!("{} stopped hosting lobby {lobby} ({id})", peer.fmt_short());
 }

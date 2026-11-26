@@ -52,8 +52,9 @@ pub enum Action {
         public: Option<String>,
     },
     JoinLobby(Ticket),
-    /// Queue for quick play (`/quick`), until a match is found and goes.
-    QuickPlay,
+    /// Queue for quick play (`/quick`), until a match is found and goes; or to get back into
+    /// the last match's lobby (`/quick rejoin`), if it is still on.
+    QuickPlay { rejoin: bool },
     /// Accept the match found, or decline it.
     AnswerMatch(bool),
     /// Race the quick play lobby's next race (`/quick again`), after one.
@@ -307,11 +308,12 @@ impl Action {
         match name {
             "lobby" => Action::lobby(rest),
             "quick" => match rest {
-                "" => Ok(Action::QuickPlay),
+                "" => Ok(Action::QuickPlay { rejoin: false }),
+                "rejoin" => Ok(Action::QuickPlay { rejoin: true }),
                 "accept" => Ok(Action::AnswerMatch(true)),
                 "decline" => Ok(Action::AnswerMatch(false)),
                 "again" => Ok(Action::PlayAgain),
-                _ => Err("Usage: /quick [accept | decline | again] (leave with /lobby close)".into()),
+                _ => Err("Usage: /quick [accept | decline | again | rejoin] (leave with /lobby close)".into()),
             },
             "race" => Action::race(rest),
             "bots" => Action::bots(rest),

@@ -46,13 +46,13 @@ pub(super) fn copy_to_clipboard(text: String) {
 pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Option<&'static str> {
     let racing = race_on.is_on();
     Some(match action {
-        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay { .. }
             if lobby.is_open() =>
         {
             "Close the lobby first (/lobby close)"
         }
         // (A race alone has no session to carry over into the lobby.)
-        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay { .. }
             if racing =>
         {
             "Stop the race first (/race stop)"
@@ -63,6 +63,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         Action::ToggleSpectator if racing => net::NOT_NOW,
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::AnswerMatch(_) if lobby.unanswered().is_none() => "No match to answer",
+        Action::QuickPlay { rejoin: true } if lobby.last_match.is_none() => "No match to rejoin",
         Action::PlayAgain if !lobby.between_matched_races(race_on) => "Only after a quick play race",
         Action::PlayAgain if lobby.again => "You race again already: waiting for the others",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
@@ -260,13 +261,15 @@ pub(super) fn run(
                 lobby.join(ticket.clone(), character as u8, &extras, &config.nickname);
                 "Joining lobby..."
             }
-            Action::QuickPlay => {
+            Action::QuickPlay { rejoin } => {
+                let rejoin = lobby.last_match.filter(|_| *rejoin);
                 let queued = crate::player::key().and_then(|key| {
                     let server = net::score::default_score().ok_or("No score server to queue at")?;
-                    lobby.quick_play(key, server, character as u8, &extras, &config.nickname);
+                    lobby.quick_play(key, server, character as u8, &extras, &config.nickname, rejoin);
                     Ok(())
                 });
                 match queued {
+                    Ok(()) if rejoin.is_some() => "Rejoining the match...",
                     Ok(()) => "Searching for a match...",
                     Err(why) => {
                         toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
