@@ -54,6 +54,8 @@ pub(super) fn report(
     let mut chats = Vec::new();
     for event in session.poll() {
         match event {
+            // TODO(matchmaking step 2): a quick play coordinator hosts unseen: no ticket to copy,
+            // no realm listing, no toast.
             Event::Open(ticket) => {
                 copy_to_clipboard(format!("/lobby join {ticket}"));
                 lobby.list("");
@@ -69,6 +71,8 @@ pub(super) fn report(
             Event::Searching { players, waited } => {
                 debug!("quick play: {players} searching, {} s", waited.as_secs());
             }
+            // TODO(matchmaking step 3): the searching screen and a ready check of its own, not a
+            // debug line and a toast that asks for a command.
             Event::Found(found) => {
                 let text = format!(
                     "Match found: {}\n/quick accept or /quick decline",

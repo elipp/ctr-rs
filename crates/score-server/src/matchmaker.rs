@@ -14,8 +14,11 @@ use tokio::sync::mpsc::UnboundedSender;
 /// more for a fuller grid.
 const TARGET_MIN: usize = 4;
 const GATHER_S: u64 = 15;
-/// Any group of 2 or more forms once its oldest has waited this long.
-const SMALL_AFTER_S: u64 = 60;
+/// Any group of 2 or more forms once its oldest has waited this long. (Not 0: clippy denies a
+/// `>=` that is always true, and a tick is a second anyway.)
+// TODO(matchmaking): back to 60 once there are players to gather: a pair races at once only to
+// test with two clients (2026-11-26). Then `a_pair_races` wants its tick before the wait again.
+const SMALL_AFTER_S: u64 = 1;
 
 /// A decline (or a ready check let run out) keeps the key out of the queue this long, doubling
 /// with each further one within [`STRIKES_FORGOTTEN_S`], up to [`COOLDOWN_MAX_S`].
@@ -327,13 +330,13 @@ mod tests {
     }
 
     #[test]
-    fn a_pair_waits_for_more_then_races() {
+    fn a_pair_races() {
         let mut mm = Matchmaker::default();
         let (a, mut ra) = waiting(1, Net::default());
         let (b, mut rb) = waiting(2, Net::default());
         mm.join(a, 0).unwrap();
-        mm.join(b, 5).unwrap();
-        mm.tick(30);
+        mm.join(b, 0).unwrap();
+        mm.tick(0);
         assert!(found(&drain(&mut ra)).is_none());
         mm.tick(SMALL_AFTER_S);
         let m = found(&drain(&mut ra)).unwrap().clone();

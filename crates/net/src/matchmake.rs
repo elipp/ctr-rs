@@ -111,6 +111,9 @@ pub fn quick_play(server: EndpointId, key: SecretKey, character: u8, extras: &[u
                     relay: coordinator.relay.as_deref().and_then(|r| r.parse::<RelayUrl>().ok()),
                 })
             };
+            // TODO(matchmaking step 2): run in matchmade mode, from `found`: its rules and track
+            // locked, only its players admitted, an automatic start, no host commands, its heirs.
+            // Until then the coordinator is an ordinary host that starts the race by hand.
             crate::session::run(endpoint, io, role, character, extras, nick, build, false).await
         })
     })

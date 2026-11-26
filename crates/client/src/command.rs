@@ -53,6 +53,8 @@ pub enum Action {
     },
     JoinLobby(Ticket),
     /// Queue for quick play (`/quick`), until a match is found and goes.
+    // TODO(matchmaking step 3): `/quick` and `/quick accept|decline` are a stand-in for testing;
+    // the menu's Quick play entry, the searching screen and an accept button replace them.
     QuickPlay,
     /// Accept the match found, or decline it.
     AnswerMatch(bool),
