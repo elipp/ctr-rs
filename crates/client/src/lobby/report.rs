@@ -54,8 +54,6 @@ pub(super) fn report(
     let mut chats = Vec::new();
     for event in session.poll() {
         match event {
-            // TODO(matchmaking step 2): a quick play coordinator hosts unseen: no ticket to copy,
-            // no realm listing, no toast.
             Event::Open(ticket) => {
                 copy_to_clipboard(format!("/lobby join {ticket}"));
                 lobby.list("");

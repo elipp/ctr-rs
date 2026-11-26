@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey, Watcher};
-use n0_future::time::timeout;
+use n0_future::time::{Instant, timeout};
 use score::matching::{MATCH_ALPN, Match, Net, QueueEntry, Refused, ToClient, ToServer, frame, frame_length};
 use score::{Action, Auth};
 use tokio::sync::mpsc::unbounded_channel;
@@ -19,30 +19,86 @@ use crate::{Command, Error, Event, Io, Rules, Ticket};
 /// How long the first net report may take: past it the queue goes without (the worst NAT).
 const REPORT_WAIT: Duration = Duration::from_secs(3);
 
+/// How long after the match goes its coordinator waits for everyone to come in, before it
+/// starts with whoever did (two at least).
+const JOIN_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The seconds counted down before a match's race, as a manual host's (`client` `countdown.rs`).
+pub(crate) const COUNTDOWN_SECONDS: u64 = 5;
+
 /// What a match found says (see [`Event::Found`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Found {
     /// The players' nicks, the coordinator first.
     pub nicks: Vec<String>,
-    /// We are the coordinator: we host.
-    pub hosting: bool,
     pub track: u32,
     pub rules: Rules,
 }
 
 impl Found {
-    fn of(found: &Match, me: EndpointId) -> Found {
+    fn of(found: &Match) -> Found {
         Found {
             nicks: found.players.iter().map(|p| p.nick.clone()).collect(),
-            hosting: found.players.first().is_some_and(|p| p.endpoint == *me.as_bytes()),
             track: found.track,
-            rules: Rules {
-                laps: found.laps,
-                masked_weapons: found.masked_weapons,
-                even_odds: found.even_odds,
-                seed: found.seed,
-            },
+            rules: rules_of(found),
         }
+    }
+}
+
+fn rules_of(found: &Match) -> Rules {
+    Rules {
+        laps: found.laps,
+        masked_weapons: found.masked_weapons,
+        even_odds: found.even_odds,
+        seed: found.seed,
+    }
+}
+
+/// The lobby of a match, as every one of its players keeps it (any of them may come to host it).
+/// The session holds to it, not the game: whoever hosts has none of a host's say.
+pub(crate) struct Matchmade {
+    /// The match's players, its coordinator first, then the heirs in order.
+    pub(crate) players: Vec<EndpointId>,
+    pub(crate) track: u32,
+    pub(crate) rules: Rules,
+    /// When whoever hosts starts with the players that came.
+    pub(crate) deadline: Instant,
+    /// The host counts down to the start: when it is, and the seconds it last said were left.
+    pub(crate) countdown: Option<(Instant, u64)>,
+    /// The match's race has been started (a lobby of a match races once: what comes after it is
+    /// step 3's, MATCHMAKING.md).
+    pub(crate) started: bool,
+}
+
+impl Matchmade {
+    fn of(found: &Match) -> Result<Matchmade, Error> {
+        let players = found
+            .players
+            .iter()
+            .map(|p| EndpointId::from_bytes(&p.endpoint))
+            .collect::<Result<_, _>>()?;
+        Ok(Matchmade {
+            players,
+            track: found.track,
+            rules: rules_of(found),
+            deadline: Instant::now() + JOIN_DEADLINE,
+            countdown: None,
+            started: false,
+        })
+    }
+
+    /// When the host has to look at the start again: the deadline, or the countdown's next second.
+    pub(crate) fn wake(&self) -> Option<Instant> {
+        match self.countdown {
+            _ if self.started => None,
+            Some((at, said)) => Some(at - Duration::from_secs(said.saturating_sub(1))),
+            None => Some(self.deadline),
+        }
+    }
+
+    /// Where `id` is in the match's order; none for a player not in it, who is let in nowhere.
+    pub(crate) fn rank(&self, id: EndpointId) -> Option<usize> {
+        self.players.iter().position(|&p| p == id)
     }
 }
 
@@ -111,10 +167,8 @@ pub fn quick_play(server: EndpointId, key: SecretKey, character: u8, extras: &[u
                     relay: coordinator.relay.as_deref().and_then(|r| r.parse::<RelayUrl>().ok()),
                 })
             };
-            // TODO(matchmaking step 2): run in matchmade mode, from `found`: its rules and track
-            // locked, only its players admitted, an automatic start, no host commands, its heirs.
-            // Until then the coordinator is an ordinary host that starts the race by hand.
-            crate::session::run(endpoint, io, role, character, extras, nick, build, false).await
+            let matchmade = Matchmade::of(&found)?;
+            crate::session::run(endpoint, io, role, character, extras, nick, build, false, Some(matchmade)).await
         })
     })
 }
@@ -192,7 +246,7 @@ async fn queue(
                         waited: Duration::from_secs(s.waited_s.into()),
                     }),
                     Some(Ok(ToClient::Found(m))) => {
-                        io.event(Event::Found(Found::of(&m, endpoint.id())));
+                        io.event(Event::Found(Found::of(&m)));
                         found = Some(m);
                     }
                     Some(Ok(ToClient::Requeued)) => {

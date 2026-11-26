@@ -274,9 +274,9 @@ pub(super) fn run(
             }
             Action::AnswerMatch(accept) => {
                 lobby.answer_match(*accept);
-                if let Some(found) = lobby.found.take().filter(|_| *accept) {
-                    // (Whether we host is the match's to say: it hosts when it goes.)
-                    lobby.joined = !found.hosting;
+                // (Whoever of the match hosts is the session's business: to the game every
+                // player of it is a guest, with none of a host's say.)
+                if lobby.found.take().is_some() && *accept {
                     "Accepted: waiting for the others..."
                 } else {
                     "Declined"

@@ -127,6 +127,8 @@ pub struct Lobby {
     pub(crate) podium: Option<[Option<u8>; 3]>,
     /// Quick play: the match found and not yet gone (`/quick accept`), while the session queues.
     pub(crate) found: Option<net::Found>,
+    /// The session is quick play's: its lobby has a host only the session knows of.
+    quick_play: bool,
 }
 
 /// How many bots the host's races have, of which kind, and how hard they race (`/bots`).
@@ -277,7 +279,7 @@ impl Lobby {
                 key: member.key.clone(),
                 id: member.id,
                 seat: 0,
-                host: n == 0,
+                host: n == 0 && !self.quick_play,
                 you: member.you,
             });
         }
@@ -536,12 +538,13 @@ impl Lobby {
     /// Queues for quick play at the score server: the session hosts or joins the match it finds.
     pub fn quick_play(&mut self, key: net::SecretKey, server: net::EndpointId, character: u8, extras: &[u8], nick: &str) {
         self.session = Some(net::quick_play(server, key, character, extras, nick, race::SIM_VERSION));
-        // (A guest until the match says we host: a host's commands mean nothing in the queue.)
+        // (A guest throughout, the match's coordinator too: the session hosts a match unseen.)
         self.joined = true;
         self.spectator = false;
         self.roster.clear();
         self.roster_seen = false;
         self.found = None;
+        self.quick_play = true;
     }
 
     /// Accepts or declines the match found.

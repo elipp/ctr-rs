@@ -682,7 +682,7 @@ pub fn host(character: u8, extras: &[u8], nick: &str, build: u32) -> Session {
     let nick = clean_nick(nick);
     let extras = clean_extras(extras);
     spawn(move |endpoint, io| {
-        Box::pin(run(endpoint, io, Role::Host, character, extras, nick, build, false))
+        Box::pin(run(endpoint, io, Role::Host, character, extras, nick, build, false, None))
     })
 }
 
@@ -715,6 +715,7 @@ fn enter(ticket: Ticket, character: u8, extras: Vec<u8>, nick: &str, build: u32,
             nick,
             build,
             spectator,
+            None,
         ))
     })
 }

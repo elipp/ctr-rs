@@ -10,6 +10,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId};
 use n0_future::time::{Instant, Interval, MissedTickBehavior, interval, sleep, timeout};
 use tokio::sync::mpsc::unbounded_channel;
 
+use crate::matchmake::{COUNTDOWN_SECONDS, Matchmade};
 use crate::conn::{
     Heard, RACE_IN_PROGRESS, listen, one_per_peer, send_datagram, send_delivered, send_reliably,
     stamp,
@@ -21,9 +22,12 @@ use crate::realm::Publisher;
 use crate::transfers::{Transfer, Verdict};
 use crate::wire::{Message, PING_SECONDS};
 use crate::{
-    ALPN, Command, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MAX_PLAYERS, MESH_ALPN, PeerInfo, Player,
+    ALPN, Command, RetailBots, Error, NOT_NOW, Event, Io, KICK_AFTER, KICKED, MAX_BLOB, MAX_PLAYERS, MESH_ALPN, PeerInfo, Player,
     Public, RateLimit, Tick, Ticket, clean_chat, clean_nick,
 };
+
+/// What a lobby of a match says to whatever only a host could otherwise do.
+const MATCHMADE: &str = "Not in a quick play lobby";
 
 /// How long a guest tries to reach the player that would host the lobby in the place of a host
 /// that left, before it goes on to the next one.
@@ -63,6 +67,23 @@ fn handoff_problem(host: &HostState, me: EndpointId, to: EndpointId) -> Option<&
             Some("That player is behind a NAT that others cannot reach, and cannot host")
         }
         Some(_) => None,
+    }
+}
+
+/// Tells everyone in the lobby, and us.
+async fn announce(host: &HostState, io: &Io, text: String) {
+    let message = Message::Announce { text: text.clone() };
+    for guest in &host.guests {
+        let _ = send_reliably(&guest.connection, &message).await;
+    }
+    io.event(Event::Announce(text));
+}
+
+/// A match's lobby keeps its guests in the match's order, which the slots and the heirs
+/// (`Message::Lobby`'s order) follow; everyone else's in the order they joined.
+fn in_match_order(host: &mut HostState, matchmade: &Option<Matchmade>) {
+    if let Some(m) = matchmade {
+        host.guests.sort_by_key(|g| m.rank(g.id));
     }
 }
 
@@ -184,6 +205,7 @@ pub(crate) async fn run(
     mut nick: String,
     build: u32,
     mut spectator: bool,
+    mut matchmade: Option<Matchmade>,
 ) -> Result<(), Error> {
     let me = endpoint.id();
     let (heard_tx, mut heard) = unbounded_channel::<(EndpointId, Heard)>();
@@ -199,43 +221,59 @@ pub(crate) async fn run(
     // The host: the sends of maps that ended.
     let (sent_tx, mut sent) = unbounded_channel::<Transfer>();
 
+    // A guest: what it would carry the lobby on with if the host left, and whether a race is on
+    // (which it cannot yet: see `Heard::Closed`). A match has its heirs before any lobby does.
+    let mut heirs = Heirs {
+        order: matchmade.as_ref().map(|m| m.players.clone()).unwrap_or_default(),
+        ..Heirs::default()
+    };
+    let mut race_on = false;
+
     match &role {
         Role::Host => {
             tokio::select! {
                 _ = &mut io.stop => return Ok(()),
                 _ = endpoint.online() => {}
             }
-            io.event(Event::Open(Ticket::of(&endpoint.addr())));
+            // (Nobody joins a match's lobby by ticket: its players have the coordinator's.)
+            if matchmade.is_none() {
+                io.event(Event::Open(Ticket::of(&endpoint.addr())));
+            }
             // The lobby has us in it from the start.
             let state = HostState { extras: extras.clone(), ..HostState::default() };
             tell_lobby(me, character, &nick, &state, &io).await;
             host = Some(state);
         }
         Role::Join(ticket) => {
-            let connection: Connection = tokio::select! {
+            let connected = tokio::select! {
                 _ = &mut io.stop => return Ok(()),
-                connection = endpoint.connect(ticket.addr(), ALPN) => connection?,
+                connection = endpoint.connect(ticket.addr(), ALPN) => connection,
             };
-            io.event(Event::Joined(ticket.id));
-            let hello = Message::Hello {
-                character,
-                extras: extras.clone(),
-                seq: 0,
-                build,
-                nick: nick.clone(),
-                spectator,
-            };
-            send_reliably(&connection, &hello).await?;
-            send_reliably(
-                &connection,
-                &Message::Nat {
-                    hard: hard_nat(&endpoint),
-                },
-            )
-            .await?;
-            hellos = 1;
-            listen(connection.clone(), ticket.id, heard_tx.clone());
-            host_connection = Some(connection);
+            match connected {
+                Ok(connection) => {
+                    io.event(Event::Joined(ticket.id));
+                    let hello = Message::Hello {
+                        character,
+                        extras: extras.clone(),
+                        seq: 0,
+                        build,
+                        nick: nick.clone(),
+                        spectator,
+                    };
+                    send_reliably(&connection, &hello).await?;
+                    send_reliably(&connection, &Message::Nat { hard: hard_nat(&endpoint) }).await?;
+                    hellos = 1;
+                    listen(connection.clone(), ticket.id, heard_tx.clone());
+                    host_connection = Some(connection);
+                }
+                // The next of the match's order hosts in its coordinator's place: the loop below
+                // finds it, as when a host leaves.
+                Err(_) if matchmade.is_some() => {
+                    heirs.dead.insert(ticket.id);
+                    heirs.searching = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
     }
     let mut host_id = match &role {
@@ -243,10 +281,6 @@ pub(crate) async fn run(
         Role::Join(ticket) => ticket.id,
     };
 
-    // A guest: what it would carry the lobby on with if the host left, and whether a race is on
-    // (which it cannot yet: see `Heard::Closed`).
-    let mut heirs = Heirs::default();
-    let mut race_on = false;
     let (reached_tx, mut reached) = unbounded_channel::<(EndpointId, Option<Connection>)>();
 
     // The race.
@@ -287,6 +321,11 @@ pub(crate) async fn run(
                 let Ok(accepting) = incoming.accept() else { continue };
                 let Ok(connection) = accepting.await else { continue };
                 let id = connection.remote_id();
+                // (The endpoint ids are the match's word for who is in it, and QUIC's proof.)
+                if matchmade.as_ref().is_some_and(|m| m.rank(id).is_none()) {
+                    connection.close(0u32.into(), b"not in the match");
+                    continue;
+                }
                 // A link of the race, from a player of the roster (or one that is early).
                 if connection.alpn() == MESH_ALPN {
                     listen(connection.clone(), id, heard_tx.clone());
@@ -312,6 +351,7 @@ pub(crate) async fn run(
                         }
                         listen(connection, id, heard_tx.clone());
                         host.guests.push(guest);
+                        in_match_order(host, &matchmade);
                     }
                     // A player that takes us for the host (we are about to be).
                     None => {
@@ -320,6 +360,9 @@ pub(crate) async fn run(
                     }
                 }
             }
+            // (Wakes the loop for the start below.)
+            _ = sleep(matchmade.as_ref().and_then(Matchmade::wake).map_or(Duration::ZERO, |w| w.saturating_duration_since(Instant::now()))),
+                if host.is_some() && matchmade.as_ref().and_then(Matchmade::wake).is_some_and(|w| Instant::now() < w) => {}
             _ = sleep(host.as_ref().and_then(|h| h.handoff.as_ref()).map_or(Duration::ZERO, |h| h.until.saturating_duration_since(Instant::now()))),
                 if host.as_ref().is_some_and(|h| h.handoff.is_some()) =>
             {
@@ -364,6 +407,19 @@ pub(crate) async fn run(
                 unclaimed.push(connection);
             }
             Some(command) = io.commands.recv() => match command {
+                // A match's lobby has the matchmaker's rules, track and order, and a host that is
+                // one of the players: nothing of it is anyone's to change.
+                Command::Start { .. }
+                | Command::Promote(_)
+                | Command::Public(_)
+                | Command::Pause(_)
+                | Command::Stop
+                | Command::Spectate(_)
+                    if matchmade.is_some() =>
+                {
+                    io.event(Event::Announce(MATCHMADE.into()));
+                }
+                Command::Lock(_) | Command::ShowBots(_) | Command::Bots(_) if matchmade.is_some() => {}
                 // Goes ahead below, once every guest has said what it drives.
                 Command::Start { track, hash, rules, retail } => if let Some(host) = &mut host {
                     if host.handoff.is_none() {
@@ -415,10 +471,7 @@ pub(crate) async fn run(
                     }
                 },
                 Command::Announce(text) => if let Some(host) = &host {
-                    for guest in &host.guests {
-                        let _ = send_reliably(&guest.connection, &Message::Announce { text: text.clone() }).await;
-                    }
-                    io.event(Event::Announce(text));
+                    announce(host, &io, text).await;
                 },
                 Command::Standings(standings) => if let Some(host) = &host {
                     let message = Message::Standings(standings.clone());
@@ -632,6 +685,8 @@ pub(crate) async fn run(
                             };
                             let theirs = if theirs < crate::CHARACTERS { theirs } else { 0 };
                             guest.hello = Some((seq, theirs));
+                            // (A match's players drive: a spectator would leave a place empty.)
+                            let watches = watches && matchmade.is_none();
                             guest.spectator = watches;
                             // (A spectator has no extras; the rest is cut to fit a race at the start.)
                             if watches {
@@ -756,6 +811,9 @@ pub(crate) async fn run(
                             .collect::<Result<_, _>>()?;
                         let slot = slot as usize;
                         let bots = (bots as usize).min(characters.len().saturating_sub(1));
+                        if let Some(m) = &mut matchmade {
+                            m.started = true;
+                        }
                         epoch = new;
                         race_on = true;
                         departed.clear();
@@ -1162,6 +1220,7 @@ pub(crate) async fn run(
                             hard: false,
                         });
                     }
+                    in_match_order(&mut state, &matchmade);
                     if let Some(public) = &state.public {
                         // (A lobby that was handed over has its listing waiting for us.)
                         let mut publisher = if heirs.handed_over {
@@ -1182,10 +1241,13 @@ pub(crate) async fn run(
                     (running, game_ready, ready_sent) = (false, false, false);
                     heirs.dialing = None;
                     heirs.handed_over = false;
-                    io.event(Event::Promoted {
-                        ticket: Ticket::of(&endpoint.addr()),
-                        public: state.public.clone(),
-                    });
+                    // (As with `Event::Open`: a match's host is no one's business.)
+                    if matchmade.is_none() {
+                        io.event(Event::Promoted {
+                            ticket: Ticket::of(&endpoint.addr()),
+                            public: state.public.clone(),
+                        });
+                    }
                     tell_lobby(me, character, &nick, &state, &io).await;
                     refresh_listing(&state, build);
                     host = Some(state);
@@ -1254,6 +1316,42 @@ pub(crate) async fn run(
                     first: d.first,
                     pads: d.pads,
                 });
+            }
+        }
+
+        // A match's race is counted down once all its players are in, or at its deadline with
+        // whoever came, and starts with whoever is there when the count is up.
+        if let Some(host) = &mut host
+            && let Some(m) = &mut matchmade
+            && !m.started
+            && host.start_wanted.is_none()
+        {
+            let now = Instant::now();
+            match m.countdown {
+                None => {
+                    let here = |id: &EndpointId| {
+                        *id == me || host.guests.iter().any(|g| g.id == *id && g.hello.is_some())
+                    };
+                    let came = m.players.iter().filter(|id| here(id)).count();
+                    let late = now >= m.deadline;
+                    if came == m.players.len() || (late && came >= 2) {
+                        m.countdown = Some((now + Duration::from_secs(COUNTDOWN_SECONDS), COUNTDOWN_SECONDS));
+                        announce(host, &io, format!("Race starts in {COUNTDOWN_SECONDS}")).await;
+                    } else if late {
+                        return Err("nobody else of the match came".into());
+                    }
+                }
+                Some((at, _)) if now >= at => {
+                    m.started = true;
+                    host.start_wanted = Some((m.track, 0, m.rules, RetailBots::default()));
+                }
+                Some((at, said)) => {
+                    let left = at.saturating_duration_since(now).as_secs_f32().ceil() as u64;
+                    if left < said {
+                        m.countdown = Some((at, left));
+                        announce(host, &io, format!("{left}...")).await;
+                    }
+                }
             }
         }
 
