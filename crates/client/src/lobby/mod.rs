@@ -279,7 +279,7 @@ impl Lobby {
                 key: member.key.clone(),
                 id: member.id,
                 seat: 0,
-                host: n == 0 && !self.quick_play,
+                host: n == 0 && self.shows_host(),
                 you: member.you,
             });
         }
@@ -787,6 +787,12 @@ impl Lobby {
         if let Some(session) = &self.session {
             session.bot_input(pads);
         }
+    }
+
+    /// Whether the lobby's host (its first player, slot 0 of its races) is one to show: a quick
+    /// play lobby's is the session's business only.
+    pub fn shows_host(&self) -> bool {
+        self.is_open() && !self.quick_play
     }
 
     /// Whether we host the lobby we are in.

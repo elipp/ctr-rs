@@ -82,6 +82,7 @@ fn build(
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
     loaded: Option<Res<Portraits>>,
+    lobby: Res<crate::lobby::Lobby>,
     boards: Query<(Entity, &Board)>,
 ) {
     // (None in a split screen: the column is one for the whole window, and the players have their
@@ -130,7 +131,7 @@ fn build(
             true => "",
         };
         // The host is slot 0 (`net::Event::Start`).
-        if slot == 0 {
+        if slot == 0 && lobby.shows_host() {
             spawn_host_badge(&mut commands, portrait, false);
         }
         let tag = spawn_tags(&mut commands, portrait, &label, key);
