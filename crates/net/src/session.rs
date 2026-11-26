@@ -166,7 +166,7 @@ fn refresh_listing(host: &HostState, build: u32) {
 /// the [`Message::Ready`]s and sends the [`Message::Go`]); the race is the same for both.
 /// Whether our NAT gives another public address for each peer we talk to, as far as iroh has
 /// found out (not, until it has). A player behind one can only be reached by dialing.
-fn hard_nat(endpoint: &Endpoint) -> bool {
+pub(crate) fn hard_nat(endpoint: &Endpoint) -> bool {
     use iroh::Watcher;
     endpoint
         .net_report()
@@ -574,6 +574,8 @@ pub(crate) async fn run(
                 Command::Bots(characters) => if let Some(host) = &mut host {
                     host.bots = characters;
                 },
+                // (Quick play's, of the queue before the lobby.)
+                Command::Answer(_) => {}
                 Command::Checksum { tick, hash } => if running {
                     let message = Message::Checksum { epoch, tick, hash };
                     for link in links.values() {

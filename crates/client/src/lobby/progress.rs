@@ -202,6 +202,7 @@ pub(super) fn finish(
             .filter_map(|(_, slot)| race.finisher(slot))
             .collect()
     };
+    crate::recordings::save(&sim, race);
     lobby.end_race(&mut race_on);
     if lobby.is_host() {
         lobby.race_over(players, &finishers, time.elapsed_secs());

@@ -46,13 +46,13 @@ pub(super) fn copy_to_clipboard(text: String) {
 pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Option<&'static str> {
     let racing = race_on.is_on();
     Some(match action {
-        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay
             if lobby.is_open() =>
         {
             "Close the lobby first (/lobby close)"
         }
         // (A race alone has no session to carry over into the lobby.)
-        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay
             if racing =>
         {
             "Stop the race first (/race stop)"
@@ -62,6 +62,7 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         }
         Action::ToggleSpectator if racing => net::NOT_NOW,
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
+        Action::AnswerMatch(_) if lobby.found.is_none() => "No match to answer",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -256,6 +257,30 @@ pub(super) fn run(
             Action::JoinLobby(ticket) => {
                 lobby.join(ticket.clone(), character as u8, &extras, &config.nickname);
                 "Joining lobby..."
+            }
+            Action::QuickPlay => {
+                let queued = crate::player::key().and_then(|key| {
+                    let server = net::score::default_score().ok_or("No score server to queue at")?;
+                    lobby.quick_play(key, server, character as u8, &extras, &config.nickname);
+                    Ok(())
+                });
+                match queued {
+                    Ok(()) => "Searching for a match...",
+                    Err(why) => {
+                        toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        continue;
+                    }
+                }
+            }
+            Action::AnswerMatch(accept) => {
+                lobby.answer_match(*accept);
+                if let Some(found) = lobby.found.take().filter(|_| *accept) {
+                    // (Whether we host is the match's to say: it hosts when it goes.)
+                    lobby.joined = !found.hosting;
+                    "Accepted: waiting for the others..."
+                } else {
+                    "Declined"
+                }
             }
             Action::SpectateLobby(ticket) => {
                 lobby.spectate(ticket.clone(), &config.nickname);

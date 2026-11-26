@@ -366,10 +366,24 @@ impl CurrentRace {
         race
     }
 
-    /// What the sim plays.
-    pub fn mode(&self) -> race::Mode {
-        let laps = self.rules.laps;
-        self.solo.map_or(race::Mode::Race { laps }, |kind| kind.mode(laps))
+    /// What a race that is not a solo run starts from (`race::multi::start`). The retail bots
+    /// are as `remote::build` left them.
+    pub fn setup(&self) -> race::multi::Setup {
+        race::multi::Setup {
+            track: self.track,
+            // (A host sends no hash of a game track: ours is of the level we play.)
+            map_hash: crate::maps::hash(self.track).unwrap_or(self.hash),
+            laps: self.rules.laps,
+            masked_weapons: self.rules.masked_weapons,
+            even_odds: self.rules.even_odds,
+            seed: self.rules.seed,
+            kart_collisions: crate::remote::kart_collisions(),
+            characters: self.characters.clone(),
+            brain_bots: self.bots as u8,
+            retail: self.retail.characters.clone(),
+            difficulty: self.retail.difficulty as i16,
+            cup: self.retail.cup,
+        }
     }
 
     /// The kind of a solo run that is being driven: what the best, the ghosts, the submit and

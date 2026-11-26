@@ -7547,6 +7547,7 @@ dependencies = [
 name = "score-server"
 version = "0.1.0"
 dependencies = [
+ "bitcode",
  "data-encoding",
  "instance",
  "iroh",

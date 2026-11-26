@@ -9,6 +9,7 @@ name = "score-server"
 path = "src/main.rs"
 
 [dependencies]
+bitcode = "0.6.9"
 data-encoding = "2.11.1"
 instance = { path = "../instance" }
 iroh = "1.4.1"

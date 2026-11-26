@@ -85,6 +85,7 @@ mod probe;
 mod projectile;
 
 mod pb;
+mod recordings;
 mod player;
 mod props;
 mod race_on;

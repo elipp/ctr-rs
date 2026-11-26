@@ -140,30 +140,23 @@ pub(super) fn drive_tick(
             Some(race) => (race.specs.clone(), race.viewed(), race.spectating()),
             None => (drive.specs(), 0, false),
         };
-        let bots = race_on.get().map(|race| {
-            let setup = vehicle::bot::Setup {
-                difficulty: race.retail.difficulty as i16,
-                // A custom track has the rubber band of the first.
-                track: (race.track < race::RACING_TRACKS).then_some(race.track as u8),
-                cup: race.retail.cup,
-                players: race.characters.len(),
-            };
-            (setup, race.retail_specs.as_slice())
-        });
-        // The host's brain bots are players to the race: it rubber-bands them (at the difficulty
-        // of `/bots`, which comes with the retail bots' even when there are none).
-        let band = race_on.get()
-            .filter(|race| race.bots > 0)
-            .map(|race| race::Band::new(race.bot_slots(), race.retail.difficulty as i16));
-        sim.restart(
-            &track.0,
-            &specs,
-            own,
-            race_on.get().map(|race| (race.rules, race.mode())),
-            spectator,
-            bots,
-            band,
-        );
+        // (The host's brain bots are players to the race: `race::multi::start` rubber-bands them,
+        // at the difficulty of `/bots`, which comes with the retail bots' even when there are none.)
+        let start = match race_on.get() {
+            None => crate::props::Start::FreeDrive,
+            Some(race) => match race.solo {
+                Some(kind) => crate::props::Start::Solo {
+                    kind,
+                    laps: race.rules.laps,
+                    seed: race.rules.seed,
+                },
+                None => crate::props::Start::Race {
+                    setup: race.setup(),
+                    retail: &race.retail_specs,
+                },
+            },
+        };
+        sim.restart(&track.0, &specs, own, start, spectator);
         if let Some(race) = race_on.get_mut().filter(|race| race.attempt().is_some()) {
             let best = crate::pb::best(&track.0, &sim, race).map(|o| o.final_ms);
             if race.solo == Some(race::solo::Kind::Relic) {

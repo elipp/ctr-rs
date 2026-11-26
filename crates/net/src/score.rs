@@ -126,8 +126,7 @@ fn signed(server: EndpointId, signed_at: impl Fn(u64) -> Request + Send + 'stati
                 // Only a clock that's off is worth another try: anything else would be told the
                 // same.
                 Response::Unauthorized { now, .. } if ts.abs_diff(now) > score::MAX_SKEW => {
-                    let offset = now as i64 - unix_now() as i64;
-                    CLOCK_OFFSET.store(offset, Ordering::Relaxed);
+                    learn_clock(now);
                     exchange(&connection, &signed_at(signing_time())).await
                 }
                 response => Ok(response),
@@ -143,7 +142,12 @@ pub fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn signing_time() -> u64 {
+/// The server's clock said `now` (an `Unauthorized`'s): signing goes by it from now on.
+pub(crate) fn learn_clock(now: u64) {
+    CLOCK_OFFSET.store(now as i64 - unix_now() as i64, Ordering::Relaxed);
+}
+
+pub(crate) fn signing_time() -> u64 {
     unix_now().saturating_add_signed(CLOCK_OFFSET.load(Ordering::Relaxed))
 }
 

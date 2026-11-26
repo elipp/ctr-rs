@@ -76,9 +76,9 @@ pub struct Rollback<S: Simulation> {
     /// The last [`HISTORY`] pads confirmed for each slot, final or not, as far as `confirmed`
     /// says. When a player leaves, whoever has the most of its pads gives them to the others.
     recent: Vec<VecDeque<Pad>>,
-    /// The players that left: their pads end where they ended, and nothing is waited for or
-    /// predicted from them (a neutral pad follows the last one).
-    departed: Vec<bool>,
+    /// The players that left, with the first tick they have no pad of: their pads end there, and
+    /// nothing is waited for or predicted from them (a neutral pad follows the last one).
+    departed: Vec<Option<u32>>,
     /// Our slot: its pads are never predicted, so a tick waits for them.
     local: Option<usize>,
     /// The most unconfirmed ticks that are kept.
@@ -89,8 +89,17 @@ pub struct Rollback<S: Simulation> {
     every: u32,
     /// The hashes taken and not yet collected: (tick, hash of the state before that tick).
     sums: Vec<(u32, u64)>,
-    /// A slot whose final pads are kept whole, from tick 0 ([`Rollback::record`]).
-    recording: Option<(usize, vehicle::demo::Demo)>,
+    /// Every slot's final pads, kept whole from tick 0 ([`Rollback::record`]).
+    recording: Option<Recorded>,
+}
+
+/// What [`Rollback::record`] keeps.
+#[derive(Clone, Debug, Default)]
+pub struct Recorded {
+    /// By slot, each up to [`Rollback::settled`].
+    pub demos: Vec<vehicle::demo::Demo>,
+    /// Every hash [`Rollback::check_every`] took, also the ones handed out already.
+    pub checksums: Vec<(u32, u64)>,
 }
 
 impl<S: Simulation> Rollback<S> {
@@ -106,7 +115,7 @@ impl<S: Simulation> Rollback<S> {
             known: vec![VecDeque::new(); players],
             last: vec![Pad::default(); players],
             recent: vec![VecDeque::new(); players],
-            departed: vec![false; players],
+            departed: vec![None; players],
             local,
             window,
             dirty: None,
@@ -116,24 +125,39 @@ impl<S: Simulation> Rollback<S> {
         }
     }
 
-    /// Keeps every final pad of `slot` (a kart of `character`), from tick 0 on: a demo of it
-    /// ([`Rollback::recorded`]). Only ticks that are final are in it, so it is the pads the race
-    /// was really played with, whatever was predicted. Before any tick is played.
-    pub fn record(mut self, slot: usize, character: usize) -> Rollback<S> {
+    /// Keeps every final pad of every slot (the karts of `characters`, by slot), from tick 0 on:
+    /// a demo of each ([`Rollback::recorded`]). Only ticks that are final are in them, so they
+    /// are the pads the race was really played with, whatever was predicted. A player that left
+    /// has the neutral pads it was played with from then on. Before any tick is played.
+    pub fn record(mut self, characters: impl IntoIterator<Item = usize>) -> Rollback<S> {
         debug_assert_eq!(self.played, 0);
-        self.recording = Some((slot, vehicle::demo::Demo::new(character)));
+        let demos: Vec<_> = characters.into_iter().map(vehicle::demo::Demo::new).collect();
+        debug_assert_eq!(demos.len(), self.known.len());
+        self.recording = Some(Recorded {
+            demos,
+            checksums: Vec::new(),
+        });
         self
     }
 
-    /// The demo [`Rollback::record`] keeps: up to [`Rollback::settled`].
-    pub fn recorded(&self) -> Option<&vehicle::demo::Demo> {
-        self.recording.as_ref().map(|(_, demo)| demo)
+    /// What [`Rollback::record`] keeps.
+    pub fn recorded(&self) -> Option<&Recorded> {
+        self.recording.as_ref()
     }
 
     /// The ticks before `base` are final: whatever `pads` (tick `base`'s) are, they are for good.
     fn record_final(&mut self, pads: &[Pad]) {
-        if let Some((slot, demo)) = &mut self.recording {
-            demo.record(self.base, &pads[*slot].input(0));
+        if let Some(recording) = &mut self.recording {
+            for (demo, pad) in recording.demos.iter_mut().zip(pads) {
+                demo.record(self.base, &pad.input(0));
+            }
+        }
+    }
+
+    fn sum(&mut self, tick: u32, hash: u64) {
+        self.sums.push((tick, hash));
+        if let Some(recording) = &mut self.recording {
+            recording.checksums.push((tick, hash));
         }
     }
 
@@ -174,7 +198,7 @@ impl<S: Simulation> Rollback<S> {
     /// The first tick that has no pad in from `slot`. A player that left has all of them: its
     /// ticks past the last pad are neutral.
     pub fn confirmed_until(&self, slot: usize) -> u32 {
-        if self.departed[slot] {
+        if self.departed[slot].is_some() {
             return u32::MAX;
         }
         self.base + self.known[slot].len() as u32
@@ -209,11 +233,11 @@ impl<S: Simulation> Rollback<S> {
     /// holds a neutral pad. Every client has to call this after confirming the same pads for it,
     /// or their sims part. The ticks already played past its last pad are played again.
     pub fn leave(&mut self, slot: usize) {
-        if self.departed.get(slot).is_none_or(|&gone| gone) {
+        if self.departed.get(slot).is_none_or(Option::is_some) {
             return;
         }
         let end = self.confirmed_until(slot);
-        self.departed[slot] = true;
+        self.departed[slot] = Some(end);
         self.last[slot] = Pad::default();
         // Those ticks were played with its last pad, which is not neutral to begin with.
         if end < self.played && self.used[(end - self.base) as usize][slot] != Pad::default() {
@@ -223,6 +247,11 @@ impl<S: Simulation> Rollback<S> {
 
     /// Whether `slot` has left.
     pub fn departed(&self, slot: usize) -> bool {
+        self.departed[slot].is_some()
+    }
+
+    /// The first tick `slot` has no pad of, if it has left.
+    pub fn left_at(&self, slot: usize) -> Option<u32> {
         self.departed[slot]
     }
 
@@ -246,7 +275,7 @@ impl<S: Simulation> Rollback<S> {
     pub fn confirm(&mut self, slot: usize, tick: u32, pad: Pad) -> Result<(), Hole> {
         // A player that left has no more pads (nor does one that was never here: a peer's slot is
         // not trusted).
-        if self.departed.get(slot).is_none_or(|&gone| gone) {
+        if self.departed.get(slot).is_none_or(Option::is_some) {
             return Ok(());
         }
         let expected = self.confirmed_until(slot);
@@ -337,7 +366,7 @@ impl<S: Simulation> Rollback<S> {
         // final at once and keeps nothing.
         if self.snapshots.is_empty() && self.all_known(self.played) {
             if self.every != 0 && self.played.is_multiple_of(self.every) {
-                self.sums.push((self.played, self.now.checksum()));
+                self.sum(self.played, self.now.checksum());
             }
             let output = self.now.step(cx, &pads);
             self.record_final(&pads);
@@ -360,7 +389,7 @@ impl<S: Simulation> Rollback<S> {
         let settled = self.settled();
         while self.base < settled {
             if self.every != 0 && self.base.is_multiple_of(self.every) {
-                self.sums.push((self.base, self.snapshots[0].checksum()));
+                self.sum(self.base, self.snapshots[0].checksum());
             }
             self.snapshots.pop_front();
             if let Some(pads) = self.used.pop_front() {

@@ -66,6 +66,21 @@ pub(super) fn report(
                 );
             }
             Event::Promoted { ticket, public } => promoted = Some((ticket, public)),
+            Event::Searching { players, waited } => {
+                debug!("quick play: {players} searching, {} s", waited.as_secs());
+            }
+            Event::Found(found) => {
+                let text = format!(
+                    "Match found: {}\n/quick accept or /quick decline",
+                    found.nicks.join(", ")
+                );
+                toasts.write(Toast::new(text, 10_000).color(ANNOUNCE_COLOR));
+                lobby.found = Some(found);
+            }
+            Event::Requeued => {
+                lobby.found = None;
+                toasts.write(Toast::new("Someone declined: back in the queue", 3000));
+            }
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
             Event::Lobby {
                 players,

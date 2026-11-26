@@ -6,6 +6,7 @@
 //! The key types are iroh's (`net::SecretKey` is the same type), which sign and generate on
 //! native and wasm alike. The player key is never an endpoint key, though.
 
+pub mod matching;
 mod proto;
 
 pub use proto::*;
@@ -25,6 +26,8 @@ pub const MAX_SKEW: u64 = 300;
 pub enum Action {
     Submit,
     Forget,
+    /// Over a `matching::QueueEntry`.
+    Queue,
 }
 
 impl Action {
@@ -32,6 +35,7 @@ impl Action {
         match self {
             Action::Submit => "POST\n/runs",
             Action::Forget => "DELETE\n/me",
+            Action::Queue => "POST\n/queue",
         }
     }
 }

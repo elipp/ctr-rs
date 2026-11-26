@@ -52,6 +52,10 @@ pub enum Action {
         public: Option<String>,
     },
     JoinLobby(Ticket),
+    /// Queue for quick play (`/quick`), until a match is found and goes.
+    QuickPlay,
+    /// Accept the match found, or decline it.
+    AnswerMatch(bool),
     /// Join a lobby to watch its races, not to drive in them.
     SpectateLobby(Ticket),
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
@@ -300,6 +304,12 @@ impl Action {
         let (name, rest) = word(line);
         match name {
             "lobby" => Action::lobby(rest),
+            "quick" => match rest {
+                "" => Ok(Action::QuickPlay),
+                "accept" => Ok(Action::AnswerMatch(true)),
+                "decline" => Ok(Action::AnswerMatch(false)),
+                _ => Err("Usage: /quick [accept | decline] (leave with /lobby close)".into()),
+            },
             "race" => Action::race(rest),
             "bots" => Action::bots(rest),
             "autopilot" => match rest {

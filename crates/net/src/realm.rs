@@ -24,7 +24,7 @@ pub const DEFAULT_REALM: &str = "255860d3bf91bdb74ba38490edad92a818a760496dd1465
 pub const LOBBY_CAPACITY: u8 = 8;
 
 /// What a listing says of the builds that can play together: the lobby protocol, and the sim.
-fn version(build: u32) -> String {
+pub(crate) fn version(build: u32) -> String {
     format!("{} sim {build}", String::from_utf8_lossy(crate::ALPN))
 }
 

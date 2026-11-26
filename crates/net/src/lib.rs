@@ -13,6 +13,7 @@
 mod conn;
 mod dotless;
 mod limit;
+mod matchmake;
 mod names;
 mod peers;
 mod pending;
@@ -25,6 +26,7 @@ pub mod wire;
 
 pub use iroh::{EndpointId, SecretKey};
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
+pub use matchmake::{Found, quick_play};
 /// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
 /// (where std's panics).
 pub use n0_future::time::Instant;
@@ -329,6 +331,12 @@ pub enum Event {
     Listed(Result<(), String>),
     /// The session could not go on.
     Failed(String),
+    /// Quick play: queued with `players` in all (us included), for `waited`.
+    Searching { players: u16, waited: Duration },
+    /// Quick play: a group is formed; [`Session::answer`] it.
+    Found(Found),
+    /// Quick play: someone else declined the match found, and we are back in the queue.
+    Requeued,
 }
 
 /// A player in the lobby.
@@ -436,6 +444,8 @@ enum Command {
     Pause(Option<Tick>),
     Public(Option<Public>),
     Promote(EndpointId),
+    /// Quick play's answer to the match found.
+    Answer(bool),
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -448,6 +458,12 @@ pub struct Session {
 }
 
 impl Session {
+    /// Quick play: accepts the match of the last [`Event::Found`], or declines it (which keeps
+    /// us out of the queue for a while).
+    pub fn answer(&self, accept: bool) {
+        let _ = self.commands.send(Command::Answer(accept));
+    }
+
     /// What happened since the last call.
     pub fn poll(&self) -> Vec<Event> {
         self.events.lock().unwrap().try_iter().collect()
