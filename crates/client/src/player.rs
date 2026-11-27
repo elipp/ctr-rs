@@ -16,6 +16,15 @@ use crate::toast::Toast;
 
 static KEY: Mutex<Option<SecretKey>> = Mutex::new(None);
 
+/// `CTR_THROWAWAY_KEY=1`: a new key each run, never read or kept, so a second client on one
+/// machine (testing matchmaking) is another player and the stored key is left alone.
+fn throwaway() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var("CTR_THROWAWAY_KEY").as_deref() == Ok("1");
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
@@ -30,6 +39,12 @@ pub fn key() -> Result<SecretKey, String> {
     let mut held = KEY.lock().map_err(|e| e.to_string())?;
     if let Some(key) = held.as_ref() {
         return Ok(key.clone());
+    }
+    if throwaway() {
+        let key = SecretKey::generate();
+        info!("a throwaway player key {}", score::fingerprint(&key.public()));
+        *held = Some(key.clone());
+        return Ok(key);
     }
     let key = match read()? {
         Some(text) => score::secret_from_text(&text)
@@ -48,7 +63,9 @@ pub fn key() -> Result<SecretKey, String> {
 /// Makes `key` ours, from now on and at every start.
 fn replace(key: SecretKey) -> Result<(), String> {
     let mut held = KEY.lock().map_err(|e| e.to_string())?;
-    write(&score::secret_to_text(&key))?;
+    if !throwaway() {
+        write(&score::secret_to_text(&key))?;
+    }
     *held = Some(key);
     Ok(())
 }
