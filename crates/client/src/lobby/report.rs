@@ -101,6 +101,13 @@ pub(super) fn report(
                 roster = Some((players, spectators, you, locked, bots));
             }
             Event::Announce(text) => announce(&mut toasts, text),
+            Event::Countdown(countdown) => {
+                lobby.starting = countdown.map(|c| super::Starting {
+                    track: c.track,
+                    restart: c.restart,
+                    at: time.elapsed_secs() + c.ms as f32 / 1000.0,
+                });
+            }
             // (The scoreboard shows them: `scoreboard.rs`.)
             Event::Standings(standings) => {
                 cup_next = standings.next.as_ref().map(|(track, _)| *track);
@@ -167,6 +174,7 @@ pub(super) fn report(
                 lobby.raced = true;
                 lobby.again = false;
                 lobby.next = None;
+                lobby.starting = None;
                 let net = NetRace::new(players, slot);
                 started = Some(CurrentRace::new(
                     slot, locals, characters, bots, track, hash, rules, retail, Some(net),
@@ -241,6 +249,7 @@ pub(super) fn report(
         lobby.public = None;
         lobby.series = None;
         lobby.countdown = None;
+        lobby.countdown_told = None;
         lobby.roster.clear();
         lobby.roster_seen = false;
     }

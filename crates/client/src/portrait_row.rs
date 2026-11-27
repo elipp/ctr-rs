@@ -155,7 +155,7 @@ pub(crate) fn spawn_ready_badge(commands: &mut Commands, portrait: Entity) {
         ..default()
     };
     commands.spawn((
-        crate::icons::outlined(crate::icons::CHECK_CIRCLE, READY_SIZE, READY_COLOR, node),
+        crate::icons::outlined(crate::icons::CHECK_FAT, READY_SIZE, READY_COLOR, node),
         Pickable::IGNORE,
         ChildOf(portrait),
     ));

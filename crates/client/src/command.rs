@@ -60,6 +60,9 @@ pub enum Action {
     /// Quick play, after a race: ready for the next one (`/quick ready`), which starts sooner
     /// once everyone is.
     QuickReady,
+    /// Quick play, after a race: not ready after all (`/quick unready`), until the next race's
+    /// countdown.
+    QuickUnready,
     /// Quick play, after a race: vote for the next race's track (`/quick vote <track>`).
     VoteTrack(u32),
     /// Join a lobby to watch its races, not to drive in them.
@@ -316,9 +319,10 @@ impl Action {
                 "accept" => Ok(Action::AnswerMatch(true)),
                 "decline" => Ok(Action::AnswerMatch(false)),
                 "ready" => Ok(Action::QuickReady),
+                "unready" => Ok(Action::QuickUnready),
                 _ => match word(rest) {
                     ("vote", track) if !track.is_empty() => Ok(Action::VoteTrack(crate::maps::resolve(track)?)),
-                    _ => Err("Usage: /quick [accept | decline | ready | vote <track> | rejoin] (leave with /lobby close)".into()),
+                    _ => Err("Usage: /quick [accept | decline | ready | unready | vote <track> | rejoin] (leave with /lobby close)".into()),
                 },
             },
             "race" => Action::race(rest),

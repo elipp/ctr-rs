@@ -5,6 +5,10 @@
 //! the last race and of the cup, and the ping ("BOT" for a bot). In a cup the rows go by points.
 //! (Not retail.)
 //!
+//! While a quick play match gathers for its first race, the table is up by itself with a line
+//! for each place of the grid: who took it, or that a player may come (and a bot drive it if
+//! none does).
+//!
 //! A score server board (`/score top`, [`TopBoard`]) goes up in the same table: while it loads,
 //! then for [`TOP_SECONDS`] or until Back dismisses it. The last one comes back while the key is
 //! held outside a lobby.
@@ -103,7 +107,8 @@ struct Column {
 #[derive(Clone, PartialEq)]
 struct Line {
     place: u32,
-    character: u8,
+    /// None for a place nobody has taken: no portrait.
+    character: Option<u8>,
     cells: Vec<String>,
     you: bool,
 }
@@ -222,7 +227,7 @@ fn show(
     config: Res<crate::config::Config>,
     menu: Res<crate::pause::PauseMenu>,
     top: Res<TopBoard>,
-    pads: crate::drive::Pads,
+    last: Res<crate::last_input::LastInput>,
     lobby: Res<Lobby>,
     race_on: Res<crate::race_on::RaceOn>,
     time: Res<Time<Real>>,
@@ -243,16 +248,14 @@ fn show(
     // Holding the key in a lobby asks for the lobby's table, so it wins over a board.
     let table = if menu.open {
         None
+    } else if lobby.gathering(&race_on) {
+        Some(gathering(&lobby))
     } else if held && lobby.is_open() {
         Some(table(&lobby, &race_on))
     } else if held || top.up(now) {
         // Back only dismisses a board that is up by itself.
         let hint = top.up(now).then(|| {
-            let keys = if pads.iter().next().is_some() {
-                "CIRCLE / ESC"
-            } else {
-                "ESC"
-            };
+            let keys = if last.pad() { "CIRCLE" } else { "ESC" };
             format!("({keys} to dismiss)")
         });
         (top.table.clone()).map(|table| Table { hint, ..table })
@@ -354,7 +357,7 @@ fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
                 .map_or(String::new(), |points| format!("+{points}"));
             Line {
                 place: place as u32 + 1,
-                character: line.character,
+                character: Some(line.character),
                 cells: if cup {
                     vec![line.name, gained, line.points.to_string(), line.ping]
                 } else {
@@ -384,6 +387,44 @@ struct Driven {
     you: bool,
 }
 
+/// A quick play match gathering: a line for each place of the grid, the players there first,
+/// then the free places, the last of which the host's bots take if no player does.
+fn gathering(lobby: &Lobby) -> Table {
+    let rows = lobby.rows();
+    let free = race::MAX_KARTS.saturating_sub(rows.len());
+    let bots = lobby.next_bots();
+    let players = rows.into_iter().map(|row| (Some(row.character), row.name, row.key, row.you));
+    let waiting = (0..free).map(|n| {
+        let note = if n >= free - bots { "BOT" } else { "" };
+        (None, "Waiting for player...".to_string(), note.to_string(), false)
+    });
+    let lines = (players.chain(waiting).enumerate())
+        .map(|(place, (character, name, key, you))| {
+            let ping = match character {
+                None => key,
+                Some(_) if you => "you".into(),
+                Some(_) => lobby
+                    .pings
+                    .get(&key)
+                    .map_or("...".to_string(), |ping| format!("{} ms", ping.as_millis())),
+            };
+            Line {
+                place: place as u32 + 1,
+                character,
+                cells: vec![name, ping],
+                you,
+            }
+        })
+        .collect();
+    Table {
+        title: "Quick play".into(),
+        columns: vec![NAME, PING],
+        lines,
+        footer: Some("Waiting for the players of the match".into()),
+        hint: None,
+    }
+}
+
 /// A board of the score server as a table: its own ranks, as the server ranks.
 fn top_table(title: String, entries: &[score::Entry]) -> Table {
     let lines = (entries.iter())
@@ -395,7 +436,7 @@ fn top_table(title: String, entries: &[score::Entry]) -> Table {
             };
             Line {
                 place: entry.rank,
-                character: entry.character,
+                character: Some(entry.character),
                 cells: vec![
                     crate::world_record::who(entry),
                     race::clock::time(entry.final_ms),
@@ -499,7 +540,11 @@ fn spawn(commands: &mut Commands, table: &Table, image: &Handle<Image>) {
     }
     for line in &table.lines {
         let parent = row(commands);
-        let color = if line.you { HIGHLIGHT } else { Color::WHITE };
+        let color = match line.character {
+            None => DIM,
+            Some(_) if line.you => HIGHLIGHT,
+            Some(_) => Color::WHITE,
+        };
         text(
             commands,
             parent,
@@ -508,22 +553,27 @@ fn spawn(commands: &mut Commands, table: &Table, image: &Handle<Image>) {
             color,
             Some(PLACE_WIDTH),
         );
-        commands.spawn((
-            // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
-            ImageNode::new(image.clone())
-                .with_rect(portrait_rect(line.character as usize))
-                .with_mode(NodeImageMode::Stretch),
-            Node {
-                width: Val::Px(PORTRAIT_WIDTH),
-                height: Val::Px(
-                    PORTRAIT_WIDTH * HEIGHT as f32 * crate::hud::PIXEL.y
-                        / (WIDTH as f32 * crate::hud::PIXEL.x),
-                ),
-                ..default()
-            },
-            Pickable::IGNORE,
-            ChildOf(parent),
-        ));
+        let portrait = Node {
+            width: Val::Px(PORTRAIT_WIDTH),
+            height: Val::Px(
+                PORTRAIT_WIDTH * HEIGHT as f32 * crate::hud::PIXEL.y
+                    / (WIDTH as f32 * crate::hud::PIXEL.x),
+            ),
+            ..default()
+        };
+        match line.character {
+            Some(character) => commands.spawn((
+                // Stretch: `Auto` would keep the picture's square texels, not the HUD's tall ones.
+                ImageNode::new(image.clone())
+                    .with_rect(portrait_rect(character as usize))
+                    .with_mode(NodeImageMode::Stretch),
+                portrait,
+                Pickable::IGNORE,
+                ChildOf(parent),
+            )),
+            // (The line keeps the height of the others.)
+            None => commands.spawn((portrait, Pickable::IGNORE, ChildOf(parent))),
+        };
         for (column, cell) in table.columns.iter().zip(&line.cells) {
             let color = if column.dim { DIM } else { color };
             text(commands, parent, cell, FONT_SIZE, color, Some(column.width));

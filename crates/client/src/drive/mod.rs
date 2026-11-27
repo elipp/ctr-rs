@@ -49,7 +49,7 @@ pub(crate) use follow::push_buffer_view;
 pub use chooser::Chosen;
 pub use practice::PracticeAsk;
 pub(crate) use practice::{Practice, RunUpKart};
-pub(crate) use input::{Controller, Pads};
+pub(crate) use input::{Controller, Device, MENU_STICK, Pads};
 pub(crate) use local::LocalView;
 pub(crate) use split::{HudCamera, UnderCamera, window_rect};
 pub(crate) use overlay::spawn_hud;

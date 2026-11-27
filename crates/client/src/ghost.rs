@@ -336,7 +336,7 @@ fn hint(
     sim: Res<crate::props::Sim>,
     race_on: Res<RaceOn>,
     config: Res<crate::config::Config>,
-    pads: crate::drive::Pads,
+    last: Res<crate::last_input::LastInput>,
     mut last_tick: Local<Option<u32>>,
     mut toasts: MessageWriter<Toast>,
 ) {
@@ -349,26 +349,19 @@ fn hint(
     }
     let tick = sim.race.tick;
     if last_tick.is_none_or(|last| tick < last) {
-        let Some(button) = select_label(&pads, &config) else {
-            return;
-        };
+        let button = select_label(*last, &config);
         toasts.write(Toast::new(format!("{button}: ghosts"), 4000));
     }
     *last_tick = Some(tick);
 }
 
-/// How Select and the ghost's key are named to the player: the end screen's submit
-/// (`scores.rs`) is on them too. None if neither can be pressed.
-pub fn select_label(pads: &crate::drive::Pads, config: &crate::config::Config) -> Option<String> {
-    // (Whether a pad is plugged in, not which one drives: a keyboard player with a pad in reads
-    // Select too.)
+/// How Select or the ghost's key, whichever we last used, is named to the player: the end
+/// screen's submit (`scores.rs`) is on them too. Select without the key bound.
+pub fn select_label(last: crate::last_input::LastInput, config: &crate::config::Config) -> String {
     let key = config.controls.keys(Control::Ghost).first().copied();
-    let key = key.map(crate::controls::label);
-    match (pads.iter().next().is_some(), key) {
-        (true, Some(key)) => Some(format!("Select / {key}")),
-        (true, None) => Some("Select".to_string()),
-        (false, Some(key)) => Some(key.to_string()),
-        (false, None) => None,
+    match key.filter(|_| !last.pad()) {
+        Some(key) => crate::controls::label(key).to_string(),
+        None => "Select".to_string(),
     }
 }
 

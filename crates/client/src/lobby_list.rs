@@ -2,7 +2,8 @@
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
 //! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has a crown on its portrait's corner; in quick play, a player ready for the next race a tick on the other. The other players at a machine (split screen) follow
+//! has a crown on its portrait's corner; in quick play, a player ready for the next race a tick on the other, and our row the button to say we are, or not, on its right
+//! (`quick_ready.rs`), where the others have their pings. The other players at a machine (split screen) follow
 //! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
 //! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
 //! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),
@@ -20,10 +21,10 @@ use crate::portrait_row::{
     spawn_portrait, spawn_ready_badge, spawn_tags,
 };
 
-/// The column of rows, with the players it was built for, and which of them is us, and the bots
-/// (how many, and what kind).
+/// The column of rows, with the players it was built for, and which of them is us, the bots
+/// (how many, and what kind), and the ready hint.
 #[derive(Component)]
-struct List(Vec<Row>, Vec<(String, String)>, (usize, String));
+struct List(Vec<Row>, Vec<(String, String)>, (usize, String), Option<String>);
 
 /// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
 /// of retail's screen, to be clear of the toasts and the chat at the top.
@@ -68,6 +69,7 @@ fn build(
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
     loaded: Option<Res<Portraits>>,
+    hint: Res<crate::quick_ready::ReadyHint>,
     lists: Query<(Entity, &List)>,
 ) {
     let players: Vec<Row> = if lobby.is_waiting(&race_on) {
@@ -89,7 +91,7 @@ fn build(
         (lobby.next_bots(), lobby.next_bots_kind())
     };
     for (entity, list) in &lists {
-        if list.0 == players && list.1 == watchers && list.2 == bots {
+        if list.0 == players && list.1 == watchers && list.2 == bots && list.3 == hint.0 {
             return;
         }
         commands.entity(entity).despawn();
@@ -125,6 +127,8 @@ fn build(
         Pickable::IGNORE,
         ChildOf(column),
     ));
+    // (On our first row only: the others at our machine are ready with it.)
+    let ours = players.iter().position(|row| row.you);
     for (n, row) in players.iter().enumerate() {
         let y = FIRST_Y + n as f32 * SLOT;
         let portrait = spawn_portrait(&mut commands, column, &image, row.character, y);
@@ -133,6 +137,9 @@ fn build(
         }
         if row.ready {
             spawn_ready_badge(&mut commands, portrait);
+        }
+        if let Some(hint) = hint.0.as_ref().filter(|_| ours == Some(n)) {
+            spawn_ready_hint(&mut commands, portrait, hint);
         }
         let tag = spawn_tags(&mut commands, portrait, &row.name, &row.key);
         if row.you {
@@ -182,5 +189,22 @@ fn build(
             ChildOf(column),
         ));
     }
-    commands.entity(column).insert(List(players, watchers, bots));
+    commands.entity(column).insert(List(players, watchers, bots, hint.0.clone()));
+}
+
+/// The ready hint on the right of our portrait, centered on it from top to bottom, as the
+/// others' pings are (`portrait_row::spawn_tags`: ours has none).
+fn spawn_ready_hint(commands: &mut Commands, portrait: Entity, hint: &str) {
+    commands.spawn((
+        CtrText::new(hint, Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
+        UiTransform::from_translation(Val2::new(hud::x(2.0), Val::Percent(-50.0))),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(100.0),
+            top: Val::Percent(50.0),
+            ..default()
+        },
+        Pickable::IGNORE,
+        ChildOf(portrait),
+    ));
 }

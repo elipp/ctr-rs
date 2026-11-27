@@ -61,6 +61,7 @@ mod icon_grid;
 mod icons;
 mod kart;
 mod laps;
+mod last_input;
 mod learned;
 mod leaderboard;
 mod lights;
@@ -76,6 +77,7 @@ mod names;
 mod nav;
 mod nav_edit;
 mod ordered;
+mod pad_glyph;
 mod paths;
 mod pause;
 mod place;
@@ -88,6 +90,7 @@ mod pb;
 mod recordings;
 mod player;
 mod props;
+mod quick_ready;
 mod race_on;
 mod replay;
 mod public_lobbies;
@@ -249,6 +252,7 @@ fn main() {
         .expect("the default font can be replaced");
     font::register_bold(&mut app.world_mut().resource_mut());
     icons::register(&mut app.world_mut().resource_mut());
+    pad_glyph::register(&mut app.world_mut().resource_mut());
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
     app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
@@ -301,6 +305,7 @@ fn main() {
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
         .add_plugins(unlit::UnlitPlugin)
         .add_plugins(between::BetweenPlugin)
+        .add_plugins(last_input::LastInputPlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(
             FixedUpdate,

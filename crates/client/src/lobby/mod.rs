@@ -114,6 +114,11 @@ pub struct Lobby {
     chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
+    /// What the lobby was told of [`Lobby::countdown`] (`countdown::countdown`).
+    countdown_told: Option<countdown::Told>,
+    /// The countdown the host told us of (`Event::Countdown`), us too when we host: the race it
+    /// is to, and when it ends (`Time<Real>` seconds). The race's start ends it.
+    pub(crate) starting: Option<Starting>,
     /// The bots our races have, when we host (`/bots`). Kept when the lobby closes.
     pub bots: BotSettings,
     /// The track of the race that is about to start, as the standings of the race before told it
@@ -246,6 +251,14 @@ pub(crate) struct NextRace {
     /// The votes for tracks, the most first.
     pub(crate) votes: Vec<(u32, u8)>,
     pub(crate) ready: Vec<EndpointId>,
+}
+
+/// A countdown to a race of the lobby ([`Lobby::starting`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Starting {
+    pub(crate) track: u32,
+    pub(crate) restart: bool,
+    pub(crate) at: f32,
 }
 
 /// A kart of the lobby's next race, as [`Lobby::rows`] gives it.
@@ -399,14 +412,7 @@ impl Lobby {
 
     /// Starts counting `then` down from [`COUNTDOWN_SECONDS`].
     fn count_down(&mut self, then: Then, now: f32, seconds: u32) {
-        // (A long wait is announced by whoever starts it; the last seconds are counted.)
-        if seconds <= COUNTDOWN_SECONDS {
-            let text = match then {
-                Then::Start { .. } => "Race starts in",
-                Then::Restart { .. } => "Race restarts in",
-            };
-            self.announce(format!("{text} {seconds}"));
-        }
+        // (A long wait is announced by whoever starts it; `countdown` tells the last seconds.)
         self.countdown = Some(Countdown {
             then,
             left: seconds,
@@ -596,7 +602,13 @@ impl Lobby {
 
     /// Quick play: a race of the match is behind us and none is on (Play again's time).
     pub(crate) fn between_matched_races(&self, race: &RaceOn) -> bool {
-        self.quick_play && self.queue.is_none() && self.raced && !race.is_on()
+        // (A race that started is on for this, under the flag too.)
+        self.quick_play && self.queue.is_none() && self.raced && race.newest().is_none()
+    }
+
+    /// Quick play: the match's lobby is up, waiting for its players to come for its first race.
+    pub(crate) fn gathering(&self, race: &RaceOn) -> bool {
+        self.quick_play && self.queue.is_none() && !self.raced && race.newest().is_none()
     }
 
     /// Ready for the match's next race.
@@ -605,6 +617,14 @@ impl Lobby {
             session.again();
         }
         self.again = true;
+    }
+
+    /// Not ready for the match's next race after all.
+    fn unready(&mut self) {
+        if let Some(session) = &self.session {
+            session.unready();
+        }
+        self.again = false;
     }
 
     /// The match found, if it waits for our answer.
@@ -972,6 +992,7 @@ impl Plugin for LobbyPlugin {
                         pace,
                         waiting,
                         hud::searching,
+                        hud::starting,
                     )
                         .chain()
                         .distributive_run_if(crate::drive::driving),

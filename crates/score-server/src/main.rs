@@ -493,6 +493,8 @@ async fn main() {
         )
         .with_ansi(std::io::stdout().is_terminal())
         .init();
+    // A bad CTR_QUICK_PLAY_LAPS panics here rather than at the first match.
+    matchmaker::quick_laps();
     if let Err(e) = run().await {
         error!("{e}");
         std::process::exit(1);

@@ -239,8 +239,9 @@ pub(crate) enum Item {
     MatchFound,
     /// `/quick accept`, `/quick decline`.
     Answer(bool),
-    /// `/quick again`.
+    /// `/quick ready`, `/quick unready`.
     QuickReady,
+    QuickUnready,
     /// Shows the realm's list.
     PublicLobbies,
     /// Creates a lobby, public or private as `PauseMenu::private_lobby`, which Left and Right
@@ -291,6 +292,42 @@ pub(crate) struct Entry {
     font: Font,
     /// What the row means, in the footer while it is picked.
     help: Option<Cow<'static, str>>,
+    /// A button the row takes, in the footer under its help while it is picked.
+    prompt: Option<Prompt>,
+}
+
+/// A button a row takes and what it does, shown as the pad's or the key's, whichever we last used
+/// (`last_input`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Prompt {
+    pad: crate::pad_glyph::PadGlyph,
+    key: KeyCode,
+    does: &'static str,
+}
+
+impl Prompt {
+    fn text(self, last: crate::last_input::LastInput) -> String {
+        let button = if last.pad() {
+            format!("{{{}}}", self.pad.name())
+        } else {
+            format!("{{key:{}}}", controls::label(self.key))
+        };
+        // (The game's font has capitals only; a keycap's is Inconsolata, and keeps the label's case.)
+        format!("{button} {}", self.does.to_uppercase())
+    }
+}
+
+/// What removes the picked row's thing (`remove`).
+const REMOVE_KEY: KeyCode = KeyCode::Delete;
+const REMOVE_BUTTON: GamepadButton = GamepadButton::West;
+
+/// The prompt of a row that [`REMOVE_KEY`] or [`REMOVE_BUTTON`] removes: `does` is what it says.
+pub(crate) fn remove_prompt(does: &'static str) -> Prompt {
+    Prompt {
+        pad: crate::pad_glyph::PadGlyph::Square,
+        key: REMOVE_KEY,
+        does,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -319,11 +356,17 @@ impl Entry {
             inline: false,
             font: Font::Middle,
             help: None,
+            prompt: None,
         }
     }
 
     pub(crate) fn help(mut self, help: impl Into<Cow<'static, str>>) -> Entry {
         self.help = Some(help.into());
+        self
+    }
+
+    pub(crate) fn prompt(mut self, prompt: Prompt) -> Entry {
+        self.prompt = Some(prompt);
         self
     }
 
@@ -486,6 +529,10 @@ fn items(
                  sooner. Leave lobby takes you out of the match.",
             ),
         );
+    }
+    // (Not once the countdown has told the race.)
+    if lobby.between_matched_races(race_on) && lobby.again && lobby.starting.is_none() {
+        items.insert(0, entry(Item::QuickUnready, "Not ready"));
     }
     // (Not a lobby's: the host restarts and ends it for everyone, as `/race restart|stop`.)
     if race_on.is_on() && !race_on.shared() {
@@ -668,8 +715,9 @@ const FOOTER_GAP: usize = 3;
 const FOOTER_TEXELS: f32 = 5.0;
 /// [`PANEL`] nearly opaque: the race behind washed the text out.
 const FOOTER_BACKGROUND: Color = Color::srgba(0.04, 0.04, 0.06, 0.92);
-/// White with a little blue.
-const FOOTER_TEXT: Color = Color::srgb(0.78, 0.88, 1.0);
+/// The items' orange (a `Text` takes no gradient): a quarter of the way from its top to its
+/// bottom, a little darker than `tint`'s.
+const FOOTER_TEXT: Color = Color::srgb_u8(0xf8, 0xa2, 0x28);
 
 /// The most the items take down, in texels of the 2D art (of its 240): taller, they scroll.
 const LIST_TEXELS: usize = 180;
@@ -696,10 +744,14 @@ struct Shown {
 #[derive(Component)]
 struct List;
 
-/// The picked row's [`Entry::help`], under the panel. Only there when some row of the view has
-/// one.
-#[derive(Component)]
-struct Footer;
+/// The picked row's [`Entry::help`] and [`Entry::prompt`], in a box under the panel. Only there
+/// when some row of the view has either.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Footer {
+    Box,
+    Help,
+    Prompt,
+}
 
 /// A cell of an item, and the item's place in the menu.
 #[derive(Component)]
@@ -1068,7 +1120,7 @@ pub(crate) fn input(
         {
             sound(MENU_MOVE_SFX);
         }
-        if (key(&[KeyCode::Delete]) || pad(GamepadButton::West))
+        if (key(&[REMOVE_KEY]) || pad(REMOVE_BUTTON))
             && let Some(entry) = items.get(menu.selected)
             && remove(entry.item, &mut menu, &config)
         {
@@ -1216,6 +1268,10 @@ pub(crate) fn input(
             Some(Item::QuickReady) => {
                 menu.open = false;
                 actions.write(Action::QuickReady);
+            }
+            Some(Item::QuickUnready) => {
+                menu.open = false;
+                actions.write(Action::QuickUnready);
             }
             Some(Item::Answer(accept)) => {
                 menu.open = false;
@@ -1625,16 +1681,19 @@ fn show(
     mut menu: ResMut<PauseMenu>,
     (lobby, race_on, players): (Res<Lobby>, Res<RaceOn>, Res<crate::drive::LocalPlayers>),
     public: Res<PublicLobbies>,
-    config: Res<Config>,
+    (config, last): (Res<Config>, Res<crate::last_input::LastInput>),
     (size, fonts): (Res<TexelSize>, Res<Fonts>),
     mut art: Art,
     shown: Query<(Entity, &Shown)>,
     rows: Query<(&Row, &Children, &ComputedNode, &UiGlobalTransform)>,
     mut list: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<List>>,
-    mut texts: Query<&mut CtrText, Without<icon_grid::GridCaption<PauseMenu>>>,
+    mut texts: Query<&mut CtrText, (Without<icon_grid::GridCaption<PauseMenu>>, Without<Footer>)>,
     (mut knobs, mut footer): (
         Query<(&Knob, &mut Node), Without<Footer>>,
-        Query<(&mut Text, &mut Node), (With<Footer>, Without<accordion::AccordionLine<PauseMenu>>)>,
+        Query<
+            (&Footer, &mut Node, Option<&mut Text>, Option<&mut CtrText>),
+            (Without<accordion::AccordionLine<PauseMenu>>, Without<icon_grid::GridCaption<PauseMenu>>),
+        >,
     ),
     (mut arrows, mut picture_frames): (
         Query<(&Arrow, &mut ImageNode)>,
@@ -1691,6 +1750,7 @@ fn show(
                 layout,
                 &size,
                 &mut art,
+                *last,
             );
         }
         return;
@@ -1729,17 +1789,31 @@ fn show(
             node.left = at;
         }
     }
-    if let Ok((mut text, mut node)) = footer.single_mut()
-        && let Some((_, shown)) = shown.single().ok()
-    {
-        let help = shown.items.get(menu.selected).and_then(|item| item.help.as_deref());
-        let display = if help.is_some() { Display::Flex } else { Display::None };
-        if node.display != display {
-            node.display = display;
-        }
-        let help = help.unwrap_or_default();
-        if text.0 != help {
-            text.0 = help.into();
+    if let Some((_, shown)) = shown.single().ok() {
+        let picked = shown.items.get(menu.selected);
+        let help = picked.and_then(|item| item.help.as_deref());
+        let prompt = picked.and_then(|item| item.prompt).map(|p| p.text(*last));
+        for (part, mut node, text, ctr) in &mut footer {
+            let shows = match part {
+                Footer::Box => help.is_some() || prompt.is_some(),
+                Footer::Help => help.is_some(),
+                Footer::Prompt => prompt.is_some(),
+            };
+            let display = if shows { Display::Flex } else { Display::None };
+            if node.display != display {
+                node.display = display;
+            }
+            if let Some(mut text) = text
+                && text.0 != help.unwrap_or_default()
+            {
+                text.0 = help.unwrap_or_default().into();
+            }
+            if let Some(mut ctr) = ctr
+                && let Some(prompt) = &prompt
+                && ctr.text != *prompt
+            {
+                ctr.text = prompt.clone();
+            }
         }
     }
     for (row, children, ..) in &rows {
@@ -1849,10 +1923,11 @@ fn spawn(
     layout: PageLayout,
     size: &TexelSize,
     art: &mut Art,
+    last: crate::last_input::LastInput,
 ) {
     let items = shown.items.clone();
     let title = shown.title.clone();
-    // The whole window, to put the panel in its middle. Under the command line.
+    // The whole window, to put the panel in its middle. Over the console.
     let root = commands
         .spawn((
             shown,
@@ -1864,7 +1939,7 @@ fn spawn(
                 align_items: AlignItems::Center,
                 ..default()
             },
-            GlobalZIndex(i32::MAX - 1),
+            GlobalZIndex(i32::MAX),
         ))
         .id();
     let panel = commands
@@ -1895,11 +1970,36 @@ fn spawn(
     }
     // Absolute, so the panel is no wider for it (the text wraps to the panel's width instead)
     // and does not change height as the pick moves between rows with and without help.
-    if items.iter().any(|item| item.help.is_some()) {
+    if items.iter().any(|item| item.help.is_some() || item.prompt.is_some()) {
         let help = items.get(selected).and_then(|item| item.help.as_deref());
+        let prompt = items.get(selected).and_then(|item| item.prompt).map(|p| p.text(last));
+        let display = |shows: bool| if shows { Display::Flex } else { Display::None };
+        let footer = commands
+            .spawn((
+                ChildOf(panel),
+                Footer::Box,
+                Node {
+                    display: display(help.is_some() || prompt.is_some()),
+                    position_type: PositionType::Absolute,
+                    top: Val::Percent(100.0),
+                    // (Out to the panel's border.)
+                    left: Val::Px(-size.0.x),
+                    right: Val::Px(-size.0.x),
+                    margin: UiRect::top(size.y(FOOTER_GAP)),
+                    padding: UiRect::axes(size.x(6), size.y(3)),
+                    border: UiRect::axes(size.x(1), size.y(1)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: size.y(3),
+                    ..default()
+                },
+                BackgroundColor(FOOTER_BACKGROUND),
+                BorderColor::all(BORDER),
+                Pickable::IGNORE,
+            ))
+            .id();
         commands.spawn((
-            ChildOf(panel),
-            Footer,
+            ChildOf(footer),
+            Footer::Help,
             Text::new(help.unwrap_or_default()),
             crate::font::bold(TextFont {
                 font_size: (size.0.y * FOOTER_TEXELS).into(),
@@ -1907,19 +2007,19 @@ fn spawn(
             }),
             TextColor(FOOTER_TEXT),
             Node {
-                display: if help.is_some() { Display::Flex } else { Display::None },
-                position_type: PositionType::Absolute,
-                top: Val::Percent(100.0),
-                // (Out to the panel's border.)
-                left: Val::Px(-size.0.x),
-                right: Val::Px(-size.0.x),
-                margin: UiRect::top(size.y(FOOTER_GAP)),
-                padding: UiRect::axes(size.x(6), size.y(3)),
-                border: UiRect::axes(size.x(1), size.y(1)),
+                display: display(help.is_some()),
                 ..default()
             },
-            BackgroundColor(FOOTER_BACKGROUND),
-            BorderColor::all(BORDER),
+            Pickable::IGNORE,
+        ));
+        commands.spawn((
+            ChildOf(footer),
+            Footer::Prompt,
+            CtrText::new(prompt.clone().unwrap_or_default(), Font::Middle, Gradient::ORANGE),
+            Node {
+                display: display(prompt.is_some()),
+                ..default()
+            },
             Pickable::IGNORE,
         ));
     }

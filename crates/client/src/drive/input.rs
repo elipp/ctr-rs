@@ -139,6 +139,7 @@ impl Controller<'_, '_> {
             take: key(Control::Hop) || pad(GamepadButton::South),
             back: key(Control::Item) || pad(GamepadButton::East),
             toggle: key(Control::RacerMenu) || pad(GamepadButton::Select),
+            triangle: key(Control::Speedometer) || pad(GamepadButton::North),
         }
     }
 }
@@ -153,7 +154,7 @@ pub(super) struct CameraButtons {
 }
 
 /// How far the left stick is pushed to tap a menu: as in the pause menu.
-const MENU_STICK: f32 = 0x60 as f32 / 127.0;
+pub(crate) const MENU_STICK: f32 = 0x60 as f32 / 127.0;
 
 /// The taps of a device in a menu of its player's own.
 #[derive(Clone, Copy, Default)]
@@ -168,6 +169,8 @@ pub(crate) struct MenuTaps {
     pub back: bool,
     /// The racer menu's key, or Select: opens it and closes it.
     pub toggle: bool,
+    /// The speedometer's key, or Triangle: quick play's ready (`quick_ready.rs`).
+    pub triangle: bool,
 }
 
 fn read_input(

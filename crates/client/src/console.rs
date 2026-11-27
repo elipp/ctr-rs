@@ -318,8 +318,8 @@ pub(crate) fn spawn(mut commands: Commands) {
             flex_direction: FlexDirection::Column,
             ..default()
         },
-        // Over every other piece of the HUD.
-        GlobalZIndex(i32::MAX),
+        // Over every other piece of the HUD but the pause menu.
+        GlobalZIndex(i32::MAX - 1),
         Visibility::Hidden,
         children![
             (

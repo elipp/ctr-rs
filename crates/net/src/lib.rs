@@ -38,7 +38,7 @@ pub use realm::{
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
-pub use wire::{LobbyBots, Pad, RetailBots, Rules, Score, Standings, Tick};
+pub use wire::{Countdown, LobbyBots, Pad, RetailBots, Rules, Score, Standings, Tick};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -304,6 +304,8 @@ pub enum Event {
     /// Where the cup stands after one of its races, as the host broadcast it (see
     /// [`Session::standings`]).
     Standings(Standings),
+    /// The host counts down to a race (see [`Session::count_down`]), or called it off.
+    Countdown(Option<Countdown>),
     /// `from` said `text` to the lobby (see [`Session::say`]): us too, when we did, in the same
     /// order as everyone reads it. It is cleaned already.
     Chat { from: EndpointId, text: String },
@@ -447,6 +449,7 @@ enum Command {
     },
     Announce(String),
     Standings(Standings),
+    Countdown(Option<Countdown>),
     Say(String),
     Character(u8),
     Lock(bool),
@@ -475,8 +478,10 @@ enum Command {
     Promote(EndpointId),
     /// Quick play's answer to the match found.
     Answer(bool),
-    /// Quick play, between races: ready for the next one, or a vote for its track.
+    /// Quick play, between races: ready for the next one (or not after all), or a vote for its
+    /// track.
     Again,
+    Unready,
     Vote(u32),
 }
 
@@ -500,6 +505,12 @@ impl Session {
     /// races anyway; when all are, it starts sooner ([`Event::Next`]).
     pub fn again(&self) {
         let _ = self.commands.send(Command::Again);
+    }
+
+    /// Quick play, after a race: not ready after all, until the next race's countdown begins.
+    /// If everyone was, the next race is back to its wait.
+    pub fn unready(&self) {
+        let _ = self.commands.send(Command::Unready);
     }
 
     /// Quick play, after a race: our vote for the next race's track (a disc track's `LevelId`;
@@ -549,6 +560,12 @@ impl Session {
     /// it.
     pub fn announce(&self, text: impl Into<String>) {
         let _ = self.commands.send(Command::Announce(text.into()));
+    }
+
+    /// Broadcasts the countdown to a race to everyone in the lobby, us included
+    /// ([`Event::Countdown`]), if we host it; `None` calls it off.
+    pub fn count_down(&self, countdown: Option<Countdown>) {
+        let _ = self.commands.send(Command::Countdown(countdown));
     }
 
     /// Broadcasts where the cup stands to everyone in the lobby, us included

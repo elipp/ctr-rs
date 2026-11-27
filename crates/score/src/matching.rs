@@ -18,7 +18,7 @@ pub const MAX_FRAME: usize = 16 << 10;
 pub const MAX_MATCH: usize = 8;
 
 /// How long a client has to accept a [`Found`] match, in seconds.
-pub const ACCEPT_SECONDS: u32 = 10;
+pub const ACCEPT_SECONDS: u32 = 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum Mode {

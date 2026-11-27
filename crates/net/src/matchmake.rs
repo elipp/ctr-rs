@@ -34,7 +34,9 @@ pub(crate) const NEXT_WAIT: Duration = Duration::from_secs(80);
 pub(crate) const READY_WAIT: Duration = Duration::from_secs(10);
 
 /// The seconds counted down before a match's race, as a manual host's (`client` `countdown.rs`).
-pub(crate) const COUNTDOWN_SECONDS: u64 = 5;
+// TODO(matchmaking): back to 5 once the countdown and the gathering board have been looked at:
+// 10 only to see them (2026-11-27).
+pub(crate) const COUNTDOWN_SECONDS: u64 = 10;
 
 /// What a match found says (see [`Event::Found`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,14 +92,17 @@ pub(crate) struct Matchmade {
     tie: u64,
     /// When whoever hosts starts with the players that came.
     pub(crate) deadline: Instant,
-    /// The host counts down to the start: when it is, and the seconds it last said were left.
-    pub(crate) countdown: Option<(Instant, u64)>,
+    /// The host counts down to the start: when it is.
+    pub(crate) countdown: Option<Instant>,
     /// A race of the match has been started: the next ones go by [`Matchmade::next`].
     pub(crate) started: bool,
     /// The host: who is ready (`Message::Again`, ours `Command::Again`) and what each voted for
     /// (`Message::Vote`). Cleared at each start; guests send theirs again to each new host.
     pub(crate) ready: HashSet<EndpointId>,
     votes: HashMap<EndpointId, u32>,
+    /// The host: when the next race was before [`Matchmade::hurry`] brought it on, for an
+    /// unready to put it back.
+    unhurried: Option<Instant>,
 }
 
 impl Matchmade {
@@ -123,14 +128,15 @@ impl Matchmade {
             started: found.lobby != found.id,
             ready: HashSet::new(),
             votes: HashMap::new(),
+            unhurried: None,
         })
     }
 
-    /// When the host has to look at the start again: the countdown's next second, the first
-    /// race's deadline, or when the next race's countdown begins.
+    /// When the host has to look at the start again: the countdown's end, the first race's
+    /// deadline, or when the next race's countdown begins.
     pub(crate) fn wake(&self) -> Option<Instant> {
         match self.countdown {
-            Some((at, said)) => Some(at - Duration::from_secs(said.saturating_sub(1))),
+            Some(at) => Some(at),
             None if !self.started => Some(self.deadline),
             None => self.next.map(|next| next - Duration::from_secs(COUNTDOWN_SECONDS)),
         }
@@ -160,6 +166,7 @@ impl Matchmade {
         let all = present.iter().all(|id| self.ready.contains(id));
         match &mut self.next {
             Some(next) if all && *next > now + READY_WAIT => {
+                self.unhurried = Some(*next);
                 *next = now + READY_WAIT;
                 true
             }
@@ -170,6 +177,18 @@ impl Matchmade {
     /// `id` is ready for the next race. Whether it is news.
     pub(crate) fn ready(&mut self, id: EndpointId) -> bool {
         self.ready.insert(id)
+    }
+
+    /// `id` is not ready after all: not everyone is, so a hurried next race is back to its wait.
+    /// Whether it is news.
+    pub(crate) fn unready(&mut self, id: EndpointId) -> bool {
+        if !self.ready.remove(&id) {
+            return false;
+        }
+        if let Some(at) = self.unhurried.take() {
+            self.next = Some(at);
+        }
+        true
     }
 
     /// `id` votes for a disc track to race next. Whether it is news.
@@ -206,6 +225,7 @@ impl Matchmade {
         self.next = None;
         self.ready.clear();
         self.votes.clear();
+        self.unhurried = None;
     }
 
     /// `id` is let in, behind the players there are.

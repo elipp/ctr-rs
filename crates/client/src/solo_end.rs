@@ -111,7 +111,7 @@ fn panel(
     sim: Res<crate::props::Sim>,
     race_on: Res<RaceOn>,
     config: Res<crate::config::Config>,
-    pads: crate::drive::Pads,
+    last: Res<crate::last_input::LastInput>,
     hud: HudViews,
     panels: Query<(&HudView, &mut Visibility), With<Panel>>,
     mut lines: Query<(&Line, &mut CtrText, &mut Node)>,
@@ -214,7 +214,7 @@ fn panel(
                 Gradient::WHITE,
             ),
             Line::Submit => (
-                submit_line(end.submit, &pads, &config),
+                submit_line(end.submit, *last, &config),
                 match end.submit {
                     Some(Submit::Offered) => Gradient::YELLOW,
                     Some(Submit::Refused) => Gradient::RED,
@@ -223,7 +223,7 @@ fn panel(
             ),
             Line::Continue => (
                 (sim.race.tick >= end.at + CONTINUE_AFTER_TICKS).then(|| {
-                    let keys = if pads.iter().next().is_some() { "X / SPACE" } else { "SPACE" };
+                    let keys = if last.pad() { "X" } else { "SPACE" };
                     format!("{keys} to CONTINUE")
                 }),
                 if sim.race.tick / PROMPT_BLINK_TICKS % 2 == 0 {
@@ -279,12 +279,12 @@ fn continue_on_key(
 /// (The font has no '#'.)
 fn submit_line(
     submit: Option<Submit>,
-    pads: &crate::drive::Pads,
+    last: crate::last_input::LastInput,
     config: &crate::config::Config,
 ) -> Option<String> {
     Some(match submit? {
         Submit::Offered => {
-            format!("{}: SUBMIT", crate::ghost::select_label(pads, config)?.to_uppercase())
+            format!("{}: SUBMIT", crate::ghost::select_label(last, config).to_uppercase())
         }
         Submit::Sending => "SUBMITTING...".to_string(),
         Submit::Accepted { rank, top_ms } => crate::scores::placed(rank, top_ms).to_uppercase(),

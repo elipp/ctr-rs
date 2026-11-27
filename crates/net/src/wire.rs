@@ -63,6 +63,16 @@ pub struct Inputs {
     pub acks: Vec<Tick>,
 }
 
+/// A countdown to a race of the lobby, as the host broadcast it (`Session::count_down`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct Countdown {
+    pub track: u32,
+    /// The milliseconds to the start, when it was sent.
+    pub ms: u32,
+    /// The race in progress starts over, rather than a new one starting.
+    pub restart: bool,
+}
+
 /// Where a cup stands after one of its races, as the host scored it: the clients show it as they
 /// like (see `Session::standings`).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -247,6 +257,9 @@ pub enum Message {
     Announce { text: String },
     /// Reliable, host to each client: where the cup stands after one of its races.
     Standings(Standings),
+    /// Reliable, host to each client: the countdown to a race begins, once; `None` calls it off.
+    /// The clients count the seconds themselves.
+    Countdown(Option<Countdown>),
     /// Reliable, client to host: a line for the lobby to read, said by the client. (See
     /// `clean_chat`; the host cleans it again.)
     Say { text: String },
@@ -304,8 +317,8 @@ pub enum Message {
     /// past it pauses where it is), or resumes with `None`.
     Pause { epoch: u32, at: Option<Tick> },
     /// Reliable, client to host, in a match's lobby (quick play): we are ready for the next race
-    /// (`Command::Again`), or vote for its track (`Command::Vote`, a disc track). Sent again to
-    /// each new host.
+    /// (`Command::Again`; [`Message::Unready`] takes it back), or vote for its track
+    /// (`Command::Vote`, a disc track). Sent again to each new host.
     Again,
     Vote { track: u32 },
     /// Reliable, host to each client, in a match's lobby between its races: the next race starts
@@ -320,6 +333,9 @@ pub enum Message {
         votes: Vec<(u32, u8)>,
         ready: Vec<[u8; 32]>,
     },
+    /// Reliable, client to host, in a match's lobby before the next race's countdown: we are not
+    /// ready after all (`Command::Unready`). Last, for the tags of the others to stay.
+    Unready,
 }
 
 /// How often a player pings the ones it is connected to.
@@ -573,9 +589,16 @@ mod tests {
                 next: Some((7, "Coco Park".into())),
                 stopped: false,
             }),
+            Message::Countdown(Some(Countdown {
+                track: 3,
+                ms: 5000,
+                restart: true,
+            })),
+            Message::Countdown(None),
             Message::Pause { epoch: 2, at: Some(900) },
             Message::Pause { epoch: 2, at: None },
             Message::Again,
+            Message::Unready,
             Message::Vote { track: 14 },
             Message::Next {
                 track: 14,

@@ -38,6 +38,24 @@ const UNREACHED_MS: u32 = 2000;
 /// The fixed quick-play rules (MATCHMAKING.md, decided 2026-11-26).
 const QUICK_LAPS: u8 = 3;
 
+/// [`QUICK_LAPS`], or `CTR_QUICK_PLAY_LAPS` from the environment to iterate on quick play faster.
+// TODO(matchmaking): remove later, with the 0-lap sprint (`vehicle::lap::update`).
+pub fn quick_laps() -> u8 {
+    static LAPS: std::sync::LazyLock<u8> = std::sync::LazyLock::new(|| {
+        let Ok(text) = std::env::var("CTR_QUICK_PLAY_LAPS") else {
+            return QUICK_LAPS;
+        };
+        match text.parse() {
+            Ok(laps) if laps <= race::MAX_LAPS => {
+                tracing::warn!("quick play races {laps} laps (CTR_QUICK_PLAY_LAPS)");
+                laps
+            }
+            _ => panic!("CTR_QUICK_PLAY_LAPS={text:?}: want 0 (a sprint to the start line) to {}", race::MAX_LAPS),
+        }
+    });
+    *LAPS
+}
+
 /// How long a lobby is remembered with nobody registered as its host: an heir takes a while to
 /// find out that the host is gone (the session's idle timeout) and to register.
 const LOBBY_GONE_S: u64 = 120;
@@ -389,7 +407,7 @@ impl Matchmaker {
             mode,
             players: players.to_vec(),
             track: (random % u64::from(race::RACING_TRACKS)) as u32,
-            laps: QUICK_LAPS,
+            laps: quick_laps(),
             masked_weapons: 0,
             even_odds: false,
             seed: (random >> 32) as u16,

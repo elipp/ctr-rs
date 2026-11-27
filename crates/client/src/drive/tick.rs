@@ -475,7 +475,7 @@ pub(super) fn drive_tick(
             replay.pad(tick)
         } else if let Some(pad) = practice.pad() {
             pad
-        } else if (shared && hold.menu.open) || drive.views[0].chooser.open {
+        } else if hold.has_controls(shared) || drive.views[0].chooser.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if let Some(pad) = auto_pad {
@@ -640,7 +640,7 @@ pub(super) fn drive_tick(
     let ours = &sim.race.karts[sim.own].driver;
     let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
     // (A menu that has the controls has the camera's buttons too.)
-    let own_camera = if (shared && hold.menu.open) || drive.views[0].chooser.open {
+    let own_camera = if hold.has_controls(shared) || drive.views[0].chooser.open {
         Default::default()
     } else {
         controller.camera(&drive.views[0].device, &taken)

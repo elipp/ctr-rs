@@ -19,6 +19,8 @@ use bevy::ui::widget::NodeImageMode;
 use bevy::window::PrimaryWindow;
 use render::font::{Font, FontAtlas, Gradient};
 
+use crate::pad_glyph::{self, PadGlyph};
+
 /// Inconsolata Bold, which [`register_bold`] puts in.
 pub const BOLD: Handle<bevy::text::Font> = bevy::asset::uuid_handle!("3b6f1c52-8e0d-4a8f-9a4e-6c1d2f7b9e10");
 
@@ -181,6 +183,35 @@ fn texel_size(windows: Query<&Window, With<PrimaryWindow>>, mut size: ResMut<Tex
     ));
 }
 
+/// A pad glyph's (`{cross}`) height, in its text's letters' heights. A keycap's (`{key:H}`) too.
+const PAD_GLYPH_SCALE: f32 = 1.3;
+
+/// A keycap's letters' size (Inconsolata Bold's em), in its heights.
+const KEY_LETTER_SCALE: f32 = 0.55;
+/// Inconsolata is monospaced, every character half an em wide: a key's name is measured without
+/// laying it out.
+const INCONSOLATA_ADVANCE: f32 = 0.5;
+/// How wide a name fits on an unstretched keycap, in its heights; a wider one stretches it.
+const KEYCAP_ROOM: f32 = 0.5;
+
+/// What a `{name}` in a text is.
+enum Inline<'a> {
+    Pad(PadGlyph),
+    /// A keycap with this on it.
+    Key(&'a str),
+}
+
+impl Inline<'_> {
+    fn parse(name: &str) -> Option<Inline<'_>> {
+        match name.split_at_checked(4) {
+            Some((key, label)) if key.eq_ignore_ascii_case("key:") && !label.is_empty() => {
+                Some(Inline::Key(label))
+            }
+            _ => PadGlyph::parse(name).map(Inline::Pad),
+        }
+    }
+}
+
 /// Puts the glyphs of a text up again when it changed, or the texel size it follows did.
 fn lay_out(
     mut commands: Commands,
@@ -194,7 +225,25 @@ fn lay_out(
             continue;
         }
         let size = TexelSize(text.texel_size.unwrap_or(window.0));
-        let line = fonts.atlas(text.font).layout(&text.text);
+        let atlas = fonts.atlas(text.font);
+        // A pad glyph is square in pixels, whatever shape the texels are.
+        let (letter_top, letter_bottom) = atlas.letter_rows();
+        let glyph_px = (letter_bottom - letter_top) as f32 * PAD_GLYPH_SCALE * size.0.y;
+        let glyph_middle = (letter_top + letter_bottom) as f32 / 2.0 * size.0.y;
+        let keycap_px = |label: &str| {
+            let name = label.chars().count() as f32 * INCONSOLATA_ADVANCE * KEY_LETTER_SCALE;
+            glyph_px * (1.0 + (name - KEYCAP_ROOM).max(0.0))
+        };
+        let mut inlines = Vec::new();
+        let line = atlas.layout_with(&text.text, |name| {
+            let inline = Inline::parse(name)?;
+            let px = match inline {
+                Inline::Pad(_) => glyph_px,
+                Inline::Key(label) => keycap_px(label),
+            };
+            inlines.push(inline);
+            Some((inlines.len() - 1, (px / size.0.x).ceil() as usize))
+        });
         let image = fonts.image(text.font, text.gradient, &mut images);
         // Bold: a texel more for each glyph, its copy to the right.
         let thick = usize::from(text.bold);
@@ -228,6 +277,61 @@ fn lay_out(
                         height: size.y(glyph.height),
                         ..default()
                     },
+                ));
+            }
+        }
+        for placed in &line.boxes {
+            let x = (placed.x + thick * placed.after_glyphs) as f32 * size.0.x;
+            let inline = &inlines[placed.id];
+            let (image, width) = match inline {
+                Inline::Pad(glyph) => (
+                    ImageNode {
+                        rect: Some(glyph.rect()),
+                        ..ImageNode::new(pad_glyph::ATLAS)
+                    },
+                    glyph_px,
+                ),
+                Inline::Key(label) => (
+                    ImageNode {
+                        rect: Some(pad_glyph::keycap_rect()),
+                        image_mode: NodeImageMode::Sliced(pad_glyph::keycap_slicer()),
+                        ..ImageNode::new(pad_glyph::ATLAS)
+                    },
+                    keycap_px(label),
+                ),
+            };
+            let mut boxed = commands.spawn((
+                ChildOf(entity),
+                image,
+                // Centred on the letters, sticking out of the line a little.
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(x + (placed.width as f32 * size.0.x - width) / 2.0),
+                    top: Val::Px(glyph_middle - glyph_px / 2.0),
+                    width: Val::Px(width),
+                    height: Val::Px(glyph_px),
+                    ..default()
+                },
+            ));
+            if let Inline::Key(label) = inline {
+                let face = pad_glyph::KEYCAP_FACE;
+                boxed.with_child((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::ZERO,
+                        right: Val::ZERO,
+                        top: Val::Px(face.min.y * glyph_px),
+                        height: Val::Px(face.height() * glyph_px),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    children![(
+                        Text::new(*label),
+                        bold(TextFont::from_font_size(KEY_LETTER_SCALE * glyph_px)),
+                        TextColor(Color::BLACK),
+                        TextLayout::no_wrap(),
+                    )],
                 ));
             }
         }

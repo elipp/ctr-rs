@@ -64,10 +64,15 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
         Action::AnswerMatch(_) if lobby.unanswered().is_none() => "No match to answer",
         Action::QuickPlay { rejoin: true } if lobby.last_match.is_none() => "No match to rejoin",
-        Action::QuickReady | Action::VoteTrack(_) if !lobby.between_matched_races(race_on) => {
+        Action::QuickReady | Action::QuickUnready | Action::VoteTrack(_)
+            if !lobby.between_matched_races(race_on) =>
+        {
             "Only after a quick play race"
         }
         Action::QuickReady if lobby.again => "You are ready already: waiting for the others",
+        Action::QuickUnready if !lobby.again => "You are not ready yet",
+        // (The countdown has told its track and its start.)
+        Action::QuickUnready if lobby.starting.is_some() => net::NOT_NOW,
         Action::VoteTrack(track) if *track >= race::RACING_TRACKS => "Vote for one of the game's tracks",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
@@ -273,7 +278,8 @@ pub(super) fn run(
                 });
                 match queued {
                     Ok(()) if rejoin.is_some() => "Rejoining the match...",
-                    Ok(()) => "Searching for a match...",
+                    // (The searching banner says it: `hud::searching`.)
+                    Ok(()) => continue,
                     Err(why) => {
                         toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
                         continue;
@@ -283,6 +289,10 @@ pub(super) fn run(
             Action::QuickReady => {
                 lobby.play_again();
                 "Ready: waiting for the others..."
+            }
+            Action::QuickUnready => {
+                lobby.unready();
+                "Not ready"
             }
             Action::VoteTrack(track) => {
                 if let Some(session) = &lobby.session {
