@@ -10,7 +10,7 @@ use iroh::endpoint::{Connection, RecvStream, SendStream};
 use score::Action;
 use score::matching::{QueueEntry, Refused, ToClient, ToServer, frame, frame_length};
 use tokio::sync::mpsc::unbounded_channel;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::matchmaker::Waiting;
 use crate::{App, MAX_VERSION, READ_TIMEOUT, unix_now};
@@ -108,13 +108,13 @@ pub async fn serve(app: Arc<App>, connection: Connection) {
         joined: 0,
         to,
     };
+    let who = waiting.who();
     let joined = app.matchmaker.lock().unwrap().join(waiting, now);
     let id = match joined {
         Ok(id) => id,
         Err(refused) => return last(&connection, &mut send, &ToClient::Refused(refused)).await,
     };
-    let who = score::fingerprint(&key);
-    debug!("{who} queued ({id})");
+    info!("{who} queued ({id})");
 
     // (A read of its own: `read_exact` loses what it read if a `select!` drops it.)
     let (answers_tx, mut answers) = unbounded_channel();
@@ -152,7 +152,7 @@ pub async fn serve(app: Arc<App>, connection: Connection) {
     }
     reader.abort();
     app.matchmaker.lock().unwrap().leave(id, unix_now());
-    debug!("{who} left the queue ({id})");
+    info!("{who} left the queue ({id})");
 }
 
 /// A lobby's host's registration: its `Open`s and `Admitted`s one way, the `Admit`s the other.

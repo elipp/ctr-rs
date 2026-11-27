@@ -535,18 +535,12 @@ fn match_found_items(lobby: &Lobby) -> Vec<Entry> {
     let Some(Queue::Found { found, left, .. }) = &lobby.queue else {
         return vec![entry(Item::Back, "Back")];
     };
-    let nicks: Vec<&str> = found
-        .nicks
-        .iter()
-        .map(|n| if n.is_empty() { "?" } else { n.as_str() })
-        .collect();
     vec![
         entry(Item::Answer(true), "Accept"),
         entry(Item::Answer(false), "Decline")
             .help("Declining keeps you out of the queue for a while."),
         entry(Item::Info, maps::name(found.track)).starts_section(),
-        entry(Item::Info, format!("{} laps, {} players", found.rules.laps, nicks.len())),
-        entry(Item::Info, nicks.join(", ")),
+        entry(Item::Info, format!("{} laps, {} players", found.rules.laps, found.nicks.len())),
         entry(Item::Info, format!("{left} s to answer")),
     ]
 }

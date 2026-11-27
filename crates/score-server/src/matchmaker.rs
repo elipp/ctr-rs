@@ -63,6 +63,12 @@ pub struct Waiting {
 }
 
 impl Waiting {
+    /// How the logs name it: the nick (which anyone may share) and the key's fingerprint.
+    pub fn who(&self) -> String {
+        let nick = if self.nick.is_empty() { "?" } else { &self.nick };
+        format!("{nick} ({})", data_encoding::HEXLOWER.encode(&self.key[..4]))
+    }
+
     fn send(&self, message: ToClient) {
         // (A connection that ended is told nothing: its task calls `leave`.)
         let _ = self.to.send(message);
@@ -274,6 +280,7 @@ impl Matchmaker {
         };
         for w in check.players {
             if out(&w) {
+                tracing::info!("match {match_id}: {} declined or let it run out", w.who());
                 self.strike(w.key, now);
                 w.send(ToClient::Refused(Refused::Declined));
             } else {
@@ -401,7 +408,8 @@ impl Matchmaker {
             players: l.players.iter().cloned().chain(players.iter().map(player)).collect(),
             ..l.template.clone()
         };
-        tracing::info!("match {id}: {} players into lobby {lobby}", players.len());
+        let who: Vec<String> = players.iter().map(Waiting::who).collect();
+        tracing::info!("match {id}: {} into lobby {lobby}", who.join(", "));
         self.check(found, players, Some(lobby), now);
     }
 
@@ -413,11 +421,11 @@ impl Matchmaker {
         let id = self.next_id;
         let listed: Vec<MatchPlayer> = players.iter().map(player).collect();
         let found = self.template(players[0].mode, &listed, id);
+        let who: Vec<String> = players.iter().map(Waiting::who).collect();
         tracing::info!(
-            "match {id}: {} players on track {}, coordinator {}",
-            players.len(),
-            found.track,
-            data_encoding::HEXLOWER.encode(&players[0].key[..4]),
+            "match {id} on {}: {} (the first coordinates)",
+            map::builtin::display_name(found.track).unwrap_or("?"),
+            who.join(", "),
         );
         self.check(found, players, None, now);
     }
