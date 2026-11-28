@@ -1,5 +1,5 @@
-//! Quick play's ready check between a match's races: Triangle (or the speedometer's key) of our
-//! first player says we are ready for the next race (`Action::QuickReady`), or not after all
+//! Quick play's ready check while a match waits for a race (its first too): Triangle (or the
+//! speedometer's key) of our first player says we are ready for the next race (`Action::QuickReady`), or not after all
 //! (`Action::QuickUnready`), until its countdown. The lobby list hints at it on our row
 //! (`lobby_list.rs`). Leaving is the pause menu's. (Not retail.)
 
@@ -46,7 +46,7 @@ fn input(
     mut stick: Local<IVec2>,
 ) {
     let view = drive.as_ref().and_then(|d| d.views().first());
-    let wanted = lobby.between_matched_races(&race_on) && lobby.starting.is_none();
+    let wanted = lobby.matched_waiting(&race_on) && lobby.starting.is_none();
     let Some(view) = view.filter(|_| wanted) else {
         hint.0 = None;
         return;

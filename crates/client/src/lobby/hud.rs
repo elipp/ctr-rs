@@ -148,8 +148,8 @@ pub(super) fn searching(
     mut label: Query<(&mut Visibility, &Children), With<SearchingHud>>,
     mut texts: Query<&mut CtrText>,
 ) {
-    let between = lobby.between_matched_races(&race_on);
-    let next = lobby.next.as_ref().filter(|_| between).map(|next| {
+    let waiting = lobby.matched_waiting(&race_on);
+    let next = lobby.next.as_ref().filter(|_| waiting).map(|next| {
         let track = next.track;
         let name = map::builtin::display_name(track).unwrap_or("A DISC TRACK").to_uppercase();
         let left = (next.at - time.elapsed_secs()).max(0.0).ceil() as u32;
@@ -165,8 +165,7 @@ pub(super) fn searching(
         // `newest`, not `is_on`: a race started is not on until the flag covers the window, and
         // the label would show while the flag comes in.
         None if !lobby.quick_play || race_on.newest().is_some() || counting => None,
-        // Else between races (ready is `quick_ready.rs`'s) or gathering (the
-        // scoreboard lists who came: `scoreboard::gathering`).
+        // Else waiting for a race (ready is `quick_ready.rs`'s).
         None => next,
         Some(Queue::Searching { players, waited }) => {
             let clock = format!("{}:{:02}", waited / 60, waited % 60);

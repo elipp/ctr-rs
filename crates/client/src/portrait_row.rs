@@ -1,6 +1,6 @@
 //! What the race's leaderboard (`leaderboard`) and the lobby's list (`lobby_list`) both draw: a
-//! column of portraits (`render::portraits`), each with the player's name under it, the ping on
-//! its right (which [`pings`] keeps up), and the host's crown on a corner. Our name is in
+//! column of portraits (`render::portraits`), each with the player's name under it and the
+//! host's crown on a corner. (The pings are the scoreboard's, `scoreboard.rs`.) Our name is in
 //! [`HIGHLIGHT`]: with every character open to everyone, the same face can be in the column more
 //! than once (which retail never allows), and this tells which one is ours. (Not retail.)
 
@@ -9,8 +9,6 @@ use render::portraits::{HEIGHT, ICON_IDS, WIDTH};
 
 use crate::hud;
 use crate::hud::{atlas_image, pack_icons};
-use crate::leaderboard::ICON_X;
-use crate::lobby::Lobby;
 
 /// The portraits as a picture, loaded when the first list or chat line needs it.
 #[derive(Resource)]
@@ -19,28 +17,27 @@ pub(crate) struct Portraits(pub(crate) Handle<Image>);
 /// The size of the names.
 const FONT_SIZE: f32 = 16.0;
 
-/// The size of the pings, and of the lobby's lines of those who only watch.
+/// The size of the lobby's lines of those who only watch.
 pub(crate) const PING_FONT_SIZE: f32 = 12.0;
 
-/// What the names and the pings are on: the toasts' colour, more opaque so that it reads over the
+/// What the names are on: the toasts' colour, more opaque so that it reads over the
 /// portrait.
 pub(crate) const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.9);
 
-/// The colour of our name (or, in a race, that of the kart the view follows), and of the "R" of a
-/// relayed ping.
+/// The colour of our name (or, in a race, that of the kart the view follows), and of the
+/// scoreboard's "R" of a relayed ping.
 pub(crate) const HIGHLIGHT: Color = Color::srgb(1.0, 0.9, 0.2);
 
-/// The colour of the "D" of a direct way: the green of the toasts of who joined.
-const DIRECT: Color = crate::toast::SUCCESS_COLOR;
+/// The colour of the scoreboard's "D" of a direct way: the green of the toasts of who joined.
+pub(crate) const DIRECT: Color = crate::toast::SUCCESS_COLOR;
 
-/// The pings' and the lobby's watchers' grey.
+/// The lobby's watchers' and free places' grey.
 pub(crate) const DIM: Color = Color::srgb(0.8, 0.8, 0.8);
 
 /// Around a name's text, in its [`tag`].
 pub(crate) const TAG_PADDING: UiRect = UiRect::axes(Val::Px(4.0), Val::Px(1.0));
 
-/// A name's or a ping's text on [`BACKGROUND`]; its node (with [`TAG_PADDING`] for a name) is the
-/// caller's.
+/// A name's text on [`BACKGROUND`]; its node (with [`TAG_PADDING`] for a name) is the caller's.
 pub(crate) fn tag(
     text: impl Into<String>,
     size: f32,
@@ -63,23 +60,6 @@ const HOST_SIZE: f32 = 18.0;
 /// of [`DIRECT`], the crown's size.
 const READY_COLOR: Color = DIRECT;
 const READY_SIZE: f32 = HOST_SIZE;
-
-/// The ping of the player with a short key.
-#[derive(Component)]
-struct PingLabel(String);
-
-/// The way to the player after its ping, with the debug HUD only: a green "D" for direct, which
-/// is generally the better, and a yellow ([`HIGHLIGHT`]) "R" for a relay.
-#[derive(Component)]
-struct RouteSpan(String);
-
-pub struct PortraitRowPlugin;
-
-impl Plugin for PortraitRowPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, pings.run_if(crate::drive::driving));
-    }
-}
 
 pub(crate) fn load_portraits(
     vram: &loader::vram::Vram,
@@ -116,13 +96,27 @@ pub(crate) fn portrait_rect(character: usize) -> Rect {
     )
 }
 
-/// Puts `character`'s portrait in `column`, at [`ICON_X`] and `y` lines of retail's screen down.
+/// Where a portrait goes: its top left corner `at`, in pixels and lines of retail's screen, and
+/// `scale` times its size (the race's leaderboard: 1, as retail).
+fn place(at: Vec2, scale: f32) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: hud::x(at.x),
+        top: hud::y(at.y),
+        width: hud::x(WIDTH as f32 * scale),
+        height: hud::y(HEIGHT as f32 * scale),
+        ..default()
+    }
+}
+
+/// Puts `character`'s portrait in `column` (see [`place`]).
 pub(crate) fn spawn_portrait(
     commands: &mut Commands,
     column: Entity,
     image: &Handle<Image>,
     character: u8,
-    y: f32,
+    at: Vec2,
+    scale: f32,
 ) -> Entity {
     commands
         .spawn((
@@ -130,14 +124,7 @@ pub(crate) fn spawn_portrait(
             ImageNode::new(image.clone())
                 .with_rect(portrait_rect(character as usize))
                 .with_mode(NodeImageMode::Stretch),
-            Node {
-                position_type: PositionType::Absolute,
-                left: hud::x(ICON_X),
-                top: hud::y(y),
-                width: hud::x(WIDTH as f32),
-                height: hud::y(HEIGHT as f32),
-                ..default()
-            },
+            place(at, scale),
             Pickable::IGNORE,
             ChildOf(column),
         ))
@@ -182,103 +169,66 @@ pub(crate) fn spawn_ready_badge(commands: &mut Commands, portrait: Entity) {
     ));
 }
 
-/// Puts a player's name on a portrait, at the bottom and centered, and the ping (which [`pings`]
-/// fills in) just right of the portrait, centered on it from top to bottom. Gives the name's
-/// entity back.
-pub(crate) fn spawn_tags(
-    commands: &mut Commands,
-    portrait: Entity,
-    name: &str,
-    key: &str,
-) -> Entity {
-    // The name's centered under the portrait, whatever its length.
-    let wrapper = commands
+/// How wide [`spawn_empty_portrait`]'s frame is, of the portrait's place: the faces' art is
+/// narrower than its picture, which a frame the picture's width shows up.
+const EMPTY_WIDTH: f32 = 0.88;
+
+/// Puts a place that no player has taken yet in `column`, where [`spawn_portrait`] would: a
+/// frame ([`EMPTY_WIDTH`], centered) with a bold question mark in it. Gives back the place, the
+/// portrait's size, for its name to go on as a portrait's does.
+pub(crate) fn spawn_empty_portrait(commands: &mut Commands, column: Entity, at: Vec2, scale: f32) -> Entity {
+    let place = commands
+        .spawn((place(at, scale), Pickable::IGNORE, ChildOf(column)))
+        .id();
+    let frame = commands
         .spawn((
-            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                // A little below the portrait's edge.
-                bottom: Val::Px(-6.0),
+                left: Val::Percent((1.0 - EMPTY_WIDTH) * 50.0),
+                width: Val::Percent(EMPTY_WIDTH * 100.0),
+                height: Val::Percent(100.0),
+                border: UiRect::all(Val::Px(2.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
+            BorderColor::all(DIM),
+            BackgroundColor(BACKGROUND),
             Pickable::IGNORE,
-            ChildOf(portrait),
+            ChildOf(place),
         ))
         .id();
-    let name_tag = commands
+    commands.spawn((
+        Text::new("?"),
+        crate::font::bold(TextFont::from_font_size(EMPTY_MARK_SIZE)),
+        TextColor(DIM),
+        Pickable::IGNORE,
+        ChildOf(frame),
+    ));
+    place
+}
+
+/// The size of [`spawn_empty_portrait`]'s question mark.
+const EMPTY_MARK_SIZE: f32 = 28.0;
+
+/// Puts a name on a portrait (or an empty place), and gives its entity back.
+pub(crate) fn spawn_name(commands: &mut Commands, portrait: Entity, name: &str) -> Entity {
+    commands
         .spawn((
             tag(name, FONT_SIZE, Color::WHITE),
+            TextLayout::linebreak(LineBreak::NoWrap),
+            // Inside the cell: below it, the tag would cover the next row's top and make the
+            // rows run together. On the left edge: a name is usually wider than its portrait,
+            // and centered it would stick out of the column (the lobby's title is on that edge).
             Node {
+                position_type: PositionType::Absolute,
+                left: Val::ZERO,
+                bottom: Val::ZERO,
                 padding: TAG_PADDING,
                 ..default()
             },
             Pickable::IGNORE,
-            ChildOf(wrapper),
-        ))
-        .id();
-    let ping = commands
-        .spawn((
-            PingLabel(key.to_string()),
-            tag("", PING_FONT_SIZE, DIM),
-            // Up by half its own height, for its middle to be the portrait's, and a little left,
-            // over the portrait's edge.
-            UiTransform::from_translation(Val2::new(hud::x(-2.0), Val::Percent(-50.0))),
-            Node {
-                position_type: PositionType::Absolute,
-                // From the portrait's right edge, halfway down it.
-                left: Val::Percent(100.0),
-                top: Val::Percent(50.0),
-                padding: UiRect::axes(Val::Px(3.0), Val::Px(1.0)),
-                display: Display::None,
-                ..default()
-            },
-            Pickable::IGNORE,
             ChildOf(portrait),
         ))
-        .id();
-    commands.spawn((
-        RouteSpan(key.to_string()),
-        TextSpan::new(""),
-        TextFont::from_font_size(PING_FONT_SIZE),
-        TextColor(HIGHLIGHT),
-        ChildOf(ping),
-    ));
-    name_tag
-}
-
-/// Writes each player's ping, and shows the label once there is one (none for us, nor before
-/// the first pong). With the debug HUD on (`Config::debug_hud`), the way to the player too (see
-/// [`RouteSpan`]).
-fn pings(
-    lobby: Res<Lobby>,
-    config: Res<crate::config::Config>,
-    mut labels: Query<(&PingLabel, &mut Text, &mut Node)>,
-    mut routes: Query<(&RouteSpan, &mut TextSpan, &mut TextColor)>,
-) {
-    for (RouteSpan(key), mut span, mut color) in &mut routes {
-        let (route, tint) = match lobby.relayed.get(key).filter(|_| config.debug_hud) {
-            Some(true) => (" R", HIGHLIGHT),
-            Some(false) => (" D", DIRECT),
-            None => ("", HIGHLIGHT),
-        };
-        if span.0 != route {
-            span.0 = route.to_string();
-        }
-        if color.0 != tint {
-            color.0 = tint;
-        }
-    }
-    for (PingLabel(key), mut text, mut node) in &mut labels {
-        let ping = lobby.pings.get(key);
-        let line = ping.map_or(String::new(), |ping| format!("{} ms", ping.as_millis()));
-        if text.0 != line {
-            text.0 = line;
-        }
-        node.display = if ping.is_some() {
-            Display::DEFAULT
-        } else {
-            Display::None
-        };
-    }
+        .id()
 }

@@ -12,7 +12,7 @@ use render::font::{Font, Gradient};
 use crate::font::CtrText;
 use crate::hud;
 use crate::portrait_row::{
-    HIGHLIGHT, Portraits, portraits, spawn_host_badge, spawn_portrait, spawn_tags,
+    HIGHLIGHT, Portraits, portraits, spawn_host_badge, spawn_name, spawn_portrait,
 };
 
 /// The column of rows, with the race it was built for.
@@ -122,19 +122,14 @@ fn build(
         .id();
     for slot in 0..players {
         let y = slot as f32 * SLOT;
-        let portrait = spawn_portrait(&mut commands, column, &image, karts[slot], ICON_Y + y);
+        let portrait = spawn_portrait(&mut commands, column, &image, karts[slot], Vec2::new(ICON_X, ICON_Y + y), 1.0);
         commands.entity(portrait).insert(Row { slot, y, pop: 0.0 });
         let label = race.kart_label(slot);
-        // (A bot has no key: a brain bot's would be the host's.)
-        let key = match race.is_any_bot(slot) {
-            false => race.keys().get(slot).map_or("", String::as_str),
-            true => "",
-        };
         // The host is slot 0 (`net::Event::Start`).
         if slot == 0 && lobby.shows_host() {
             spawn_host_badge(&mut commands, portrait, false);
         }
-        let tag = spawn_tags(&mut commands, portrait, &label, key);
+        let tag = spawn_name(&mut commands, portrait, &label);
         commands.entity(tag).insert(NameTag(slot));
     }
     // The numbers, over the portraits.

@@ -22,20 +22,19 @@ use crate::{Command, Error, Event, Io, Rules, Ticket};
 /// How long the first net report may take: past it the queue goes without (the worst NAT).
 const REPORT_WAIT: Duration = Duration::from_secs(3);
 
-/// How long after the match goes its coordinator waits for everyone to come in, before it
-/// starts with whoever did (two at least).
+/// How long after the match goes its coordinator waits for everyone to come in, before the
+/// ready check counts whoever did (two at least; alone, the match is off).
 const JOIN_DEADLINE: Duration = Duration::from_secs(30);
 
-/// How long after a match's race its next one starts: everyone still in the lobby races it.
+/// How long after a match's lobby is up, or after its race, its next race starts: everyone
+/// still in the lobby races it.
 pub(crate) const NEXT_WAIT: Duration = Duration::from_secs(80);
 
 /// How soon the next race starts once everyone in the lobby is ready (unless it is sooner
 /// anyway). Not at once: players let in from the queue may still be connecting.
 pub(crate) const READY_WAIT: Duration = Duration::from_secs(10);
 
-/// The seconds counted down before a match's race, as a manual host's (`client` `countdown.rs`).
-// TODO(matchmaking): back to 5 once the countdown and the gathering board have been looked at:
-// 10 only to see them (2026-11-27).
+/// The seconds counted down before a match's race.
 pub(crate) const COUNTDOWN_SECONDS: u64 = 10;
 
 /// What a match found says (see [`Event::Found`]).
@@ -133,28 +132,39 @@ impl Matchmade {
     }
 
     /// When the host has to look at the start again: the countdown's end, the first race's
-    /// deadline, or when the next race's countdown begins.
-    pub(crate) fn wake(&self) -> Option<Instant> {
-        match self.countdown {
-            Some(at) => Some(at),
-            None if !self.started => Some(self.deadline),
-            None => self.next.map(|next| next - Duration::from_secs(COUNTDOWN_SECONDS)),
+    /// deadline (while it is ahead), or when the next race's countdown begins.
+    pub(crate) fn wake(&self, now: Instant) -> Option<Instant> {
+        if let Some(at) = self.countdown {
+            return Some(at);
         }
+        let deadline = (!self.started && now < self.deadline).then_some(self.deadline);
+        let next = self.next.map(|next| next - Duration::from_secs(COUNTDOWN_SECONDS));
+        deadline.into_iter().chain(next).min()
     }
 
-    /// The host, once a race is over: the wait for the next begins, on a new random disc track
-    /// (another than the last one's) with a new item seed. Whether it did (a wait that an heir
-    /// took over goes on).
+    /// Whether the players the match waits for are in: all of the match's, or whoever came by
+    /// the first race's deadline. Until then nobody's ready hurries the start, and the free
+    /// places aren't offered to the queue (they are the latecomers').
+    pub(crate) fn gathered(&self, present: usize, now: Instant) -> bool {
+        self.started || present >= self.players.len() || now >= self.deadline
+    }
+
+    /// The host, once the lobby is up or a race is over: the wait for the next race begins.
+    /// The first is on the match's track; each after on a new random disc track (another than
+    /// the last one's) with a new item seed. Whether it did (a wait that an heir took over goes
+    /// on).
     pub(crate) fn wait_next(&mut self, now: Instant) -> bool {
         if self.next.is_some() {
             return false;
         }
         // The time is mixed in for the web, whose `RandomState` is not random.
         let random = RandomState::new().hash_one(self.deadline.elapsed().as_nanos());
-        let other = (random % u64::from(race::RACING_TRACKS - 1)) as u32;
-        self.rolled = if other >= self.track { other + 1 } else { other };
-        self.track = self.rolled;
-        self.rules.seed = (random >> 32) as u16;
+        if self.started {
+            let other = (random % u64::from(race::RACING_TRACKS - 1)) as u32;
+            self.rolled = if other >= self.track { other + 1 } else { other };
+            self.track = self.rolled;
+            self.rules.seed = (random >> 32) as u16;
+        }
         self.tie = random.rotate_left(16);
         self.next = Some(now + NEXT_WAIT);
         true
@@ -163,7 +173,7 @@ impl Matchmade {
     /// The host: everyone `present` is ready, so the next race is brought to [`READY_WAIT`]
     /// from `now`. Whether it was.
     pub(crate) fn hurry(&mut self, present: &[EndpointId], now: Instant) -> bool {
-        let all = present.iter().all(|id| self.ready.contains(id));
+        let all = self.gathered(present.len(), now) && present.iter().all(|id| self.ready.contains(id));
         match &mut self.next {
             Some(next) if all && *next > now + READY_WAIT => {
                 self.unhurried = Some(*next);

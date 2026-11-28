@@ -445,8 +445,8 @@ pub(crate) async fn run(
                 let _ = r.tell.send(score::matching::ToServer::Admitted { id });
             },
             // (Wakes the loop for the start below.)
-            _ = sleep(matchmade.as_ref().and_then(Matchmade::wake).map_or(Duration::ZERO, |w| w.saturating_duration_since(Instant::now()))),
-                if host.is_some() && matchmade.as_ref().and_then(Matchmade::wake).is_some_and(|w| Instant::now() < w) => {}
+            _ = sleep(matchmade.as_ref().and_then(|m| m.wake(Instant::now())).map_or(Duration::ZERO, |w| w.saturating_duration_since(Instant::now()))),
+                if host.is_some() && matchmade.as_ref().and_then(|m| m.wake(Instant::now())).is_some_and(|w| Instant::now() < w) => {}
             _ = sleep(host.as_ref().and_then(|h| h.handoff.as_ref()).map_or(Duration::ZERO, |h| h.until.saturating_duration_since(Instant::now()))),
                 if host.as_ref().is_some_and(|h| h.handoff.is_some()) =>
             {
@@ -715,7 +715,7 @@ pub(crate) async fn run(
                 // (Quick play's, of the queue before the lobby.)
                 Command::Answer(_) => {}
                 Command::Again => match &mut matchmade {
-                    Some(m) if m.started => {
+                    Some(m) => {
                         want_again = true;
                         if let Some(host) = &host {
                             if m.ready(me) {
@@ -729,7 +729,7 @@ pub(crate) async fn run(
                 },
                 // (Once the countdown is on, its track and its start are told.)
                 Command::Unready => match &mut matchmade {
-                    Some(m) if m.started && m.countdown.is_none() => {
+                    Some(m) if m.countdown.is_none() => {
                         want_again = false;
                         if let Some(host) = &host {
                             if m.unready(me) {
@@ -742,7 +742,7 @@ pub(crate) async fn run(
                     _ => io.event(Event::Announce(NOT_NOW.into())),
                 },
                 Command::Vote(track) => match &mut matchmade {
-                    Some(m) if m.started && m.countdown.is_none() && track < race::RACING_TRACKS => {
+                    Some(m) if m.countdown.is_none() && track < race::RACING_TRACKS => {
                         my_vote = Some(track);
                         if let Some(host) = &host {
                             if m.vote(me, track) {
@@ -837,7 +837,6 @@ pub(crate) async fn run(
                     // (One who toggles too fast is not heard.)
                     Message::Again => if let Some(host) = &mut host
                         && let Some(m) = &mut matchmade
-                        && m.started
                         && host.guests.iter().any(|g| g.id == from)
                         && host.readiers
                             .entry(from)
@@ -849,7 +848,6 @@ pub(crate) async fn run(
                     },
                     Message::Unready => if let Some(host) = &mut host
                         && let Some(m) = &mut matchmade
-                        && m.started
                         && m.countdown.is_none()
                         && host.guests.iter().any(|g| g.id == from)
                         && host.readiers
@@ -863,7 +861,6 @@ pub(crate) async fn run(
                     // (One during a race counts for the wait after it.)
                     Message::Vote { track } => if let Some(host) = &host
                         && let Some(m) = &mut matchmade
-                        && m.started
                         && m.countdown.is_none()
                         && host.guests.iter().any(|g| g.id == from)
                         && m.vote(from, track)
@@ -1530,7 +1527,10 @@ pub(crate) async fn run(
         }
 
         // A match's host keeps the matchmaker told how its lobby stands, for it to send players
-        // into its free places between races (MATCHMAKING.md, backfill). Not hosting ends it.
+        // into its free places once the match's own players are in (MATCHMAKING.md, backfill).
+        // During a race too: who comes waits in the lobby for the next (`RACE_IN_PROGRESS`), or
+        // races this one if it is in before the countdown ends. Not while a race is being
+        // started (its roster is being made) or the lobby handed over. Not hosting ends it.
         match (&host, &matchmade) {
             (Some(host), Some(m)) => {
                 let registration = registration.get_or_insert_with(|| register(&endpoint, m.server, m.lobby));
@@ -1540,12 +1540,10 @@ pub(crate) async fn run(
                     .filter(|g| g.hello.is_some() && !host.gone.contains(&g.id))
                     .collect();
                 let karts = 1 + host.extras.len() + here.iter().map(|g| 1 + g.extras.len()).sum::<usize>();
-                let between = m.started
-                    && !host.racing
-                    && m.countdown.is_none()
+                let takes = m.gathered(1 + here.len(), Instant::now())
                     && host.start_wanted.is_none()
                     && host.handoff.is_none();
-                let open = if between { MAX_PLAYERS.saturating_sub(karts) as u8 } else { 0 };
+                let open = if takes { MAX_PLAYERS.saturating_sub(karts) as u8 } else { 0 };
                 let players: Vec<(EndpointId, String)> = std::iter::once((me, nick.clone()))
                     .chain(here.iter().map(|g| (g.id, g.nick.1.clone())))
                     .collect();
@@ -1563,9 +1561,9 @@ pub(crate) async fn run(
             }
         }
 
-        // A match's race is counted down once its players are in: for its first race all of them
-        // (or at the deadline whoever came), for the next ones at `Matchmade::next`. When the
-        // count is up it starts with whoever is there.
+        // A match's race is counted down at `Matchmade::next`, which everyone ready brings on
+        // (once the match's players are in: `Matchmade::gathered`). When the count is up it
+        // starts with whoever is there.
         if let Some(host) = &mut host
             && let Some(m) = &mut matchmade
             && !host.racing
@@ -1576,17 +1574,12 @@ pub(crate) async fn run(
             let present = present(host, me);
             let mut count_to: Option<Instant> = None;
             match m.countdown {
-                None if !m.started => {
-                    let late = now >= m.deadline;
-                    if present.len() == m.players.len() || (late && present.len() >= 2) {
-                        count_to = Some(now + Duration::from_secs(COUNTDOWN_SECONDS));
-                    } else if late {
-                        return Err("nobody else of the match came".into());
-                    }
-                }
                 None => {
-                    if present.len() < 2 {
+                    if present.len() < 2 && m.started {
                         return Err("Everyone else left the match".into());
+                    }
+                    if present.len() < 2 && now >= m.deadline {
+                        return Err("nobody else of the match came".into());
                     }
                     let waits = m.wait_next(now);
                     let hurried = m.hurry(&present, now);

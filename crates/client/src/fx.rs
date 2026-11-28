@@ -372,7 +372,7 @@ fn show(
 }
 
 fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize, podium: bool) {
-    let (panel, rows) = crate::rect_menu::spawn(commands, size, "EFFECTS", crate::rect_menu::TitleAlign::Left, |node| {
+    let (panel, rows) = crate::rect_menu::spawn(commands, size, "EFFECTS", None, |node| {
         node.right = size.x(24);
         node.top = size.y(40);
     });

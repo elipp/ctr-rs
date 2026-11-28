@@ -57,13 +57,13 @@ pub enum Action {
     QuickPlay { rejoin: bool },
     /// Accept the match found, or decline it.
     AnswerMatch(bool),
-    /// Quick play, after a race: ready for the next one (`/quick ready`), which starts sooner
+    /// Quick play, waiting for a race: ready for the next one (`/quick ready`), which starts sooner
     /// once everyone is.
     QuickReady,
-    /// Quick play, after a race: not ready after all (`/quick unready`), until the next race's
+    /// Quick play, waiting for a race: not ready after all (`/quick unready`), until the next race's
     /// countdown.
     QuickUnready,
-    /// Quick play, after a race: vote for the next race's track (`/quick vote <track>`).
+    /// Quick play, waiting for a race: vote for the next race's track (`/quick vote <track>`).
     VoteTrack(u32),
     /// Join a lobby to watch its races, not to drive in them.
     SpectateLobby(Ticket),
@@ -183,6 +183,8 @@ pub enum Action {
     SetConfig(crate::config::Setting),
     /// Toast the version of this build (`version.rs`).
     Version,
+    /// Show the welcome box again (`welcome.rs`).
+    Welcome,
     /// Print the player key (`player.rs`).
     ScoreKeyExport,
     /// Replace the player key with one exported before.
@@ -367,6 +369,8 @@ impl Action {
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
             "version" => Err("Usage: /version".into()),
+            "welcome" if rest.is_empty() => Ok(Action::Welcome),
+            "welcome" => Err("Usage: /welcome".into()),
             "clear" if rest.is_empty() => Ok(Action::Clear),
             "clear" => Err("Usage: /clear".into()),
             "net" => Action::net(rest),
@@ -1339,42 +1343,10 @@ impl Plugin for CommandPlugin {
         app.init_resource::<CommandLine>()
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
-            .add_systems(Update, (open, submit, show, show_offer_picture).chain())
-            .add_systems(Update, greet.run_if(crate::drive::driving));
+            .add_systems(Update, (open, submit, show, show_offer_picture).chain());
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, tell_page.after(submit));
     }
-}
-
-const GREETING: &str =
-    "Press Enter and / to see the list of available commands, or Escape/Start button to show the menu.";
-/// The page's touch controls: a tap on the console opens the line, and its Menu button is top
-/// right (`web/play.html`).
-#[cfg(target_arch = "wasm32")]
-const TOUCH_GREETING: &str =
-    "Tap here and type / to see the list of available commands, or the Menu button (top right) to show the menu.";
-const GREETING_COLOR: Color = Color::srgb(1.0, 0.95, 0.4);
-
-/// Once, when the first level is up (behind the loading screen it would go unseen).
-fn greet(
-    mut greeted: Local<bool>,
-    loading: Option<Res<crate::loading::Loading>>,
-    mut logs: MessageWriter<Log>,
-) {
-    if *greeted || loading.is_some() {
-        return;
-    }
-    *greeted = true;
-    logs.write(Log::default().then_bold("Welcome to ctr-rs!", GREETING_COLOR));
-    #[cfg(target_arch = "wasm32")]
-    let greeting = if crate::web::has_touch() {
-        TOUCH_GREETING
-    } else {
-        GREETING
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let greeting = GREETING;
-    logs.write(Log::colored(greeting, GREETING_COLOR));
 }
 
 /// Which of the modifier keys are held.

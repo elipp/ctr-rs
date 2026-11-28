@@ -2,12 +2,9 @@
 //! by default) is held, and for [`STANDINGS_SECONDS`] after a cup's standings come in. A row
 //! for each kart of the race (or each player of the lobby between races) and each driver the cup
 //! has scored who is gone since: the place, the character's portrait, the name, the points of
-//! the last race and of the cup, and the ping ("BOT" for a bot). In a cup the rows go by points.
+//! the last race and of the cup, and the ping ("BOT" for a bot; with the debug HUD, the way to
+//! the player after it: a green "D" for direct, a yellow "R" for a relay). In a cup the rows go by points.
 //! (Not retail.)
-//!
-//! While a quick play match gathers for its first race, the table is up by itself with a line
-//! for each place of the grid: who took it, or that a player may come (and a bot drive it if
-//! none does).
 //!
 //! A score server board (`/score top`, [`TopBoard`]) goes up in the same table: while it loads,
 //! then for [`TOP_SECONDS`] or until Back dismisses it. The last one comes back while the key is
@@ -21,7 +18,7 @@ use crate::controls::Control;
 use crate::font::CtrText;
 use crate::lobby::Lobby;
 use crate::lobby::cup::Who;
-use crate::portrait_row::{HIGHLIGHT, Portraits, portrait_rect, portraits};
+use crate::portrait_row::{DIRECT, HIGHLIGHT, Portraits, portrait_rect, portraits};
 
 /// How long the scoreboard shows by itself when a cup's standings come in.
 const STANDINGS_SECONDS: f32 = 10.0;
@@ -116,6 +113,8 @@ struct Line {
     /// None for a place nobody has taken: no portrait.
     character: Option<u8>,
     cells: Vec<String>,
+    /// After the [`PING`] cell: whether the way to the player is a relay (see the module's).
+    route: Option<bool>,
     you: bool,
 }
 
@@ -254,16 +253,14 @@ fn show(
     // Holding the key in a lobby asks for the lobby's table, so it wins over a board.
     let table = if menu.open {
         None
-    } else if lobby.gathering(&race_on) {
-        Some(gathering(&lobby))
     } else if held && lobby.is_open() {
-        Some(table(&lobby, &race_on))
+        Some(table(&lobby, &race_on, config.debug_hud))
     } else if held || top.up(now) {
         // Back only dismisses a board that is up by itself.
         let hint = top.up(now).then(|| DISMISS.text(last.pad()));
         (top.table.clone()).map(|table| Table { hint, ..table })
     } else if now < shown.until && lobby.is_open() {
-        Some(table(&lobby, &race_on))
+        Some(table(&lobby, &race_on, config.debug_hud))
     } else {
         None
     };
@@ -286,7 +283,7 @@ fn show(
 }
 
 /// What the table shows now.
-fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
+fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn, routes: bool) -> Table {
     let drivers = drivers(lobby, race_on);
     let standings = lobby.standings.as_ref();
     let ping = |driver: &Driver| match &driver.key {
@@ -308,6 +305,9 @@ fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
                 .and_then(|s| score(&s.totals, &driver.who))
                 .unwrap_or(0),
             ping: ping(driver),
+            route: (driver.key.as_ref())
+                .filter(|_| routes && !driver.you)
+                .and_then(|key| lobby.relayed.get(key).copied()),
             you: driver.you,
         })
         .collect();
@@ -329,6 +329,7 @@ fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
                     "left"
                 }
                 .into(),
+                route: None,
                 you: false,
             });
         }
@@ -366,6 +367,7 @@ fn table(lobby: &Lobby, race_on: &crate::race_on::RaceOn) -> Table {
                 } else {
                     vec![line.name, line.ping]
                 },
+                route: line.route,
                 you: line.you,
             }
         })
@@ -387,45 +389,8 @@ struct Driven {
     gained: Option<u32>,
     points: u32,
     ping: String,
+    route: Option<bool>,
     you: bool,
-}
-
-/// A quick play match gathering: a line for each place of the grid, the players there first,
-/// then the free places, the last of which the host's bots take if no player does.
-fn gathering(lobby: &Lobby) -> Table {
-    let rows = lobby.rows();
-    let free = race::MAX_KARTS.saturating_sub(rows.len());
-    let bots = lobby.next_bots();
-    let players = rows.into_iter().map(|row| (Some(row.character), row.name, row.key, row.you));
-    let waiting = (0..free).map(|n| {
-        let note = if n >= free - bots { "BOT" } else { "" };
-        (None, "Waiting for player...".to_string(), note.to_string(), false)
-    });
-    let lines = (players.chain(waiting).enumerate())
-        .map(|(place, (character, name, key, you))| {
-            let ping = match character {
-                None => key,
-                Some(_) if you => "you".into(),
-                Some(_) => lobby
-                    .pings
-                    .get(&key)
-                    .map_or("...".to_string(), |ping| format!("{} ms", ping.as_millis())),
-            };
-            Line {
-                place: place as u32 + 1,
-                character,
-                cells: vec![name, ping],
-                you,
-            }
-        })
-        .collect();
-    Table {
-        title: "Quick play".into(),
-        columns: vec![NAME, PING],
-        lines,
-        footer: Some("Waiting for the players of the match".into()),
-        hint: None,
-    }
 }
 
 /// A board of the score server as a table: its own ranks, as the server ranks.
@@ -446,6 +411,7 @@ fn top_table(title: String, entries: &[score::Entry]) -> Table {
                     crate::world_record::date(entry.at),
                     note.to_string(),
                 ],
+                route: None,
                 you: crate::world_record::is_ours(entry),
             }
         })
@@ -579,7 +545,16 @@ fn spawn(commands: &mut Commands, table: &Table, image: &Handle<Image>) {
         };
         for (column, cell) in table.columns.iter().zip(&line.cells) {
             let color = if column.dim { DIM } else { color };
-            text(commands, parent, cell, FONT_SIZE, color, Some(column.width));
+            let cell = text(commands, parent, cell, FONT_SIZE, color, Some(column.width));
+            if let Some(relayed) = line.route.filter(|_| *column == PING) {
+                let (route, tint) = if relayed { (" R", HIGHLIGHT) } else { (" D", DIRECT) };
+                commands.spawn((
+                    TextSpan::new(route),
+                    TextFont::from_font_size(FONT_SIZE),
+                    TextColor(tint),
+                    ChildOf(cell),
+                ));
+            }
         }
     }
     if let Some(footer) = &table.footer {
@@ -614,16 +589,18 @@ fn text(
     size: f32,
     color: Color,
     width: Option<f32>,
-) {
-    commands.spawn((
-        Text::new(text),
-        TextFont::from_font_size(size),
-        TextColor(color),
-        Node {
-            width: width.map_or(Val::Auto, Val::Px),
-            ..default()
-        },
-        Pickable::IGNORE,
-        ChildOf(parent),
-    ));
+) -> Entity {
+    commands
+        .spawn((
+            Text::new(text),
+            TextFont::from_font_size(size),
+            TextColor(color),
+            Node {
+                width: width.map_or(Val::Auto, Val::Px),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(parent),
+        ))
+        .id()
 }

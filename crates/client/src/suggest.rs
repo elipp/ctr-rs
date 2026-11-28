@@ -389,6 +389,7 @@ pub(crate) const COMMANDS: &[Spec] = &[
         )],
     ),
     leaf("version", "Show the version of this build"),
+    leaf("welcome", "Show the welcome box again"),
     leaf("clear", "Empty the console"),
     node(
         "net",
@@ -690,6 +691,7 @@ mod tests {
                 "character",
                 "config",
                 "version",
+                "welcome",
                 "clear",
                 "net",
                 "cache",

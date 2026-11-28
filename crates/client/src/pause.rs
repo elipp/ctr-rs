@@ -497,7 +497,7 @@ fn items(
     if lobby.unanswered().is_some() {
         items.insert(0, entry(Item::MatchFound, "Match found"));
     }
-    if lobby.between_matched_races(race_on) && !lobby.again {
+    if lobby.matched_waiting(race_on) && !lobby.again {
         items.insert(
             0,
             entry(Item::QuickReady, "Ready").help(
@@ -507,7 +507,7 @@ fn items(
         );
     }
     // (Not once the countdown has told the race.)
-    if lobby.between_matched_races(race_on) && lobby.again && lobby.starting.is_none() {
+    if lobby.matched_waiting(race_on) && lobby.again && lobby.starting.is_none() {
         items.insert(0, entry(Item::QuickUnready, "Not ready"));
     }
     // (Not a lobby's: the host restarts and ends it for everyone, as `/race restart|stop`.)
@@ -1888,6 +1888,43 @@ fn gradient(picked: bool) -> Gradient {
     }
 }
 
+/// The menu's panel, with `title` at its top, in `parent`; what goes in it after is centred under
+/// the title. Every box of the kind is this one (`rect_menu`'s too).
+pub(crate) fn spawn_panel(
+    commands: &mut Commands,
+    parent: Entity,
+    size: &TexelSize,
+    title: &str,
+) -> Entity {
+    let panel = commands
+        .spawn((
+            ChildOf(parent),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                padding: UiRect::axes(size.x(12), size.y(6)),
+                border: UiRect::axes(size.x(1), size.y(1)),
+                ..default()
+            },
+            BackgroundColor(PANEL),
+            BorderColor::all(BORDER),
+            BoxShadow::new(SHADOW, size.x(4), size.y(4), Val::ZERO, Val::ZERO),
+        ))
+        .id();
+    commands.spawn((
+        ChildOf(panel),
+        CtrText::new(title, Font::Large, Gradient::ORANGE),
+        Node {
+            margin: UiRect::bottom(size.y(TITLE_GAP)),
+            ..default()
+        },
+    ));
+    panel
+}
+
+/// Under the panel's title.
+const TITLE_GAP: usize = 4;
+
 /// The menu, and the about page's list if it shows it.
 #[allow(clippy::too_many_arguments)]
 fn spawn(
@@ -1918,29 +1955,7 @@ fn spawn(
             GlobalZIndex(i32::MAX),
         ))
         .id();
-    let panel = commands
-        .spawn((
-            ChildOf(root),
-            Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(size.x(12), size.y(6)),
-                border: UiRect::axes(size.x(1), size.y(1)),
-                ..default()
-            },
-            BackgroundColor(PANEL),
-            BorderColor::all(BORDER),
-            BoxShadow::new(SHADOW, size.x(4), size.y(4), Val::ZERO, Val::ZERO),
-        ))
-        .id();
-    commands.spawn((
-        ChildOf(panel),
-        CtrText::new(title, Font::Large, Gradient::ORANGE),
-        Node {
-            margin: UiRect::bottom(size.y(4)),
-            ..default()
-        },
-    ));
+    let panel = spawn_panel(commands, root, size, &title);
     if let Some(list) = about {
         spawn_about(commands, panel, list, size);
     }

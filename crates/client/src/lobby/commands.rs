@@ -65,9 +65,9 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         Action::AnswerMatch(_) if lobby.unanswered().is_none() => "No match to answer",
         Action::QuickPlay { rejoin: true } if lobby.last_match.is_none() => "No match to rejoin",
         Action::QuickReady | Action::QuickUnready | Action::VoteTrack(_)
-            if !lobby.between_matched_races(race_on) =>
+            if !lobby.matched_waiting(race_on) =>
         {
-            "Only after a quick play race"
+            "Only while a quick play lobby waits for a race"
         }
         Action::QuickReady if lobby.again => "You are ready already: waiting for the others",
         Action::QuickUnready if !lobby.again => "You are not ready yet",
@@ -693,6 +693,7 @@ pub(super) fn run(
             | Action::Character(_)
             | Action::Track(_)
             | Action::Version
+            | Action::Welcome
             | Action::ScoreKeyExport
             | Action::ScoreKeyImport(_)
             | Action::ScoreSubmit { .. }

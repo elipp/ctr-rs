@@ -170,7 +170,6 @@ pub(super) fn report(
                 retail.characters.iter_mut().for_each(on_roster);
                 stopped = false;
                 started_cup = Some(retail.cup);
-                lobby.raced = true;
                 lobby.again = false;
                 lobby.next = None;
                 lobby.starting = None;

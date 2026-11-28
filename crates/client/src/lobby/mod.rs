@@ -134,15 +134,13 @@ pub struct Lobby {
     pub(crate) queue: Option<Queue>,
     /// The session is quick play's: its lobby has a host only the session knows of.
     pub(crate) quick_play: bool,
-    /// Quick play: the match's lobby has started a race, so the next one waits for Play again.
-    raced: bool,
     /// Quick play: we said we are ready for the next race (`/quick ready`), since the last
     /// started.
     pub(crate) again: bool,
     /// How fast we have been saying we are ready or not (`net::RateLimit::ready`; none until the
     /// first, as `Default` would be chat's).
     ready_limit: Option<net::RateLimit>,
-    /// Quick play, between races: the next race, as the last `Event::Next` said.
+    /// Quick play, waiting for a race: the next race, as the last `Event::Next` said.
     pub(crate) next: Option<NextRace>,
     /// Quick play: the lobby of the last match we were in (`net::Found::lobby`), to rejoin it by
     /// (`/quick rejoin`). Kept when the lobby closes, which is when it is wanted.
@@ -603,15 +601,11 @@ impl Lobby {
         self.quick_play = true;
     }
 
-    /// Quick play: a race of the match is behind us and none is on (Play again's time).
-    pub(crate) fn between_matched_races(&self, race: &RaceOn) -> bool {
+    /// Quick play: the match's lobby is up and no race is on: before its first race, or
+    /// between two (the ready check's time).
+    pub(crate) fn matched_waiting(&self, race: &RaceOn) -> bool {
         // (A race that started is on for this, under the flag too.)
-        self.quick_play && self.queue.is_none() && self.raced && race.newest().is_none()
-    }
-
-    /// Quick play: the match's lobby is up, waiting for its players to come for its first race.
-    pub(crate) fn gathering(&self, race: &RaceOn) -> bool {
-        self.quick_play && self.queue.is_none() && !self.raced && race.newest().is_none()
+        self.quick_play && self.queue.is_none() && race.newest().is_none()
     }
 
     /// Ready for the match's next race, or not after all: false if we are toggling too fast for

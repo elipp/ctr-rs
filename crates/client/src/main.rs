@@ -126,6 +126,7 @@ mod unlit;
 mod version;
 mod weapon;
 mod weather;
+mod welcome;
 #[cfg(target_arch = "wasm32")]
 mod web;
 mod wheels;

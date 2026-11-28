@@ -406,7 +406,9 @@ impl FontAtlas {
     }
 
     /// [`layout`](Self::layout), with a `{name}` that `boxed` gives an `(id, width)` for kept
-    /// as a box that wide, spaced like a glyph. Any other `{` is just a character.
+    /// as a box that wide, spaced like a glyph. Any other `{` is just a character. A space right
+    /// after a box is half as wide: a button's glyph or keycap is a word of its own already, and
+    /// a whole space reads as a gap ("H  READY").
     pub fn layout_with<'t>(
         &self,
         text: &'t str,
@@ -416,6 +418,7 @@ impl FontAtlas {
         let mut boxes = Vec::new();
         let (mut x, mut width) = (0, 0);
         let mut chars = text.char_indices();
+        let mut after_box = false;
         while let Some((i, c)) = chars.next() {
             let named = (c == '{')
                 .then(|| text[i + 1..].find('}'))
@@ -431,6 +434,7 @@ impl FontAtlas {
                 x += w;
                 width = x;
                 x += GAP;
+                after_box = true;
                 let resume = i + 1 + end + 1;
                 while chars.offset() < resume {
                     chars.next();
@@ -438,9 +442,11 @@ impl FontAtlas {
                 continue;
             }
             if c == ' ' {
-                x += self.font.space();
+                x += if after_box { self.font.space() / 2 } else { self.font.space() };
+                after_box = false;
                 continue;
             }
+            after_box = false;
             // The large font has no `#`: it shows as the `?` of a character the fonts lack.
             let at = |i: Option<usize>| i.and_then(|i| self.glyphs.get(i));
             let Some(&glyph) = at(glyph(c)).or(at(Some(QUESTION))) else {
@@ -602,7 +608,7 @@ mod tests {
                 after_glyphs: 1
             }]
         );
-        assert_eq!(line.glyphs[1].x, ink('A') + GAP + 10 + GAP + Font::Large.space());
+        assert_eq!(line.glyphs[1].x, ink('A') + GAP + 10 + GAP + Font::Large.space() / 2);
         // Unnamed or unclosed, `{` is just a character.
         assert!(large.layout_with("{y}", boxed).boxes.is_empty());
         assert_eq!(large.layout_with("{x", boxed).glyphs.len(), 2);

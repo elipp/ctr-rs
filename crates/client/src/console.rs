@@ -60,6 +60,8 @@ const BACKGROUND_ALPHA: f32 = 0.25;
 /// Seconds the text stays up after the last line or scroll, and how long it then fades for. The
 /// background goes first, after `BACKGROUND_HOLD_SECONDS`.
 const HOLD_SECONDS: f32 = 60.0;
+/// [`HOLD_SECONDS`] while a race is on: nobody chats then, and the lines are in the way.
+const RACE_HOLD_SECONDS: f32 = 8.0;
 const BACKGROUND_HOLD_SECONDS: f32 = 2.0;
 const FADE_SECONDS: f32 = 1.0;
 
@@ -133,15 +135,6 @@ impl Log {
         });
         self
     }
-
-    /// Adds a piece in bold after the others.
-    pub fn then_bold(mut self, text: impl Into<String>, color: Color) -> Log {
-        self = self.then(text, color);
-        if let Some(piece) = self.pieces.last_mut() {
-            piece.bold = true;
-        }
-        self
-    }
 }
 
 /// The lines, and the part of them that is shown.
@@ -157,6 +150,8 @@ pub struct Console {
     active_at: f32,
     /// When the lines were last brought back whole: by opening the command line or scrolling.
     revealed_at: f32,
+    /// [`HOLD_SECONDS`] or [`RACE_HOLD_SECONDS`], as `fade` last saw.
+    hold: f32,
 }
 
 impl Default for Console {
@@ -167,6 +162,7 @@ impl Default for Console {
             version: 0,
             active_at: f32::NEG_INFINITY,
             revealed_at: f32::NEG_INFINITY,
+            hold: HOLD_SECONDS,
         }
     }
 }
@@ -190,7 +186,7 @@ impl Console {
     /// time is up. The ones that have are back while the view is scrolled back, and go together
     /// as soon as that ends.
     fn text_alpha(&self, born: f32, now: f32) -> f32 {
-        opacity(now - born, HOLD_SECONDS).max(opacity(now - self.revealed_at, 0.0))
+        opacity(now - born, self.hold).max(opacity(now - self.revealed_at, 0.0))
     }
 
     /// Scrolls to older lines (positive) or newer (negative).
@@ -481,6 +477,7 @@ fn fade(
     mut console: ResMut<Console>,
     line: Res<CommandLine>,
     time: Res<Time<Real>>,
+    race_on: Res<crate::race_on::RaceOn>,
     mut windows: Query<&mut Visibility, With<ConsoleWindow>>,
     mut areas: Query<&mut BackgroundColor, With<LogArea>>,
     mut texts: Query<(&Ink, &Born, &mut TextColor)>,
@@ -493,6 +490,14 @@ fn fade(
     }
     if console.scroll > 0 {
         console.revealed_at = now;
+    }
+    let hold = if race_on.is_on() {
+        RACE_HOLD_SECONDS
+    } else {
+        HOLD_SECONDS
+    };
+    if console.hold != hold {
+        console.hold = hold;
     }
     let idle = now - console.active_at;
     let background = opacity(idle, BACKGROUND_HOLD_SECONDS);
