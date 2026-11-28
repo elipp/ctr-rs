@@ -5,10 +5,13 @@ use bevy::prelude::*;
 use render::font::{Font, Gradient};
 use render::mesh::SCALE;
 
+use crate::controls::Control;
 use crate::drive::ChaseCamera;
 use crate::font::CtrText;
 use crate::ghost::{GhostKart, Source};
 use crate::kart::KartSlot;
+use crate::pad_glyph::PadGlyph;
+use crate::prompt::Prompt;
 
 /// Whose kart a name is over.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,12 +44,16 @@ pub(crate) struct NameText;
 #[derive(Component)]
 pub(crate) struct NameOutline(Vec2);
 
-/// Who the camera follows, once we have finished: the [`WatchingName`] over the hint.
+/// Who the camera follows, once we have finished: its [`WatchingLine`]s.
 #[derive(Component)]
 pub(crate) struct WatchingLabel;
 
-#[derive(Component)]
-pub(crate) struct WatchingName;
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchingLine {
+    Name,
+    /// What steps the camera: R1 and L1 (`drive::input`'s Hop and Hop 2).
+    Hint,
+}
 
 /// How far above the kart's position the name floats, in the game's units, clear of the kart and
 /// its driver (retail's 25 is down on the driver's head). The box's bottom edge is a further
@@ -124,7 +131,8 @@ pub(crate) fn overhead(
         Without<OverheadName>,
     >,
     mut watching: Query<(Entity, &mut Visibility), With<WatchingLabel>>,
-    mut watching_name: Query<&mut CtrText, With<WatchingName>>,
+    mut watching_lines: Query<(&WatchingLine, &mut CtrText)>,
+    last: Res<crate::last_input::LastInput>,
 ) {
     // (Not in a split screen: the plates are placed by the one camera.)
     let split = drive.is_some_and(|d| d.views().len() > 1);
@@ -188,26 +196,17 @@ pub(crate) fn overhead(
             .spawn((
                 WatchingLabel,
                 Visibility::Hidden,
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(60.0),
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
+                crate::bands::Band::Watching.node(),
                 Pickable::IGNORE,
             ))
             .with_children(|label| {
-                label.spawn((
-                    WatchingName,
-                    CtrText::new("", Font::Middle, Gradient::YELLOW),
-                    Pickable::IGNORE,
-                ));
-                label.spawn((
-                    CtrText::new("R1 / L1: change the camera", Font::Middle, Gradient::YELLOW),
-                    Pickable::IGNORE,
-                ));
+                for line in [WatchingLine::Name, WatchingLine::Hint] {
+                    label.spawn((
+                        line,
+                        CtrText::new("", Font::Middle, Gradient::YELLOW),
+                        Pickable::IGNORE,
+                    ));
+                }
             });
     }
     let followed = race.watching != race.slot;
@@ -216,9 +215,17 @@ pub(crate) fn overhead(
     } else {
         String::new()
     };
-    for mut text in &mut watching_name {
-        if text.text != name {
-            text.text = name.clone();
+    let pad = last.pad();
+    let next = Prompt::bound(PadGlyph::R, config.controls.keys(Control::Hop), "");
+    let back = Prompt::bound(PadGlyph::L, config.controls.keys(Control::Hop2), "");
+    let hint = format!("{} / {} CAMERA", back.button(pad), next.button(pad));
+    for (line, mut text) in &mut watching_lines {
+        let wanted = match line {
+            WatchingLine::Name => &name,
+            WatchingLine::Hint => &hint,
+        };
+        if text.text != *wanted {
+            text.text = wanted.clone();
         }
     }
     for (_, mut visibility) in &mut watching {

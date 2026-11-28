@@ -31,7 +31,28 @@ pub(crate) const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.9);
 pub(crate) const HIGHLIGHT: Color = Color::srgb(1.0, 0.9, 0.2);
 
 /// The colour of the "D" of a direct way: the green of the toasts of who joined.
-const DIRECT: Color = Color::srgb(0.4, 1.0, 0.4);
+const DIRECT: Color = crate::toast::SUCCESS_COLOR;
+
+/// The pings' and the lobby's watchers' grey.
+pub(crate) const DIM: Color = Color::srgb(0.8, 0.8, 0.8);
+
+/// Around a name's text, in its [`tag`].
+pub(crate) const TAG_PADDING: UiRect = UiRect::axes(Val::Px(4.0), Val::Px(1.0));
+
+/// A name's or a ping's text on [`BACKGROUND`]; its node (with [`TAG_PADDING`] for a name) is the
+/// caller's.
+pub(crate) fn tag(
+    text: impl Into<String>,
+    size: f32,
+    color: Color,
+) -> (Text, TextFont, TextColor, BackgroundColor) {
+    (
+        Text::new(text),
+        TextFont::from_font_size(size),
+        TextColor(color),
+        BackgroundColor(BACKGROUND),
+    )
+}
 
 /// The host's crown, golden, and its size in pixels. Outlined as the names over the karts are,
 /// which reads over any portrait without a box.
@@ -185,16 +206,11 @@ pub(crate) fn spawn_tags(
             ChildOf(portrait),
         ))
         .id();
-    let tag = commands
+    let name_tag = commands
         .spawn((
-            Text::new(name),
-            TextFont {
-                font_size: FONT_SIZE.into(),
-                ..default()
-            },
-            BackgroundColor(BACKGROUND),
+            tag(name, FONT_SIZE, Color::WHITE),
             Node {
-                padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
+                padding: TAG_PADDING,
                 ..default()
             },
             Pickable::IGNORE,
@@ -204,13 +220,7 @@ pub(crate) fn spawn_tags(
     let ping = commands
         .spawn((
             PingLabel(key.to_string()),
-            Text::new(""),
-            TextFont {
-                font_size: PING_FONT_SIZE.into(),
-                ..default()
-            },
-            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-            BackgroundColor(BACKGROUND),
+            tag("", PING_FONT_SIZE, DIM),
             // Up by half its own height, for its middle to be the portrait's, and a little left,
             // over the portrait's edge.
             UiTransform::from_translation(Val2::new(hud::x(-2.0), Val::Percent(-50.0))),
@@ -230,14 +240,11 @@ pub(crate) fn spawn_tags(
     commands.spawn((
         RouteSpan(key.to_string()),
         TextSpan::new(""),
-        TextFont {
-            font_size: PING_FONT_SIZE.into(),
-            ..default()
-        },
+        TextFont::from_font_size(PING_FONT_SIZE),
         TextColor(HIGHLIGHT),
         ChildOf(ping),
     ));
-    tag
+    name_tag
 }
 
 /// Writes each player's ping, and shows the label once there is one (none for us, nor before

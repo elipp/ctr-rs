@@ -10,11 +10,16 @@ use render::font::Font;
 #[derive(Component)]
 pub(super) struct Placing;
 
+/// How often the place changes colour, a second: slower than the countdown's, as it stays up
+/// (10 hurt the eyes).
+const FLASH_HZ: f32 = 4.0;
+
 /// Shows our place from the moment our kart crosses the line, and takes it away with the race.
 pub(super) fn placing(
     mut commands: Commands,
     race_on: Res<crate::race_on::RaceOn>,
     sim: Res<crate::props::Sim>,
+    time: Res<Time<Real>>,
     row: Query<(Entity, &Children), With<Placing>>,
     mut texts: Query<&mut CtrText>,
 ) {
@@ -32,36 +37,30 @@ pub(super) fn placing(
         return;
     };
     let text = format!("You came in {}", ordinal(place));
+    let on = crate::blink::on(time.elapsed_secs(), 1.0 / FLASH_HZ);
+    let gradient = crate::blink::flash(on);
     // (It follows the sim, which a rollback can put right.)
     if let Ok((_, children)) = row.single() {
         for &child in children {
-            if let Ok(mut shown) = texts.get_mut(child)
-                && shown.text != text
-            {
+            let Ok(mut shown) = texts.get_mut(child) else {
+                continue;
+            };
+            if shown.text != text {
                 shown.text = text.clone();
+            }
+            if shown.gradient != gradient {
+                shown.gradient = gradient;
             }
         }
         return;
     }
-    commands
-        .spawn((
+    commands.spawn((
             Placing,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Percent(30.0),
-                width: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
             GlobalZIndex(1),
-            Pickable::IGNORE,
-        ))
-        .with_child(
-            CtrText::new(
-                text,
-                Font::Middle,
-                crate::toast::gradient(Color::srgb(1.0, 0.9, 0.2)),
-            )
-            .fixed(crate::toast::texel_size(48.0)),
-        );
+            crate::bands::line(
+                crate::bands::Band::Placing,
+                CtrText::new(text, Font::Large, gradient)
+                    .fixed(crate::hud::PIXEL),
+            ),
+        ));
 }

@@ -8,8 +8,13 @@ use n0_future::time::Instant;
 pub const CHAT_BURST: u32 = 5;
 pub const CHAT_PER_SECOND: f32 = 0.5;
 
-/// What the host allows beyond [`CHAT_BURST`]: lines that left a player in time can arrive
-/// bunched up, and the player is not at fault for it.
+/// How many times a player can say it is ready or not at once (quick play), and how often after
+/// that: everyone in the lobby is told each time.
+pub const READY_BURST: u32 = 3;
+pub const READY_PER_SECOND: f32 = 0.5;
+
+/// What the host allows beyond a burst: what left a player in time can arrive bunched up, and the
+/// player is not at fault for it.
 const HOST_SLACK: u32 = 2;
 
 #[derive(Clone, Debug)]
@@ -39,6 +44,17 @@ impl RateLimit {
     /// The limit the host puts on a guest's chat: a little more than the guest keeps to.
     pub fn chat_for_host(now: Instant) -> RateLimit {
         RateLimit::new(CHAT_BURST + HOST_SLACK, CHAT_PER_SECOND, now)
+    }
+
+    /// The limit a player puts on its own ready and unready.
+    pub fn ready(now: Instant) -> RateLimit {
+        RateLimit::new(READY_BURST, READY_PER_SECOND, now)
+    }
+
+    /// The limit the host puts on a guest's ready and unready: a little more than the guest
+    /// keeps to.
+    pub fn ready_for_host(now: Instant) -> RateLimit {
+        RateLimit::new(READY_BURST + HOST_SLACK, READY_PER_SECOND, now)
     }
 
     /// Whether a go is allowed at `now`, which takes a token if so.

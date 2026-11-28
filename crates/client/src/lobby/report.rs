@@ -58,11 +58,10 @@ pub(super) fn report(
                 copy_to_clipboard(format!("/lobby join {ticket}"));
                 lobby.list("");
                 toasts.write(
-                    Toast::new(
+                    Toast::success(
                         "Lobby created!\nJoin command copied to clipboard".to_string(),
                         3000,
-                    )
-                    .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+                    ),
                 );
             }
             Event::Promoted { ticket, public } => promoted = Some((ticket, public)),
@@ -262,11 +261,10 @@ pub(super) fn report(
         copy_to_clipboard(format!("/lobby join {ticket}"));
         lobby.list("");
         toasts.write(
-            Toast::new(
+            Toast::success(
                 "You are now the host!\nJoin command copied to clipboard".to_string(),
                 4000,
-            )
-            .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+            ),
         );
     }
     for (key, rtt, relay) in rtts {
@@ -299,8 +297,7 @@ pub(super) fn report(
         Some(Err(why)) => {
             warn!("could not list the lobby in the realm: {why}");
             toasts.write(
-                Toast::new(format!("Could not list the lobby: {why}"), 4000)
-                    .color(Color::srgb(1.0, 0.4, 0.4)),
+                Toast::error(format!("Could not list the lobby: {why}"), 4000),
             );
         }
         None => {}
@@ -363,13 +360,12 @@ pub(super) fn report(
             lobby.fetching = None;
         }
         toasts.write(
-            Toast::new(format!("Got the track {}", maps::name(track)), 2500)
-                .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+            Toast::success(format!("Got the track {}", maps::name(track)), 2500),
         );
     }
     if let Some(why) = map_failed {
         warn!("{why}");
-        toasts.write(Toast::new(why, 6000).color(Color::srgb(1.0, 0.3, 0.3)));
+        toasts.write(Toast::error(why, 6000));
         // The race cannot start without the map: the others would wait for us for good.
         lobby.close(&mut race_on);
         return;
@@ -431,13 +427,12 @@ pub(super) fn report(
                     }
                     Some(_) => continue,
                 };
-                toasts.write(Toast::new(text, 3000).color(Color::srgb(0.4, 1.0, 0.4)));
+                toasts.write(Toast::success(text, 3000));
             }
             for was in &lobby.roster {
                 if members.iter().all(|now| now.key != was.key) {
                     toasts.write(
-                        Toast::new(format!("{} left", was.label), 3000)
-                            .color(Color::srgb(1.0, 0.6, 0.3)),
+                        Toast::warning(format!("{} left", was.label), 3000),
                     );
                 }
             }
@@ -511,11 +506,10 @@ pub(super) fn report(
                 net.names,
             );
             toasts.write(
-                Toast::new(
+                Toast::error(
                     format!("Out of sync with player {} (tick {})", d.slot, d.tick),
                     8000,
-                )
-                .color(Color::srgb(1.0, 0.3, 0.3)),
+                ),
             );
         }
     }
@@ -526,7 +520,7 @@ pub(super) fn report(
         // Back to where we started: no lobby, no race.
         lobby.close(&mut race_on);
         toasts.write(
-            Toast::new(format!("Left the lobby: {why}"), 5000).color(Color::srgb(1.0, 0.3, 0.3)),
+            Toast::error(format!("Left the lobby: {why}"), 5000),
         );
     }
 }

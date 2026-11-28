@@ -176,7 +176,7 @@ pub(super) fn drive_tick(
                 // (They hold a neutral pad then, below: the race does not wait for them.)
                 Err(e) => {
                     error!("online bots: {e}");
-                    toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    toasts.write(Toast::error(e, 4000));
                 }
             }
         }
@@ -281,8 +281,7 @@ pub(super) fn drive_tick(
             net.gone[slot] = true;
             let name = race.labels.get(slot).map_or("?", String::as_str);
             toasts.write(
-                Toast::new(format!("Player {name} left the race"), 3000)
-                    .color(Color::srgb(1.0, 0.6, 0.3)),
+                Toast::warning(format!("Player {name} left the race"), 3000),
             );
         }
     }
@@ -733,7 +732,7 @@ pub(super) fn debug_actions(
                 debug!("(debug) stalling for {time:?}");
                 stall(*time);
             } else {
-                toasts.write(Toast::new("Only online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+                toasts.write(Toast::error("Only online", 2500));
             }
             continue;
         }
@@ -746,7 +745,7 @@ pub(super) fn debug_actions(
             continue;
         }
         if race_on.shared() {
-            toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error("Not online", 2500));
             continue;
         }
         let own = sim.own;

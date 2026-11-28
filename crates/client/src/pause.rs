@@ -55,6 +55,7 @@ use std::hash::BuildHasher;
 
 use crate::LevelNumber;
 use crate::about;
+use crate::prompt::Prompt;
 use crate::accordion::{self, Accordion, HasAccordion, Steer};
 use crate::bots_menu::{self, BotsItem};
 use crate::command::Action;
@@ -296,38 +297,13 @@ pub(crate) struct Entry {
     prompt: Option<Prompt>,
 }
 
-/// A button a row takes and what it does, shown as the pad's or the key's, whichever we last used
-/// (`last_input`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Prompt {
-    pad: crate::pad_glyph::PadGlyph,
-    key: KeyCode,
-    does: &'static str,
-}
-
-impl Prompt {
-    fn text(self, last: crate::last_input::LastInput) -> String {
-        let button = if last.pad() {
-            format!("{{{}}}", self.pad.name())
-        } else {
-            format!("{{key:{}}}", controls::label(self.key))
-        };
-        // (The game's font has capitals only; a keycap's is Inconsolata, and keeps the label's case.)
-        format!("{button} {}", self.does.to_uppercase())
-    }
-}
-
 /// What removes the picked row's thing (`remove`).
 const REMOVE_KEY: KeyCode = KeyCode::Delete;
 const REMOVE_BUTTON: GamepadButton = GamepadButton::West;
 
 /// The prompt of a row that [`REMOVE_KEY`] or [`REMOVE_BUTTON`] removes: `does` is what it says.
 pub(crate) fn remove_prompt(does: &'static str) -> Prompt {
-    Prompt {
-        pad: crate::pad_glyph::PadGlyph::Square,
-        key: REMOVE_KEY,
-        does,
-    }
+    Prompt::new(crate::pad_glyph::PadGlyph::Square, REMOVE_KEY, does)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -970,7 +946,7 @@ pub(crate) fn input(
             menu.capturing = None;
             sound(MENU_BACK_SFX);
         } else if let Some(key) = first_press {
-            let refuse = |why: String| Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4));
+            let refuse = |why: String| Toast::error(why, 3000);
             if let Some(what) = controls::taken(key) {
                 toasts.write(refuse(format!("{} {what}", controls::label(key))));
             } else if !controls::bindable(key) {
@@ -1488,7 +1464,7 @@ fn leave(
             true
         }
         Err(why) => {
-            toasts.write(Toast::new(why, 2000).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error(why, 2000));
             false
         }
     }
@@ -1655,7 +1631,7 @@ fn save(menu: &mut PauseMenu, config: &Config, toasts: &mut MessageWriter<Toast>
         menu.unsaved = false;
         menu.slide_keys = 0;
         if let Err(why) = config.save() {
-            toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error(why, 3000));
         }
     }
 }
@@ -1792,7 +1768,7 @@ fn show(
     if let Some((_, shown)) = shown.single().ok() {
         let picked = shown.items.get(menu.selected);
         let help = picked.and_then(|item| item.help.as_deref());
-        let prompt = picked.and_then(|item| item.prompt).map(|p| p.text(*last));
+        let prompt = picked.and_then(|item| item.prompt).map(|p| p.text(last.pad()));
         for (part, mut node, text, ctr) in &mut footer {
             let shows = match part {
                 Footer::Box => help.is_some() || prompt.is_some(),
@@ -1972,7 +1948,7 @@ fn spawn(
     // and does not change height as the pick moves between rows with and without help.
     if items.iter().any(|item| item.help.is_some() || item.prompt.is_some()) {
         let help = items.get(selected).and_then(|item| item.help.as_deref());
-        let prompt = items.get(selected).and_then(|item| item.prompt).map(|p| p.text(last));
+        let prompt = items.get(selected).and_then(|item| item.prompt).map(|p| p.text(last.pad()));
         let display = |shows: bool| if shows { Display::Flex } else { Display::None };
         let footer = commands
             .spawn((
@@ -2001,10 +1977,7 @@ fn spawn(
             ChildOf(footer),
             Footer::Help,
             Text::new(help.unwrap_or_default()),
-            crate::font::bold(TextFont {
-                font_size: (size.0.y * FOOTER_TEXELS).into(),
-                ..default()
-            }),
+            crate::font::bold(TextFont::from_font_size(size.0.y * FOOTER_TEXELS)),
             TextColor(FOOTER_TEXT),
             Node {
                 display: display(help.is_some()),
@@ -2297,10 +2270,7 @@ fn spawn_about(commands: &mut Commands, panel: Entity, list: &Accordion, size: &
         Text::new(format!(
             "ctr-rs {VERSION}\nFree software under the GNU GPL 3. Source: https://github.com/elipp/ctr-rs"
         )),
-        TextFont {
-            font_size: font_size.into(),
-            ..default()
-        },
+        TextFont::from_font_size(font_size),
         TextColor(accordion::TEXT),
         Node {
             margin: UiRect::bottom(size.y(4)),

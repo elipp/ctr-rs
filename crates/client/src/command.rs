@@ -1623,10 +1623,7 @@ const ABOUT: Color = Color::srgb(0.6, 0.6, 0.6);
 
 /// The line and its suggestions, for the console to put at the bottom of its window.
 pub(crate) fn input_row() -> impl Bundle {
-    let font = TextFont {
-        font_size: FONT_SIZE.into(),
-        ..default()
-    };
+    let font = TextFont::from_font_size(FONT_SIZE);
     (
         InputRow,
         Node {
@@ -1762,7 +1759,7 @@ fn show(
         (None, Some(c)) => (c.to_string(), &ghost[c.len_utf8()..]),
         (None, None) => (" ".to_string(), ""),
     };
-    let blink_on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
+    let blink_on = crate::blink::on(time.elapsed_secs(), BLINK_SECONDS);
     for mut text in &mut prompt {
         assign(&mut text.0, &format!("> {before}"));
     }
@@ -1808,10 +1805,7 @@ fn show(
     } else {
         Display::Grid
     };
-    let font = TextFont {
-        font_size: FONT_SIZE.into(),
-        ..default()
-    };
+    let font = TextFont::from_font_size(FONT_SIZE);
     for (name, about, color) in rows {
         commands.spawn((
             Text::new(name),

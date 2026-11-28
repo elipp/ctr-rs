@@ -237,10 +237,7 @@ pub fn spawn<R: HasAccordion>(
     list: &Accordion,
     font_size: f32,
 ) -> Entity {
-    let font = TextFont {
-        font_size: font_size.into(),
-        ..default()
-    };
+    let font = TextFont::from_font_size(font_size);
     let line = font_size * LINE;
     let lines = commands
         .spawn((

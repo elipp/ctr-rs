@@ -29,6 +29,8 @@ mod accordion;
 mod animation;
 mod assets;
 mod banner;
+mod bands;
+mod blink;
 mod between;
 mod billboard;
 mod command;
@@ -84,6 +86,7 @@ mod place;
 mod podium;
 mod portrait_row;
 mod probe;
+mod prompt;
 mod projectile;
 
 mod pb;

@@ -71,7 +71,6 @@ fn replace(key: SecretKey) -> Result<(), String> {
 }
 
 fn key_commands(mut actions: MessageReader<Action>, mut toasts: MessageWriter<Toast>) {
-    let red = Color::srgb(1.0, 0.4, 0.4);
     for action in actions.read() {
         match action {
             Action::ScoreKeyExport => match key() {
@@ -84,12 +83,12 @@ fn key_commands(mut actions: MessageReader<Action>, mut toasts: MessageWriter<To
                     console!("{}", score::secret_to_text(&key));
                 }
                 Err(why) => {
-                    toasts.write(Toast::new(why, 4000).color(red));
+                    toasts.write(Toast::error(why, 4000));
                 }
             },
             Action::ScoreKeyImport(text) => {
                 let Some(new) = score::secret_from_text(text) else {
-                    toasts.write(Toast::new("That is not a player key", 2500).color(red));
+                    toasts.write(Toast::error("That is not a player key", 2500));
                     continue;
                 };
                 let fingerprint = score::fingerprint(&new.public());
@@ -98,7 +97,7 @@ fn key_commands(mut actions: MessageReader<Action>, mut toasts: MessageWriter<To
                         toasts.write(Toast::new(format!("You are {fingerprint} now"), 2500));
                     }
                     Err(why) => {
-                        toasts.write(Toast::new(why, 4000).color(red));
+                        toasts.write(Toast::error(why, 4000));
                     }
                 }
             }

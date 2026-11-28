@@ -196,7 +196,7 @@ fn show(
     // cooldown is over.
     let strobed = driver.held_item_id != held::ROULETTE
         && driver.no_item_timer != 0
-        && sim.race.tick.is_multiple_of(2);
+        && crate::blink::on_ticks(sim.race.tick, 1);
     *visibility = if cell.is_some() && !strobed {
         Visibility::Inherited
     } else {

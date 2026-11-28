@@ -719,7 +719,6 @@ pub(crate) async fn run(
                         want_again = true;
                         if let Some(host) = &host {
                             if m.ready(me) {
-                                announce(host, &io, format!("{} is ready", name_of(me, &nick))).await;
                                 tell_next(host, m, &present(host, me), &io).await;
                             }
                         } else if let Some(connection) = &host_connection {
@@ -734,7 +733,6 @@ pub(crate) async fn run(
                         want_again = false;
                         if let Some(host) = &host {
                             if m.unready(me) {
-                                announce(host, &io, format!("{} is not ready", name_of(me, &nick))).await;
                                 tell_next(host, m, &present(host, me), &io).await;
                             }
                         } else if let Some(connection) = &host_connection {
@@ -836,23 +834,30 @@ pub(crate) async fn run(
                             }
                         }
                     }
-                    Message::Again => if let Some(host) = &host
+                    // (One who toggles too fast is not heard.)
+                    Message::Again => if let Some(host) = &mut host
                         && let Some(m) = &mut matchmade
                         && m.started
-                        && let Some(guest) = host.guests.iter().find(|g| g.id == from)
+                        && host.guests.iter().any(|g| g.id == from)
+                        && host.readiers
+                            .entry(from)
+                            .or_insert_with(|| RateLimit::ready_for_host(Instant::now()))
+                            .allow(Instant::now())
                         && m.ready(from)
                     {
-                        announce(host, &io, format!("{} is ready", name_of(from, &guest.nick.1))).await;
                         tell_next(host, m, &present(host, me), &io).await;
                     },
-                    Message::Unready => if let Some(host) = &host
+                    Message::Unready => if let Some(host) = &mut host
                         && let Some(m) = &mut matchmade
                         && m.started
                         && m.countdown.is_none()
-                        && let Some(guest) = host.guests.iter().find(|g| g.id == from)
+                        && host.guests.iter().any(|g| g.id == from)
+                        && host.readiers
+                            .entry(from)
+                            .or_insert_with(|| RateLimit::ready_for_host(Instant::now()))
+                            .allow(Instant::now())
                         && m.unready(from)
                     {
-                        announce(host, &io, format!("{} is not ready", name_of(from, &guest.nick.1))).await;
                         tell_next(host, m, &present(host, me), &io).await;
                     },
                     // (One during a race counts for the wait after it.)

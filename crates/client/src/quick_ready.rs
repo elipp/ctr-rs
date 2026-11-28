@@ -55,14 +55,9 @@ fn input(
         Device::Keys(controls) => controls.keys(Control::Speedometer),
         _ => config.controls.keys(Control::Speedometer),
     };
-    // (Triangle without the key bound.)
-    let button = match keys.first().filter(|_| !last.pad_of(&view.device)) {
-        Some(&key) => format!("{{key:{}}}", crate::controls::label(key)),
-        None => "{triangle}".to_string(),
-    };
-    let does = if lobby.again { "NOT READY" } else { "READY" };
-    // (Not uppercased whole: a keycap keeps the label's case.)
-    let text = Some(format!("{button} {does}"));
+    let does = if lobby.again { "not ready" } else { "ready" };
+    let prompt = crate::prompt::Prompt::bound(crate::pad_glyph::PadGlyph::Triangle, keys, does);
+    let text = Some(prompt.text(last.pad_of(&view.device)));
     if hint.0 != text {
         hint.0 = text;
     }

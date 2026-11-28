@@ -195,7 +195,7 @@ fn act(
         };
         let offline_only = matches!(what, Fx::Speed(_) | Fx::Freeze(_) | Fx::Step);
         if offline_only && race_on.shared() {
-            toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error("Not online", 2500));
             continue;
         }
         match what {

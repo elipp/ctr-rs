@@ -1,8 +1,8 @@
 //! The players in the lobby, down the left of the screen while no race is on, under a title in the
 //! game's font ([`TITLE`]): each one's portrait
 //! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
-//! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has a crown on its portrait's corner; in quick play, a player ready for the next race a tick on the other, and our row the button to say we are, or not, on its right
+//! names are for Bevy's `Text`: a nickname may have anything in it.) Ours come first, then the
+//! others in the lobby's order (the host's first). The host has a crown on its portrait's corner; in quick play, a player ready for the next race a tick on the other, and our row the button to say we are, or not, on its right
 //! (`quick_ready.rs`), where the others have their pings. The other players at a machine (split screen) follow
 //! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
 //! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
@@ -17,8 +17,8 @@ use crate::hud;
 use crate::leaderboard::ICON_X;
 use crate::lobby::{Lobby, Row};
 use crate::portrait_row::{
-    BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_host_badge,
-    spawn_portrait, spawn_ready_badge, spawn_tags,
+    DIM, HIGHLIGHT, PING_FONT_SIZE, TAG_PADDING, Portraits, portraits, spawn_host_badge,
+    spawn_portrait, spawn_ready_badge, spawn_tags, tag,
 };
 
 /// The column of rows, with the players it was built for, and which of them is us, the bots
@@ -72,11 +72,13 @@ fn build(
     hint: Res<crate::quick_ready::ReadyHint>,
     lists: Query<(Entity, &List)>,
 ) {
-    let players: Vec<Row> = if lobby.is_waiting(&race_on) {
+    let mut players: Vec<Row> = if lobby.is_waiting(&race_on) {
         lobby.rows()
     } else {
         Vec::new()
     };
+    // (Stable: our split screen's players keep their order, and so do the others.)
+    players.sort_by_key(|row| !row.you);
     let watchers: Vec<(String, String)> = if lobby.is_waiting(&race_on) {
         lobby
             .watchers()
@@ -171,18 +173,12 @@ fn build(
     }
     for (n, (name, _)) in watchers.iter().enumerate() {
         commands.spawn((
-            Text::new(format!("{name} (spectator)")),
-            TextFont {
-                font_size: PING_FONT_SIZE.into(),
-                ..default()
-            },
-            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-            BackgroundColor(BACKGROUND),
+            tag(format!("{name} (spectator)"), PING_FONT_SIZE, DIM),
             Node {
                 position_type: PositionType::Absolute,
                 left: hud::x(ICON_X),
                 top: hud::y(below + n as f32 * WATCHER_LINE),
-                padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
+                padding: TAG_PADDING,
                 ..default()
             },
             Pickable::IGNORE,

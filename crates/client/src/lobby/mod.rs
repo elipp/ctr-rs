@@ -139,6 +139,9 @@ pub struct Lobby {
     /// Quick play: we said we are ready for the next race (`/quick ready`), since the last
     /// started.
     pub(crate) again: bool,
+    /// How fast we have been saying we are ready or not (`net::RateLimit::ready`; none until the
+    /// first, as `Default` would be chat's).
+    ready_limit: Option<net::RateLimit>,
     /// Quick play, between races: the next race, as the last `Event::Next` said.
     pub(crate) next: Option<NextRace>,
     /// Quick play: the lobby of the last match we were in (`net::Found::lobby`), to rejoin it by
@@ -611,20 +614,22 @@ impl Lobby {
         self.quick_play && self.queue.is_none() && !self.raced && race.newest().is_none()
     }
 
-    /// Ready for the match's next race.
-    fn play_again(&mut self) {
-        if let Some(session) = &self.session {
-            session.again();
+    /// Ready for the match's next race, or not after all: false if we are toggling too fast for
+    /// it (the host holds us to the same).
+    fn say_ready(&mut self, ready: bool) -> bool {
+        let now = net::Instant::now();
+        if !self.ready_limit.get_or_insert_with(|| net::RateLimit::ready(now)).allow(now) {
+            return false;
         }
-        self.again = true;
-    }
-
-    /// Not ready for the match's next race after all.
-    fn unready(&mut self) {
         if let Some(session) = &self.session {
-            session.unready();
+            if ready {
+                session.again();
+            } else {
+                session.unready();
+            }
         }
-        self.again = false;
+        self.again = ready;
+        true
     }
 
     /// The match found, if it waits for our answer.

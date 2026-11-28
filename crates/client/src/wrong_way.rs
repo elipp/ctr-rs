@@ -11,9 +11,6 @@ use crate::font::CtrText;
 use crate::hud;
 use crate::hud_view::{HudView, HudViews};
 
-/// How far above the middle of the screen the text's top is, in lines of retail's screen.
-const ABOVE_MIDDLE: f32 = 30.0;
-
 /// The bit of the race's clock (`elapsedEventTime`, in milliseconds) that the text is on with.
 const FLASH_BIT: i32 = 0x80;
 
@@ -41,20 +38,11 @@ fn show(
         commands.spawn((
             WrongWay,
             HudView(view),
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Percent(50.0),
-                margin: UiRect::top(-hud::y(ABOVE_MIDDLE)),
-                width: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
             Visibility::Hidden,
-            Pickable::IGNORE,
-            children![(
+            crate::bands::line(
+                crate::bands::Band::WrongWay,
                 CtrText::new("WRONG WAY!", Font::Large, Gradient::ORANGE).fixed(hud::PIXEL),
-                Pickable::IGNORE,
-            )],
+            ),
         ));
     }
     let race = &*sim.race;

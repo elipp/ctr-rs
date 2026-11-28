@@ -14,9 +14,11 @@
 //! held outside a lobby.
 
 use bevy::prelude::*;
+use render::font::Font;
 use render::portraits::{HEIGHT, WIDTH};
 
 use crate::controls::Control;
+use crate::font::CtrText;
 use crate::lobby::Lobby;
 use crate::lobby::cup::Who;
 use crate::portrait_row::{HIGHLIGHT, Portraits, portrait_rect, portraits};
@@ -28,6 +30,10 @@ const STANDINGS_SECONDS: f32 = 10.0;
 const TITLE_SIZE: f32 = 24.0;
 const FONT_SIZE: f32 = 18.0;
 const HINT_SIZE: f32 = FONT_SIZE - 2.0;
+
+/// The first of `dismiss`'s keys and buttons.
+const DISMISS: crate::prompt::Prompt =
+    crate::prompt::Prompt::new(crate::pad_glyph::PadGlyph::Circle, KeyCode::Escape, "dismiss");
 
 /// How long a board from the score server shows by itself when it comes in.
 const TOP_SECONDS: f32 = 15.0;
@@ -254,10 +260,7 @@ fn show(
         Some(table(&lobby, &race_on))
     } else if held || top.up(now) {
         // Back only dismisses a board that is up by itself.
-        let hint = top.up(now).then(|| {
-            let keys = if last.pad() { "CIRCLE" } else { "ESC" };
-            format!("({keys} to dismiss)")
-        });
+        let hint = top.up(now).then(|| DISMISS.text(last.pad()));
         (top.table.clone()).map(|table| Table { hint, ..table })
     } else if now < shown.until && lobby.is_open() {
         Some(table(&lobby, &race_on))
@@ -594,7 +597,12 @@ fn spawn(commands: &mut Commands, table: &Table, image: &Handle<Image>) {
                 ChildOf(root),
             ))
             .id();
-        text(commands, corner, hint, HINT_SIZE, DIM, None);
+        commands.spawn((
+            CtrText::new(hint, Font::Middle, crate::toast::gradient(DIM))
+                .fixed(crate::toast::texel_size(HINT_SIZE)),
+            Pickable::IGNORE,
+            ChildOf(corner),
+        ));
     }
 }
 
@@ -609,10 +617,7 @@ fn text(
 ) {
     commands.spawn((
         Text::new(text),
-        TextFont {
-            font_size: size.into(),
-            ..default()
-        },
+        TextFont::from_font_size(size),
         TextColor(color),
         Node {
             width: width.map_or(Val::Auto, Val::Px),

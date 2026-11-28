@@ -5,6 +5,7 @@ use super::{Lobby, Queue};
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
+use crate::bands::{self, Band};
 use crate::font::CtrText;
 use crate::hud;
 
@@ -43,13 +44,8 @@ pub fn spawn_waiting(mut commands: Commands) {
         StartingHud,
         Visibility::Hidden,
         Node {
-            position_type: PositionType::Absolute,
-            top: Val::Percent(20.0),
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
             row_gap: Val::Px(8.0),
-            ..default()
+            ..Band::Countdown.node()
         },
         Pickable::IGNORE,
         children![
@@ -88,11 +84,7 @@ pub(super) fn starting(
     let Some((starting, left)) = left else {
         return;
     };
-    let flash = if ((now * FLASH_HZ) as u32).is_multiple_of(2) {
-        Gradient::ORANGE
-    } else {
-        Gradient::WHITE
-    };
+    let flash = crate::blink::flash(crate::blink::on(now, 1.0 / FLASH_HZ));
     for (line, mut text) in &mut lines {
         let (wanted, gradient) = match line {
             StartingLine::Seconds => {
@@ -114,18 +106,10 @@ fn spawn_label(commands: &mut Commands, marker: impl Component, text: &str) {
     commands.spawn((
         marker,
         Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Percent(20.0),
-            width: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        Pickable::IGNORE,
-        children![(
+        bands::line(
+            Band::Status,
             CtrText::new(text, Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
-            Pickable::IGNORE,
-        )],
+        ),
     ));
 }
 
@@ -140,7 +124,7 @@ pub(super) fn waiting(
 ) {
     let waiting = lobby.joined && !lobby.quick_play && lobby.is_waiting(&race_on);
     let paused = race_on.net().is_some_and(|net| net.pause_at.is_some());
-    let on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
+    let on = crate::blink::on(time.elapsed_secs(), BLINK_SECONDS);
     let visibility_of = |show: bool| {
         if show && on {
             Visibility::Inherited

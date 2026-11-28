@@ -73,8 +73,6 @@ struct Banner(Source, String);
 #[derive(Component)]
 struct BannerKeys;
 
-/// Where the banner is: over the bottom edge, as the spectator's label (`names.rs`).
-const BANNER_BOTTOM: f32 = 60.0;
 const BANNER_BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 const BANNER_PADDING: UiRect = UiRect::axes(Val::Px(14.0), Val::Px(8.0));
 
@@ -217,13 +215,7 @@ fn banner(
     // (Across the window, to center the box in it.)
     commands.spawn((
         Banner(replay.source, replay.who.clone()),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(BANNER_BOTTOM),
-            width: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
+        crate::bands::Band::Watching.node(),
         Pickable::IGNORE,
         children![(
             Node {

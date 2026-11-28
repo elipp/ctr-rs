@@ -226,7 +226,7 @@ pub(super) fn run(
             continue;
         }
         if let Some(why) = refusal(action, &lobby, &race_on) {
-            toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error(why, 2500));
             continue;
         }
         // The track shown is the podium's. (`/track` is not refused: it leaves the podium,
@@ -240,7 +240,7 @@ pub(super) fn run(
                 | Action::CupDrive { .. }
         );
         if needs_track && *mode.get() == crate::Mode::Podium {
-            toasts.write(Toast::new("Not on the podium", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error("Not on the podium", 2500));
             continue;
         }
         let character = options.racer as usize;
@@ -281,18 +281,18 @@ pub(super) fn run(
                     // (The searching banner says it: `hud::searching`.)
                     Ok(()) => continue,
                     Err(why) => {
-                        toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(why, 3000));
                         continue;
                     }
                 }
             }
-            Action::QuickReady => {
-                lobby.play_again();
-                "Ready: waiting for the others..."
-            }
-            Action::QuickUnready => {
-                lobby.unready();
-                "Not ready"
+            Action::QuickReady | Action::QuickUnready => {
+                let ready = matches!(action, Action::QuickReady);
+                // (Too fast is let go of quietly: a double tap is no mistake to tell of. Nor is a
+                // toast wanted otherwise: the tick and the hint on our row say it,
+                // `lobby_list.rs`.)
+                lobby.say_ready(ready);
+                continue;
             }
             Action::VoteTrack(track) => {
                 if let Some(session) = &lobby.session {
@@ -339,7 +339,7 @@ pub(super) fn run(
                         toasts.write(Toast::new(text, 2500));
                     }
                     Err(why) => {
-                        toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(why, 3000));
                     }
                 }
                 continue;
@@ -400,7 +400,7 @@ pub(super) fn run(
             Action::StartSolo(kind) => {
                 if !extras.is_empty() {
                     let why = "A solo run is for one player (/players 1)";
-                    toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+                    toasts.write(Toast::error(why, 2500));
                     continue;
                 }
                 let characters = vec![character as u8];
@@ -495,7 +495,7 @@ pub(super) fn run(
                     }
                     Err(e) => {
                         console!("{e}");
-                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(e, 4000));
                     }
                 }
                 continue;
@@ -524,7 +524,7 @@ pub(super) fn run(
                     }
                     Err(e) => {
                         console!("{e}");
-                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(e, 4000));
                     }
                 }
                 continue;
@@ -625,7 +625,7 @@ pub(super) fn run(
                     continue;
                 }
                 Err(why) => {
-                    toasts.write(Toast::new(why, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    toasts.write(Toast::error(why, 4000));
                     continue;
                 }
             },
@@ -763,7 +763,7 @@ pub(super) fn say(
             continue;
         };
         if let Some(why) = refusal(action, &lobby, &race_on) {
-            toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error(why, 2500));
         } else if !lobby.say(text) {
             logs.write(Log::error("You are talking too fast"));
         }

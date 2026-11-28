@@ -349,20 +349,20 @@ fn hint(
     }
     let tick = sim.race.tick;
     if last_tick.is_none_or(|last| tick < last) {
-        let button = select_label(*last, &config);
-        toasts.write(Toast::new(format!("{button}: ghosts"), 4000));
+        let prompt = select_prompt(&config, "ghosts");
+        toasts.write(Toast::new(prompt.text(last.pad()), 4000));
     }
     *last_tick = Some(tick);
 }
 
-/// How Select or the ghost's key, whichever we last used, is named to the player: the end
-/// screen's submit (`scores.rs`) is on them too. Select without the key bound.
-pub fn select_label(last: crate::last_input::LastInput, config: &crate::config::Config) -> String {
-    let key = config.controls.keys(Control::Ghost).first().copied();
-    match key.filter(|_| !last.pad()) {
-        Some(key) => crate::controls::label(key).to_string(),
-        None => "Select".to_string(),
-    }
+/// Select or the ghost's key ([`select_pressed`]): the end screen's submit (`scores.rs`) is on
+/// them too.
+pub(crate) fn select_prompt(config: &crate::config::Config, does: &'static str) -> crate::prompt::Prompt {
+    crate::prompt::Prompt::bound(
+        crate::pad_glyph::PadGlyph::Select,
+        config.controls.keys(Control::Ghost),
+        does,
+    )
 }
 
 /// Select or the ghost's key, just pressed.

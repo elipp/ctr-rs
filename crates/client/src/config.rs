@@ -571,7 +571,7 @@ fn apply(
         let Action::SetConfig(setting) = action else {
             continue;
         };
-        let refuse = |why: String| Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4));
+        let refuse = |why: String| Toast::error(why, 3000);
         match setting {
             Setting::Nickname(nick) => {
                 if *nick == config.nickname {

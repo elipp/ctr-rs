@@ -297,7 +297,7 @@ pub(super) fn rollback_toasts(
         format!("Rollback: {ticks} ticks")
     };
     let color = if ticks >= ROLLBACK_WARN_TICKS {
-        Color::srgb(1.0, 0.6, 0.3)
+        crate::toast::WARNING_COLOR
     } else {
         Color::srgb(0.8, 0.8, 0.8)
     };

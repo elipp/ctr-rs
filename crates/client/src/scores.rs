@@ -14,8 +14,6 @@ use crate::pb::ToSubmit;
 use crate::race_on::{RaceOn, Submit};
 use crate::toast::Toast;
 
-const RED: Color = Color::srgb(1.0, 0.4, 0.4);
-
 #[derive(Resource, Default)]
 struct Scores {
     sending: Option<Sending>,
@@ -106,7 +104,7 @@ fn forget(
                 toasts.write(Toast::new("Asking the board to forget you", 2000));
             }
             Err(why) => {
-                toasts.write(Toast::new(why, 3000).color(RED));
+                toasts.write(Toast::error(why, 3000));
             }
         }
     }
@@ -126,7 +124,7 @@ fn command(
         let id = track.unwrap_or(level.0);
         match start(&mut scores, id, *kind, race::DEFAULT_LAPS, &config.nickname) {
             Ok(()) => toasts.write(Toast::new("Sending your best to the board", 2000)),
-            Err(why) => toasts.write(Toast::new(why, 3000).color(RED)),
+            Err(why) => toasts.write(Toast::error(why, 3000)),
         };
     }
 }
@@ -156,7 +154,7 @@ fn end_screen(
         Ok(()) => end.submit = Some(Submit::Sending),
         Err(why) => {
             end.submit = Some(Submit::Refused);
-            toasts.write(Toast::new(why, 3000).color(RED));
+            toasts.write(Toast::error(why, 3000));
         }
     }
 }
@@ -220,7 +218,7 @@ fn answer(
             toasts.write(Toast::new(said, 4000));
         }
         Err(why) => {
-            toasts.write(Toast::new(why, 5000).color(RED));
+            toasts.write(Toast::error(why, 5000));
         }
     }
 }
@@ -257,5 +255,5 @@ fn forgotten(response: Result<Response, String>, toasts: &mut MessageWriter<Toas
         }
         Err(e) => format!("Could not reach the board: {e}"),
     };
-    toasts.write(Toast::new(why, 5000).color(RED));
+    toasts.write(Toast::error(why, 5000));
 }

@@ -212,6 +212,24 @@ impl Inline<'_> {
     }
 }
 
+/// Whether `font` writes all of `line`: each character is its, or in a `{cross}` or `{key:H}`.
+/// The same parse as [`lay_out`]'s, so a `{` that isn't markup has to be drawable.
+pub fn writes(font: Font, line: &str) -> bool {
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
+        let markup = (c == '{')
+            .then(|| rest[1..].find('}'))
+            .flatten()
+            .filter(|&end| Inline::parse(&rest[1..1 + end]).is_some());
+        rest = match markup {
+            Some(end) => &rest[end + 2..],
+            None if render::font::drawable(font, c) => &rest[c.len_utf8()..],
+            None => return false,
+        };
+    }
+    true
+}
+
 /// Puts the glyphs of a text up again when it changed, or the texel size it follows did.
 fn lay_out(
     mut commands: Commands,

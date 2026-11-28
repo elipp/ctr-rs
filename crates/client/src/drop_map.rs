@@ -41,7 +41,7 @@ type Made = Result<(Vec<map::Map>, Vec<String>), String>;
 struct Importing(Vec<(String, Task<Made>)>);
 
 fn failure(text: String) -> Toast {
-    Toast::new(text, 5000).color(Color::srgb(1.0, 0.4, 0.4))
+    Toast::error(text, 5000)
 }
 
 /// Reads what was dropped, from the window or the page.
@@ -162,7 +162,7 @@ fn finish(mut importing: ResMut<Importing>, mut toasts: MessageWriter<Toast>) {
         }
         if let Some(slug) = last {
             lines.push(format!("] steps to it; /cup create can use {slug}"));
-            toasts.write(Toast::new(lines.join("\n"), 5000).color(Color::linear_rgb(0.4, 1.0, 0.4)));
+            toasts.write(Toast::success(lines.join("\n"), 5000));
         }
         false
     });

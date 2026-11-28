@@ -569,10 +569,7 @@ fn rebuild(
 /// A line in the area: the first piece is the text, and the others spans of it. With a portrait
 /// the two are side by side, and the text wraps in what is left of the width.
 fn spawn_line(commands: &mut Commands, area: Entity, line: &Log, alpha: f32) {
-    let font = TextFont {
-        font_size: FONT_SIZE.into(),
-        ..default()
-    };
+    let font = TextFont::from_font_size(FONT_SIZE);
     let mut pieces = line.pieces.iter();
     let Some(first) = pieces.next() else {
         return;
