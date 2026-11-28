@@ -148,7 +148,7 @@ pub struct Lobby {
 }
 
 /// Where a quick play session is before its match's lobby: the searching label
-/// (`hud::searching`) and the ready check (`pause.rs`'s `View::MatchFound`) show it.
+/// (`hud::searching`) and the ready check (`match_found.rs`) show it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Queue {
     /// `waited` seconds, as the matchmaker last said.

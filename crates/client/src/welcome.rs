@@ -57,6 +57,7 @@ impl Plugin for WelcomePlugin {
 fn open(
     loading: Option<Res<crate::loading::Loading>>,
     mut actions: MessageReader<Action>,
+    lobby: Res<crate::lobby::Lobby>,
     mut welcome: ResMut<Welcome>,
 ) {
     if actions.read().any(|a| matches!(a, Action::Welcome)) {
@@ -65,6 +66,10 @@ fn open(
     if !welcome.greeted && loading.is_none() {
         welcome.greeted = true;
         welcome.up = true;
+    }
+    // The ready check's box (`match_found.rs`) is where this one is, and has the same keys.
+    if lobby.unanswered().is_some() {
+        welcome.up = false;
     }
 }
 

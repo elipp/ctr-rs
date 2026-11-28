@@ -1,16 +1,5 @@
-//! The players in the lobby, down the left of the screen while no race is on, under a title in the
-//! game's font ([`TITLE`]): each one's portrait
-//! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
-//! names are for Bevy's `Text`: a nickname may have anything in it.) Ours come first, then the
-//! others in the lobby's order (the host's first). The host has a crown on its portrait's corner; in quick play, a player ready for the next race a tick on the other, and our row the button to say we are, or not, on its right
-//! (`quick_ready.rs`). The other players at a machine (split screen) follow
-//! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
-//! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
-//! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),
-//! if any, and then those who only watch. In a quick play match's lobby, between races and
-//! before the first, the grid's free places follow the players instead of the bots, each a framed question mark
-//! named "Open" (the 8 places fill the column).
-
+//! The lobby's roster while no race is on. The rows are `portrait_row`'s, shared with the race's
+//! leaderboard. Names are Bevy `Text`, not the game's font: a nickname may have anything in it.
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
@@ -18,48 +7,40 @@ use crate::font::CtrText;
 use crate::hud;
 use crate::lobby::{Lobby, Row};
 use crate::portrait_row::{
-    DIM, HIGHLIGHT, PING_FONT_SIZE, TAG_PADDING, Portraits, portraits, spawn_empty_portrait,
-    spawn_host_badge, spawn_name, spawn_portrait, spawn_ready_badge, tag,
+    BACKGROUND, DIM, HIGHLIGHT, HOST_COLOR, PING_FONT_SIZE, READY_COLOR, TAG_PADDING, Portraits,
+    portraits, spawn_empty_portrait, spawn_portrait, tag,
 };
 
-/// The name of a free place of a quick play match's grid.
 const OPEN: &str = "Open";
 
-/// The column of rows, with the players it was built for, and which of them is us, the bots
-/// (how many, and what kind), the ready hint, and the free places shown.
+/// Everything the column was built from: any change rebuilds it.
 #[derive(Component)]
 struct List(Vec<Row>, Vec<(String, String)>, (usize, String), Option<String>, usize);
 
-/// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
-/// of retail's screen, to be clear of the toasts and the chat at the top.
+/// Clear of the toasts at the top.
 const TABLE_Y: f32 = 12.0;
 
-/// What the list is headed with. (The fonts have capitals, and this is how they show.)
+/// Capitals: the game's fonts have no lowercase.
 const TITLE: &str = "PLAYERS IN LOBBY:";
 
-/// Where the title is, in lines of retail's screen. It is [`Font::Middle`], 8 lines tall.
 const TITLE_Y: f32 = 2.0;
 
-/// Where the first portrait is, in lines of retail's screen, under the title.
 const FIRST_Y: f32 = 12.0;
 
-/// The portraits' size, of retail's (the race's leaderboard keeps that), and the lines from one
-/// row to the next: small enough for 8 rows to fit the 240 lines with room under them
-/// ([`TABLE_Y`] + [`FIRST_Y`] + 7 rows + a portrait's 20 make 198). The 2 lines between rows are
-/// what keeps them apart: the names are inside the portraits.
-const SCALE: f32 = 0.8;
-const SLOT: f32 = 22.0;
+/// At 0.8 a full grid ran into the chat. At this size the name and badges don't fit on the
+/// portrait, hence [`spawn_beside`].
+const SCALE: f32 = 0.55;
+const SLOT: f32 = 15.0;
 
-/// Where the list is across, in pixels of retail's screen: as the race's leaderboard.
+const NAME_SIZE: f32 = 16.0;
+const BADGE_SIZE: f32 = 16.0;
+
+/// Lined up with the race's leaderboard.
 const X: f32 = crate::leaderboard::ICON_X;
 
-/// The lines of retail's screen between the last portrait and the line of the bots, or the first
-/// who only watches (more than a row's own gap), and from one of those lines to the next.
 const WATCHER_GAP: f32 = 12.0;
 const WATCHER_LINE: f32 = 9.0;
 
-/// The lines of retail's screen from each of the bots' two lines ([`Font::Middle`], 8 lines
-/// tall) to the next.
 const BOTS_LINE: f32 = 12.0;
 
 pub struct LobbyListPlugin;
@@ -70,7 +51,6 @@ impl Plugin for LobbyListPlugin {
     }
 }
 
-/// Puts the list up when the roster changes, and takes it down when there is no lobby, or a race.
 fn build(
     mut commands: Commands,
     lobby: Res<Lobby>,
@@ -86,7 +66,7 @@ fn build(
     } else {
         Vec::new()
     };
-    // (Stable: our split screen's players keep their order, and so do the others.)
+    // Stable: split screen players keep their order.
     players.sort_by_key(|row| !row.you);
     let watchers: Vec<(String, String)> = if lobby.is_waiting(&race_on) {
         lobby
@@ -155,28 +135,15 @@ fn build(
         let y = FIRST_Y + n as f32 * SLOT;
         let at = Vec2::new(X, y);
         let portrait = spawn_portrait(&mut commands, column, &image, row.character, at, SCALE);
-        if row.host {
-            spawn_host_badge(&mut commands, portrait, true);
-        }
-        if row.ready {
-            spawn_ready_badge(&mut commands, portrait);
-        }
-        if let Some(hint) = hint.0.as_ref().filter(|_| ours == Some(n)) {
-            spawn_ready_hint(&mut commands, portrait, hint);
-        }
-        let tag = spawn_name(&mut commands, portrait, &row.name);
-        if row.you {
-            commands.entity(tag).insert(TextColor(HIGHLIGHT));
-        }
+        let hint = hint.0.as_deref().filter(|_| ours == Some(n));
+        let color = if row.you { HIGHLIGHT } else { Color::WHITE };
+        spawn_beside(&mut commands, portrait, &row.name, color, row.host, row.ready, hint);
     }
     for n in players.len()..players.len() + free {
         let y = FIRST_Y + n as f32 * SLOT;
         let place = spawn_empty_portrait(&mut commands, column, Vec2::new(X, y), SCALE);
-        let name = spawn_name(&mut commands, place, OPEN);
-        commands.entity(name).insert(TextColor(DIM));
+        spawn_beside(&mut commands, place, OPEN, DIM, false, false, None);
     }
-    // The bots and those who only watch have no portrait: a line each, a little further down,
-    // the bots' in the game's font as the title is: how many, and under it what kind.
     let mut below = FIRST_Y + (players.len() + free) as f32 * SLOT + WATCHER_GAP;
     if bots.0 > 0 {
         let count = match bots.0 {
@@ -215,19 +182,60 @@ fn build(
     commands.entity(column).insert(List(players, watchers, bots, hint.0.clone(), free));
 }
 
-/// The ready hint on the right of our portrait, level with its top: our name, on the portrait's
-/// bottom, is usually wider than it and runs under the hint (`portrait_row::spawn_name`).
-fn spawn_ready_hint(commands: &mut Commands, portrait: Entity, hint: &str) {
+fn spawn_beside(
+    commands: &mut Commands,
+    portrait: Entity,
+    name: &str,
+    color: Color,
+    host: bool,
+    ready: bool,
+    hint: Option<&str>,
+) {
+    let line = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(100.0),
+                top: Val::ZERO,
+                height: Val::Percent(100.0),
+                margin: UiRect::left(hud::x(2.0)),
+                align_items: AlignItems::Center,
+                column_gap: hud::x(2.0),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(portrait),
+        ))
+        .id();
     commands.spawn((
-        CtrText::new(hint, Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
+        Text::new(name),
+        TextFont::from_font_size(NAME_SIZE),
+        TextColor(color),
+        BackgroundColor(BACKGROUND),
+        TextLayout::linebreak(LineBreak::NoWrap),
         Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(100.0),
-            top: Val::ZERO,
-            margin: UiRect::left(hud::x(2.0)),
+            padding: TAG_PADDING,
             ..default()
         },
         Pickable::IGNORE,
-        ChildOf(portrait),
+        ChildOf(line),
     ));
+    let badges = [
+        (host, crate::icons::CROWN_SIMPLE, HOST_COLOR),
+        (ready, crate::icons::CHECK_FAT, READY_COLOR),
+    ];
+    for (_, icon, tint) in badges.into_iter().filter(|badge| badge.0) {
+        commands.spawn((
+            crate::icons::outlined(icon, BADGE_SIZE, tint, Node::default()),
+            Pickable::IGNORE,
+            ChildOf(line),
+        ));
+    }
+    if let Some(hint) = hint {
+        commands.spawn((
+            CtrText::new(hint, Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
+            Pickable::IGNORE,
+            ChildOf(line),
+        ));
+    }
 }

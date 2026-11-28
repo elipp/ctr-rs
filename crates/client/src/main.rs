@@ -71,6 +71,7 @@ mod loading;
 mod lobby;
 mod lobby_list;
 mod maps;
+mod match_found;
 mod mask;
 mod mesh_stats;
 mod mesh_write;

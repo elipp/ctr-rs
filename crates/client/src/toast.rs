@@ -45,6 +45,11 @@ const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.45);
 /// The font size of a toast unless it says otherwise.
 const DEFAULT_SIZE: f32 = 28.0;
 
+/// How wide a toast's text is at most, in logical pixels (as the HUD's, which is 1024 wide): a
+/// longer one wraps at spaces.
+const MAX_WIDTH: f32 = 640.0;
+const PADDING: Vec2 = Vec2::new(12.0, 4.0);
+
 /// Asks the HUD to show `text` for `millis` milliseconds: white and of the default size, unless
 /// the builder methods say otherwise.
 #[derive(Message, Clone, Debug)]
@@ -189,6 +194,7 @@ fn show(
     mut showing: Query<&mut Showing>,
     mut last_shown: Local<HashMap<String, Duration>>,
     time: Res<Time<Real>>,
+    fonts: Option<Res<crate::font::Fonts>>,
 ) {
     if toasts.is_empty() {
         return;
@@ -219,7 +225,9 @@ fn show(
                 },
                 Node {
                     margin: UiRect::top(Val::Px(toast.lower)),
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                    padding: UiRect::axes(Val::Px(PADDING.x), Val::Px(PADDING.y)),
+                    // (Bevy's text wraps to it by itself.)
+                    max_width: Val::Px(MAX_WIDTH + 2.0 * PADDING.x),
                     // (The lines of a toast in the game's font are its children.)
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
@@ -230,9 +238,15 @@ fn show(
             ))
             .id();
         if in_game_font(&toast.text) {
-            for line in toast.text.lines().filter(|line| !line.trim().is_empty()) {
-                let text = CtrText::new(line.to_string(), Font::Middle, gradient(toast.color))
-                    .fixed(texel_size(toast.size));
+            let texels = texel_size(toast.size);
+            let lines = match &fonts {
+                Some(fonts) => {
+                    crate::font::wrap(fonts, Font::Middle, texels, toast.bold, &toast.text, MAX_WIDTH)
+                }
+                None => toast.text.lines().map(str::to_string).collect(),
+            };
+            for line in lines.into_iter().filter(|line| !line.trim().is_empty()) {
+                let text = CtrText::new(line, Font::Middle, gradient(toast.color)).fixed(texels);
                 let text = if toast.bold { text.bold() } else { text };
                 commands.spawn((text, ChildOf(shown)));
             }

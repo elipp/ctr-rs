@@ -308,7 +308,8 @@ pub(super) fn run(
                     if let Some(super::Queue::Found { accepted, .. }) = &mut lobby.queue {
                         *accepted = true;
                     }
-                    "Accepted: waiting for the others..."
+                    // `hud::searching` says it already.
+                    continue;
                 } else {
                     "Declined"
                 }

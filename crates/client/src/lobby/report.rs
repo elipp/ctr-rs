@@ -416,7 +416,10 @@ pub(super) fn report(
                 let text = match before {
                     // We know that we joined.
                     None if is_you => continue,
-                    None => format!("{who} joined as {name}"),
+                    None => {
+                        console!("{who} joined as {name}");
+                        continue;
+                    }
                     Some(was) if was.character != member.character => {
                         format!("{who} is now {name}")
                     }

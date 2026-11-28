@@ -17,7 +17,7 @@ use bevy::camera::visibility::VisibilitySystems;
 use bevy::ui::UiSystems;
 use bevy::ui::widget::NodeImageMode;
 use bevy::window::PrimaryWindow;
-use render::font::{Font, FontAtlas, Gradient};
+use render::font::{Font, FontAtlas, Gradient, Line};
 
 use crate::pad_glyph::{self, PadGlyph};
 
@@ -212,6 +212,80 @@ impl Inline<'_> {
     }
 }
 
+/// A pad glyph is square in pixels, whatever shape the texels are.
+fn glyph_px(atlas: &FontAtlas, size: TexelSize) -> f32 {
+    let (letter_top, letter_bottom) = atlas.letter_rows();
+    (letter_bottom - letter_top) as f32 * PAD_GLYPH_SCALE * size.0.y
+}
+
+fn keycap_px(glyph_px: f32, label: &str) -> f32 {
+    let name = label.chars().count() as f32 * INCONSOLATA_ADVANCE * KEY_LETTER_SCALE;
+    glyph_px * (1.0 + (name - KEYCAP_ROOM).max(0.0))
+}
+
+/// Where `text`'s glyphs and boxes go at `size`, and the markup of each box (by its id).
+fn line_of<'t>(atlas: &FontAtlas, text: &'t str, size: TexelSize) -> (Line, Vec<Inline<'t>>) {
+    let glyph_px = glyph_px(atlas, size);
+    let mut inlines = Vec::new();
+    let line = atlas.layout_with(text, |name| {
+        let inline = Inline::parse(name)?;
+        let px = match inline {
+            Inline::Pad(_) => glyph_px,
+            Inline::Key(label) => keycap_px(glyph_px, label),
+        };
+        inlines.push(inline);
+        Some((inlines.len() - 1, (px / size.0.x).ceil() as usize))
+    });
+    (line, inlines)
+}
+
+/// `text` broken at spaces into lines of a [`CtrText`] of `font` at `size` no wider than
+/// `max_px` (the same width [`lay_out`] gives them), and at its new lines. A word wider than that
+/// is a line of its own, as wide as it is. A space in markup (`{key:Page Up}`) is not a break.
+pub(crate) fn wrap(
+    fonts: &Fonts,
+    font: Font,
+    size: Vec2,
+    bold: bool,
+    text: &str,
+    max_px: f32,
+) -> Vec<String> {
+    let (atlas, size) = (fonts.atlas(font), TexelSize(size));
+    let fits = |line: &str| {
+        let (line, _) = line_of(atlas, line, size);
+        let width = line.width + usize::from(bold) * line.glyphs.len();
+        width as f32 * size.0.x <= max_px
+    };
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in words(paragraph) {
+            let longer = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if line.is_empty() || fits(&longer) {
+                line = longer;
+            } else {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+/// `text`'s words: split at the spaces outside `{...}`.
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    let mut depth = 0usize;
+    text.split(move |c: char| {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        c == ' ' && depth == 0
+    })
+    .filter(|word| !word.is_empty())
+}
+
 /// Whether `font` writes all of `line`: each character is its, or in a `{cross}` or `{key:H}`.
 /// The same parse as [`lay_out`]'s, so a `{` that isn't markup has to be drawable.
 pub fn writes(font: Font, line: &str) -> bool {
@@ -244,24 +318,10 @@ fn lay_out(
         }
         let size = TexelSize(text.texel_size.unwrap_or(window.0));
         let atlas = fonts.atlas(text.font);
-        // A pad glyph is square in pixels, whatever shape the texels are.
         let (letter_top, letter_bottom) = atlas.letter_rows();
-        let glyph_px = (letter_bottom - letter_top) as f32 * PAD_GLYPH_SCALE * size.0.y;
+        let glyph_px = glyph_px(atlas, size);
         let glyph_middle = (letter_top + letter_bottom) as f32 / 2.0 * size.0.y;
-        let keycap_px = |label: &str| {
-            let name = label.chars().count() as f32 * INCONSOLATA_ADVANCE * KEY_LETTER_SCALE;
-            glyph_px * (1.0 + (name - KEYCAP_ROOM).max(0.0))
-        };
-        let mut inlines = Vec::new();
-        let line = atlas.layout_with(&text.text, |name| {
-            let inline = Inline::parse(name)?;
-            let px = match inline {
-                Inline::Pad(_) => glyph_px,
-                Inline::Key(label) => keycap_px(label),
-            };
-            inlines.push(inline);
-            Some((inlines.len() - 1, (px / size.0.x).ceil() as usize))
-        });
+        let (line, inlines) = line_of(atlas, &text.text, size);
         let image = fonts.image(text.font, text.gradient, &mut images);
         // Bold: a texel more for each glyph, its copy to the right.
         let thick = usize::from(text.bold);
@@ -315,7 +375,7 @@ fn lay_out(
                         image_mode: NodeImageMode::Sliced(pad_glyph::keycap_slicer()),
                         ..ImageNode::new(pad_glyph::ATLAS)
                     },
-                    keycap_px(label),
+                    keycap_px(glyph_px, label),
                 ),
             };
             let mut boxed = commands.spawn((
@@ -353,5 +413,16 @@ fn lay_out(
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markup_is_one_word() {
+        let words: Vec<_> = words("press  {key:Page Up} to {cross} go").collect();
+        assert_eq!(words, ["press", "{key:Page Up}", "to", "{cross}", "go"]);
     }
 }

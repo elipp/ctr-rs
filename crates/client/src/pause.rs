@@ -121,8 +121,7 @@ pub struct PauseMenu {
     /// which can't type, can still create with Create.
     lobby_name: String,
     private_lobby: bool,
-    /// The match found (by when it came) that the ready check was opened for: it opens once for
-    /// each, so that Back can leave it.
+    /// The match found (by when it came) that the menu was taken down for.
     ready_check: Option<f32>,
 }
 
@@ -198,8 +197,6 @@ pub(crate) enum View {
     Tracks,
     /// "Quit the game?": Quit is too easy to take by mistake.
     ConfirmQuit,
-    /// Quick play's ready check: it opens itself when a match is found (`Lobby::queue`).
-    MatchFound,
 }
 
 impl View {
@@ -236,10 +233,6 @@ pub(crate) enum Item {
     QuickPlay,
     /// `/quick rejoin`.
     Rejoin,
-    /// Back to the ready check, from the main view.
-    MatchFound,
-    /// `/quick accept`, `/quick decline`.
-    Answer(bool),
     /// `/quick ready`, `/quick unready`.
     QuickReady,
     QuickUnready,
@@ -486,7 +479,6 @@ fn items(
             );
         }
         View::Tracks => return ("Track select".into(), track_items()),
-        View::MatchFound => return ("Match found".into(), match_found_items(lobby)),
         View::ConfirmQuit => {
             let items = vec![entry(Item::QuitNow, "Quit"), entry(Item::Back, "Cancel")];
             return ("Quit the game?".into(), items);
@@ -494,9 +486,6 @@ fn items(
         View::Main => {}
     }
     let mut items = vec![entry(Item::Resume, "Resume")];
-    if lobby.unanswered().is_some() {
-        items.insert(0, entry(Item::MatchFound, "Match found"));
-    }
     if lobby.matched_waiting(race_on) && !lobby.again {
         items.insert(
             0,
@@ -551,21 +540,6 @@ fn items(
     // A lobby's race goes on.
     let title = if !race_on.shared() { "Paused" } else { "Menu" };
     (title.into(), items)
-}
-
-/// The ready check: the answers first, then what the match is.
-fn match_found_items(lobby: &Lobby) -> Vec<Entry> {
-    let Some(Queue::Found { found, left, .. }) = &lobby.queue else {
-        return vec![entry(Item::Back, "Back")];
-    };
-    vec![
-        entry(Item::Answer(true), "Accept"),
-        entry(Item::Answer(false), "Decline")
-            .help("Declining keeps you out of the queue for a while."),
-        entry(Item::Info, maps::name(found.track)).starts_section(),
-        entry(Item::Info, format!("{} laps, {} players", found.rules.laps, found.nicks.len())),
-        entry(Item::Info, format!("{left} s to answer")),
-    ]
 }
 
 /// Item builders don't know about typing; the live text is overlaid here so they stay pure.
@@ -900,26 +874,18 @@ pub(crate) fn input(
         sound(MENU_TAKE_SFX);
         return finish(was_open, &menu, &mut keys, &mut pads);
     }
-    // The ready check opens itself once for each match found, and goes once it is answered.
-    let found_at = match &lobby.queue {
-        Some(Queue::Found { at, accepted: false, .. }) => Some(*at),
-        _ => None,
-    };
-    if let Some(at) = found_at
-        && menu.ready_check != Some(at)
+    // The ready check (`match_found.rs`) goes under the menu: a match found takes the menu down,
+    // once, so that it can be opened again over the box.
+    if let Some(Queue::Found { at, accepted: false, .. }) = &lobby.queue
+        && menu.ready_check != Some(*at)
     {
-        menu.ready_check = Some(at);
-        menu.open = true;
-        go_to(&mut menu, View::MatchFound);
-        hold_sounds(&menu);
-        sound(MENU_TAKE_SFX);
-        return finish(was_open, &menu, &mut keys, &mut pads);
-    }
-    if found_at.is_none() && menu.view == View::MatchFound {
-        menu.open = false;
-        go_to(&mut menu, View::Main);
-        hold_sounds(&menu);
-        return finish(was_open, &menu, &mut keys, &mut pads);
+        menu.ready_check = Some(*at);
+        if menu.open {
+            menu.open = false;
+            go_to(&mut menu, View::Main);
+            hold_sounds(&menu);
+            return finish(was_open, &menu, &mut keys, &mut pads);
+        }
     }
     let key = |codes: &[KeyCode]| codes.iter().any(|&k| keys.just_pressed(k));
     let pad = |button: GamepadButton| pads.iter().any(|p| p.just_pressed(button));
@@ -1237,10 +1203,6 @@ pub(crate) fn input(
                 menu.open = false;
                 actions.write(Action::QuickPlay { rejoin: true });
             }
-            Some(Item::MatchFound) => {
-                menu.view = View::MatchFound;
-                menu.selected = 0;
-            }
             Some(Item::QuickReady) => {
                 menu.open = false;
                 actions.write(Action::QuickReady);
@@ -1248,11 +1210,6 @@ pub(crate) fn input(
             Some(Item::QuickUnready) => {
                 menu.open = false;
                 actions.write(Action::QuickUnready);
-            }
-            Some(Item::Answer(accept)) => {
-                menu.open = false;
-                menu.view = View::Main;
-                actions.write(Action::AnswerMatch(accept));
             }
             Some(Item::NewLobby) if menu.private_lobby => {
                 menu.open = false;

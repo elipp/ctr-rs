@@ -63,6 +63,7 @@ impl PluginGroup for HudPlugins {
             .add(crate::wrong_way::WrongWayPlugin)
             .add(crate::version::VersionPlugin)
             .add(crate::welcome::WelcomePlugin)
+            .add(crate::match_found::MatchFoundPlugin)
             .add(crate::player::PlayerPlugin)
             .add(crate::scores::ScoresPlugin)
             .add(crate::world_record::WorldRecordPlugin)
