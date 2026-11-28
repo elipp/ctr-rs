@@ -140,30 +140,23 @@ pub(super) fn drive_tick(
             Some(race) => (race.specs.clone(), race.viewed(), race.spectating()),
             None => (drive.specs(), 0, false),
         };
-        let bots = race_on.get().map(|race| {
-            let setup = vehicle::bot::Setup {
-                difficulty: race.retail.difficulty as i16,
-                // A custom track has the rubber band of the first.
-                track: (race.track < race::RACING_TRACKS).then_some(race.track as u8),
-                cup: race.retail.cup,
-                players: race.characters.len(),
-            };
-            (setup, race.retail_specs.as_slice())
-        });
-        // The host's brain bots are players to the race: it rubber-bands them (at the difficulty
-        // of `/bots`, which comes with the retail bots' even when there are none).
-        let band = race_on.get()
-            .filter(|race| race.bots > 0)
-            .map(|race| race::Band::new(race.bot_slots(), race.retail.difficulty as i16));
-        sim.restart(
-            &track.0,
-            &specs,
-            own,
-            race_on.get().map(|race| (race.rules, race.mode())),
-            spectator,
-            bots,
-            band,
-        );
+        // (The host's brain bots are players to the race: `race::multi::start` rubber-bands them,
+        // at the difficulty of `/bots`, which comes with the retail bots' even when there are none.)
+        let start = match race_on.get() {
+            None => crate::props::Start::FreeDrive,
+            Some(race) => match race.solo {
+                Some(kind) => crate::props::Start::Solo {
+                    kind,
+                    laps: race.rules.laps,
+                    seed: race.rules.seed,
+                },
+                None => crate::props::Start::Race {
+                    setup: race.setup(),
+                    retail: &race.retail_specs,
+                },
+            },
+        };
+        sim.restart(&track.0, &specs, own, start, spectator);
         if let Some(race) = race_on.get_mut().filter(|race| race.attempt().is_some()) {
             let best = crate::pb::best(&track.0, &sim, race).map(|o| o.final_ms);
             if race.solo == Some(race::solo::Kind::Relic) {
@@ -183,7 +176,7 @@ pub(super) fn drive_tick(
                 // (They hold a neutral pad then, below: the race does not wait for them.)
                 Err(e) => {
                     error!("online bots: {e}");
-                    toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    toasts.write(Toast::error(e, 4000));
                 }
             }
         }
@@ -288,8 +281,7 @@ pub(super) fn drive_tick(
             net.gone[slot] = true;
             let name = race.labels.get(slot).map_or("?", String::as_str);
             toasts.write(
-                Toast::new(format!("Player {name} left the race"), 3000)
-                    .color(Color::srgb(1.0, 0.6, 0.3)),
+                Toast::warning(format!("Player {name} left the race"), 3000),
             );
         }
     }
@@ -482,7 +474,7 @@ pub(super) fn drive_tick(
             replay.pad(tick)
         } else if let Some(pad) = practice.pad() {
             pad
-        } else if (shared && hold.menu.open) || drive.views[0].chooser.open {
+        } else if hold.has_controls(shared) || drive.views[0].chooser.open {
             // The menu has the controls: the kart coasts.
             Pad::default()
         } else if let Some(pad) = auto_pad {
@@ -647,7 +639,7 @@ pub(super) fn drive_tick(
     let ours = &sim.race.karts[sim.own].driver;
     let won = ours.actions_flag_set & vehicle::actions::RACE_FINISHED != 0 && ours.driver_rank == 0;
     // (A menu that has the controls has the camera's buttons too.)
-    let own_camera = if (shared && hold.menu.open) || drive.views[0].chooser.open {
+    let own_camera = if hold.has_controls(shared) || drive.views[0].chooser.open {
         Default::default()
     } else {
         controller.camera(&drive.views[0].device, &taken)
@@ -740,7 +732,7 @@ pub(super) fn debug_actions(
                 debug!("(debug) stalling for {time:?}");
                 stall(*time);
             } else {
-                toasts.write(Toast::new("Only online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+                toasts.write(Toast::error("Only online", 2500));
             }
             continue;
         }
@@ -753,7 +745,7 @@ pub(super) fn debug_actions(
             continue;
         }
         if race_on.shared() {
-            toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error("Not online", 2500));
             continue;
         }
         let own = sim.own;

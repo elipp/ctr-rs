@@ -342,7 +342,7 @@ pub(crate) fn switch_mode(
 ) {
     use command::{Action, MeshSetting};
     let refuse = |toasts: &mut MessageWriter<toast::Toast>, why: &str| {
-        toasts.write(toast::Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+        toasts.write(toast::Toast::error(why, 2500));
     };
     for action in actions.read() {
         let setting = match action {

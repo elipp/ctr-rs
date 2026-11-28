@@ -10,6 +10,7 @@ pub mod bot;
 pub mod clock;
 pub mod desync;
 pub mod infer;
+pub mod multi;
 pub mod nn;
 pub mod relic;
 pub mod solo;

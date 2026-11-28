@@ -29,6 +29,8 @@ mod accordion;
 mod animation;
 mod assets;
 mod banner;
+mod bands;
+mod blink;
 mod between;
 mod billboard;
 mod command;
@@ -61,6 +63,7 @@ mod icon_grid;
 mod icons;
 mod kart;
 mod laps;
+mod last_input;
 mod learned;
 mod leaderboard;
 mod lights;
@@ -68,6 +71,7 @@ mod loading;
 mod lobby;
 mod lobby_list;
 mod maps;
+mod match_found;
 mod mask;
 mod mesh_stats;
 mod mesh_write;
@@ -76,17 +80,21 @@ mod names;
 mod nav;
 mod nav_edit;
 mod ordered;
+mod pad_glyph;
 mod paths;
 mod pause;
 mod place;
 mod podium;
 mod portrait_row;
 mod probe;
+mod prompt;
 mod projectile;
 
 mod pb;
+mod recordings;
 mod player;
 mod props;
+mod quick_ready;
 mod race_on;
 mod replay;
 mod public_lobbies;
@@ -119,6 +127,7 @@ mod unlit;
 mod version;
 mod weapon;
 mod weather;
+mod welcome;
 #[cfg(target_arch = "wasm32")]
 mod web;
 mod wheels;
@@ -248,6 +257,7 @@ fn main() {
         .expect("the default font can be replaced");
     font::register_bold(&mut app.world_mut().resource_mut());
     icons::register(&mut app.world_mut().resource_mut());
+    pad_glyph::register(&mut app.world_mut().resource_mut());
     let digits = place::BigDigits::new(digits, &mut app.world_mut().resource_mut());
     app.insert_resource(digits);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.1)))
@@ -300,6 +310,7 @@ fn main() {
         .add_plugins(MaterialPlugin::<SubtractMaterial>::default())
         .add_plugins(unlit::UnlitPlugin)
         .add_plugins(between::BetweenPlugin)
+        .add_plugins(last_input::LastInputPlugin)
         .insert_resource(Time::<Fixed>::from_hz(GAME_TICK_HZ))
         .add_systems(
             FixedUpdate,

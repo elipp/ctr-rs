@@ -27,6 +27,10 @@ pub const RELIC_MODEL: i16 = 0x61;
 /// moments shouldn't skip the ceremony.
 const CONTINUE_AFTER_TICKS: u32 = crate::GAME_TICK_HZ as u32;
 
+const CONTINUE_KEY: KeyCode = KeyCode::Space;
+const CONTINUE: crate::prompt::Prompt =
+    crate::prompt::Prompt::new(crate::pad_glyph::PadGlyph::Cross, CONTINUE_KEY, "continue");
+
 /// The prompt goes between yellow and orange this often: slower than the other lines' flash, which
 /// would be too loud for a line that stays up.
 const PROMPT_BLINK_TICKS: u32 = 8;
@@ -35,8 +39,7 @@ const PROMPT_BLINK_TICKS: u32 = 8;
 #[derive(Resource)]
 pub struct RelicModel(pub Model);
 
-/// Where the panel's first line is, and the relic's middle, in lines of retail's screen.
-const TOP: f32 = 40.0;
+/// Where the relic's middle is, in lines of retail's screen (the panel's is `Band::SoloEnd`).
 const RELIC_Y: f32 = 170.0;
 
 /// Between the panel's lines, in lines of retail's screen.
@@ -111,7 +114,7 @@ fn panel(
     sim: Res<crate::props::Sim>,
     race_on: Res<RaceOn>,
     config: Res<crate::config::Config>,
-    pads: crate::drive::Pads,
+    last: Res<crate::last_input::LastInput>,
     hud: HudViews,
     panels: Query<(&HudView, &mut Visibility), With<Panel>>,
     mut lines: Query<(&Line, &mut CtrText, &mut Node)>,
@@ -144,14 +147,8 @@ fn panel(
             Panel,
             HudView(view),
             Node {
-                position_type: PositionType::Absolute,
-                left: Val::ZERO,
-                right: Val::ZERO,
-                top: hud::y(TOP),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
                 row_gap: hud::y(ROW_GAP),
-                ..default()
+                ..crate::bands::Band::SoloEnd.node()
             },
             Visibility::Hidden,
             Pickable::IGNORE,
@@ -183,11 +180,7 @@ fn panel(
     let total = sim.race.final_ms(slot).unwrap_or(0);
     let bonus = if end.perfect { race::PERFECT_BONUS_MS } else { 0 };
     // Retail's text flashes orange and white, a frame each.
-    let flash = if sim.race.tick % 2 == 0 {
-        Gradient::ORANGE
-    } else {
-        Gradient::WHITE
-    };
+    let flash = crate::blink::flash(crate::blink::on_ticks(sim.race.tick, 1));
     for (line, mut text, mut node) in &mut lines {
         let (wanted, gradient) = match line {
             Line::Time => (
@@ -214,7 +207,7 @@ fn panel(
                 Gradient::WHITE,
             ),
             Line::Submit => (
-                submit_line(end.submit, &pads, &config),
+                submit_line(end.submit, *last, &config),
                 match end.submit {
                     Some(Submit::Offered) => Gradient::YELLOW,
                     Some(Submit::Refused) => Gradient::RED,
@@ -222,11 +215,9 @@ fn panel(
                 },
             ),
             Line::Continue => (
-                (sim.race.tick >= end.at + CONTINUE_AFTER_TICKS).then(|| {
-                    let keys = if pads.iter().next().is_some() { "X / SPACE" } else { "SPACE" };
-                    format!("{keys} to CONTINUE")
-                }),
-                if sim.race.tick / PROMPT_BLINK_TICKS % 2 == 0 {
+                (sim.race.tick >= end.at + CONTINUE_AFTER_TICKS)
+                    .then(|| CONTINUE.text(last.pad())),
+                if crate::blink::on_ticks(sim.race.tick, PROMPT_BLINK_TICKS) {
                     Gradient::YELLOW
                 } else {
                     Gradient::ORANGE
@@ -265,27 +256,25 @@ fn continue_on_key(
     if menu.open || end.continued || sim.race.tick < end.at + CONTINUE_AFTER_TICKS {
         return;
     }
-    let pressed = keys.just_pressed(KeyCode::Space)
+    let pressed = keys.just_pressed(CONTINUE_KEY)
         || pads.iter().any(|p| p.just_pressed(GamepadButton::South));
     if !pressed {
         return;
     }
     end.continued = true;
     // (Not a hop in the free drive the race ends into.)
-    keys.clear_just_pressed(KeyCode::Space);
+    keys.clear_just_pressed(CONTINUE_KEY);
     pads.consume();
 }
 
 /// (The font has no '#'.)
 fn submit_line(
     submit: Option<Submit>,
-    pads: &crate::drive::Pads,
+    last: crate::last_input::LastInput,
     config: &crate::config::Config,
 ) -> Option<String> {
     Some(match submit? {
-        Submit::Offered => {
-            format!("{}: SUBMIT", crate::ghost::select_label(pads, config)?.to_uppercase())
-        }
+        Submit::Offered => crate::ghost::select_prompt(config, "submit").text(last.pad()),
         Submit::Sending => "SUBMITTING...".to_string(),
         Submit::Accepted { rank, top_ms } => crate::scores::placed(rank, top_ms).to_uppercase(),
         Submit::Refused => "NOT SUBMITTED".to_string(),

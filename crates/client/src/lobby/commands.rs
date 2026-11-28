@@ -46,13 +46,13 @@ pub(super) fn copy_to_clipboard(text: String) {
 pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Option<&'static str> {
     let racing = race_on.is_on();
     Some(match action {
-        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay { .. }
             if lobby.is_open() =>
         {
             "Close the lobby first (/lobby close)"
         }
         // (A race alone has no session to carry over into the lobby.)
-        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_)
+        Action::CreateLobby { .. } | Action::JoinLobby(_) | Action::SpectateLobby(_) | Action::QuickPlay { .. }
             if racing =>
         {
             "Stop the race first (/race stop)"
@@ -62,6 +62,18 @@ pub(crate) fn refusal(action: &Action, lobby: &Lobby, race_on: &RaceOn) -> Optio
         }
         Action::ToggleSpectator if racing => net::NOT_NOW,
         Action::CloseLobby if !lobby.is_open() => "No lobby to close",
+        Action::AnswerMatch(_) if lobby.unanswered().is_none() => "No match to answer",
+        Action::QuickPlay { rejoin: true } if lobby.last_match.is_none() => "No match to rejoin",
+        Action::QuickReady | Action::QuickUnready | Action::VoteTrack(_)
+            if !lobby.matched_waiting(race_on) =>
+        {
+            "Only while a quick play lobby waits for a race"
+        }
+        Action::QuickReady if lobby.again => "You are ready already: waiting for the others",
+        Action::QuickUnready if !lobby.again => "You are not ready yet",
+        // (The countdown has told its track and its start.)
+        Action::QuickUnready if lobby.starting.is_some() => net::NOT_NOW,
+        Action::VoteTrack(track) if *track >= race::RACING_TRACKS => "Vote for one of the game's tracks",
         Action::Promote(_) if !lobby.is_open() || lobby.joined => {
             "Only the host of a lobby can do that"
         }
@@ -214,7 +226,7 @@ pub(super) fn run(
             continue;
         }
         if let Some(why) = refusal(action, &lobby, &race_on) {
-            toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error(why, 2500));
             continue;
         }
         // The track shown is the podium's. (`/track` is not refused: it leaves the podium,
@@ -228,7 +240,7 @@ pub(super) fn run(
                 | Action::CupDrive { .. }
         );
         if needs_track && *mode.get() == crate::Mode::Podium {
-            toasts.write(Toast::new("Not on the podium", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error("Not on the podium", 2500));
             continue;
         }
         let character = options.racer as usize;
@@ -257,6 +269,51 @@ pub(super) fn run(
                 lobby.join(ticket.clone(), character as u8, &extras, &config.nickname);
                 "Joining lobby..."
             }
+            Action::QuickPlay { rejoin } => {
+                let rejoin = lobby.last_match.filter(|_| *rejoin);
+                let queued = crate::player::key().and_then(|key| {
+                    let server = net::score::default_score().ok_or("No score server to queue at")?;
+                    lobby.quick_play(key, server, character as u8, &extras, &config.nickname, rejoin);
+                    Ok(())
+                });
+                match queued {
+                    Ok(()) if rejoin.is_some() => "Rejoining the match...",
+                    // (The searching banner says it: `hud::searching`.)
+                    Ok(()) => continue,
+                    Err(why) => {
+                        toasts.write(Toast::error(why, 3000));
+                        continue;
+                    }
+                }
+            }
+            Action::QuickReady | Action::QuickUnready => {
+                let ready = matches!(action, Action::QuickReady);
+                // (Too fast is let go of quietly: a double tap is no mistake to tell of. Nor is a
+                // toast wanted otherwise: the tick and the hint on our row say it,
+                // `lobby_list.rs`.)
+                lobby.say_ready(ready);
+                continue;
+            }
+            Action::VoteTrack(track) => {
+                if let Some(session) = &lobby.session {
+                    session.vote(*track);
+                }
+                "Vote taken"
+            }
+            Action::AnswerMatch(accept) => {
+                lobby.answer_match(*accept);
+                // (Whoever of the match hosts is the session's business: to the game every
+                // player of it is a guest, with none of a host's say.)
+                if *accept {
+                    if let Some(super::Queue::Found { accepted, .. }) = &mut lobby.queue {
+                        *accepted = true;
+                    }
+                    // `hud::searching` says it already.
+                    continue;
+                } else {
+                    "Declined"
+                }
+            }
             Action::SpectateLobby(ticket) => {
                 lobby.spectate(ticket.clone(), &config.nickname);
                 "Joining lobby to watch..."
@@ -283,7 +340,7 @@ pub(super) fn run(
                         toasts.write(Toast::new(text, 2500));
                     }
                     Err(why) => {
-                        toasts.write(Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(why, 3000));
                     }
                 }
                 continue;
@@ -344,7 +401,7 @@ pub(super) fn run(
             Action::StartSolo(kind) => {
                 if !extras.is_empty() {
                     let why = "A solo run is for one player (/players 1)";
-                    toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+                    toasts.write(Toast::error(why, 2500));
                     continue;
                 }
                 let characters = vec![character as u8];
@@ -439,7 +496,7 @@ pub(super) fn run(
                     }
                     Err(e) => {
                         console!("{e}");
-                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(e, 4000));
                     }
                 }
                 continue;
@@ -468,7 +525,7 @@ pub(super) fn run(
                     }
                     Err(e) => {
                         console!("{e}");
-                        toasts.write(Toast::new(e, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                        toasts.write(Toast::error(e, 4000));
                     }
                 }
                 continue;
@@ -569,7 +626,7 @@ pub(super) fn run(
                     continue;
                 }
                 Err(why) => {
-                    toasts.write(Toast::new(why, 4000).color(Color::srgb(1.0, 0.4, 0.4)));
+                    toasts.write(Toast::error(why, 4000));
                     continue;
                 }
             },
@@ -637,6 +694,7 @@ pub(super) fn run(
             | Action::Character(_)
             | Action::Track(_)
             | Action::Version
+            | Action::Welcome
             | Action::ScoreKeyExport
             | Action::ScoreKeyImport(_)
             | Action::ScoreSubmit { .. }
@@ -707,7 +765,7 @@ pub(super) fn say(
             continue;
         };
         if let Some(why) = refusal(action, &lobby, &race_on) {
-            toasts.write(Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error(why, 2500));
         } else if !lobby.say(text) {
             logs.write(Log::error("You are talking too fast"));
         }

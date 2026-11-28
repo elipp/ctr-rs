@@ -1,7 +1,7 @@
 //! What the session reports (`net::Event`), taken in once a frame.
 
 use super::commands::{copy_to_clipboard, net_info_text};
-use super::{ANNOUNCE_COLOR, Lobby, Member};
+use super::{ANNOUNCE_COLOR, Lobby, Member, Queue};
 use crate::console::{Log, console};
 use crate::maps;
 use crate::race_on::{CurrentRace, NetRace, RaceOn};
@@ -58,14 +58,33 @@ pub(super) fn report(
                 copy_to_clipboard(format!("/lobby join {ticket}"));
                 lobby.list("");
                 toasts.write(
-                    Toast::new(
+                    Toast::success(
                         "Lobby created!\nJoin command copied to clipboard".to_string(),
                         3000,
-                    )
-                    .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+                    ),
                 );
             }
             Event::Promoted { ticket, public } => promoted = Some((ticket, public)),
+            Event::Searching { players, waited } => {
+                let waited = waited.as_secs() as u32;
+                lobby.queue = Some(Queue::Searching { players, waited });
+            }
+            Event::Found(found) => {
+                lobby.queue = Some(Queue::Found {
+                    found,
+                    at: time.elapsed_secs(),
+                    left: score::matching::ACCEPT_SECONDS,
+                    accepted: false,
+                });
+            }
+            Event::Next { track, left, votes, ready } => {
+                let at = time.elapsed_secs() + left.as_secs_f32();
+                lobby.next = Some(super::NextRace { track, at, votes, ready });
+            }
+            Event::Requeued => {
+                lobby.queue = Some(Queue::Searching { players: 0, waited: 0 });
+                toasts.write(Toast::new("Someone declined: back in the queue", 3000));
+            }
             Event::PeerJoined(id) => debug!("{} joined", id.fmt_short()),
             Event::Lobby {
                 players,
@@ -73,8 +92,21 @@ pub(super) fn report(
                 you,
                 locked,
                 bots,
-            } => roster = Some((players, spectators, you, locked, bots)),
+            } => {
+                // The match's lobby is up: the queue is behind us.
+                if let Some(Queue::Found { found, .. }) = lobby.queue.take() {
+                    lobby.last_match = Some(found.lobby);
+                }
+                roster = Some((players, spectators, you, locked, bots));
+            }
             Event::Announce(text) => announce(&mut toasts, text),
+            Event::Countdown(countdown) => {
+                lobby.starting = countdown.map(|c| super::Starting {
+                    track: c.track,
+                    restart: c.restart,
+                    at: time.elapsed_secs() + c.ms as f32 / 1000.0,
+                });
+            }
             // (The scoreboard shows them: `scoreboard.rs`.)
             Event::Standings(standings) => {
                 cup_next = standings.next.as_ref().map(|(track, _)| *track);
@@ -138,6 +170,9 @@ pub(super) fn report(
                 retail.characters.iter_mut().for_each(on_roster);
                 stopped = false;
                 started_cup = Some(retail.cup);
+                lobby.again = false;
+                lobby.next = None;
+                lobby.starting = None;
                 let net = NetRace::new(players, slot);
                 started = Some(CurrentRace::new(
                     slot, locals, characters, bots, track, hash, rules, retail, Some(net),
@@ -202,12 +237,17 @@ pub(super) fn report(
             }
         }
     }
+    if let Some(Queue::Found { at, left, .. }) = &mut lobby.queue {
+        let gone = (time.elapsed_secs() - *at).max(0.0) as u32;
+        *left = score::matching::ACCEPT_SECONDS.saturating_sub(gone);
+    }
     // We handed the lobby over, and are a guest of the new host: what only the host has is theirs.
     if handed_over {
         lobby.joined = true;
         lobby.public = None;
         lobby.series = None;
         lobby.countdown = None;
+        lobby.countdown_told = None;
         lobby.roster.clear();
         lobby.roster_seen = false;
     }
@@ -220,11 +260,10 @@ pub(super) fn report(
         copy_to_clipboard(format!("/lobby join {ticket}"));
         lobby.list("");
         toasts.write(
-            Toast::new(
+            Toast::success(
                 "You are now the host!\nJoin command copied to clipboard".to_string(),
                 4000,
-            )
-            .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+            ),
         );
     }
     for (key, rtt, relay) in rtts {
@@ -257,8 +296,7 @@ pub(super) fn report(
         Some(Err(why)) => {
             warn!("could not list the lobby in the realm: {why}");
             toasts.write(
-                Toast::new(format!("Could not list the lobby: {why}"), 4000)
-                    .color(Color::srgb(1.0, 0.4, 0.4)),
+                Toast::error(format!("Could not list the lobby: {why}"), 4000),
             );
         }
         None => {}
@@ -321,13 +359,12 @@ pub(super) fn report(
             lobby.fetching = None;
         }
         toasts.write(
-            Toast::new(format!("Got the track {}", maps::name(track)), 2500)
-                .color(Color::linear_rgb(0.4, 1.0, 0.4)),
+            Toast::success(format!("Got the track {}", maps::name(track)), 2500),
         );
     }
     if let Some(why) = map_failed {
         warn!("{why}");
-        toasts.write(Toast::new(why, 6000).color(Color::srgb(1.0, 0.3, 0.3)));
+        toasts.write(Toast::error(why, 6000));
         // The race cannot start without the map: the others would wait for us for good.
         lobby.close(&mut race_on);
         return;
@@ -379,7 +416,10 @@ pub(super) fn report(
                 let text = match before {
                     // We know that we joined.
                     None if is_you => continue,
-                    None => format!("{who} joined as {name}"),
+                    None => {
+                        console!("{who} joined as {name}");
+                        continue;
+                    }
                     Some(was) if was.character != member.character => {
                         format!("{who} is now {name}")
                     }
@@ -389,13 +429,12 @@ pub(super) fn report(
                     }
                     Some(_) => continue,
                 };
-                toasts.write(Toast::new(text, 3000).color(Color::srgb(0.4, 1.0, 0.4)));
+                toasts.write(Toast::success(text, 3000));
             }
             for was in &lobby.roster {
                 if members.iter().all(|now| now.key != was.key) {
                     toasts.write(
-                        Toast::new(format!("{} left", was.label), 3000)
-                            .color(Color::srgb(1.0, 0.6, 0.3)),
+                        Toast::warning(format!("{} left", was.label), 3000),
                     );
                 }
             }
@@ -469,11 +508,10 @@ pub(super) fn report(
                 net.names,
             );
             toasts.write(
-                Toast::new(
+                Toast::error(
                     format!("Out of sync with player {} (tick {})", d.slot, d.tick),
                     8000,
-                )
-                .color(Color::srgb(1.0, 0.3, 0.3)),
+                ),
             );
         }
     }
@@ -484,7 +522,7 @@ pub(super) fn report(
         // Back to where we started: no lobby, no race.
         lobby.close(&mut race_on);
         toasts.write(
-            Toast::new(format!("Left the lobby: {why}"), 5000).color(Color::srgb(1.0, 0.3, 0.3)),
+            Toast::error(format!("Left the lobby: {why}"), 5000),
         );
     }
 }

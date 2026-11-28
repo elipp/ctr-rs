@@ -5580,7 +5580,9 @@ dependencies = [
  "bitcode",
  "bytes",
  "iroh",
+ "map",
  "n0-future",
+ "race",
  "realm-proto",
  "score",
  "tokio",
@@ -7547,6 +7549,7 @@ dependencies = [
 name = "score-server"
 version = "0.1.0"
 dependencies = [
+ "bitcode",
  "data-encoding",
  "instance",
  "iroh",

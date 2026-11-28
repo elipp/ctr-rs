@@ -94,8 +94,6 @@ const NOT_TO_CONTINUE: [KeyCode; 12] = [
     KeyCode::SuperRight,
 ];
 
-/// `CS_PODIUM_CONTINUE_TEXT_Y`: how far down the 216 lines of the screen the prompt is.
-const CONTINUE_TOP: f32 = 0xbe as f32 / 216.0 * 100.0;
 
 pub struct PodiumPlugin;
 
@@ -267,7 +265,7 @@ fn toggle(
     mut commands: Commands,
 ) {
     let refuse = |toasts: &mut MessageWriter<toast::Toast>, why: &str| {
-        toasts.write(toast::Toast::new(why, 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+        toasts.write(toast::Toast::error(why, 2500));
     };
     for action in actions.read() {
         let Action::DebugPodium(named) = action else {
@@ -363,8 +361,7 @@ fn show(world: &mut World, places: [Option<u8>; 3]) {
         }
         Err(why) => {
             world.write_message(
-                toast::Toast::new(format!("No podium: {why}"), 3000)
-                    .color(Color::srgb(1.0, 0.4, 0.4)),
+                toast::Toast::error(format!("No podium: {why}"), 3000),
             );
         }
     }
@@ -704,26 +701,15 @@ fn spawn_stand(
 }
 
 fn spawn_prompt(mut commands: Commands) {
+    let text = crate::font::CtrText::new(
+        "PRESS ANY KEY TO CONTINUE",
+        render::font::Font::Large,
+        render::font::Gradient::ORANGE,
+    );
     commands.spawn((
         Prompt,
         Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Percent(CONTINUE_TOP),
-            width: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        Pickable::IGNORE,
-        children![(
-            crate::font::CtrText::new(
-                "PRESS ANY KEY TO CONTINUE",
-                render::font::Font::Large,
-                render::font::Gradient::ORANGE,
-            )
-            .fixed(crate::hud::PIXEL),
-            Pickable::IGNORE,
-        )],
+        crate::bands::line(crate::bands::Band::PodiumContinue, text.fixed(crate::hud::PIXEL)),
     ));
 }
 

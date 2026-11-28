@@ -114,6 +114,11 @@ pub struct Lobby {
     chat_limit: net::RateLimit,
     /// The start or restart that is counting down.
     countdown: Option<Countdown>,
+    /// What the lobby was told of [`Lobby::countdown`] (`countdown::countdown`).
+    countdown_told: Option<countdown::Told>,
+    /// The countdown the host told us of (`Event::Countdown`), us too when we host: the race it
+    /// is to, and when it ends (`Time<Real>` seconds). The race's start ends it.
+    pub(crate) starting: Option<Starting>,
     /// The bots our races have, when we host (`/bots`). Kept when the lobby closes.
     pub bots: BotSettings,
     /// The track of the race that is about to start, as the standings of the race before told it
@@ -125,6 +130,37 @@ pub struct Lobby {
     /// Who stands on the podium of the cup that just ended (`podium.rs`), until it is shown: once
     /// our race is over.
     pub(crate) podium: Option<[Option<u8>; 3]>,
+    /// Quick play: where we are in the queue, until the match's lobby is up.
+    pub(crate) queue: Option<Queue>,
+    /// The session is quick play's: its lobby has a host only the session knows of.
+    pub(crate) quick_play: bool,
+    /// Quick play: we said we are ready for the next race (`/quick ready`), since the last
+    /// started.
+    pub(crate) again: bool,
+    /// How fast we have been saying we are ready or not (`net::RateLimit::ready`; none until the
+    /// first, as `Default` would be chat's).
+    ready_limit: Option<net::RateLimit>,
+    /// Quick play, waiting for a race: the next race, as the last `Event::Next` said.
+    pub(crate) next: Option<NextRace>,
+    /// Quick play: the lobby of the last match we were in (`net::Found::lobby`), to rejoin it by
+    /// (`/quick rejoin`). Kept when the lobby closes, which is when it is wanted.
+    pub(crate) last_match: Option<u64>,
+}
+
+/// Where a quick play session is before its match's lobby: the searching label
+/// (`hud::searching`) and the ready check (`match_found.rs`) show it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Queue {
+    /// `waited` seconds, as the matchmaker last said.
+    Searching { players: u16, waited: u32 },
+    Found {
+        found: net::Found,
+        /// When it came (`Time<Real>`), and the whole seconds left to answer, which `report`
+        /// keeps up.
+        at: f32,
+        left: u32,
+        accepted: bool,
+    },
 }
 
 /// How many bots the host's races have, of which kind, and how hard they race (`/bots`).
@@ -207,6 +243,25 @@ pub fn difficulty_name(difficulty: u16) -> &'static str {
     }
 }
 
+/// Quick play's next race of the match, between races.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NextRace {
+    pub(crate) track: u32,
+    /// When it starts, in `Time<Real>` seconds.
+    pub(crate) at: f32,
+    /// The votes for tracks, the most first.
+    pub(crate) votes: Vec<(u32, u8)>,
+    pub(crate) ready: Vec<EndpointId>,
+}
+
+/// A countdown to a race of the lobby ([`Lobby::starting`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Starting {
+    pub(crate) track: u32,
+    pub(crate) restart: bool,
+    pub(crate) at: f32,
+}
+
 /// A kart of the lobby's next race, as [`Lobby::rows`] gives it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Row {
@@ -223,6 +278,8 @@ pub struct Row {
     pub host: bool,
     /// Whether it is at our machine.
     pub you: bool,
+    /// Quick play, between races: its machine is ready for the next race.
+    pub ready: bool,
 }
 
 /// A player in the lobby, as the last [`Event::Lobby`] said.
@@ -267,6 +324,11 @@ impl Lobby {
     /// as the grid has room for. (The race gives the room to the host's extras first, then
     /// each guest's, in this order.)
     pub fn rows(&self) -> Vec<Row> {
+        // (Ours at once: the host's word on it comes a round trip later.)
+        let ready = |member: &Member| {
+            (member.you && self.again)
+                || self.next.as_ref().is_some_and(|next| next.ready.contains(&member.id))
+        };
         let mut rows = Vec::new();
         for (n, member) in self.roster.iter().enumerate() {
             rows.push(Row {
@@ -275,8 +337,9 @@ impl Lobby {
                 key: member.key.clone(),
                 id: member.id,
                 seat: 0,
-                host: n == 0,
+                host: n == 0 && self.shows_host(),
                 you: member.you,
+                ready: ready(member),
             });
         }
         // (The extras come after all the players, as they do in the race.)
@@ -290,6 +353,7 @@ impl Lobby {
                     seat: n as u8 + 1,
                     host: false,
                     you: member.you,
+                    ready: ready(member),
                 });
             }
         }
@@ -349,14 +413,7 @@ impl Lobby {
 
     /// Starts counting `then` down from [`COUNTDOWN_SECONDS`].
     fn count_down(&mut self, then: Then, now: f32, seconds: u32) {
-        // (A long wait is announced by whoever starts it; the last seconds are counted.)
-        if seconds <= COUNTDOWN_SECONDS {
-            let text = match then {
-                Then::Start { .. } => "Race starts in",
-                Then::Restart { .. } => "Race restarts in",
-            };
-            self.announce(format!("{text} {seconds}"));
-        }
+        // (A long wait is announced by whoever starts it; `countdown` tells the last seconds.)
         self.countdown = Some(Countdown {
             then,
             left: seconds,
@@ -526,9 +583,62 @@ impl Lobby {
     /// Leaves the lobby, ours or another's, and the race in it.
     pub fn close(&mut self, race_on: &mut RaceOn) {
         race_on.end();
-        let bots = self.bots;
+        let (bots, last_match) = (self.bots, self.last_match);
         *self = Lobby::default();
         self.bots = bots;
+        self.last_match = last_match;
+    }
+
+    /// Queues for quick play at the score server: the session hosts or joins the match it finds.
+    pub fn quick_play(&mut self, key: net::SecretKey, server: net::EndpointId, character: u8, extras: &[u8], nick: &str, rejoin: Option<u64>) {
+        self.session = Some(net::quick_play(server, key, character, extras, nick, race::SIM_VERSION, rejoin));
+        // (A guest throughout, the match's coordinator too: the session hosts a match unseen.)
+        self.joined = true;
+        self.spectator = false;
+        self.roster.clear();
+        self.roster_seen = false;
+        self.queue = Some(Queue::Searching { players: 0, waited: 0 });
+        self.quick_play = true;
+    }
+
+    /// Quick play: the match's lobby is up and no race is on: before its first race, or
+    /// between two (the ready check's time).
+    pub(crate) fn matched_waiting(&self, race: &RaceOn) -> bool {
+        // (A race that started is on for this, under the flag too.)
+        self.quick_play && self.queue.is_none() && race.newest().is_none()
+    }
+
+    /// Ready for the match's next race, or not after all: false if we are toggling too fast for
+    /// it (the host holds us to the same).
+    fn say_ready(&mut self, ready: bool) -> bool {
+        let now = net::Instant::now();
+        if !self.ready_limit.get_or_insert_with(|| net::RateLimit::ready(now)).allow(now) {
+            return false;
+        }
+        if let Some(session) = &self.session {
+            if ready {
+                session.again();
+            } else {
+                session.unready();
+            }
+        }
+        self.again = ready;
+        true
+    }
+
+    /// The match found, if it waits for our answer.
+    pub(crate) fn unanswered(&self) -> Option<&net::Found> {
+        match &self.queue {
+            Some(Queue::Found { found, accepted: false, .. }) => Some(found),
+            _ => None,
+        }
+    }
+
+    /// Accepts or declines the match found.
+    pub fn answer_match(&mut self, accept: bool) {
+        if let Some(session) = &self.session {
+            session.answer(accept);
+        }
     }
 
     /// Joins the lobby at `ticket`.
@@ -766,6 +876,12 @@ impl Lobby {
         }
     }
 
+    /// Whether the lobby's host (its first player, slot 0 of its races) is one to show: a quick
+    /// play lobby's is the session's business only.
+    pub fn shows_host(&self) -> bool {
+        self.is_open() && !self.quick_play
+    }
+
     /// Whether we host the lobby we are in.
     pub fn is_host(&self) -> bool {
         self.session.is_some() && !self.joined
@@ -874,6 +990,8 @@ impl Plugin for LobbyPlugin {
                         rollback_toasts,
                         pace,
                         waiting,
+                        hud::searching,
+                        hud::starting,
                     )
                         .chain()
                         .distributive_run_if(crate::drive::driving),

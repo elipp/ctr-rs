@@ -18,14 +18,11 @@
 //! everyone's there.
 
 use bevy::ecs::system::SystemParam;
-use bevy::picking::events::{PointerClick, PointerOver};
-use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-
-use render::font::Font;
 
 use crate::command::Action;
 use crate::font::{CtrText, TexelSize};
+use crate::rect_menu::{HasMenuItems, MenuItem, MenuItemText};
 use crate::toast::Toast;
 
 /// An effect to try, or a way to watch it (`/debug fx`).
@@ -151,6 +148,14 @@ pub struct Hold<'w> {
     pub fx: ResMut<'w, Effects>,
 }
 
+impl Hold<'_> {
+    /// A menu over the whole game has the controls of our kart (and its camera's buttons): it
+    /// coasts. Offline the pause menu holds the race instead.
+    pub fn has_controls(&self, shared: bool) -> bool {
+        shared && self.menu.open
+    }
+}
+
 /// Whether the level's weather is drawn.
 pub fn weather(fx: Res<Effects>) -> bool {
     fx.weather
@@ -190,7 +195,7 @@ fn act(
         };
         let offline_only = matches!(what, Fx::Speed(_) | Fx::Freeze(_) | Fx::Step);
         if offline_only && race_on.shared() {
-            toasts.write(Toast::new("Not online", 2500).color(Color::srgb(1.0, 0.4, 0.4)));
+            toasts.write(Toast::error("Not online", 2500));
             continue;
         }
         match what {
@@ -225,11 +230,19 @@ fn online(race_on: Res<crate::race_on::RaceOn>, mut fx: ResMut<Effects>) {
     }
 }
 
-/// F3 opens and closes the panel. (Not while the command line has the keyboard: it takes the
-/// keys it reads.)
-fn keys(keys: Res<ButtonInput<KeyCode>>, mut actions: MessageWriter<Action>) {
+/// F3 opens and closes the panel (not while the command line has the keyboard: it takes the
+/// keys it reads), and a click on a line does what it offers.
+fn keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    fx: Res<Effects>,
+    mut picked: ResMut<Picked>,
+    mut actions: MessageWriter<Action>,
+) {
     if keys.just_pressed(KeyCode::F3) {
         actions.write(Action::DebugFx(Fx::Panel));
+    }
+    if let Some(item) = picked.taken.take() {
+        actions.write(ITEMS[item].action(&fx));
     }
 }
 
@@ -305,17 +318,22 @@ impl Item {
 #[derive(Component)]
 struct Panel(TexelSize);
 
-/// A row, and its place in the panel.
-#[derive(Component)]
-struct Row(usize);
-
-/// The text of a row.
-#[derive(Component)]
-struct Line(Item);
-
-/// The row the mouse last pointed at, which has the menu's bar.
+/// The row the mouse last pointed at, which has the menu's bar, and the one it clicked.
 #[derive(Resource, Default)]
-struct Picked(usize);
+struct Picked {
+    at: usize,
+    taken: Option<usize>,
+}
+
+impl HasMenuItems for Picked {
+    fn point_item(&mut self, item: usize) {
+        self.at = item;
+    }
+
+    fn take_item(&mut self, item: usize) {
+        self.taken = Some(item);
+    }
+}
 
 /// Puts the panel up or takes it down (and builds it again for a new texel size), keeps its lines
 /// those of the settings now, and the bar on the row picked.
@@ -329,8 +347,8 @@ fn show(
     mode: Res<State<crate::Mode>>,
     mut podium_shown: Local<bool>,
     panels: Query<(Entity, &Panel)>,
-    mut lines: Query<(&Line, &mut CtrText)>,
-    mut rows: Query<(&Row, &mut BackgroundColor)>,
+    mut rows: Query<(&MenuItem<Picked>, &mut BackgroundColor)>,
+    mut lines: Query<(&MenuItemText<Picked>, &mut CtrText)>,
 ) {
     let panel = panels.single().ok();
     let stale = panel.is_some_and(|(_, built)| built.0 != *size);
@@ -343,57 +361,24 @@ fn show(
         spawn(&mut commands, &fx, &size, podium);
         return;
     }
-    if fx.is_changed() || *podium_shown != podium {
-        *podium_shown = podium;
-        for (Line(item), mut text) in &mut lines {
-            let label = item.label(&fx, podium);
-            if text.text != label {
-                text.text = label;
-            }
-        }
-    }
-    let bar = crate::rect_menu::bar(time.elapsed_secs());
-    for (Row(i), mut color) in &mut rows {
-        color.0 = if *i == picked.0 { bar } else { Color::NONE };
-    }
+    *podium_shown = podium;
+    crate::rect_menu::update_items(
+        picked.at,
+        time.elapsed_secs(),
+        |i| ITEMS[i].label(&fx, podium),
+        &mut rows,
+        &mut lines,
+    );
 }
 
 fn spawn(commands: &mut Commands, fx: &Effects, size: &TexelSize, podium: bool) {
-    let (panel, rows) = crate::rect_menu::spawn(commands, size, "EFFECTS", |node| {
+    let (panel, rows) = crate::rect_menu::spawn(commands, size, "EFFECTS", None, |node| {
         node.right = size.x(24);
         node.top = size.y(40);
     });
     commands
         .entity(panel)
         .insert((Panel(*size), GlobalZIndex(i32::MAX - 2)));
-    for (i, item) in ITEMS.into_iter().enumerate() {
-        commands
-            .spawn((
-                ChildOf(rows),
-                Row(i),
-                Node {
-                    height: size.y(crate::rect_menu::ROW),
-                    padding: UiRect::left(size.x(1)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_child((
-                Line(item),
-                CtrText::new(item.label(fx, podium), Font::Middle, crate::rect_menu::TEXT),
-                Pickable::IGNORE,
-            ))
-            .observe(move |_: On<PointerOver>, mut picked: ResMut<Picked>| {
-                picked.0 = i;
-            })
-            .observe(
-                move |click: On<PointerClick>,
-                      fx: Res<Effects>,
-                      mut actions: MessageWriter<Action>| {
-                    if click.button == PointerButton::Primary {
-                        actions.write(item.action(&fx));
-                    }
-                },
-            );
-    }
+    let labels = ITEMS.map(|item| item.label(fx, podium));
+    crate::rect_menu::spawn_items::<Picked>(commands, rows, size, labels, false);
 }

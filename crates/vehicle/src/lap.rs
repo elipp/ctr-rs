@@ -160,6 +160,15 @@ pub fn update(d: &mut Driver, level: &Level, laps: u8, event_time: i32) -> Lap {
         if d.actions_flag_set & actions::BEHIND_START_LINE != 0 {
             // The start line itself: the lap has not begun.
             d.actions_flag_set &= !actions::BEHIND_START_LINE;
+            // TODO(matchmaking): remove later. 0 laps is a debug sprint (CTR_QUICK_PLAY_LAPS=0) to
+            // iterate on quick play: the start line is the finish.
+            if laps == 0 && d.actions_flag_set & actions::RACE_FINISHED == 0 {
+                lap.time = event_time.wrapping_sub(d.lap_time);
+                d.lap_time = event_time;
+                lap.new_lap = true;
+                d.actions_flag_set |= actions::RACE_FINISHED;
+                lap.finished = true;
+            }
         } else {
             d.distance_to_finish_checkpoint = after as u32;
             // A kart that finished does not count more laps.

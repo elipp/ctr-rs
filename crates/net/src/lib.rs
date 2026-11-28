@@ -13,6 +13,7 @@
 mod conn;
 mod dotless;
 mod limit;
+mod matchmake;
 mod names;
 mod peers;
 mod pending;
@@ -25,6 +26,7 @@ pub mod wire;
 
 pub use iroh::{EndpointId, SecretKey};
 pub use limit::{CHAT_BURST, CHAT_PER_SECOND, RateLimit};
+pub use matchmake::{Found, quick_play};
 /// The clock of [`RateLimit`], as the session's: tokio's natively, the browser's in a browser
 /// (where std's panics).
 pub use n0_future::time::Instant;
@@ -36,7 +38,7 @@ pub use realm::{
 };
 pub use realm_proto::is_name_char as is_lobby_name_char;
 pub use ticket::Ticket;
-pub use wire::{LobbyBots, Pad, RetailBots, Rules, Score, Standings, Tick};
+pub use wire::{Countdown, LobbyBots, Pad, RetailBots, Rules, Score, Standings, Tick};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -161,12 +163,32 @@ fn dialer_builder() -> Builder {
     builder
 }
 
+/// How long a session's connection may hear nothing before it is taken for dead (iroh's default
+/// is 30 s). A crash sends no close: a lobby only learns that its host is gone (and its heir takes
+/// over, `session.rs` `Heard::Closed`) once this is up.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What keeps an idle connection alive within [`IDLE_TIMEOUT`] (iroh's default is 5 s). A
+/// background browser tab's timers fire once a second at worst, until Chrome's 5-minute heavy
+/// throttling, which drops it from its lobby anyway.
+const KEEP_ALIVE: Duration = Duration::from_secs(2);
+
+/// iroh's QUIC defaults (tuned for its hole punching, `QuicTransportConfig`), with a dead peer
+/// found sooner.
+fn session_transport() -> iroh::endpoint::QuicTransportConfig {
+    let idle = iroh::endpoint::IdleTimeout::try_from(IDLE_TIMEOUT).expect("fits a VarInt");
+    iroh::endpoint::QuicTransportConfig::builder()
+        .max_idle_timeout(Some(idle))
+        .keep_alive_interval(KEEP_ALIVE)
+        .build()
+}
+
 /// What a player is told of a request that cannot be taken at this moment (the lobby is in a
 /// race, a promotion is under way, ...), when the reason is plain to see.
 pub const NOT_NOW: &str = "You can't do that right now";
 
 /// What the clients speak, exchanged in the connection handshake.
-pub const ALPN: &[u8] = b"ctr-rust/lobby/19";
+pub const ALPN: &[u8] = b"ctr-rust/lobby/21";
 
 /// What the connections between the players of a race speak. They carry the pads and nothing
 /// else; the lobby's own connection (to the host) carries the rest. Every pair of players has
@@ -282,6 +304,8 @@ pub enum Event {
     /// Where the cup stands after one of its races, as the host broadcast it (see
     /// [`Session::standings`]).
     Standings(Standings),
+    /// The host counts down to a race (see [`Session::count_down`]), or called it off.
+    Countdown(Option<Countdown>),
     /// `from` said `text` to the lobby (see [`Session::say`]): us too, when we did, in the same
     /// order as everyone reads it. It is cleaned already.
     Chat { from: EndpointId, text: String },
@@ -329,6 +353,21 @@ pub enum Event {
     Listed(Result<(), String>),
     /// The session could not go on.
     Failed(String),
+    /// Quick play: queued with `players` in all (us included), for `waited`.
+    Searching { players: u16, waited: Duration },
+    /// Quick play: a group is formed; [`Session::answer`] it.
+    Found(Found),
+    /// Quick play: someone else declined the match found, and we are back in the queue.
+    Requeued,
+    /// Quick play, between races: the next race starts in `left`, on `track`, which are the
+    /// `votes` so far (track and count, the most first) decided; the players `ready` said they
+    /// are. Comes again on each change.
+    Next {
+        track: u32,
+        left: Duration,
+        votes: Vec<(u32, u8)>,
+        ready: Vec<EndpointId>,
+    },
 }
 
 /// A player in the lobby.
@@ -410,6 +449,7 @@ enum Command {
     },
     Announce(String),
     Standings(Standings),
+    Countdown(Option<Countdown>),
     Say(String),
     Character(u8),
     Lock(bool),
@@ -436,6 +476,13 @@ enum Command {
     Pause(Option<Tick>),
     Public(Option<Public>),
     Promote(EndpointId),
+    /// Quick play's answer to the match found.
+    Answer(bool),
+    /// Quick play, between races: ready for the next one (or not after all), or a vote for its
+    /// track.
+    Again,
+    Unready,
+    Vote(u32),
 }
 
 /// A lobby being hosted, or joined. Dropping it closes the connections.
@@ -448,6 +495,30 @@ pub struct Session {
 }
 
 impl Session {
+    /// Quick play: accepts the match of the last [`Event::Found`], or declines it (which keeps
+    /// us out of the queue for a while).
+    pub fn answer(&self, accept: bool) {
+        let _ = self.commands.send(Command::Answer(accept));
+    }
+
+    /// Quick play, after a race: we are ready for the next one, which everyone in the lobby
+    /// races anyway; when all are, it starts sooner ([`Event::Next`]).
+    pub fn again(&self) {
+        let _ = self.commands.send(Command::Again);
+    }
+
+    /// Quick play, after a race: not ready after all, until the next race's countdown begins.
+    /// If everyone was, the next race is back to its wait.
+    pub fn unready(&self) {
+        let _ = self.commands.send(Command::Unready);
+    }
+
+    /// Quick play, after a race: our vote for the next race's track (a disc track's `LevelId`;
+    /// a later vote replaces it). The most voted wins when the countdown begins.
+    pub fn vote(&self, track: u32) {
+        let _ = self.commands.send(Command::Vote(track));
+    }
+
     /// What happened since the last call.
     pub fn poll(&self) -> Vec<Event> {
         self.events.lock().unwrap().try_iter().collect()
@@ -489,6 +560,12 @@ impl Session {
     /// it.
     pub fn announce(&self, text: impl Into<String>) {
         let _ = self.commands.send(Command::Announce(text.into()));
+    }
+
+    /// Broadcasts the countdown to a race to everyone in the lobby, us included
+    /// ([`Event::Countdown`]), if we host it; `None` calls it off.
+    pub fn count_down(&self, countdown: Option<Countdown>) {
+        let _ = self.commands.send(Command::Countdown(countdown));
     }
 
     /// Broadcasts where the cup stands to everyone in the lobby, us included
@@ -666,7 +743,7 @@ pub fn host(character: u8, extras: &[u8], nick: &str, build: u32) -> Session {
     let nick = clean_nick(nick);
     let extras = clean_extras(extras);
     spawn(move |endpoint, io| {
-        Box::pin(run(endpoint, io, Role::Host, character, extras, nick, build, false))
+        Box::pin(run(endpoint, io, Role::Host, character, extras, nick, build, false, None))
     })
 }
 
@@ -699,6 +776,7 @@ fn enter(ticket: Ticket, character: u8, extras: Vec<u8>, nick: &str, build: u32,
             nick,
             build,
             spectator,
+            None,
         ))
     })
 }
@@ -717,7 +795,11 @@ fn spawn(run: impl FnOnce(Endpoint, Io) -> Task + Send + 'static) -> Session {
     // Made where it runs: the session is not `Send`.
     let session = move || async move {
         let result: Result<(), Error> = async {
-            let endpoint = endpoint_builder().alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()]).bind().await?;
+            let endpoint = endpoint_builder()
+                .alpns(vec![ALPN.to_vec(), MESH_ALPN.to_vec()])
+                .transport_config(session_transport())
+                .bind()
+                .await?;
             let io = Io {
                 events: events_tx.clone(),
                 commands: commands_rx,

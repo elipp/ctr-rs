@@ -33,14 +33,22 @@ const REPEAT_MS: u64 = 1000;
 /// The color of a toast unless it says otherwise.
 pub const DEFAULT_COLOR: Color = Color::WHITE;
 
+/// [`Toast::error`]'s, [`Toast::success`]'s and [`Toast::warning`]'s (the console's errors are
+/// `console::ERROR_COLOR`).
+pub const ERROR_COLOR: Color = Color::srgb(1.0, 0.4, 0.4);
+pub const SUCCESS_COLOR: Color = Color::srgb(0.4, 1.0, 0.4);
+pub const WARNING_COLOR: Color = Color::srgb(1.0, 0.6, 0.3);
+
 /// The grey behind a toast, so that it reads over any scene (the fade scales its alpha).
 const BACKGROUND: Color = Color::srgba(0.1, 0.1, 0.1, 0.45);
 
-/// The pixels between the weapon slot and the first toast.
-const BELOW_WEAPON: f32 = 8.0;
-
 /// The font size of a toast unless it says otherwise.
 const DEFAULT_SIZE: f32 = 28.0;
+
+/// How wide a toast's text is at most, in logical pixels (as the HUD's, which is 1024 wide): a
+/// longer one wraps at spaces.
+const MAX_WIDTH: f32 = 640.0;
+const PADDING: Vec2 = Vec2::new(12.0, 4.0);
 
 /// Asks the HUD to show `text` for `millis` milliseconds: white and of the default size, unless
 /// the builder methods say otherwise.
@@ -67,6 +75,20 @@ impl Toast {
             lower: 0.0,
             bold: false,
         }
+    }
+
+    /// Something asked for didn't happen.
+    pub fn error(text: impl Into<String>, millis: u64) -> Toast {
+        Toast::new(text, millis).color(ERROR_COLOR)
+    }
+
+    pub fn success(text: impl Into<String>, millis: u64) -> Toast {
+        Toast::new(text, millis).color(SUCCESS_COLOR)
+    }
+
+    /// Something went wrong that isn't ours to fix: someone left, a long rollback.
+    pub fn warning(text: impl Into<String>, millis: u64) -> Toast {
+        Toast::new(text, millis).color(WARNING_COLOR)
     }
 
     #[expect(dead_code, reason = "no toast is bold yet")]
@@ -105,14 +127,10 @@ pub(crate) fn gradient(color: Color) -> Gradient {
     }
 }
 
-/// Whether the game's font (the middle one, which toasts are in) can write `text`: it has no
-/// character the font lacks (apart from the new lines, which divide the text into the lines it
-/// writes).
+/// Whether the game's font (the middle one, which toasts are in) can write each line of `text`.
 fn in_game_font(text: &str) -> bool {
     !text.trim().is_empty()
-        && text
-            .chars()
-            .all(|c| c == '\n' || render::font::drawable(Font::Middle, c))
+        && text.lines().all(|line| crate::font::writes(Font::Middle, line))
 }
 
 /// The size of a texel of a toast in the game's font: the HUD's, or half of it for a small toast,
@@ -160,14 +178,8 @@ fn column(commands: &mut Commands) -> Entity {
         .spawn((
             ToastColumn,
             Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(crate::weapon::WEAPON_BOTTOM + BELOW_WEAPON),
-                left: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
-                ..default()
+                ..crate::bands::Band::Toasts.node()
             },
             // Toasts are not to eat clicks.
             Pickable::IGNORE,
@@ -182,6 +194,7 @@ fn show(
     mut showing: Query<&mut Showing>,
     mut last_shown: Local<HashMap<String, Duration>>,
     time: Res<Time<Real>>,
+    fonts: Option<Res<crate::font::Fonts>>,
 ) {
     if toasts.is_empty() {
         return;
@@ -212,7 +225,9 @@ fn show(
                 },
                 Node {
                     margin: UiRect::top(Val::Px(toast.lower)),
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                    padding: UiRect::axes(Val::Px(PADDING.x), Val::Px(PADDING.y)),
+                    // (Bevy's text wraps to it by itself.)
+                    max_width: Val::Px(MAX_WIDTH + 2.0 * PADDING.x),
                     // (The lines of a toast in the game's font are its children.)
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
@@ -223,17 +238,20 @@ fn show(
             ))
             .id();
         if in_game_font(&toast.text) {
-            for line in toast.text.lines().filter(|line| !line.trim().is_empty()) {
-                let text = CtrText::new(line.to_string(), Font::Middle, gradient(toast.color))
-                    .fixed(texel_size(toast.size));
+            let texels = texel_size(toast.size);
+            let lines = match &fonts {
+                Some(fonts) => {
+                    crate::font::wrap(fonts, Font::Middle, texels, toast.bold, &toast.text, MAX_WIDTH)
+                }
+                None => toast.text.lines().map(str::to_string).collect(),
+            };
+            for line in lines.into_iter().filter(|line| !line.trim().is_empty()) {
+                let text = CtrText::new(line, Font::Middle, gradient(toast.color)).fixed(texels);
                 let text = if toast.bold { text.bold() } else { text };
                 commands.spawn((text, ChildOf(shown)));
             }
         } else {
-            let font = TextFont {
-                font_size: toast.size.into(),
-                ..default()
-            };
+            let font = TextFont::from_font_size(toast.size);
             commands.spawn((
                 Text::new(toast.text.clone()),
                 if toast.bold { crate::font::bold(font) } else { font },
@@ -249,7 +267,8 @@ fn expire(
     time: Res<Time<Real>>,
     mut showing: Query<(Entity, &Showing, &mut BackgroundColor, &Children)>,
     mut texts: Query<&mut TextColor>,
-    lines: Query<&Children, With<CtrText>>,
+    lines: Query<(), With<CtrText>>,
+    descendants: Query<&Children>,
     mut glyphs: Query<&mut ImageNode>,
 ) {
     let now = time.elapsed();
@@ -261,13 +280,20 @@ fn expire(
         let alpha = (left.as_millis() as f32 / FADE_MS as f32).min(1.0);
         background.0 = BACKGROUND.with_alpha(BACKGROUND.alpha() * alpha);
         for &child in children {
-            if let Ok(mut color) = texts.get_mut(child) {
-                color.0 = showing.color.with_alpha(showing.color.alpha() * alpha);
+            if !lines.contains(child) {
+                if let Ok(mut color) = texts.get_mut(child) {
+                    color.0 = showing.color.with_alpha(showing.color.alpha() * alpha);
+                }
+                continue;
             }
-            // The glyphs of the game's font carry the colour; the fade is their alpha.
-            for &glyph in lines.get(child).into_iter().flatten() {
+            // The glyphs of the game's font carry the colour; the fade is their alpha. A keycap's
+            // label is a black `Text` under its glyph.
+            for glyph in descendants.iter_descendants(child) {
                 if let Ok(mut image) = glyphs.get_mut(glyph) {
                     image.color = Color::WHITE.with_alpha(alpha);
+                }
+                if let Ok(mut color) = texts.get_mut(glyph) {
+                    color.0 = Color::BLACK.with_alpha(alpha);
                 }
             }
         }
@@ -291,6 +317,9 @@ mod tests {
         assert!(in_game_font("two\nlines"));
         assert!(!in_game_font("Usage:\n/race start | stop"));
         assert!(!in_game_font(" "));
+        assert!(in_game_font("{select} GHOSTS"));
+        assert!(in_game_font("{key:Esc} dismiss"));
+        assert!(!in_game_font("{nope} dismiss"));
     }
 
     #[test]

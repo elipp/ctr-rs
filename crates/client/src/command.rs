@@ -52,6 +52,19 @@ pub enum Action {
         public: Option<String>,
     },
     JoinLobby(Ticket),
+    /// Queue for quick play (`/quick`), until a match is found and goes; or to get back into
+    /// the last match's lobby (`/quick rejoin`), if it is still on.
+    QuickPlay { rejoin: bool },
+    /// Accept the match found, or decline it.
+    AnswerMatch(bool),
+    /// Quick play, waiting for a race: ready for the next one (`/quick ready`), which starts sooner
+    /// once everyone is.
+    QuickReady,
+    /// Quick play, waiting for a race: not ready after all (`/quick unready`), until the next race's
+    /// countdown.
+    QuickUnready,
+    /// Quick play, waiting for a race: vote for the next race's track (`/quick vote <track>`).
+    VoteTrack(u32),
     /// Join a lobby to watch its races, not to drive in them.
     SpectateLobby(Ticket),
     /// Watch instead of driving, or drive again, in the lobby we are in (a guest's).
@@ -170,6 +183,8 @@ pub enum Action {
     SetConfig(crate::config::Setting),
     /// Toast the version of this build (`version.rs`).
     Version,
+    /// Show the welcome box again (`welcome.rs`).
+    Welcome,
     /// Print the player key (`player.rs`).
     ScoreKeyExport,
     /// Replace the player key with one exported before.
@@ -300,6 +315,18 @@ impl Action {
         let (name, rest) = word(line);
         match name {
             "lobby" => Action::lobby(rest),
+            "quick" => match rest {
+                "" => Ok(Action::QuickPlay { rejoin: false }),
+                "rejoin" => Ok(Action::QuickPlay { rejoin: true }),
+                "accept" => Ok(Action::AnswerMatch(true)),
+                "decline" => Ok(Action::AnswerMatch(false)),
+                "ready" => Ok(Action::QuickReady),
+                "unready" => Ok(Action::QuickUnready),
+                _ => match word(rest) {
+                    ("vote", track) if !track.is_empty() => Ok(Action::VoteTrack(crate::maps::resolve(track)?)),
+                    _ => Err("Usage: /quick [accept | decline | ready | unready | vote <track> | rejoin] (leave with /lobby close)".into()),
+                },
+            },
             "race" => Action::race(rest),
             "bots" => Action::bots(rest),
             "autopilot" => match rest {
@@ -342,6 +369,8 @@ impl Action {
             "config" => Action::config(rest),
             "version" if rest.is_empty() => Ok(Action::Version),
             "version" => Err("Usage: /version".into()),
+            "welcome" if rest.is_empty() => Ok(Action::Welcome),
+            "welcome" => Err("Usage: /welcome".into()),
             "clear" if rest.is_empty() => Ok(Action::Clear),
             "clear" => Err("Usage: /clear".into()),
             "net" => Action::net(rest),
@@ -1314,42 +1343,10 @@ impl Plugin for CommandPlugin {
         app.init_resource::<CommandLine>()
             .add_message::<Action>()
             .add_systems(PreUpdate, capture.after(InputSystems))
-            .add_systems(Update, (open, submit, show, show_offer_picture).chain())
-            .add_systems(Update, greet.run_if(crate::drive::driving));
+            .add_systems(Update, (open, submit, show, show_offer_picture).chain());
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, tell_page.after(submit));
     }
-}
-
-const GREETING: &str =
-    "Press Enter and / to see the list of available commands, or Escape/Start button to show the menu.";
-/// The page's touch controls: a tap on the console opens the line, and its Menu button is top
-/// right (`web/play.html`).
-#[cfg(target_arch = "wasm32")]
-const TOUCH_GREETING: &str =
-    "Tap here and type / to see the list of available commands, or the Menu button (top right) to show the menu.";
-const GREETING_COLOR: Color = Color::srgb(1.0, 0.95, 0.4);
-
-/// Once, when the first level is up (behind the loading screen it would go unseen).
-fn greet(
-    mut greeted: Local<bool>,
-    loading: Option<Res<crate::loading::Loading>>,
-    mut logs: MessageWriter<Log>,
-) {
-    if *greeted || loading.is_some() {
-        return;
-    }
-    *greeted = true;
-    logs.write(Log::default().then_bold("Welcome to ctr-rs!", GREETING_COLOR));
-    #[cfg(target_arch = "wasm32")]
-    let greeting = if crate::web::has_touch() {
-        TOUCH_GREETING
-    } else {
-        GREETING
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let greeting = GREETING;
-    logs.write(Log::colored(greeting, GREETING_COLOR));
 }
 
 /// Which of the modifier keys are held.
@@ -1598,10 +1595,7 @@ const ABOUT: Color = Color::srgb(0.6, 0.6, 0.6);
 
 /// The line and its suggestions, for the console to put at the bottom of its window.
 pub(crate) fn input_row() -> impl Bundle {
-    let font = TextFont {
-        font_size: FONT_SIZE.into(),
-        ..default()
-    };
+    let font = TextFont::from_font_size(FONT_SIZE);
     (
         InputRow,
         Node {
@@ -1737,7 +1731,7 @@ fn show(
         (None, Some(c)) => (c.to_string(), &ghost[c.len_utf8()..]),
         (None, None) => (" ".to_string(), ""),
     };
-    let blink_on = ((time.elapsed_secs() / BLINK_SECONDS) as u32).is_multiple_of(2);
+    let blink_on = crate::blink::on(time.elapsed_secs(), BLINK_SECONDS);
     for mut text in &mut prompt {
         assign(&mut text.0, &format!("> {before}"));
     }
@@ -1783,10 +1777,7 @@ fn show(
     } else {
         Display::Grid
     };
-    let font = TextFont {
-        font_size: FONT_SIZE.into(),
-        ..default()
-    };
+    let font = TextFont::from_font_size(FONT_SIZE);
     for (name, about, color) in rows {
         commands.spawn((
             Text::new(name),

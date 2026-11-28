@@ -3,6 +3,9 @@
 //! level, and ranked by what that replay times. Reads are open; submits are signed by a player
 //! key.
 //!
+//! The same endpoint runs the quick-play matchmaker on an ALPN of its own (`matching.rs`,
+//! `matchmaker.rs`, MATCHMAKING.md).
+//!
 //! Like the realm, the endpoint has no IP transports: it is reached through the relay only, so it
 //! never learns a player's address. Its key is kept in a file, so that its id stays the same.
 //!
@@ -11,6 +14,8 @@
 
 mod auth;
 mod db;
+mod matching;
+mod matchmaker;
 mod operator;
 mod suspect;
 mod tracks;
@@ -110,7 +115,7 @@ async fn bind(key: SecretKey, port: u16) -> Result<Endpoint, Error> {
     let builder = || {
         Endpoint::builder(presets::N0)
             .secret_key(key.clone())
-            .alpns(vec![score::ALPN.to_vec()])
+            .alpns(vec![score::ALPN.to_vec(), score::matching::MATCH_ALPN.to_vec()])
             .clear_ip_transports()
     };
     // Both families when the host has them, and IPv4 alone when it does not.
@@ -132,6 +137,7 @@ struct App {
     verifiers: Semaphore,
     seen: Seen,
     limits: Limits,
+    matchmaker: Mutex<matchmaker::Matchmaker>,
 }
 
 fn unix_now() -> u64 {
@@ -432,7 +438,18 @@ async fn run() -> Result<(), Error> {
         verifiers: Semaphore::new(cores.saturating_sub(1).max(1)),
         seen: Seen::default(),
         limits: Limits::default(),
+        matchmaker: Mutex::default(),
     });
+    {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                every.tick().await;
+                app.matchmaker.lock().unwrap().tick(unix_now());
+            }
+        });
+    }
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let shutdown = shutdown();
     tokio::pin!(shutdown);
@@ -453,7 +470,11 @@ async fn run() -> Result<(), Error> {
         let app = app.clone();
         tokio::spawn(async move {
             if let Ok(connection) = accepting.await {
-                serve(app, connection).await;
+                if connection.alpn() == score::matching::MATCH_ALPN {
+                    matching::serve(app, connection).await;
+                } else {
+                    serve(app, connection).await;
+                }
             }
             drop(slot);
         });
@@ -472,6 +493,8 @@ async fn main() {
         )
         .with_ansi(std::io::stdout().is_terminal())
         .init();
+    // A bad CTR_QUICK_PLAY_LAPS panics here rather than at the first match.
+    matchmaker::quick_laps();
     if let Err(e) = run().await {
         error!("{e}");
         std::process::exit(1);

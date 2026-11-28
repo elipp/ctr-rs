@@ -43,70 +43,73 @@ pub struct Sim {
     start: Objects,
     /// Our kart among the race's: the one the camera and the HUD follow (a spectator's changes).
     pub own: usize,
+    /// What a race that is not a solo run was started from: its recording's header.
+    pub setup: Option<race::multi::Setup>,
+}
+
+/// What a race starts as.
+pub enum Start<'a> {
+    FreeDrive,
+    Solo {
+        kind: race::solo::Kind,
+        laps: u8,
+        seed: u16,
+    },
+    /// A lobby's, or one alone with bots; `retail` are the retail bots' karts.
+    Race {
+        setup: race::multi::Setup,
+        retail: &'a [KartSpec],
+    },
 }
 
 impl Sim {
     pub fn new(level: &Level, objects: Objects, specs: &[KartSpec]) -> Sim {
         Sim {
-            race: Sim::rollback(level, objects.clone(), specs, 0, None, false, None, None),
+            race: Sim::rollback(level, objects.clone(), specs, 0, &Start::FreeDrive, false),
             start: objects,
             own: 0,
+            setup: None,
         }
     }
 
-    /// The race at tick 0 with the karts `specs`, ours being kart `own`; `rules` are a race's, of
-    /// a lobby or alone, with what it plays (None for a free drive). A `spectator`
-    /// drives none: `own` is the kart it is following, and no pad of it is waited for. The `bots`
-    /// race after the players; the `band` is the learned bots' rubber band.
-    #[allow(clippy::too_many_arguments)]
+    /// The race at tick 0 with the karts `specs`, ours being kart `own`. A `spectator` drives
+    /// none: `own` is the kart it is following, and no pad of it is waited for.
     fn rollback(
         level: &Level,
         objects: Objects,
         specs: &[KartSpec],
         own: usize,
-        rules: Option<(net::Rules, race::Mode)>,
+        start: &Start,
         spectator: bool,
-        bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
-        band: Option<race::Band>,
     ) -> Rollback<Race> {
-        let solo = rules.and_then(|(rules, mode)| Some((rules, race::solo::Kind::of(mode)?)));
-        if let Some((rules, (kind, laps))) = solo {
-            // `/race relic|time-trial` refuses a lobby, split screen and bots.
-            let [spec] = specs else {
-                panic!("a solo run is for one kart, not {}", specs.len());
-            };
-            let race = race::solo::start(level, objects, *spec, kind, laps, rules.seed);
-            return Rollback::new(race, 1, Some(0), ROLLBACK_WINDOW).record(0, spec.character);
-        }
-        let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
-        race.band = band;
-        if let Some((setup, bots)) = bots.filter(|(_, bots)| !bots.is_empty()) {
-            race.add_bots(level, setup, bots);
-        }
-        // A race starts with the ceremony; a free drive drives off at once.
-        if let Some((rules, mode)) = rules {
-            race.mode = mode;
-            race.objects.random_number = i32::from(rules.seed);
-            race.roulette = vehicle::item::Roulette {
-                masked: rules.masked_weapons,
-                odds: if rules.even_odds {
-                    vehicle::item::Odds::Even
-                } else {
-                    vehicle::item::Odds::Retail
-                },
-            };
-            race.start_ceremony(level);
-        } else {
-            race.mode = race::Mode::FreeDrive;
-        }
+        let race = match start {
+            Start::Solo { kind, laps, seed } => {
+                // `/race relic|time-trial` refuses a lobby, split screen and bots.
+                let [spec] = specs else {
+                    panic!("a solo run is for one kart, not {}", specs.len());
+                };
+                let race = race::solo::start(level, objects, *spec, *kind, *laps, *seed);
+                return Rollback::new(race, 1, Some(0), ROLLBACK_WINDOW).record([spec.character]);
+            }
+            Start::Race { setup, retail } => race::multi::start(level, objects, setup, specs, retail),
+            Start::FreeDrive => {
+                let mut race = Race::new(level, objects, specs, crate::remote::kart_collisions());
+                race.mode = race::Mode::FreeDrive;
+                race
+            }
+        };
         let rollback = Rollback::new(
             race,
             specs.len(),
             (!specs.is_empty() && !spectator).then_some(own),
             ROLLBACK_WINDOW,
         );
-        // Nobody to compare with alone (the bots are in our sim alone), or offline.
-        if specs.len() > 1 && rules.is_some() {
+        let Start::Race { .. } = start else {
+            return rollback;
+        };
+        let rollback = rollback.record(specs.iter().map(|spec| spec.character));
+        // Nobody to compare with alone (the bots are in our sim alone).
+        if specs.len() > 1 {
             rollback.check_every(CHECK_EVERY)
         } else {
             rollback
@@ -115,27 +118,19 @@ impl Sim {
 
     /// Puts the race back to tick 0 with the karts `specs`, ours being kart `own` (or, for a
     /// `spectator`, the one that is followed); every object is as it was at the start.
-    #[allow(clippy::too_many_arguments)]
     pub fn restart(
         &mut self,
         level: &Level,
         specs: &[KartSpec],
         own: usize,
-        rules: Option<(net::Rules, race::Mode)>,
+        start: Start,
         spectator: bool,
-        bots: Option<(vehicle::bot::Setup, &[KartSpec])>,
-        band: Option<race::Band>,
     ) {
-        self.race = Sim::rollback(
-            level,
-            self.start.clone(),
-            specs,
-            own,
-            rules,
-            spectator,
-            bots,
-            band,
-        );
+        self.race = Sim::rollback(level, self.start.clone(), specs, own, &start, spectator);
+        self.setup = match start {
+            Start::Race { setup, .. } => Some(setup),
+            Start::FreeDrive | Start::Solo { .. } => None,
+        };
         self.own = own;
     }
 

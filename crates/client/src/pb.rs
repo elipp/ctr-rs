@@ -436,7 +436,7 @@ fn stored(
 /// and logged.
 pub fn finished(level: &loader::lev::Level, sim: &Sim, race: &CurrentRace) -> Option<Verdict> {
     let spec = *race.specs.first()?;
-    let demo = sim.race.recorded()?.clone();
+    let demo = sim.race.recorded()?.demos.first()?.clone();
     let Some(run) = Run::of_finished(&sim.race, race.hash, race.rules.seed, demo) else {
         error!("personal best: the recording doesn't reach the finish");
         return None;

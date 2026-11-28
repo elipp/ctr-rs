@@ -270,10 +270,22 @@ pub struct Placed {
     pub x: usize,
 }
 
+/// Space kept on a line for something other than a glyph, e.g. a button picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlacedBox {
+    /// What `layout_with`'s `boxed` named it.
+    pub id: usize,
+    pub x: usize,
+    pub width: usize,
+    /// How many glyphs are left of it, which a bold line shifts it by a texel each for.
+    pub after_glyphs: usize,
+}
+
 /// A line of text in texels.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
     pub glyphs: Vec<Placed>,
+    pub boxes: Vec<PlacedBox>,
     pub width: usize,
     pub height: usize,
 }
@@ -284,6 +296,8 @@ pub struct FontAtlas {
     glyphs: Vec<Glyph>,
     /// How wide every digit is on a line: the widest one's width.
     digit_width: usize,
+    /// The rows the letters have texels in, `start..end`: the font's cells have empty rows below.
+    letter_rows: (usize, usize),
     /// The grey picture of the glyphs: one row of cells, as tall as the tallest.
     atlas: Atlas,
 }
@@ -355,9 +369,13 @@ impl FontAtlas {
             });
             x += w;
         }
+        let inked = |y: usize, glyph: &Glyph| (glyph.x..glyph.x + glyph.width).any(|x| rgba[(y * width + x) * 4 + 3] > 0);
+        let letters = glyphs.get(10..36)?;
+        let rows: Vec<usize> = (0..height).filter(|&y| letters.iter().any(|g| inked(y, g))).collect();
         Some(FontAtlas {
             font,
             digit_width: glyphs.iter().take(10).map(Glyph::ink_width).max()?,
+            letter_rows: (*rows.first()?, rows.last()? + 1),
             glyphs,
             atlas: Atlas {
                 width,
@@ -375,17 +393,60 @@ impl FontAtlas {
         &self.glyphs
     }
 
+    /// The rows of a line the letters have texels in, `start..end`.
+    pub fn letter_rows(&self) -> (usize, usize) {
+        self.letter_rows
+    }
+
     /// Where the glyphs of `text` go. A character the font does not have shows as `?`. Every digit
     /// is as wide as the widest, in the middle of that width, so that a number that counts does
     /// not change its width.
     pub fn layout(&self, text: &str) -> Line {
+        self.layout_with(text, |_| None)
+    }
+
+    /// [`layout`](Self::layout), with a `{name}` that `boxed` gives an `(id, width)` for kept
+    /// as a box that wide, spaced like a glyph. Any other `{` is just a character. A space right
+    /// after a box is half as wide: a button's glyph or keycap is a word of its own already, and
+    /// a whole space reads as a gap ("H  READY").
+    pub fn layout_with<'t>(
+        &self,
+        text: &'t str,
+        mut boxed: impl FnMut(&'t str) -> Option<(usize, usize)>,
+    ) -> Line {
         let mut glyphs = Vec::new();
+        let mut boxes = Vec::new();
         let (mut x, mut width) = (0, 0);
-        for c in text.chars() {
-            if c == ' ' {
-                x += self.font.space();
+        let mut chars = text.char_indices();
+        let mut after_box = false;
+        while let Some((i, c)) = chars.next() {
+            let named = (c == '{')
+                .then(|| text[i + 1..].find('}'))
+                .flatten()
+                .and_then(|end| Some((end, boxed(&text[i + 1..i + 1 + end])?)));
+            if let Some((end, (id, w))) = named {
+                boxes.push(PlacedBox {
+                    id,
+                    x,
+                    width: w,
+                    after_glyphs: glyphs.len(),
+                });
+                x += w;
+                width = x;
+                x += GAP;
+                after_box = true;
+                let resume = i + 1 + end + 1;
+                while chars.offset() < resume {
+                    chars.next();
+                }
                 continue;
             }
+            if c == ' ' {
+                x += if after_box { self.font.space() / 2 } else { self.font.space() };
+                after_box = false;
+                continue;
+            }
+            after_box = false;
             // The large font has no `#`: it shows as the `?` of a character the fonts lack.
             let at = |i: Option<usize>| i.and_then(|i| self.glyphs.get(i));
             let Some(&glyph) = at(glyph(c)).or(at(Some(QUESTION))) else {
@@ -406,6 +467,7 @@ impl FontAtlas {
         }
         Line {
             glyphs,
+            boxes,
             width,
             height: self.font.line_height(),
         }
@@ -527,6 +589,29 @@ mod tests {
             2 * ink('A') + Font::Large.space() + GAP
         );
         assert_eq!(large.layout("ä").glyphs, large.layout("?").glyphs);
+    }
+
+    #[test]
+    fn needs_disc_a_named_box_is_spaced_like_a_glyph() {
+        let Some([large, _]) = fonts() else {
+            return;
+        };
+        let boxed = |name: &str| (name == "x").then_some((7, 10));
+        let ink = |c| large.glyphs()[glyph(c).unwrap()].ink_width();
+        let line = large.layout_with("A{x} B", boxed);
+        assert_eq!(
+            line.boxes,
+            [PlacedBox {
+                id: 7,
+                x: ink('A') + GAP,
+                width: 10,
+                after_glyphs: 1
+            }]
+        );
+        assert_eq!(line.glyphs[1].x, ink('A') + GAP + 10 + GAP + Font::Large.space() / 2);
+        // Unnamed or unclosed, `{` is just a character.
+        assert!(large.layout_with("{y}", boxed).boxes.is_empty());
+        assert_eq!(large.layout_with("{x", boxed).glyphs.len(), 2);
     }
 
     #[test]

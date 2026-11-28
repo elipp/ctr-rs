@@ -28,8 +28,9 @@ pub(crate) enum Role {
 pub(crate) struct HostState {
     /// The players that joined, in the order they did.
     pub(crate) guests: Vec<Guest>,
-    /// How fast each guest has been talking.
+    /// How fast each guest has been talking, and saying it is ready or not.
     pub(crate) talkers: HashMap<EndpointId, RateLimit>,
+    pub(crate) readiers: HashMap<EndpointId, RateLimit>,
     /// The players of the race that left it. They are not told of in the lobby, and go from
     /// `guests` when the next race starts.
     pub(crate) gone: HashSet<EndpointId>,

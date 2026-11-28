@@ -1,0 +1,6 @@
+# The icons `src/icons.rs` uses, cut out of Phosphor's fill weight (`fonts/src`): one code point
+# per constant there. Run again after adding one.
+icons := "U+E4DA,U+E616,U+E184,U+EBA6,U+E182,U+E186"
+
+icons:
+    uv run --with fonttools pyftsubset fonts/src/Phosphor-Fill.ttf --unicodes={{icons}} --output-file=fonts/Phosphor-Fill-subset.ttf

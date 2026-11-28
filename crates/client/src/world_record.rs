@@ -23,8 +23,6 @@ const FRESH_SECS: u64 = 60;
 /// How many `/score top` lists.
 const TOP: u32 = 10;
 
-const RED: Color = Color::srgb(1.0, 0.4, 0.4);
-
 /// A board's #1.
 pub struct Record {
     pub entry: Entry,
@@ -311,7 +309,7 @@ fn top(
                 tops.0.push((name, board, answer));
             }
             Err(why) => {
-                toasts.write(Toast::new(why, 3000).color(RED));
+                toasts.write(Toast::error(why, 3000));
             }
         }
     }
@@ -378,11 +376,11 @@ fn listed(
             }
             Ok(other) => {
                 warn!("the score server answered a top with {other:?}");
-                toasts.write(Toast::new("The board answered nonsense", 3000).color(RED));
+                toasts.write(Toast::error("The board answered nonsense", 3000));
             }
             Err(e) => {
                 toasts
-                    .write(Toast::new(format!("Could not reach the board: {e}"), 5000).color(RED));
+                    .write(Toast::error(format!("Could not reach the board: {e}"), 5000));
             }
         }
     }

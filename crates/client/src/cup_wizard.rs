@@ -154,6 +154,12 @@ pub(crate) fn items(
             "",
             Kind::Cycle(format!("{}. {}", n + 1, maps::name(track))),
         );
+        // (`remove` keeps the last.)
+        let row = if draft.tracks.len() > 1 {
+            row.prompt(crate::pause::remove_prompt("delete track"))
+        } else {
+            row
+        };
         items.push(if n == 0 { row.starts_section() } else { row });
     }
     if draft.tracks.len() < MAX_TRACKS {

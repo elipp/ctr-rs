@@ -202,6 +202,7 @@ pub(super) fn finish(
             .filter_map(|(_, slot)| race.finisher(slot))
             .collect()
     };
+    crate::recordings::save(&sim, race);
     lobby.end_race(&mut race_on);
     if lobby.is_host() {
         lobby.race_over(players, &finishers, time.elapsed_secs());
@@ -296,7 +297,7 @@ pub(super) fn rollback_toasts(
         format!("Rollback: {ticks} ticks")
     };
     let color = if ticks >= ROLLBACK_WARN_TICKS {
-        Color::srgb(1.0, 0.6, 0.3)
+        crate::toast::WARNING_COLOR
     } else {
         Color::srgb(0.8, 0.8, 0.8)
     };

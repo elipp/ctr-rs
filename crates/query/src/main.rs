@@ -67,6 +67,12 @@ commands:
                                       leaderboard would and prints its outcome; MAPS is the
                                       run's `.ctrmap`, or a folder of them to find it in by hash
 
+  replay RECORDING MAPS               plays a race recording (a client's `races/*.race`) on our
+                                      sim: the finishing order, and whether the recorder's
+                                      hashes hold; MAPS as for verify
+  diff A B                            two recordings of one race (two clients'): the first tick
+                                      their pads differ at, and their hashes
+
 environment: CTR_BIN is the disc image.
 ";
 
@@ -1133,6 +1139,20 @@ fn run() -> Result<(), String> {
         args.finish()?;
         return verify(&run, &maps);
     }
+    if command == "replay" {
+        let mut args = Args(args);
+        let recording = PathBuf::from(args.positional("RECORDING")?);
+        let maps = PathBuf::from(args.positional("MAPS")?);
+        args.finish()?;
+        return replay(&recording, &maps);
+    }
+    if command == "diff" {
+        let mut args = Args(args);
+        let a = PathBuf::from(args.positional("A")?);
+        let b = PathBuf::from(args.positional("B")?);
+        args.finish()?;
+        return diff(&a, &b);
+    }
     if command == "strings" {
         return strings(Args(args));
     }
@@ -1267,6 +1287,90 @@ fn verify(run: &std::path::Path, maps: &std::path::Path) -> Result<(), String> {
             o.finish_tick
         ),
         None => println!("no finish"),
+    }
+    Ok(())
+}
+
+fn read_recording(path: &std::path::Path) -> Result<race::multi::Recording, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    race::multi::Recording::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn describe(rec: &race::multi::Recording) {
+    let setup = &rec.setup;
+    println!(
+        "track {}, map {:016x}, {} laps, seed {}, sim {} (ours {}), {} ticks, recorded by {}",
+        setup.track,
+        setup.map_hash,
+        setup.laps,
+        setup.seed,
+        rec.sim_version,
+        race::SIM_VERSION,
+        rec.length(),
+        rec.recorder.map_or("a spectator".to_string(), |slot| format!("slot {slot}")),
+    );
+    let brains = rec.demos.len().saturating_sub(setup.brain_bots as usize);
+    for (slot, demo) in rec.demos.iter().enumerate() {
+        let name = rec.names.get(slot).map_or("?", String::as_str);
+        let bot = if slot >= brains { " (brain bot)" } else { "" };
+        let left = rec.left.get(slot).copied().flatten().map_or(String::new(), |at| format!(", left at tick {at}"));
+        println!("  {slot}: {name}{bot}, character {}, {} changes{left}", demo.character, demo.changes.len());
+    }
+    if !setup.retail.is_empty() {
+        println!("  retail bots {:?}, difficulty {}, cup {}", setup.retail, setup.difficulty, setup.cup);
+    }
+}
+
+/// A race recording played on our sim: who finished where, and whether its hashes held.
+fn replay(path: &std::path::Path, maps: &std::path::Path) -> Result<(), String> {
+    let rec = read_recording(path)?;
+    describe(&rec);
+    let map = find_map(maps, rec.setup.map_hash)?;
+    let track = race::track::track_of(&map).map_err(|e| e.to_string())?;
+    let made = race::track::sim_level(&map, track, Default::default());
+    for why in &made.left_out {
+        println!("a bot path amendment is left out: {why}");
+    }
+    let objects = instance::Objects::new(&made.level, made.dram);
+    let setup = &rec.setup;
+    if let Some(c) = (setup.characters.iter().chain(&setup.retail))
+        .find(|&&c| race::track::ANIM_NUM_FRAMES.get(c as usize).is_none())
+    {
+        return Err(format!("no character {c}"));
+    }
+    let frames = |c: usize| race::track::ANIM_NUM_FRAMES[c];
+    let (specs, retail) = rec.setup.specs(frames);
+    let outcome = rec.replay(&made.level, objects, &specs, &retail);
+    for (place, (slot, tick)) in outcome.finishers.iter().enumerate() {
+        let name = rec.names.get(*slot).map_or("bot", String::as_str);
+        println!("{}. slot {slot} {name} at tick {tick}", place + 1);
+    }
+    match outcome.mismatch {
+        Some(tick) => println!("the replay parts from the recorder's sim at tick {tick} (or before)"),
+        None if rec.checksums.is_empty() => println!("no hashes to check against"),
+        None => println!("all {} hashes match", rec.checksums.len()),
+    }
+    Ok(())
+}
+
+/// Two recordings of one race (by two clients): where their pads or their hashes first differ.
+fn diff(a: &std::path::Path, b: &std::path::Path) -> Result<(), String> {
+    let (ra, rb) = (read_recording(a)?, read_recording(b)?);
+    describe(&ra);
+    describe(&rb);
+    if ra.setup != rb.setup {
+        println!("not the same race: the setups differ");
+    }
+    match ra.first_pad_difference(&rb) {
+        Some((tick, slot)) => println!("pads differ first at tick {tick}, slot {slot}"),
+        None => println!("pads agree over {} ticks", ra.length().min(rb.length())),
+    }
+    if ra.left != rb.left {
+        println!("leaves differ: {:?} vs {:?}", ra.left, rb.left);
+    }
+    match ra.first_hash_difference(&rb) {
+        Some(tick) => println!("hashes differ first at tick {tick}"),
+        None => println!("hashes agree"),
     }
     Ok(())
 }

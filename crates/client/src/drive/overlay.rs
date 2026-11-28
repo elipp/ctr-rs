@@ -23,7 +23,7 @@ pub(crate) fn debug_text_command(
         if let crate::command::Action::DebugHud(setting) = action {
             config.debug_hud = setting.unwrap_or(!config.debug_hud);
             if let Err(why) = config.save() {
-                toasts.write(crate::toast::Toast::new(why, 3000).color(Color::srgb(1.0, 0.4, 0.4)));
+                toasts.write(crate::toast::Toast::error(why, 3000));
             }
         }
     }
@@ -213,8 +213,7 @@ pub(super) fn split_toast(
         return;
     }
     *announced = number;
-    let green = Color::srgb(0.4, 1.0, 0.4);
-    let red = Color::srgb(1.0, 0.3, 0.3);
+    let (green, red) = (crate::toast::SUCCESS_COLOR, crate::toast::ERROR_COLOR);
     let toast = if race.solo.is_none() {
         if behind == 0 {
             crate::toast::Toast::new(race::clock::time(time), SPLIT_SHOW_MS).color(green)

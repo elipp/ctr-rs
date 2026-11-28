@@ -1,55 +1,46 @@
-//! The players in the lobby, down the left of the screen while no race is on, under a title in the
-//! game's font ([`TITLE`]): each one's portrait
-//! (`render::portraits`) and name, which is the nickname or, without one, the short key. (The
-//! names are for Bevy's `Text`: a nickname may have anything in it.) The host, always the first,
-//! has a crown on its portrait's corner. The other players at a machine (split screen) follow
-//! the players, each named "name@2", "name@3", as in the race. Our names are in [`HIGHLIGHT`], as in the race's
-//! leaderboard. (The rows are `portrait_row`'s, which the leaderboard's are too.) After the
-//! players, the bots the next race fills the grid with ("+3 bots", and under it "medium, brain"),
-//! if any, and then those who only watch.
-
+//! The lobby's roster while no race is on. The rows are `portrait_row`'s, shared with the race's
+//! leaderboard. Names are Bevy `Text`, not the game's font: a nickname may have anything in it.
 use bevy::prelude::*;
 use render::font::{Font, Gradient};
 
 use crate::font::CtrText;
 use crate::hud;
-use crate::leaderboard::ICON_X;
 use crate::lobby::{Lobby, Row};
 use crate::portrait_row::{
-    BACKGROUND, HIGHLIGHT, PING_FONT_SIZE, Portraits, portraits, spawn_host_badge,
-    spawn_portrait, spawn_tags,
+    BACKGROUND, DIM, HIGHLIGHT, HOST_COLOR, PING_FONT_SIZE, READY_COLOR, TAG_PADDING, Portraits,
+    portraits, spawn_empty_portrait, spawn_portrait, tag,
 };
 
-/// The column of rows, with the players it was built for, and which of them is us, and the bots
-/// (how many, and what kind).
-#[derive(Component)]
-struct List(Vec<Row>, Vec<(String, String)>, (usize, String));
+const OPEN: &str = "Open";
 
-/// How far the whole list (the title, the portraits and the spectators) is moved down, in lines
-/// of retail's screen, to be clear of the toasts and the chat at the top.
+/// Everything the column was built from: any change rebuilds it.
+#[derive(Component)]
+struct List(Vec<Row>, Vec<(String, String)>, (usize, String), Option<String>, usize);
+
+/// Clear of the toasts at the top.
 const TABLE_Y: f32 = 12.0;
 
-/// What the list is headed with. (The fonts have capitals, and this is how they show.)
+/// Capitals: the game's fonts have no lowercase.
 const TITLE: &str = "PLAYERS IN LOBBY:";
 
-/// Where the title is, in lines of retail's screen. It is [`Font::Middle`], 8 lines tall.
 const TITLE_Y: f32 = 2.0;
 
-/// Where the first portrait is, in lines of retail's screen: under the title, and high enough
-/// that 8 players fit (8 rows of [`SLOT`] lines make 233 of the 240).
 const FIRST_Y: f32 = 12.0;
 
-/// The lines from one row to the next: a little more than the leaderboard's, to make room for
-/// the names, which hang under the portraits.
-const SLOT: f32 = 28.0;
+/// At 0.8 a full grid ran into the chat. At this size the name and badges don't fit on the
+/// portrait, hence [`spawn_beside`].
+const SCALE: f32 = 0.55;
+const SLOT: f32 = 15.0;
 
-/// The lines of retail's screen between the last portrait and the line of the bots, or the first
-/// who only watches (more than a row's own gap), and from one of those lines to the next.
+const NAME_SIZE: f32 = 16.0;
+const BADGE_SIZE: f32 = 16.0;
+
+/// Lined up with the race's leaderboard.
+const X: f32 = crate::leaderboard::ICON_X;
+
 const WATCHER_GAP: f32 = 12.0;
 const WATCHER_LINE: f32 = 9.0;
 
-/// The lines of retail's screen from each of the bots' two lines ([`Font::Middle`], 8 lines
-/// tall) to the next.
 const BOTS_LINE: f32 = 12.0;
 
 pub struct LobbyListPlugin;
@@ -60,7 +51,6 @@ impl Plugin for LobbyListPlugin {
     }
 }
 
-/// Puts the list up when the roster changes, and takes it down when there is no lobby, or a race.
 fn build(
     mut commands: Commands,
     lobby: Res<Lobby>,
@@ -68,13 +58,16 @@ fn build(
     textures: Res<crate::Textures>,
     mut images: ResMut<Assets<Image>>,
     loaded: Option<Res<Portraits>>,
+    hint: Res<crate::quick_ready::ReadyHint>,
     lists: Query<(Entity, &List)>,
 ) {
-    let players: Vec<Row> = if lobby.is_waiting(&race_on) {
+    let mut players: Vec<Row> = if lobby.is_waiting(&race_on) {
         lobby.rows()
     } else {
         Vec::new()
     };
+    // Stable: split screen players keep their order.
+    players.sort_by_key(|row| !row.you);
     let watchers: Vec<(String, String)> = if lobby.is_waiting(&race_on) {
         lobby
             .watchers()
@@ -83,13 +76,24 @@ fn build(
     } else {
         Vec::new()
     };
-    let bots = if players.is_empty() {
+    let free = if !players.is_empty() && lobby.matched_waiting(&race_on) {
+        race::MAX_KARTS.saturating_sub(players.len())
+    } else {
+        0
+    };
+    // The free places stand for the bots too: a bot drives any no player takes.
+    let bots = if players.is_empty() || lobby.matched_waiting(&race_on) {
         (0, String::new())
     } else {
         (lobby.next_bots(), lobby.next_bots_kind())
     };
     for (entity, list) in &lists {
-        if list.0 == players && list.1 == watchers && list.2 == bots {
+        if list.0 == players
+            && list.1 == watchers
+            && list.2 == bots
+            && list.3 == hint.0
+            && list.4 == free
+        {
             return;
         }
         commands.entity(entity).despawn();
@@ -118,27 +122,29 @@ fn build(
         CtrText::new(TITLE, Font::Middle, Gradient::ORANGE).fixed(hud::PIXEL),
         Node {
             position_type: PositionType::Absolute,
-            left: hud::x(ICON_X),
+            left: hud::x(X),
             top: hud::y(TITLE_Y),
             ..default()
         },
         Pickable::IGNORE,
         ChildOf(column),
     ));
+    // (On our first row only: the others at our machine are ready with it.)
+    let ours = players.iter().position(|row| row.you);
     for (n, row) in players.iter().enumerate() {
         let y = FIRST_Y + n as f32 * SLOT;
-        let portrait = spawn_portrait(&mut commands, column, &image, row.character, y);
-        if row.host {
-            spawn_host_badge(&mut commands, portrait, true);
-        }
-        let tag = spawn_tags(&mut commands, portrait, &row.name, &row.key);
-        if row.you {
-            commands.entity(tag).insert(TextColor(HIGHLIGHT));
-        }
+        let at = Vec2::new(X, y);
+        let portrait = spawn_portrait(&mut commands, column, &image, row.character, at, SCALE);
+        let hint = hint.0.as_deref().filter(|_| ours == Some(n));
+        let color = if row.you { HIGHLIGHT } else { Color::WHITE };
+        spawn_beside(&mut commands, portrait, &row.name, color, row.host, row.ready, hint);
     }
-    // The bots and those who only watch have no portrait: a line each, a little further down,
-    // the bots' in the game's font as the title is: how many, and under it what kind.
-    let mut below = FIRST_Y + players.len() as f32 * SLOT + WATCHER_GAP;
+    for n in players.len()..players.len() + free {
+        let y = FIRST_Y + n as f32 * SLOT;
+        let place = spawn_empty_portrait(&mut commands, column, Vec2::new(X, y), SCALE);
+        spawn_beside(&mut commands, place, OPEN, DIM, false, false, None);
+    }
+    let mut below = FIRST_Y + (players.len() + free) as f32 * SLOT + WATCHER_GAP;
     if bots.0 > 0 {
         let count = match bots.0 {
             1 => "+1 bot".to_string(),
@@ -149,7 +155,7 @@ fn build(
                 CtrText::new(text, Font::Middle, gradient).fixed(hud::PIXEL),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: hud::x(ICON_X),
+                    left: hud::x(X),
                     top: hud::y(below),
                     ..default()
                 },
@@ -161,23 +167,75 @@ fn build(
     }
     for (n, (name, _)) in watchers.iter().enumerate() {
         commands.spawn((
-            Text::new(format!("{name} (spectator)")),
-            TextFont {
-                font_size: PING_FONT_SIZE.into(),
-                ..default()
-            },
-            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-            BackgroundColor(BACKGROUND),
+            tag(format!("{name} (spectator)"), PING_FONT_SIZE, DIM),
             Node {
                 position_type: PositionType::Absolute,
-                left: hud::x(ICON_X),
+                left: hud::x(X),
                 top: hud::y(below + n as f32 * WATCHER_LINE),
-                padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
+                padding: TAG_PADDING,
                 ..default()
             },
             Pickable::IGNORE,
             ChildOf(column),
         ));
     }
-    commands.entity(column).insert(List(players, watchers, bots));
+    commands.entity(column).insert(List(players, watchers, bots, hint.0.clone(), free));
+}
+
+fn spawn_beside(
+    commands: &mut Commands,
+    portrait: Entity,
+    name: &str,
+    color: Color,
+    host: bool,
+    ready: bool,
+    hint: Option<&str>,
+) {
+    let line = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(100.0),
+                top: Val::ZERO,
+                height: Val::Percent(100.0),
+                margin: UiRect::left(hud::x(2.0)),
+                align_items: AlignItems::Center,
+                column_gap: hud::x(2.0),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(portrait),
+        ))
+        .id();
+    commands.spawn((
+        Text::new(name),
+        TextFont::from_font_size(NAME_SIZE),
+        TextColor(color),
+        BackgroundColor(BACKGROUND),
+        TextLayout::linebreak(LineBreak::NoWrap),
+        Node {
+            padding: TAG_PADDING,
+            ..default()
+        },
+        Pickable::IGNORE,
+        ChildOf(line),
+    ));
+    let badges = [
+        (host, crate::icons::CROWN_SIMPLE, HOST_COLOR),
+        (ready, crate::icons::CHECK_FAT, READY_COLOR),
+    ];
+    for (_, icon, tint) in badges.into_iter().filter(|badge| badge.0) {
+        commands.spawn((
+            crate::icons::outlined(icon, BADGE_SIZE, tint, Node::default()),
+            Pickable::IGNORE,
+            ChildOf(line),
+        ));
+    }
+    if let Some(hint) = hint {
+        commands.spawn((
+            CtrText::new(hint, Font::Middle, Gradient::WHITE).fixed(hud::PIXEL),
+            Pickable::IGNORE,
+            ChildOf(line),
+        ));
+    }
 }
